@@ -54,6 +54,7 @@ fn surface_forms(raw: &str) -> Vec<String> {
 }
 
 
+/// Check for missing cross-references based on concept mentions.
 pub fn check_cross_refs(graph: &Graph, report: &mut Report, cfg: &Config) {
     let sccs = kosaraju_scc(&graph.graph);
     let mut component: HashMap<petgraph::graph::NodeIndex, usize> = HashMap::new();

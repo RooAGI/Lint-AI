@@ -279,6 +279,7 @@ fn debug_phrase_matches(
     out
 }
 
+/// Normalize a section heading to a stable bucket name.
 pub fn normalize_heading(name: &str) -> String {
     let lower = name.trim().to_lowercase();
     if lower.is_empty() || lower == "(unscoped)" || lower == "(untitled section)" {
@@ -369,6 +370,7 @@ fn common_dir_prefix(paths: &[String]) -> Option<String> {
     }
 }
 
+/// Generate the `--analyze` output for tests and snapshotting.
 pub fn analyze_for_tests(graph: &Graph, cfg: &Config) -> String {
     let (ac, forms, form_to_concept) = build_matcher(graph, cfg);
     let ac = match ac {
@@ -457,6 +459,9 @@ fn analyze_corpus(graph: &Graph, cfg: &Config) {
     print!("{}", out);
 }
 
+/// Run the lint pipeline using CLI arguments.
+///
+/// This is the main entry point used by the CLI wrapper in `main.rs`.
 pub fn run(args: crate::cli::Args) -> Result<()> {
     let cfg = load_config(
         args.config.as_deref(),

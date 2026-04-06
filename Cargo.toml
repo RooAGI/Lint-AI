@@ -1,6 +1,6 @@
 [package]
 name = "lint-ai"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Semantic wiki and docs linting for contradictions, stale claims, orphan pages, and missing cross-references"
 license = "Apache-2.0"

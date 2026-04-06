@@ -11,28 +11,52 @@ islands, and keep a large doc set coherent.
 
 ## Usage
 
+### Download Release Binaries
+
+Download the latest release binary from the GitHub Releases page for this repo, then verify the checksum.
+
+Release artifacts (v0.1.0):
+
+```
+lint-ai-linux-x86_64
+sha256:7ec06e0ed69a2fa1c2acd55c5ef1ee2c951ed57a35a3d7a64481e61fa35c18eb
+
+lint-ai-macos-x86_64
+sha256:9bc2879e90434f470782ec9630fe1eab26fcb399da6574ae20bfcf3b37794d46
+
+lint-ai-windows-x86_64.exe
+sha256:a5be16b5543b49d5a7a931612f117d112fe63f7f5cd2d791d0808ab3be5a5fc0
+```
+
+Verify checksums:
+
+```bash
+sha256sum lint-ai-linux-x86_64
+shasum -a 256 lint-ai-macos-x86_64
+```
+
 Run the linter against a docs directory:
 
 ```bash
-cargo run -- /path/to/repo
+./lint-ai /path/to/repo
 ```
 
 By default the linter skips files larger than 5MB and stops after 50k files. Override these limits:
 
 ```bash
-cargo run -- /path/to/repo --max-bytes 10000000 --max-files 100000
+./lint-ai /path/to/repo --max-bytes 10000000 --max-files 100000
 ```
 
 Limit directory traversal depth:
 
 ```bash
-cargo run -- /path/to/repo --max-depth 10
+./lint-ai /path/to/repo --max-depth 10
 ```
 
 Limit total bytes read across the corpus:
 
 ```bash
-cargo run -- /path/to/repo --max-total-bytes 100000000
+./lint-ai /path/to/repo --max-total-bytes 100000000
 ```
 
 The tool will automatically scope to `/path/to/repo/docs/**` when that folder exists.
@@ -40,31 +64,31 @@ The tool will automatically scope to `/path/to/repo/docs/**` when that folder ex
 Example with a local repo:
 
 ```bash
-cargo run -- /path/to/openclaw
+./lint-ai /path/to/openclaw
 ```
 
 Show the inferred concept inventory:
 
 ```bash
-cargo run -- /path/to/openclaw/docs/channels --show-concepts
+./lint-ai /path/to/openclaw/docs/channels --show-concepts
 ```
 
 Show Markdown headings per file (structure/architecture hints):
 
 ```bash
-cargo run -- /path/to/openclaw/docs/channels --show-headings
+./lint-ai /path/to/openclaw/docs/channels --show-headings
 ```
 
 Debug phrase matches (prints matched text fragments and concepts):
 
 ```bash
-cargo run -- /path/to/openclaw/docs/channels --debug-matches
+./lint-ai /path/to/openclaw/docs/channels --debug-matches
 ```
 
 Analyze a corpus and emit a suggested `lint-ai.json`:
 
 ```bash
-cargo run -- /path/to/openclaw/docs/channels --analyze
+./lint-ai /path/to/openclaw/docs/channels --analyze
 ```
 
 Example analysis output (Openclaw channels):
@@ -120,7 +144,7 @@ Use `--strict-config` to fail fast if the config is invalid.
 Limit config size:
 
 ```bash
-cargo run -- /path/to/repo --max-config-bytes 2000000
+./lint-ai /path/to/repo --max-config-bytes 2000000
 ```
 
 ```json
@@ -149,8 +173,29 @@ ignoring generic terms):
 Run it:
 
 ```bash
-cargo run -- /path/to/openclaw/docs/channels --config /path/to/openclaw/lint-ai.json
+./lint-ai /path/to/openclaw/docs/channels --config /path/to/openclaw/lint-ai.json
 ```
+
+## Development
+
+### Build
+
+```bash
+cargo build
+```
+
+### Test
+
+```bash
+cargo test
+```
+
+### Contributing
+
+1. Fork the repo and create a feature branch.
+2. Make changes with tests where appropriate.
+3. Run `cargo test`.
+4. Open a PR.
 
 ## Concept Examples
 

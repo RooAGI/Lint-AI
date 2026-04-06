@@ -11,21 +11,32 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct Page {
+    /// Absolute path to the file.
     pub path: String,
+    /// Path relative to the root used for traversal.
     pub rel_path: String,
+    /// Normalized concept name derived from the file name.
     pub concept: String,
+    /// Raw concept name derived from the file name.
     pub raw_concept: String,
+    /// Full file contents.
     pub content: String,
+    /// Normalized outbound link targets.
     pub links: HashSet<String>,
+    /// Markdown headings extracted from the file.
     pub headings: Vec<String>,
 }
 
 pub struct Graph {
+    /// All parsed pages.
     pub pages: Vec<Page>,
+    /// Map of concept -> node index in the graph.
     pub index: HashMap<String, NodeIndex>,
+    /// Directed graph of page links.
     pub graph: DiGraph<String, ()>,
 }
 
+/// Normalize a concept string for matching (unicode + deunicode + case fold).
 pub fn normalize_concept(s: &str) -> String {
     let normalized: String = s
         .nfc()
@@ -85,6 +96,14 @@ fn docs_dir(root: &Path) -> PathBuf {
 }
 
 impl Graph {
+    /// Build a graph from the given path, applying size and depth limits.
+    ///
+    /// Example:
+    /// ```
+    /// use lint_ai::graph::Graph;
+    /// let graph = Graph::build("docs", 5_000_000, 50_000, 20, 100_000_000).unwrap();
+    /// println!("pages: {}", graph.pages.len());
+    /// ```
     pub fn build(
         path: &str,
         max_bytes: usize,

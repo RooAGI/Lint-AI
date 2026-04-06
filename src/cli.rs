@@ -2,6 +2,7 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(name = "lint-ai")]
+/// CLI arguments for the lint-ai binary.
 pub struct Args {
     pub path: String,
     #[arg(long)]
@@ -28,6 +29,7 @@ pub struct Args {
     pub max_total_bytes: usize,
 }
 
+/// Parse CLI arguments from the environment.
 pub fn parse() -> Args {
     Args::parse()
 }

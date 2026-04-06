@@ -1,5 +1,6 @@
 use crate::config::{normalize_list, Config};
 
+/// Return true if the concept is a built-in stopword.
 pub fn is_stopword(concept: &str) -> bool {
     const STOP: &[&str] = &[
         "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "if", "in", "is",
@@ -13,6 +14,7 @@ pub fn is_stopword(concept: &str) -> bool {
     STOP.contains(&concept)
 }
 
+/// Return true if the concept should be ignored for matching.
 pub fn is_noise_concept(concept: &str, cfg: &Config) -> bool {
     if concept.len() < 3 {
         return true;

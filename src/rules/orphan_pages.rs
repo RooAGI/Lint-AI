@@ -3,6 +3,7 @@ use crate::report::Report;
 use petgraph::visit::Dfs;
 use std::collections::HashSet;
 
+/// Report unreachable or orphan pages based on graph reachability.
 pub fn check_orphans(graph: &Graph, report: &mut Report) {
     let avg_out = if graph.graph.node_count() > 0 {
         graph.graph.edge_count() as f64 / graph.graph.node_count() as f64

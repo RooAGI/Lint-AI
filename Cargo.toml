@@ -7,7 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/RooAGI/Lint-AI"
 homepage = "https://www.rooagi.com"
 readme = "README.md"
-keywords = ["lint", "documentation", "markdown", "knowledge-base", "graph", "ai", "llm", "agents"]
+keywords = ["lint", "markdown", "knowledge-base", "AI", "agents"]
 categories = ["text-processing", "command-line-utilities"]
 
 [lib]

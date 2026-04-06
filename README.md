@@ -1,2 +1,3 @@
-# Lint-AI
-Lint for ai generated knowledge 
+# Lint AI
+
+Semantic linter for wikis and documentation.

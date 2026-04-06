@@ -21,4 +21,17 @@ impl Report {
             }
         }
     }
+
+    pub fn to_string(&self) -> String {
+        if self.issues.is_empty() {
+            "No issues found".to_string()
+        } else {
+            let mut out = String::from("Issues:");
+            for i in &self.issues {
+                out.push_str("\n- ");
+                out.push_str(i);
+            }
+            out
+        }
+    }
 }

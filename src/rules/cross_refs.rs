@@ -118,6 +118,9 @@ pub fn check_cross_refs(graph: &Graph, report: &mut Report, cfg: &Config) {
 
     forms.retain(|form| !ambiguous.contains(form));
 
+    if forms.is_empty() {
+        return;
+    }
     let ac = AhoCorasick::new(&forms).unwrap();
     for page in &graph.pages {
         if let Some(prefix) = scope_prefix.as_ref() {
@@ -237,5 +240,19 @@ pub fn check_cross_refs(graph: &Graph, report: &mut Report, cfg: &Config) {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_forms_variants() {
+        let forms = surface_forms("Group-Messages");
+        let set: HashSet<String> = forms.into_iter().collect();
+        assert!(set.contains("group messages"));
+        assert!(set.contains("groupmessages"));
+        assert!(set.contains("group messages"));
     }
 }

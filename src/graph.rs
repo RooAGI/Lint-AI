@@ -82,7 +82,13 @@ fn docs_dir(root: &Path) -> PathBuf {
 }
 
 impl Graph {
-    pub fn build(path: &str) -> Result<Self> {
+    pub fn build(
+        path: &str,
+        max_bytes: usize,
+        max_files: usize,
+        max_depth: usize,
+        max_total_bytes: usize,
+    ) -> Result<Self> {
         let root = Path::new(path);
         let base = docs_dir(root);
         let base_walk = base.clone();
@@ -99,7 +105,9 @@ impl Graph {
 
         let mut pages = Vec::new();
 
-        for entry in WalkDir::new(base_walk) {
+        let mut files_seen = 0usize;
+        let mut total_bytes = 0usize;
+        for entry in WalkDir::new(base_walk).max_depth(max_depth) {
             let entry = entry?;
             if !entry.file_type().is_file() {
                 continue;
@@ -115,6 +123,19 @@ impl Graph {
                 continue;
             }
 
+            files_seen += 1;
+            if files_seen > max_files {
+                break;
+            }
+
+            let metadata = entry.metadata()?;
+            if metadata.len() as usize > max_bytes {
+                continue;
+            }
+            total_bytes = total_bytes.saturating_add(metadata.len() as usize);
+            if total_bytes > max_total_bytes {
+                break;
+            }
             let content = fs::read_to_string(entry.path())?;
             let raw_concept = entry
                 .path()
@@ -187,5 +208,31 @@ impl Graph {
         }
 
         Ok(Self { pages })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_concept_basic() {
+        assert_eq!(normalize_concept("Group-Messages"), "group messages");
+        assert_eq!(normalize_concept("Group_Messages"), "group messages");
+        assert_eq!(normalize_concept("Café-Menu"), "cafe menu");
+    }
+
+    #[test]
+    fn link_target_concept_parsing() {
+        assert_eq!(
+            concept_from_link_target("docs/channels/discord.md").as_deref(),
+            Some("discord")
+        );
+        assert_eq!(
+            concept_from_link_target("docs/channels/discord.md#setup").as_deref(),
+            Some("discord")
+        );
+        assert_eq!(concept_from_link_target("https://example.com"), None);
+        assert_eq!(concept_from_link_target("mailto:test@example.com"), None);
     }
 }

@@ -54,7 +54,10 @@ fn is_noise_concept(concept: &str, cfg: &Config) -> bool {
     extra.contains(&concept.to_string())
 }
 
-fn build_matcher(graph: &Graph, cfg: &Config) -> (AhoCorasick, Vec<String>, HashMap<String, String>) {
+fn build_matcher(
+    graph: &Graph,
+    cfg: &Config,
+) -> (Option<AhoCorasick>, Vec<String>, HashMap<String, String>) {
     let mut concept_raw: HashMap<String, String> = HashMap::new();
     for page in &graph.pages {
         if is_noise_concept(&page.concept, cfg) {
@@ -89,7 +92,10 @@ fn build_matcher(graph: &Graph, cfg: &Config) -> (AhoCorasick, Vec<String>, Hash
     }
 
     forms.retain(|form| !ambiguous.contains(form));
-    let ac = AhoCorasick::new(&forms).unwrap();
+    if forms.is_empty() {
+        return (None, forms, form_to_concept);
+    }
+    let ac = AhoCorasick::new(&forms).ok();
     (ac, forms, form_to_concept)
 }
 
@@ -329,6 +335,10 @@ pub fn normalize_heading(name: &str) -> String {
 
 fn show_concepts_by_section(graph: &Graph, cfg: &Config) {
     let (ac, forms, form_to_concept) = build_matcher(graph, cfg);
+    let ac = match ac {
+        Some(ac) => ac,
+        None => return,
+    };
     let ignore_sections = normalize_list(&cfg.ignore_sections);
     let mut aggregated: BTreeMap<String, HashMap<String, usize>> = BTreeMap::new();
 
@@ -384,8 +394,12 @@ fn common_dir_prefix(paths: &[String]) -> Option<String> {
     }
 }
 
-fn analyze_corpus(graph: &Graph, cfg: &Config) {
+pub fn analyze_for_tests(graph: &Graph, cfg: &Config) -> String {
     let (ac, forms, form_to_concept) = build_matcher(graph, cfg);
+    let ac = match ac {
+        Some(ac) => ac,
+        None => return "Suggested config:\n{\n  \"stopwords\": [],\n  \"ignore_sections\": [\"unscoped\", \"related\"],\n  \"ignore_crossref_sections\": [\"unscoped\", \"related\"],\n  \"ignore_paths\": [],\n  \"allowlist_concepts\": []\n}\n\nStats:\npages: 0\n".to_string(),
+    };
     let mut concept_pages: HashMap<String, usize> = HashMap::new();
     let mut section_counts: HashMap<String, usize> = HashMap::new();
     let mut page_count = 0usize;
@@ -433,36 +447,56 @@ fn analyze_corpus(graph: &Graph, cfg: &Config) {
     let rel_paths: Vec<String> = graph.pages.iter().map(|p| p.rel_path.clone()).collect();
     let scope_prefix = common_dir_prefix(&rel_paths);
 
-    println!("Suggested config:");
-    println!("{{");
-    println!("  \"stopwords\": {:?},", suggested_stopwords);
-    println!("  \"ignore_sections\": {:?},", suggested_ignore_sections);
-    println!("  \"ignore_crossref_sections\": {:?},", suggested_ignore_sections);
-    println!("  \"ignore_paths\": [],");
+    let mut out = String::new();
+    out.push_str("Suggested config:\n");
+    out.push_str("{\n");
+    out.push_str(&format!("  \"stopwords\": {:?},\n", suggested_stopwords));
+    out.push_str(&format!("  \"ignore_sections\": {:?},\n", suggested_ignore_sections));
+    out.push_str(&format!(
+        "  \"ignore_crossref_sections\": {:?},\n",
+        suggested_ignore_sections
+    ));
+    out.push_str("  \"ignore_paths\": [],\n");
     if let Some(prefix) = scope_prefix {
-        println!("  \"allowlist_concepts\": [],");
-        println!("  \"scope_prefix\": \"{}\"", prefix);
+        out.push_str("  \"allowlist_concepts\": [],\n");
+        out.push_str(&format!("  \"scope_prefix\": \"{}\"\n", prefix));
     } else {
-        println!("  \"allowlist_concepts\": []");
+        out.push_str("  \"allowlist_concepts\": []\n");
     }
-    println!("}}");
-
-    println!();
-    println!("Stats:");
-    println!("pages: {}", page_count);
-    println!("top concepts:");
+    out.push_str("}\n\n");
+    out.push_str("Stats:\n");
+    out.push_str(&format!("pages: {}\n", page_count));
+    out.push_str("top concepts:\n");
     for (concept, count) in concept_list.iter().take(15) {
-        println!("- {} ({})", concept, count);
+        out.push_str(&format!("- {} ({})\n", concept, count));
     }
-    println!("top sections:");
+    out.push_str("top sections:\n");
     for (section, count) in section_list.iter().take(10) {
-        println!("- {} ({})", section, count);
+        out.push_str(&format!("- {} ({})\n", section, count));
     }
+    out
+}
+
+fn analyze_corpus(graph: &Graph, cfg: &Config) {
+    let out = analyze_for_tests(graph, cfg);
+    print!("{}", out);
 }
 
 pub fn run(args: crate::cli::Args) -> Result<()> {
-    let cfg = load_config(args.config.as_deref(), &args.path);
-    let mut graph = Graph::build(&args.path)?;
+    let cfg = load_config(
+        args.config.as_deref(),
+        &args.path,
+        args.strict_config,
+        args.max_config_bytes,
+    )
+    .map_err(|err| anyhow::anyhow!(err))?;
+    let mut graph = Graph::build(
+        &args.path,
+        args.max_bytes,
+        args.max_files,
+        args.max_depth,
+        args.max_total_bytes,
+    )?;
     if !cfg.ignore_paths.is_empty() {
         let ignore = normalize_list(&cfg.ignore_paths);
         graph.pages.retain(|p| {
@@ -480,6 +514,10 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
     }
     if args.debug_matches {
         let (ac, forms, form_to_concept) = build_matcher(&graph, &cfg);
+        let ac = match ac {
+            Some(ac) => ac,
+            None => return Ok(()),
+        };
         for page in &graph.pages {
             println!("{}", page.rel_path);
             let matches = debug_phrase_matches(&page.content, &ac, &forms, &form_to_concept, &cfg);
@@ -505,4 +543,28 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     report.print();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_heading_rules() {
+        assert_eq!(normalize_heading("Related"), "related");
+        assert_eq!(normalize_heading("Quick start"), "setup");
+        assert_eq!(normalize_heading("Security notes"), "security");
+        assert_eq!(normalize_heading("Routing & Sessions"), "routing");
+        assert_eq!(normalize_heading(""), "unscoped");
+    }
+
+    #[test]
+    fn common_prefix() {
+        let paths = vec![
+            "docs/channels/a.md".to_string(),
+            "docs/channels/b.md".to_string(),
+        ];
+        assert_eq!(common_dir_prefix(&paths).as_deref(), Some("docs/channels/"));
+        assert_eq!(common_dir_prefix(&[]), None);
+    }
 }

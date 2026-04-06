@@ -5,6 +5,10 @@ edition = "2021"
 description = "Semantic wiki and docs linting for contradictions, stale claims, orphan pages, and missing cross-references"
 license = "Apache-2.0"
 
+[lib]
+name = "lint_ai"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4.4.18", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

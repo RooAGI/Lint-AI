@@ -17,6 +17,24 @@ Run the linter against a docs directory:
 cargo run -- /path/to/repo
 ```
 
+By default the linter skips files larger than 5MB and stops after 50k files. Override these limits:
+
+```bash
+cargo run -- /path/to/repo --max-bytes 10000000 --max-files 100000
+```
+
+Limit directory traversal depth:
+
+```bash
+cargo run -- /path/to/repo --max-depth 10
+```
+
+Limit total bytes read across the corpus:
+
+```bash
+cargo run -- /path/to/repo --max-total-bytes 100000000
+```
+
 The tool will automatically scope to `/path/to/repo/docs/**` when that folder exists.
 
 Example with a local repo:
@@ -96,6 +114,14 @@ top sections:
 
 You can place a `lint-ai.json` file in the target root (or pass `--config /path/to/lint-ai.json`)
 to control filters.
+
+Use `--strict-config` to fail fast if the config is invalid.
+
+Limit config size:
+
+```bash
+cargo run -- /path/to/repo --max-config-bytes 2000000
+```
 
 ```json
 {

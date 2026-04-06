@@ -1,14 +1,7 @@
-mod cli;
-mod config;
-mod engine;
-mod graph;
-mod report;
-mod rules;
-
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    let args = cli::parse();
-    engine::run(args)?;
+    let args = lint_ai::cli::parse();
+    lint_ai::engine::run(args)?;
     Ok(())
 }

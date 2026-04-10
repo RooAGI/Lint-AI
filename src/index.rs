@@ -6,9 +6,9 @@ use serde::Serialize;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::document::TantivyDocument;
-use tantivy::schema::{Schema, STORED, STRING, TEXT};
+use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
 use tantivy::schema::Value;
-use tantivy::{doc, Index};
+use tantivy::{doc, Index, IndexReader};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,6 +32,7 @@ pub struct Claim {
 pub struct DocRecord {
     pub doc_id: String,
     pub source: String,
+    #[serde(skip_serializing)]
     pub content: String,
     pub timestamp: Option<String>,
     pub doc_length: usize,
@@ -58,13 +59,25 @@ pub struct TermPosting {
     pub score: f32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Serialize)]
 pub struct MemoryIndex {
     pub docs: HashMap<String, DocRecord>,
     pub entity_to_docs: HashMap<String, Vec<EntityPosting>>,
     pub term_to_docs: HashMap<String, Vec<TermPosting>>,
     pub topic_to_docs: HashMap<String, Vec<String>>,
     pub doc_type_to_docs: HashMap<String, Vec<String>>,
+    #[serde(skip_serializing)]
+    lexical: Option<LexicalIndex>,
+}
+
+struct LexicalIndex {
+    index: Index,
+    reader: IndexReader,
+    doc_id_f: Field,
+    content_f: Field,
+    headings_f: Field,
+    terms_f: Field,
+    entities_f: Field,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -87,6 +100,24 @@ pub struct SearchResult {
     pub matched_terms: Vec<String>,
     pub probable_topic: Option<String>,
     pub doc_type_guess: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactedDocRecord {
+    pub doc_id: String,
+    pub source: String,
+    pub timestamp: Option<String>,
+    pub doc_length: usize,
+    pub probable_topic: Option<String>,
+    pub doc_type_guess: Option<String>,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactedMemoryIndex {
+    pub docs: HashMap<String, RedactedDocRecord>,
+    pub topic_to_docs: HashMap<String, Vec<String>>,
+    pub doc_type_to_docs: HashMap<String, Vec<String>>,
 }
 
 impl MemoryIndex {
@@ -156,16 +187,25 @@ impl MemoryIndex {
             });
         }
 
+        let lexical = match Self::build_lexical_index(&docs) {
+            Ok(index) => Some(index),
+            Err(err) => {
+                eprintln!("warning: lexical BM25 index disabled: {}", err);
+                None
+            }
+        };
+
         Self {
             docs,
             entity_to_docs,
             term_to_docs,
             topic_to_docs,
             doc_type_to_docs,
+            lexical,
         }
     }
 
-    fn lexical_bm25(&self, query: &str, top_k: usize) -> Result<HashMap<String, f32>> {
+    fn build_lexical_index(docs: &HashMap<String, DocRecord>) -> Result<LexicalIndex> {
         let mut schema_builder = Schema::builder();
         let doc_id_f = schema_builder.add_text_field("doc_id", STRING | STORED);
         let content_f = schema_builder.add_text_field("content", TEXT);
@@ -174,9 +214,9 @@ impl MemoryIndex {
         let entities_f = schema_builder.add_text_field("entities", TEXT);
         let schema = schema_builder.build();
 
-        let index = Index::create_in_ram(schema.clone());
+        let index = Index::create_in_ram(schema);
         let mut writer = index.writer(50_000_000)?;
-        for doc in self.docs.values() {
+        for doc in docs.values() {
             let headings_text = doc.headings.join(" ");
             let terms_text = doc
                 .important_terms
@@ -200,21 +240,35 @@ impl MemoryIndex {
         }
         writer.commit()?;
         let reader = index.reader()?;
-        let searcher = reader.searcher();
+        Ok(LexicalIndex {
+            index,
+            reader,
+            doc_id_f,
+            content_f,
+            headings_f,
+            terms_f,
+            entities_f,
+        })
+    }
 
+    fn lexical_bm25(&self, query: &str, top_k: usize) -> Result<HashMap<String, f32>> {
+        let Some(lex) = self.lexical.as_ref() else {
+            return Ok(HashMap::new());
+        };
+        let searcher = lex.reader.searcher();
         let mut query_parser =
-            QueryParser::for_index(&index, vec![content_f, headings_f, terms_f, entities_f]);
-        query_parser.set_field_boost(content_f, 1.0);
-        query_parser.set_field_boost(headings_f, 1.4);
-        query_parser.set_field_boost(terms_f, 2.0);
-        query_parser.set_field_boost(entities_f, 2.4);
+            QueryParser::for_index(&lex.index, vec![lex.content_f, lex.headings_f, lex.terms_f, lex.entities_f]);
+        query_parser.set_field_boost(lex.content_f, 1.0);
+        query_parser.set_field_boost(lex.headings_f, 1.4);
+        query_parser.set_field_boost(lex.terms_f, 2.0);
+        query_parser.set_field_boost(lex.entities_f, 2.4);
         let parsed = query_parser.parse_query(query)?;
         let top_docs = searcher.search(&parsed, &TopDocs::with_limit(top_k))?;
 
         let mut out = HashMap::new();
         for (score, addr) in top_docs {
             let retrieved: TantivyDocument = searcher.doc(addr)?;
-            if let Some(v) = retrieved.get_first(doc_id_f) {
+            if let Some(v) = retrieved.get_first(lex.doc_id_f) {
                 if let Some(doc_id) = v.as_str() {
                     out.insert(doc_id.to_string(), score);
                 }
@@ -224,11 +278,29 @@ impl MemoryIndex {
     }
 
     pub fn query(&self, query: &str, top_k: usize) -> Vec<SearchResult> {
-        let q = normalize_for_index(query);
+        const MAX_QUERY_CHARS: usize = 4096;
+        const MAX_QUERY_TOKENS: usize = 128;
+
+        let truncated = if query.len() > MAX_QUERY_CHARS {
+            let mut cut = 0usize;
+            for (idx, _) in query.char_indices() {
+                if idx > MAX_QUERY_CHARS {
+                    break;
+                }
+                cut = idx;
+            }
+            &query[..cut]
+        } else {
+            query
+        };
+        let q = normalize_for_index(truncated);
         if q.is_empty() {
             return Vec::new();
         }
         let mut q_terms: Vec<String> = tokenize_query_terms(&q);
+        if q_terms.len() > MAX_QUERY_TOKENS {
+            q_terms.truncate(MAX_QUERY_TOKENS);
+        }
         if q_terms.is_empty() {
             q_terms.push(q.clone());
         }
@@ -239,10 +311,15 @@ impl MemoryIndex {
         let mut matched_terms: HashMap<String, Vec<String>> = HashMap::new();
         let query_set: HashSet<String> = q_terms.iter().cloned().collect();
 
-        if let Ok(lexical_hits) = self.lexical_bm25(&q, top_k.saturating_mul(5).max(20)) {
-            for (doc_id, bm25_score) in lexical_hits {
-                *scores.entry(doc_id.clone()).or_insert(0.0) += bm25_score;
-                breakdowns.entry(doc_id).or_default().lexical_score += bm25_score;
+        match self.lexical_bm25(&q, top_k.saturating_mul(5).max(20)) {
+            Ok(lexical_hits) => {
+                for (doc_id, bm25_score) in lexical_hits {
+                    *scores.entry(doc_id.clone()).or_insert(0.0) += bm25_score;
+                    breakdowns.entry(doc_id).or_default().lexical_score += bm25_score;
+                }
+            }
+            Err(err) => {
+                eprintln!("warning: lexical BM25 query component failed: {}", err);
             }
         }
 
@@ -345,6 +422,32 @@ impl MemoryIndex {
         });
         out.truncate(top_k);
         out
+    }
+
+    pub fn redacted_for_export(&self) -> RedactedMemoryIndex {
+        let docs = self
+            .docs
+            .iter()
+            .map(|(id, d)| {
+                (
+                    id.clone(),
+                    RedactedDocRecord {
+                        doc_id: d.doc_id.clone(),
+                        source: d.source.clone(),
+                        timestamp: d.timestamp.clone(),
+                        doc_length: d.doc_length,
+                        probable_topic: d.probable_topic.clone(),
+                        doc_type_guess: d.doc_type_guess.clone(),
+                        provenance: d.provenance.clone(),
+                    },
+                )
+            })
+            .collect();
+        RedactedMemoryIndex {
+            docs,
+            topic_to_docs: self.topic_to_docs.clone(),
+            doc_type_to_docs: self.doc_type_to_docs.clone(),
+        }
     }
 }
 

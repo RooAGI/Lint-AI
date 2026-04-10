@@ -2,6 +2,12 @@
 import json
 import sys
 
+ALLOWED_MODELS = {
+    "en_core_web_sm",
+    "en_core_web_md",
+    "en_core_web_lg",
+}
+
 
 def main() -> int:
     try:
@@ -11,6 +17,19 @@ def main() -> int:
         return 2
 
     model = payload.get("model", "en_core_web_sm")
+    if model not in ALLOWED_MODELS:
+        print(
+            json.dumps(
+                {
+                    "error": (
+                        f"spacy_model_not_allowed({model}); "
+                        f"allowed={sorted(ALLOWED_MODELS)}"
+                    )
+                }
+            ),
+            file=sys.stderr,
+        )
+        return 5
     docs = payload.get("documents", [])
 
     try:

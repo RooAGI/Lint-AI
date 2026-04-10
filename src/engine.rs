@@ -593,9 +593,17 @@ fn build_memory_index(
                 model: spacy_model.to_string(),
                 script_path: "scripts/spacy_ner.py".to_string(),
             };
-            spacy
-                .rank_docs(&docs)
-                .unwrap_or_else(|_| heuristic.rank_docs(&docs).unwrap_or_default())
+            match spacy.rank_docs(&docs) {
+                Ok(out) => out,
+                Err(err) => {
+                    eprintln!(
+                        "warning: {} ranker unavailable ({}), falling back to heuristic",
+                        spacy.name(),
+                        err
+                    );
+                    heuristic.rank_docs(&docs).unwrap_or_default()
+                }
+            }
         }
     };
 
@@ -744,7 +752,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         show_tier1_terms(&graph, &args.tier1_term_ranker)?;
         return Ok(());
     }
-    if args.index || args.query.is_some() {
+    if args.index || args.index_redacted || args.query.is_some() {
         let index = build_memory_index(
             &graph,
             &args.tier1_ner_provider,
@@ -754,6 +762,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         if let Some(query) = args.query.as_deref() {
             let results = index.query(query, 20);
             println!("{}", serde_json::to_string_pretty(&results)?);
+        } else if args.index_redacted {
+            println!("{}", serde_json::to_string_pretty(&index.redacted_for_export())?);
         } else {
             println!("{}", serde_json::to_string_pretty(&index)?);
         }

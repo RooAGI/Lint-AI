@@ -159,7 +159,7 @@ The query pipeline uses hybrid scoring with:
 
 Download the latest release binary from the GitHub Releases page for this repo, then verify the checksum.
 
-Release artifacts (v0.1.0):
+Release artifacts (v0.1.2):
 
 ```
 lint-ai-linux-x86_64

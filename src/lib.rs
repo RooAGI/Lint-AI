@@ -5,7 +5,7 @@
 //! and orphan/unreachable pages.
 //!
 //! Basic usage:
-//! ```
+//! ```no_run
 //! use lint_ai::graph::Graph;
 //! use lint_ai::report::Report;
 //! use lint_ai::rules::{cross_refs::check_cross_refs, orphan_pages::check_orphans};
@@ -23,5 +23,7 @@ pub mod config;
 pub mod engine;
 pub mod filters;
 pub mod graph;
+pub mod index;
 pub mod report;
 pub mod rules;
+pub mod tier1;

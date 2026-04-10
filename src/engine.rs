@@ -1,15 +1,29 @@
+use crate::cli::{Tier1NerProvider, Tier1TermRankerKind};
 use crate::config::{load_config, normalize_list, Config};
 use crate::filters::is_noise_concept;
-use crate::graph::{normalize_concept, Graph};
+use crate::graph::{normalize_concept, Graph, Tier0Record};
+use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::report::Report;
-use crate::rules::orphan_pages::check_orphans;
 use crate::rules::cross_refs::check_cross_refs;
+use crate::rules::orphan_pages::check_orphans;
+use crate::tier1::{
+    CValueStyleTermRanker, HeuristicKeyEntityRanker, ImportantTermRanker, KeyEntityRanker,
+    RakeStyleTermRanker, SpacyKeyEntityRanker, TextRankStyleTermRanker, Tier1DocEntities,
+    Tier1DocInput, Tier1DocTerms, YakeStyleTermRanker,
+};
 use aho_corasick::AhoCorasick;
 use anyhow::Result;
-use comrak::{nodes::{AstNode, NodeValue}, parse_document, Arena, ComrakOptions};
+use comrak::{
+    nodes::{AstNode, NodeValue},
+    parse_document, Arena, ComrakOptions,
+};
 use deunicode::deunicode;
 use inflector::Inflector;
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
 
 fn surface_forms(raw: &str) -> Vec<String> {
@@ -27,7 +41,6 @@ fn surface_forms(raw: &str) -> Vec<String> {
     forms.insert(spaced.to_singular());
     forms.into_iter().filter(|s| !s.is_empty()).collect()
 }
-
 
 fn build_matcher(
     graph: &Graph,
@@ -113,8 +126,7 @@ fn collect_section_concepts(
         cfg: &Config,
     ) {
         let value = &node.data.borrow().value;
-        let now_in_code = in_code
-            || matches!(value, NodeValue::Code(_) | NodeValue::CodeBlock(_));
+        let now_in_code = in_code || matches!(value, NodeValue::Code(_) | NodeValue::CodeBlock(_));
 
         if let NodeValue::Heading(_) = value {
             let text = heading_text(node);
@@ -229,8 +241,7 @@ fn debug_phrase_matches(
         cfg: &Config,
     ) {
         let value = &node.data.borrow().value;
-        let now_in_code = in_code
-            || matches!(value, NodeValue::Code(_) | NodeValue::CodeBlock(_));
+        let now_in_code = in_code || matches!(value, NodeValue::Code(_) | NodeValue::CodeBlock(_));
 
         if !now_in_code {
             if let NodeValue::Text(ref t) = value {
@@ -349,10 +360,7 @@ fn common_dir_prefix(paths: &[String]) -> Option<String> {
     if paths.is_empty() {
         return None;
     }
-    let parts: Vec<Vec<&str>> = paths
-        .iter()
-        .map(|p| p.split('/').collect())
-        .collect();
+    let parts: Vec<Vec<&str>> = paths.iter().map(|p| p.split('/').collect()).collect();
     let mut prefix: Vec<&str> = Vec::new();
     'outer: for idx in 0..parts[0].len().saturating_sub(1) {
         let candidate = parts[0][idx];
@@ -428,7 +436,10 @@ pub fn analyze_for_tests(graph: &Graph, cfg: &Config) -> String {
     out.push_str("Suggested config:\n");
     out.push_str("{\n");
     out.push_str(&format!("  \"stopwords\": {:?},\n", suggested_stopwords));
-    out.push_str(&format!("  \"ignore_sections\": {:?},\n", suggested_ignore_sections));
+    out.push_str(&format!(
+        "  \"ignore_sections\": {:?},\n",
+        suggested_ignore_sections
+    ));
     out.push_str(&format!(
         "  \"ignore_crossref_sections\": {:?},\n",
         suggested_ignore_sections
@@ -459,6 +470,241 @@ fn analyze_corpus(graph: &Graph, cfg: &Config) {
     print!("{}", out);
 }
 
+fn show_tier1_entities(
+    graph: &Graph,
+    provider: &Tier1NerProvider,
+    spacy_model: &str,
+) -> Result<()> {
+    let docs: Vec<Tier1DocInput> = graph
+        .pages
+        .iter()
+        .map(|p| Tier1DocInput {
+            id: p.rel_path.clone(),
+            source: p.rel_path.clone(),
+            content: p.content.clone(),
+            concept: p.raw_concept.clone(),
+            headings: p.headings.clone(),
+        })
+        .collect();
+    let heuristic = HeuristicKeyEntityRanker;
+    let mut heuristic_by_doc = heuristic.rank_docs(&docs)?;
+    let mut by_doc = match provider {
+        Tier1NerProvider::Heuristic => heuristic_by_doc.clone(),
+        Tier1NerProvider::Spacy => {
+            let spacy = SpacyKeyEntityRanker {
+                model: spacy_model.to_string(),
+                script_path: "scripts/spacy_ner.py".to_string(),
+            };
+            match spacy.rank_docs(&docs) {
+                Ok(out) => out,
+                Err(err) => {
+                    eprintln!(
+                        "warning: {} ranker unavailable ({}), falling back to heuristic",
+                        spacy.name(),
+                        err
+                    );
+                    heuristic_by_doc.clone()
+                }
+            }
+        }
+    };
+
+    let mut docs_out = Vec::new();
+    for doc in docs {
+        let key_entities = by_doc
+            .remove(&doc.id)
+            .or_else(|| heuristic_by_doc.remove(&doc.id))
+            .unwrap_or_default();
+        docs_out.push(Tier1DocEntities {
+            id: doc.id,
+            source: doc.source,
+            key_entities,
+        });
+    }
+    println!("{}", serde_json::to_string_pretty(&docs_out)?);
+    Ok(())
+}
+
+fn show_tier1_terms(graph: &Graph, ranker_kind: &Tier1TermRankerKind) -> Result<()> {
+    let docs: Vec<Tier1DocInput> = graph
+        .pages
+        .iter()
+        .map(|p| Tier1DocInput {
+            id: p.rel_path.clone(),
+            source: p.rel_path.clone(),
+            content: p.content.clone(),
+            concept: p.raw_concept.clone(),
+            headings: p.headings.clone(),
+        })
+        .collect();
+
+    let ranker: Box<dyn ImportantTermRanker> = match ranker_kind {
+        Tier1TermRankerKind::Yake => Box::new(YakeStyleTermRanker),
+        Tier1TermRankerKind::Rake => Box::new(RakeStyleTermRanker),
+        Tier1TermRankerKind::Cvalue => Box::new(CValueStyleTermRanker),
+        Tier1TermRankerKind::Textrank => Box::new(TextRankStyleTermRanker),
+    };
+
+    let mut out = Vec::new();
+    for doc in docs {
+        let important_terms = ranker.rank_terms(&doc);
+        out.push(Tier1DocTerms {
+            id: doc.id,
+            source: doc.source,
+            important_terms,
+        });
+    }
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+fn select_term_ranker(ranker_kind: &Tier1TermRankerKind) -> Box<dyn ImportantTermRanker> {
+    match ranker_kind {
+        Tier1TermRankerKind::Yake => Box::new(YakeStyleTermRanker),
+        Tier1TermRankerKind::Rake => Box::new(RakeStyleTermRanker),
+        Tier1TermRankerKind::Cvalue => Box::new(CValueStyleTermRanker),
+        Tier1TermRankerKind::Textrank => Box::new(TextRankStyleTermRanker),
+    }
+}
+
+fn build_memory_index(
+    graph: &Graph,
+    provider: &Tier1NerProvider,
+    spacy_model: &str,
+    ranker_kind: &Tier1TermRankerKind,
+) -> Result<MemoryIndex> {
+    let docs: Vec<Tier1DocInput> = graph
+        .pages
+        .iter()
+        .map(|p| Tier1DocInput {
+            id: p.rel_path.clone(),
+            source: p.rel_path.clone(),
+            content: p.content.clone(),
+            concept: p.raw_concept.clone(),
+            headings: p.headings.clone(),
+        })
+        .collect();
+
+    let heuristic = HeuristicKeyEntityRanker;
+    let entities_by_doc = match provider {
+        Tier1NerProvider::Heuristic => heuristic.rank_docs(&docs)?,
+        Tier1NerProvider::Spacy => {
+            let spacy = SpacyKeyEntityRanker {
+                model: spacy_model.to_string(),
+                script_path: "scripts/spacy_ner.py".to_string(),
+            };
+            spacy
+                .rank_docs(&docs)
+                .unwrap_or_else(|_| heuristic.rank_docs(&docs).unwrap_or_default())
+        }
+    };
+
+    let term_ranker = select_term_ranker(ranker_kind);
+    let term_ranker_name = term_ranker.name().to_string();
+    let ner_provider_name = match provider {
+        Tier1NerProvider::Heuristic => "heuristic".to_string(),
+        Tier1NerProvider::Spacy => format!("spacy:{}", spacy_model),
+    };
+    let tier0_by_source: HashMap<String, &Tier0Record> = graph
+        .tier0_records
+        .iter()
+        .map(|r| (r.source.clone(), r))
+        .collect();
+
+    let mut records = Vec::new();
+    for doc in docs {
+        let key_entities = entities_by_doc.get(&doc.id).cloned().unwrap_or_default();
+        let important_terms = term_ranker.rank_terms(&doc);
+        let t0 = tier0_by_source.get(&doc.source).copied();
+        let probable_topic = if let Some(first_heading) = doc.headings.first() {
+            Some(first_heading.clone())
+        } else {
+            important_terms.first().map(|t| t.term.clone())
+        };
+        let joined_headings = doc.headings.join(" ").to_lowercase();
+        let content_l = doc.content.to_lowercase();
+        let doc_type_guess = if joined_headings.contains("incident")
+            || content_l.contains("postmortem")
+        {
+            Some("incident".to_string())
+        } else if joined_headings.contains("runbook") || content_l.contains("playbook") {
+            Some("runbook".to_string())
+        } else if joined_headings.contains("changelog") || content_l.contains("release notes") {
+            Some("changelog".to_string())
+        } else if joined_headings.contains("reference") {
+            Some("reference".to_string())
+        } else if joined_headings.contains("tutorial") || joined_headings.contains("quick start") {
+            Some("tutorial".to_string())
+        } else if joined_headings.contains("decision") || content_l.contains("adr") {
+            Some("decision".to_string())
+        } else {
+            None
+        };
+        records.push(DocRecord {
+            doc_id: doc.id.clone(),
+            source: doc.source.clone(),
+            content: doc.content.clone(),
+            timestamp: t0.and_then(|r| r.timestamp.clone()),
+            doc_length: t0.map(|r| r.doc_length).unwrap_or(doc.content.len()),
+            author_agent: t0.and_then(|r| r.author_agent.clone()),
+            probable_topic,
+            doc_type_guess,
+            headings: doc.headings.clone(),
+            key_entities,
+            important_terms,
+            embedding: None,
+            top_claims: Vec::new(),
+            provenance: Provenance {
+                source: doc.source.clone(),
+                timestamp: t0.and_then(|r| r.timestamp.clone()),
+                ner_provider: ner_provider_name.clone(),
+                term_ranker: term_ranker_name.clone(),
+                index_version: "v1-memory-hybrid".to_string(),
+            },
+        });
+    }
+    Ok(MemoryIndex::from_records(records))
+}
+
+#[derive(Serialize)]
+struct Tier0IndexFile {
+    tier: String,
+    generated_at_unix: u64,
+    path: String,
+    document_count: usize,
+    documents_by_id: BTreeMap<String, Tier0Record>,
+}
+
+fn write_tier0_index(path: &str, records: &[Tier0Record], scanned_path: &str) -> Result<String> {
+    let mut output_path = Path::new(path).to_path_buf();
+    if output_path.extension().is_none() {
+        output_path.set_extension("json");
+    }
+    let mut documents_by_id: BTreeMap<String, Tier0Record> = BTreeMap::new();
+    for record in records {
+        documents_by_id.insert(record.id.clone(), record.clone());
+    }
+    let generated_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let payload = Tier0IndexFile {
+        tier: "tier0".to_string(),
+        generated_at_unix,
+        path: scanned_path.to_string(),
+        document_count: documents_by_id.len(),
+        documents_by_id,
+    };
+    let json = serde_json::to_string_pretty(&payload)?;
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&output_path, json)?;
+    Ok(output_path.display().to_string())
+}
+
 /// Run the lint pipeline using CLI arguments.
 ///
 /// This is the main entry point used by the CLI wrapper in `main.rs`.
@@ -483,6 +729,44 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             let rel = p.rel_path.to_lowercase();
             !ignore.iter().any(|pat| rel.contains(pat))
         });
+        let retained: HashSet<String> = graph.pages.iter().map(|p| p.rel_path.clone()).collect();
+        graph.tier0_records.retain(|r| retained.contains(&r.source));
+    }
+    if args.show_tier0 {
+        println!("{}", serde_json::to_string_pretty(&graph.tier0_records)?);
+        return Ok(());
+    }
+    if args.show_tier1_entities {
+        show_tier1_entities(&graph, &args.tier1_ner_provider, &args.spacy_model)?;
+        return Ok(());
+    }
+    if args.show_tier1_terms {
+        show_tier1_terms(&graph, &args.tier1_term_ranker)?;
+        return Ok(());
+    }
+    if args.index || args.query.is_some() {
+        let index = build_memory_index(
+            &graph,
+            &args.tier1_ner_provider,
+            &args.spacy_model,
+            &args.tier1_term_ranker,
+        )?;
+        if let Some(query) = args.query.as_deref() {
+            let results = index.query(query, 20);
+            println!("{}", serde_json::to_string_pretty(&results)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&index)?);
+        }
+        return Ok(());
+    }
+    if let Some(out_path) = args.tier0_index_out.as_deref() {
+        let written_path = write_tier0_index(out_path, &graph.tier0_records, &args.path)?;
+        println!(
+            "Wrote Tier 0 index ({} documents) to {}",
+            graph.tier0_records.len(),
+            written_path
+        );
+        return Ok(());
     }
     if args.show_concepts {
         show_concepts_by_section(&graph, &cfg);

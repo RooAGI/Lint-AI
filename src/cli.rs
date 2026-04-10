@@ -1,4 +1,18 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Tier1NerProvider {
+    Heuristic,
+    Spacy,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum Tier1TermRankerKind {
+    Yake,
+    Rake,
+    Cvalue,
+    Textrank,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "lint-ai")]
@@ -9,6 +23,24 @@ pub struct Args {
     pub show_concepts: bool,
     #[arg(long)]
     pub show_headings: bool,
+    #[arg(long)]
+    pub show_tier0: bool,
+    #[arg(long)]
+    pub show_tier1_entities: bool,
+    #[arg(long)]
+    pub show_tier1_terms: bool,
+    #[arg(long)]
+    pub index: bool,
+    #[arg(long)]
+    pub query: Option<String>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json")]
+    pub tier0_index_out: Option<String>,
+    #[arg(long, value_enum, default_value = "heuristic")]
+    pub tier1_ner_provider: Tier1NerProvider,
+    #[arg(long, value_enum, default_value = "yake")]
+    pub tier1_term_ranker: Tier1TermRankerKind,
+    #[arg(long, default_value = "en_core_web_sm")]
+    pub spacy_model: String,
     #[arg(long)]
     pub debug_matches: bool,
     #[arg(long)]

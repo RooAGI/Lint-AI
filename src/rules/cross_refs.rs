@@ -5,9 +5,9 @@ use crate::report::Report;
 use aho_corasick::AhoCorasick;
 use deunicode::deunicode;
 use inflector::Inflector;
+use petgraph::algo::kosaraju_scc;
 use std::collections::{HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
-use petgraph::algo::kosaraju_scc;
 
 fn is_word_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
@@ -52,7 +52,6 @@ fn surface_forms(raw: &str) -> Vec<String> {
     forms.insert(spaced.to_singular());
     forms.into_iter().filter(|s| !s.is_empty()).collect()
 }
-
 
 /// Check for missing cross-references based on concept mentions.
 pub fn check_cross_refs(graph: &Graph, report: &mut Report, cfg: &Config) {
@@ -141,8 +140,10 @@ pub fn check_cross_refs(graph: &Graph, report: &mut Report, cfg: &Config) {
         ) {
             let value = &node.data.borrow().value;
             let now_in_code = in_code
-                || matches!(value, comrak::nodes::NodeValue::Code(_)
-                    | comrak::nodes::NodeValue::CodeBlock(_));
+                || matches!(
+                    value,
+                    comrak::nodes::NodeValue::Code(_) | comrak::nodes::NodeValue::CodeBlock(_)
+                );
 
             if let comrak::nodes::NodeValue::Heading(_) = value {
                 let mut text = String::new();

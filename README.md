@@ -1,13 +1,90 @@
 # Lint AI
 
-Lint AI is a semantic documentation linter for Markdown knowledge bases. It builds a concept
-inventory from your docs, generates surface forms for each concept, matches phrases across
-the corpus, and applies false-positive filters to surface missing cross-references and
-orphan pages.
+Lint-AI is a system for analyzing and aligning large corpora of AI-generated documentation.
 
-The linter is designed to be general-purpose. You point it at any docs folder (for example
-`docs/`), and it produces a report you can review to tighten navigation, eliminate stale
-islands, and keep a large doc set coherent.
+As AI systems produce increasing amounts of documentation--task records, traces, logs, decisions, and reports--these artifacts often become inconsistent, outdated, or misaligned with each other. Lint-AI addresses this by treating documentation as a network of facts, rather than isolated text.
+
+## How it works
+
+Lint-AI processes documentation in several stages:
+
+### 1. Fact Extraction
+Extracts entities, concepts, and claims from each document.
+
+### 2. Concept & Entity Resolution
+Identifies when different documents refer to the same concept using different terms.
+
+### 3. Fact Graph Construction
+Builds a network of normalized facts with context such as:
+- source document
+- time
+- confidence
+- status (current, deprecated, proposed)
+
+### 4. Misalignment Detection
+Identifies potential issues such as:
+- contradictions
+- terminology drift
+- scope conflicts
+- unsupported claims
+- missing required context
+
+### 5. AI Review
+Routes suspicious cases to an AI reviewer that verifies and explains the issue with context.
+
+Instead of enforcing rigid templates, Lint-AI focuses on understanding and comparing what documents actually say, enabling systematic detection of misalignment at scale.
+
+The result is a continuous alignment layer that helps ensure AI-generated work remains consistent, interpretable, and trustworthy over time.
+
+## Why Lint-AI?
+
+AI systems don't just produce outputs--they produce documentation about their work.
+
+Over time, this creates a growing body of:
+- task summaries
+- decision notes
+- traces and logs
+- generated reports
+
+Without alignment:
+- terminology drifts
+- definitions conflict
+- outdated concepts persist
+- claims become unsupported or inconsistent
+
+Reading individual documents is not enough. The problem is **system-level consistency**.
+
+Lint-AI addresses this by analyzing documentation collectively, not in isolation.
+
+## Vision
+
+As AI systems perform more work, they will continuously generate documentation describing their actions, decisions, and outputs.
+
+Lint-AI aims to ensure that this growing body of AI-generated knowledge remains:
+- consistent
+- traceable
+- interpretable
+- aligned over time
+
+## Under the hood
+
+Lint-AI builds on techniques such as:
+- concept extraction
+- corpus-wide matching
+- terminology analysis
+
+These are used as part of a larger system for fact extraction and alignment reasoning.
+
+## What Lint-AI is NOT
+
+Lint-AI is not:
+- a Markdown style checker
+- a grammar tool
+- a fixed template enforcer
+
+It does not require documents to follow a rigid schema.
+
+Instead, it focuses on understanding what documents *mean* and how they relate to each other.
 
 ## Usage
 

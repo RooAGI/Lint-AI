@@ -3,9 +3,11 @@ use comrak::{nodes::NodeValue, parse_document, Arena, ComrakOptions};
 use deunicode::deunicode;
 use petgraph::graph::{DiGraph, NodeIndex};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use unicode_normalization::UnicodeNormalization;
 use walkdir::WalkDir;
 
@@ -30,10 +32,28 @@ pub struct Page {
 pub struct Graph {
     /// All parsed pages.
     pub pages: Vec<Page>,
+    /// Tier 0 ingestion records for each parsed document.
+    pub tier0_records: Vec<Tier0Record>,
     /// Map of concept -> node index in the graph.
     pub index: HashMap<String, NodeIndex>,
     /// Directed graph of page links.
     pub graph: DiGraph<String, ()>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tier0Record {
+    /// Stable document id for ingestion.
+    pub id: String,
+    /// Source path for the document (relative to scan root).
+    pub source: String,
+    /// Last-modified timestamp (unix seconds as string), when available.
+    pub timestamp: Option<String>,
+    /// Author/agent from frontmatter, when available.
+    pub author_agent: Option<String>,
+    /// Document length in bytes.
+    pub doc_length: usize,
+    /// Additional lightweight metadata for later tiers.
+    pub metadata: HashMap<String, String>,
 }
 
 /// Normalize a concept string for matching (unicode + deunicode + case fold).
@@ -66,10 +86,7 @@ fn concept_from_link_target(target: &str) -> Option<String> {
 
     let target = target.trim_end_matches('/');
     let path = Path::new(target);
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(target);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(target);
     if stem.is_empty() {
         return None;
     }
@@ -95,11 +112,33 @@ fn docs_dir(root: &Path) -> PathBuf {
     }
 }
 
+fn parse_frontmatter_kv(content: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return out;
+    }
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+        if let Some((k, v)) = trimmed.split_once(':') {
+            let key = k.trim().to_lowercase();
+            let value = v.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !key.is_empty() && !value.is_empty() {
+                out.insert(key, value);
+            }
+        }
+    }
+    out
+}
+
 impl Graph {
     /// Build a graph from the given path, applying size and depth limits.
     ///
     /// Example:
-    /// ```
+    /// ```no_run
     /// use lint_ai::graph::Graph;
     /// let graph = Graph::build("docs", 5_000_000, 50_000, 20, 100_000_000).unwrap();
     /// println!("pages: {}", graph.pages.len());
@@ -126,6 +165,7 @@ impl Graph {
         let md_heading_re = Regex::new(r"(?m)^#{1,6}\s+(.*)$")?;
 
         let mut pages = Vec::new();
+        let mut tier0_records = Vec::new();
 
         let mut files_seen = 0usize;
         let mut total_bytes = 0usize;
@@ -140,7 +180,11 @@ impl Graph {
                 }
             }
 
-            let ext = entry.path().extension().and_then(|s| s.to_str()).unwrap_or("");
+            let ext = entry
+                .path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
             if ext != "md" {
                 continue;
             }
@@ -226,6 +270,46 @@ impl Graph {
                 headings,
             };
 
+            let mut basic_metadata: HashMap<String, String> = HashMap::new();
+            basic_metadata.insert("concept".to_string(), page.concept.clone());
+            basic_metadata.insert("raw_concept".to_string(), page.raw_concept.clone());
+            basic_metadata.insert("file_ext".to_string(), "md".to_string());
+            basic_metadata.insert("heading_count".to_string(), page.headings.len().to_string());
+            basic_metadata.insert(
+                "outbound_link_count".to_string(),
+                page.links.len().to_string(),
+            );
+            basic_metadata.insert("path".to_string(), page.path.clone());
+
+            let file_size = metadata.len() as usize;
+            let timestamp = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs().to_string());
+            let frontmatter = parse_frontmatter_kv(&page.content);
+            let author_agent = frontmatter
+                .get("author")
+                .cloned()
+                .or_else(|| frontmatter.get("agent").cloned())
+                .or_else(|| frontmatter.get("author_agent").cloned())
+                .or_else(|| frontmatter.get("created_by").cloned());
+            if frontmatter.contains_key("author") {
+                basic_metadata.insert("frontmatter_author".to_string(), "true".to_string());
+            }
+            if frontmatter.contains_key("agent") {
+                basic_metadata.insert("frontmatter_agent".to_string(), "true".to_string());
+            }
+            basic_metadata.insert("file_size_bytes".to_string(), file_size.to_string());
+
+            tier0_records.push(Tier0Record {
+                id: page.rel_path.clone(),
+                source: page.rel_path.clone(),
+                timestamp,
+                author_agent,
+                doc_length: file_size,
+                metadata: basic_metadata,
+            });
             pages.push(page);
         }
 
@@ -244,7 +328,12 @@ impl Graph {
                 }
             }
         }
-        Ok(Self { pages, index, graph })
+        Ok(Self {
+            pages,
+            tier0_records,
+            index,
+            graph,
+        })
     }
 }
 
@@ -271,5 +360,14 @@ mod tests {
         );
         assert_eq!(concept_from_link_target("https://example.com"), None);
         assert_eq!(concept_from_link_target("mailto:test@example.com"), None);
+    }
+
+    #[test]
+    fn parse_frontmatter_metadata() {
+        let content = "---\nauthor: lint-bot\nagent: reviewer-v1\ntopic: docs\n---\n# Title";
+        let parsed = parse_frontmatter_kv(content);
+        assert_eq!(parsed.get("author").map(|s| s.as_str()), Some("lint-bot"));
+        assert_eq!(parsed.get("agent").map(|s| s.as_str()), Some("reviewer-v1"));
+        assert_eq!(parsed.get("topic").map(|s| s.as_str()), Some("docs"));
     }
 }

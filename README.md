@@ -96,6 +96,65 @@ Run the linter against a docs directory:
 ./lint-ai /path/to/repo
 ```
 
+### Tier 0 and Tier 1 Outputs
+
+Show Tier 0 ingestion records:
+
+```bash
+./lint-ai /path/to/repo --show-tier0
+```
+
+Write a Tier 0 index JSON:
+
+```bash
+./lint-ai /path/to/repo --tier0-index-out
+```
+
+Show Tier 1 key entities:
+
+```bash
+./lint-ai /path/to/repo --show-tier1-entities
+```
+
+Use spaCy for Tier 1 entities (falls back to heuristic if unavailable):
+
+```bash
+./lint-ai /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
+```
+
+Show Tier 1 important terms:
+
+```bash
+./lint-ai /path/to/repo --show-tier1-terms --tier1-term-ranker yake
+```
+
+Available term rankers:
+- `yake`
+- `rake`
+- `cvalue`
+- `textrank`
+
+### Index and Query
+
+Build and print the in-memory hybrid index:
+
+```bash
+./lint-ai --index /path/to/repo/docs
+```
+
+Query the corpus (index is built automatically behind the scenes):
+
+```bash
+./lint-ai --query "docker install linux" /path/to/repo/docs
+```
+
+The query pipeline uses hybrid scoring with:
+- BM25 lexical scoring
+- key-entity overlap
+- important-term overlap
+- topic/doc-type boosts when available
+- score breakdown output for transparency
+
 ### Download Release Binaries
 
 Download the latest release binary from the GitHub Releases page for this repo, then verify the checksum.

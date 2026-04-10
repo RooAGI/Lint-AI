@@ -32,6 +32,8 @@ pub struct Args {
     #[arg(long)]
     pub index: bool,
     #[arg(long)]
+    pub index_redacted: bool,
+    #[arg(long)]
     pub query: Option<String>,
     #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json")]
     pub tier0_index_out: Option<String>,

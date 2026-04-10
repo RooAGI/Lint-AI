@@ -5,6 +5,8 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct Tier1DocInput {
@@ -277,6 +279,24 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
             .spawn()?;
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(input_json.as_bytes())?;
+        }
+        let timeout = Duration::from_secs(20);
+        let start = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait()? {
+                if !status.success() {
+                    let output = child.wait_with_output()?;
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    anyhow::bail!("spaCy subprocess failed: {}", stderr.trim());
+                }
+                break;
+            }
+            if start.elapsed() >= timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("spaCy subprocess timed out after {}s", timeout.as_secs());
+            }
+            sleep(Duration::from_millis(50));
         }
         let output = child.wait_with_output()?;
         if !output.status.success() {

@@ -29,6 +29,38 @@ pub struct Page {
     pub headings: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChunkNode {
+    /// Stable chunk id (<rel_path>::<idx>)
+    pub chunk_id: String,
+    /// Parent document rel path.
+    pub doc_rel_path: String,
+    /// Section heading for this chunk.
+    pub heading: String,
+    /// 1-based start line in parent doc.
+    pub start_line: usize,
+    /// 1-based end line in parent doc.
+    pub end_line: usize,
+    /// Chunk text.
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ChunkEdgeKind {
+    /// Sequence edge between adjacent chunks in same doc.
+    Next,
+    /// Cross-doc edge projected from doc-level links.
+    DocLink,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EntityEdgeKind {
+    /// Two entities co-occurred in at least one document.
+    CoOccurs,
+    /// A document-level link projected to concept entities.
+    DocLink,
+}
+
 pub struct Graph {
     /// All parsed pages.
     pub pages: Vec<Page>,
@@ -38,6 +70,20 @@ pub struct Graph {
     pub index: HashMap<String, NodeIndex>,
     /// Directed graph of page links.
     pub graph: DiGraph<String, ()>,
+    /// All chunk nodes across the corpus.
+    pub chunks: Vec<ChunkNode>,
+    /// Map of chunk_id -> chunk node index.
+    pub chunk_index: HashMap<String, NodeIndex>,
+    /// Map of doc rel_path -> ordered chunk ids.
+    pub doc_to_chunks: HashMap<String, Vec<String>>,
+    /// Directed chunk graph.
+    pub chunk_graph: DiGraph<String, ChunkEdgeKind>,
+    /// Map of canonical entity -> node index.
+    pub entity_index: HashMap<String, NodeIndex>,
+    /// Canonical entity graph.
+    pub entity_graph: DiGraph<String, EntityEdgeKind>,
+    /// Document -> canonical entities mentioned in that document.
+    pub doc_entities: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +175,96 @@ fn parse_frontmatter_kv(content: &str) -> HashMap<String, String> {
             if !key.is_empty() && !value.is_empty() {
                 out.insert(key, value);
             }
+        }
+    }
+    out
+}
+
+fn chunk_page_sections(content: &str, rel_path: &str) -> Vec<ChunkNode> {
+    let heading_re = Regex::new(r"(?m)^#{1,6}\s+(.*)$").expect("valid heading regex");
+    let mut chunks = Vec::new();
+    let mut last_start = 0usize;
+    let mut current_heading = "(document)".to_string();
+    let mut idx = 0usize;
+
+    for cap in heading_re.captures_iter(content) {
+        let m = match cap.get(0) {
+            Some(v) => v,
+            None => continue,
+        };
+        if m.start() > last_start {
+            let body = content[last_start..m.start()].trim();
+            if !body.is_empty() {
+                let start_line = content[..last_start].lines().count().max(1);
+                let end_line = content[..m.start()].lines().count().max(start_line);
+                chunks.push(ChunkNode {
+                    chunk_id: format!("{}::{}", rel_path, idx),
+                    doc_rel_path: rel_path.to_string(),
+                    heading: current_heading.clone(),
+                    start_line,
+                    end_line,
+                    content: body.to_string(),
+                });
+                idx += 1;
+            }
+        }
+        current_heading = cap
+            .get(1)
+            .map(|v| v.as_str().trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "(section)".to_string());
+        last_start = m.end();
+    }
+
+    let tail = content[last_start..].trim();
+    if !tail.is_empty() {
+        let start_line = content[..last_start].lines().count().max(1);
+        let end_line = content.lines().count().max(start_line);
+        chunks.push(ChunkNode {
+            chunk_id: format!("{}::{}", rel_path, idx),
+            doc_rel_path: rel_path.to_string(),
+            heading: current_heading,
+            start_line,
+            end_line,
+            content: tail.to_string(),
+        });
+    }
+
+    if chunks.is_empty() {
+        chunks.push(ChunkNode {
+            chunk_id: format!("{}::0", rel_path),
+            doc_rel_path: rel_path.to_string(),
+            heading: "(document)".to_string(),
+            start_line: 1,
+            end_line: content.lines().count().max(1),
+            content: content.to_string(),
+        });
+    }
+    chunks
+}
+
+fn extract_doc_entities(content: &str, concept: &str) -> HashSet<String> {
+    let mut out: HashSet<String> = HashSet::new();
+    let concept_norm = normalize_concept(concept);
+    if !concept_norm.is_empty() {
+        out.insert(concept_norm);
+    }
+
+    let title_case_re =
+        Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b").expect("valid entity regex");
+    for cap in title_case_re.captures_iter(content).take(100) {
+        if let Some(m) = cap.get(1) {
+            let e = normalize_concept(m.as_str());
+            if e.len() >= 3 {
+                out.insert(e);
+            }
+        }
+    }
+    let acronym_re = Regex::new(r"\b([A-Z]{2,8})\b").expect("valid acronym regex");
+    for m in acronym_re.find_iter(content).take(80) {
+        let e = normalize_concept(m.as_str());
+        if e.len() >= 2 {
+            out.insert(e);
         }
     }
     out
@@ -328,11 +464,124 @@ impl Graph {
                 }
             }
         }
+        // Build chunk graph on top of parsed pages.
+        let mut chunks = Vec::new();
+        let mut chunk_index: HashMap<String, NodeIndex> = HashMap::new();
+        let mut doc_to_chunks: HashMap<String, Vec<String>> = HashMap::new();
+        let mut chunk_graph = DiGraph::<String, ChunkEdgeKind>::new();
+
+        // Concept -> rel_path for link projection onto first chunk of target doc.
+        let concept_to_rel_path: HashMap<String, String> = pages
+            .iter()
+            .map(|p| (p.concept.clone(), p.rel_path.clone()))
+            .collect();
+
+        for page in &pages {
+            let page_chunks = chunk_page_sections(&page.content, &page.rel_path);
+            let mut ordered_ids = Vec::new();
+            for ch in page_chunks {
+                let node = chunk_graph.add_node(ch.chunk_id.clone());
+                chunk_index.insert(ch.chunk_id.clone(), node);
+                ordered_ids.push(ch.chunk_id.clone());
+                chunks.push(ch);
+            }
+            // Intra-doc sequence edges.
+            for pair in ordered_ids.windows(2) {
+                if let [a, b] = pair {
+                    if let (Some(&from), Some(&to)) = (chunk_index.get(a), chunk_index.get(b)) {
+                        chunk_graph.add_edge(from, to, ChunkEdgeKind::Next);
+                    }
+                }
+            }
+            doc_to_chunks.insert(page.rel_path.clone(), ordered_ids);
+        }
+
+        // Project doc links to first chunk -> first chunk.
+        for page in &pages {
+            let Some(from_chunks) = doc_to_chunks.get(&page.rel_path) else {
+                continue;
+            };
+            let Some(from_first) = from_chunks.first() else {
+                continue;
+            };
+            let Some(&from_node) = chunk_index.get(from_first) else {
+                continue;
+            };
+            for link in &page.links {
+                let Some(target_rel) = concept_to_rel_path.get(link) else {
+                    continue;
+                };
+                let Some(target_chunks) = doc_to_chunks.get(target_rel) else {
+                    continue;
+                };
+                let Some(target_first) = target_chunks.first() else {
+                    continue;
+                };
+                if let Some(&to_node) = chunk_index.get(target_first) {
+                    chunk_graph.add_edge(from_node, to_node, ChunkEdgeKind::DocLink);
+                }
+            }
+        }
+
+        // Build entity graph.
+        let mut entity_graph = DiGraph::<String, EntityEdgeKind>::new();
+        let mut entity_index: HashMap<String, NodeIndex> = HashMap::new();
+        let mut doc_entities: HashMap<String, Vec<String>> = HashMap::new();
+
+        for page in &pages {
+            let mut ents = extract_doc_entities(&page.content, &page.concept)
+                .into_iter()
+                .collect::<Vec<_>>();
+            ents.sort();
+            ents.dedup();
+            for e in &ents {
+                if !entity_index.contains_key(e) {
+                    let n = entity_graph.add_node(e.clone());
+                    entity_index.insert(e.clone(), n);
+                }
+            }
+            doc_entities.insert(page.rel_path.clone(), ents);
+        }
+
+        for ents in doc_entities.values() {
+            for i in 0..ents.len() {
+                for j in (i + 1)..ents.len() {
+                    let a = &ents[i];
+                    let b = &ents[j];
+                    let (Some(&na), Some(&nb)) = (entity_index.get(a), entity_index.get(b)) else {
+                        continue;
+                    };
+                    entity_graph.add_edge(na, nb, EntityEdgeKind::CoOccurs);
+                }
+            }
+        }
+
+        // Project doc links as concept-entity edges.
+        for page in &pages {
+            let from_concept = normalize_concept(&page.concept);
+            let Some(&from_node) = entity_index.get(&from_concept) else {
+                continue;
+            };
+            for link in &page.links {
+                let to_concept = normalize_concept(link);
+                if let Some(&to_node) = entity_index.get(&to_concept) {
+                    entity_graph.add_edge(from_node, to_node, EntityEdgeKind::DocLink);
+                }
+            }
+        }
+
         Ok(Self {
             pages,
             tier0_records,
             index,
             graph,
+            chunks,
+            chunk_index,
+            doc_to_chunks,
+            chunk_graph,
+            entity_index,
+            entity_graph,
+            doc_entities,
         })
     }
 }

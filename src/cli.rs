@@ -21,6 +21,26 @@ pub enum ChunkStrategy {
     Hybrid,
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+pub enum LlmChunkStrategy {
+    All,
+    ByDoc,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum GraphExportFormat {
+    Dot,
+    Json,
+    CytoscapeHtml,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum GraphLevel {
+    Doc,
+    Chunk,
+    Entity,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "lint-ai")]
 /// CLI arguments for the lint-ai binary.
@@ -42,6 +62,26 @@ pub struct Args {
     pub index_redacted: bool,
     #[arg(long)]
     pub query: Option<String>,
+    #[arg(long)]
+    pub llm_context: Option<String>,
+    #[arg(long, default_value_t = 5)]
+    pub result_count: usize,
+    #[arg(long, alias = "simplifed")]
+    pub simplified: bool,
+    #[arg(long, value_enum, default_value = "all")]
+    pub llm_chunk_strategy: LlmChunkStrategy,
+    #[arg(long, value_enum)]
+    pub export_graph: Option<GraphExportFormat>,
+    #[arg(long, default_value = "lint-ai-graph.dot")]
+    pub graph_out: String,
+    #[arg(long, value_enum, default_value = "doc")]
+    pub graph_level: GraphLevel,
+    #[arg(long)]
+    pub show_chunk_graph_stats: bool,
+    #[arg(long)]
+    pub export_ontology: bool,
+    #[arg(long, default_value = "lint-ai-ontology.json")]
+    pub ontology_out: String,
     #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json")]
     pub tier0_index_out: Option<String>,
     #[arg(long, value_enum, default_value = "heuristic")]

@@ -56,6 +56,8 @@ pub struct DocRecord {
     pub probable_topic: Option<String>,
     pub doc_type_guess: Option<String>,
     pub headings: Vec<String>,
+    #[serde(default)]
+    pub doc_links: Vec<String>,
     pub key_entities: Vec<Tier1Entity>,
     pub important_terms: Vec<RankedTerm>,
     pub section_chunks: Vec<SectionChunk>,
@@ -294,6 +296,8 @@ pub struct ScoreBreakdown {
     pub topic_score: f32,
     pub doc_type_score: f32,
     pub recency_score: f32,
+    pub graph_link_score: f32,
+    pub entity_graph_score: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -996,6 +1000,80 @@ impl MemoryIndex {
                 let delta = 0.05;
                 scores[idx] += delta;
                 breakdowns[idx].recency_score += delta;
+            }
+        }
+
+        // Graph-aware rerank features with bounded contribution.
+        // Use current hybrid score as base so graph signals cannot dominate.
+        let base_scores = scores.clone();
+        let mut ranked_docs: Vec<(usize, f32)> = base_scores
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| if *s > 0.0 { Some((i, *s)) } else { None })
+            .collect();
+        ranked_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let anchors = ranked_docs.iter().take(5).cloned().collect::<Vec<_>>();
+        let anchor_doc_ids = anchors
+            .iter()
+            .map(|(idx, _)| self.doc_u32_to_id[*idx].clone())
+            .collect::<Vec<_>>();
+
+        // 1-hop doc-link proximity boost.
+        for (anchor_idx, anchor_score) in &anchors {
+            let anchor_doc_id = &self.doc_u32_to_id[*anchor_idx];
+            let Some(anchor_doc) = self.docs.get(anchor_doc_id) else {
+                continue;
+            };
+            let anchor_weight = (*anchor_score / (1.0 + *anchor_score)).clamp(0.0, 1.0);
+            for linked in &anchor_doc.doc_links {
+                if let Some(&doc_u32) = self.doc_id_to_u32.get(linked) {
+                    let idx = doc_u32 as usize;
+                    if base_scores[idx] <= 0.0 {
+                        continue;
+                    }
+                    let delta = (0.22 * anchor_weight).min(0.6 - breakdowns[idx].graph_link_score);
+                    if delta > 0.0 {
+                        scores[idx] += delta;
+                        breakdowns[idx].graph_link_score += delta;
+                    }
+                }
+            }
+        }
+
+        // Entity-graph proximity boost: overlap against anchor-entity set.
+        let mut anchor_entities: HashSet<String> = HashSet::new();
+        for doc_id in &anchor_doc_ids {
+            if let Some(doc) = self.docs.get(doc_id) {
+                for e in &doc.key_entities {
+                    let k = normalize_for_index(&e.text);
+                    if !k.is_empty() {
+                        anchor_entities.insert(k);
+                    }
+                }
+            }
+        }
+        if !anchor_entities.is_empty() {
+            for (doc_id, doc) in &self.docs {
+                let Some(&doc_u32) = self.doc_id_to_u32.get(doc_id) else {
+                    continue;
+                };
+                let idx = doc_u32 as usize;
+                if base_scores[idx] <= 0.0 {
+                    continue;
+                }
+                let overlap = doc
+                    .key_entities
+                    .iter()
+                    .map(|e| normalize_for_index(&e.text))
+                    .filter(|k| !k.is_empty() && anchor_entities.contains(k))
+                    .count();
+                if overlap > 0 {
+                    let delta = (0.08 * overlap as f32).min(0.6 - breakdowns[idx].entity_graph_score);
+                    if delta > 0.0 {
+                        scores[idx] += delta;
+                        breakdowns[idx].entity_graph_score += delta;
+                    }
+                }
             }
         }
 

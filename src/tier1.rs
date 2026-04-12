@@ -272,6 +272,7 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
         let input_json = serde_json::to_string(&payload)?;
 
         let mut child = Command::new("python3")
+            .arg("-I")
             .arg(&self.script_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -23,3 +23,19 @@ target
 # Codex and release artifacts
 .codex
 target/release
+
+# Lint-AI local cache
+.lint-ai-cache/
+
+# Local workspace file
+lint-ai.code-workspace
+
+# Generated graph artifacts
+lint-ai-graph.dot
+lint-ai-graph.png
+lint-ai-graph.svg
+lint-ai-graph.html
+lint-ai-chunk-graph.html
+
+# Optional for library-style workflows
+Cargo.lock

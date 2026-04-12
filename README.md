@@ -137,6 +137,76 @@ Query the corpus (index is built automatically behind the scenes):
 ./lint-ai --query "docker install linux" /path/to/repo/docs
 ```
 
+Generate LLM-ready retrieval context (same index/query engine, different output schema):
+
+```bash
+./lint-ai --llm-context "docker install linux" /path/to/repo/docs
+./lint-ai --llm-context "docker install linux" --result-count 10 /path/to/repo/docs
+./lint-ai --llm-context "docker install linux" --simplified /path/to/repo/docs
+```
+
+`--llm-context` is chunk-focused output for LLM grounding (`top_chunks` + citation policy), while `--query` stays doc-focused.
+
+Chunk selection strategy for `--llm-context`:
+
+```bash
+./lint-ai --llm-context "docker install linux" --llm-chunk-strategy all /path/to/repo/docs
+./lint-ai --llm-context "docker install linux" --llm-chunk-strategy by-doc /path/to/repo/docs
+```
+
+Default is `all` (global chunk scoring).
+
+Export graph for visualization (Graphviz DOT):
+
+```bash
+./lint-ai /path/to/repo/docs --export-graph dot --graph-out lint-ai-graph.dot
+dot -Tpng lint-ai-graph.dot -o lint-ai-graph.png
+```
+
+Export chunk-level graph (DOT):
+
+```bash
+./lint-ai /path/to/repo/docs --export-graph dot --graph-level chunk --graph-out lint-ai-chunk-graph.dot
+dot -Tpng lint-ai-chunk-graph.dot -o lint-ai-chunk-graph.png
+```
+
+Export entity-level graph (DOT):
+
+```bash
+./lint-ai /path/to/repo/docs --export-graph dot --graph-level entity --graph-out lint-ai-entity-graph.dot
+dot -Tpng lint-ai-entity-graph.dot -o lint-ai-entity-graph.png
+```
+
+Export graph as JSON (for D3/Cytoscape integration):
+
+```bash
+./lint-ai /path/to/repo/docs --export-graph json --graph-out lint-ai-graph.json
+./lint-ai /path/to/repo/docs --export-graph json --graph-level chunk --graph-out lint-ai-chunk-graph.json
+./lint-ai /path/to/repo/docs --export-graph json --graph-level entity --graph-out lint-ai-entity-graph.json
+```
+
+Export interactive Cytoscape.js HTML:
+
+```bash
+./lint-ai /path/to/repo/docs --export-graph cytoscape-html --graph-out lint-ai-graph.html
+./lint-ai /path/to/repo/docs --export-graph cytoscape-html --graph-level chunk --graph-out lint-ai-chunk-graph.html
+./lint-ai /path/to/repo/docs --export-graph cytoscape-html --graph-level entity --graph-out lint-ai-entity-graph.html
+```
+
+Note: Cytoscape HTML exports load `./cytoscape.min.js` from the same directory as the HTML file.
+
+Show chunk graph stats:
+
+```bash
+./lint-ai /path/to/repo/docs --show-chunk-graph-stats
+```
+
+Export seed entity ontology graph (JSON):
+
+```bash
+./lint-ai /path/to/repo/docs --export-ontology --ontology-out lint-ai-ontology.json
+```
+
 Query output includes:
 - `query`
 - `elapsed_ms`
@@ -157,30 +227,6 @@ The query pipeline uses hybrid scoring with:
 - score breakdown output for transparency
 
 Chunk strategy details: `docs/chunk-strategy.md`
-
-### Download Release Binaries
-
-Download the latest release binary from the GitHub Releases page for this repo, then verify the checksum.
-
-Release artifacts (v0.1.3):
-
-```
-lint-ai-linux-x86_64
-sha256:7ec06e0ed69a2fa1c2acd55c5ef1ee2c951ed57a35a3d7a64481e61fa35c18eb
-
-lint-ai-macos-x86_64
-sha256:9bc2879e90434f470782ec9630fe1eab26fcb399da6574ae20bfcf3b37794d46
-
-lint-ai-windows-x86_64.exe
-sha256:a5be16b5543b49d5a7a931612f117d112fe63f7f5cd2d791d0808ab3be5a5fc0
-```
-
-Verify checksums:
-
-```bash
-sha256sum lint-ai-linux-x86_64
-shasum -a 256 lint-ai-macos-x86_64
-```
 
 ## Advanced
 
@@ -227,6 +273,70 @@ Debug phrase matches (prints matched text fragments and concepts):
 ```bash
 ./lint-ai /path/to/openclaw/docs/channels --debug-matches
 ```
+
+## Coordinator + Workers
+
+`lint-service` can run as a coordinator in front of multiple long-running `lint-client` workers.
+
+### Components
+
+- `lint-service`: gRPC coordinator + HTTP gateway/UI
+- `lint-client`: worker process that executes `lint-ai`
+- `lint-dispatch`: dispatch CLI that sends one request to coordinator and returns aggregated JSON
+
+### Start coordinator
+
+```bash
+cd /home/louis/sources/lint-service
+LINT_SERVICE_ADDR=127.0.0.1:50051 \
+LINT_HTTP_ADDR=127.0.0.1:8080 \
+cargo run --bin lint-service
+```
+
+### Start a worker
+
+```bash
+cd /home/louis/sources/lint-service
+LINT_AI_PATH=/home/louis/sources/lint-ai/target/debug/lint-ai \
+LINT_WORKER_ADDR=127.0.0.1:50052 \
+LINT_WORKER_ID=worker-1 \
+LINT_WORKER_PATH=/home/louis/sources/openclaw/docs \
+LINT_HTTP_ADDR=http://127.0.0.1:8080 \
+cargo run --bin lint-client
+```
+
+Workers send heartbeats to coordinator every 5s. Coordinator keeps a presence table and drops stale workers automatically.
+
+### Dispatch a query
+
+```bash
+cd /home/louis/sources/lint-service
+LINT_SERVICE_ADDR=http://127.0.0.1:50051 \
+cargo run --bin lint-dispatch -- --query "mac install"
+```
+
+### HTTP gateway and UI
+
+- `GET /`: web UI (workers + recent jobs + top results)
+- `GET /api/workers`: current worker presence
+- `GET /api/jobs`: recent dispatch jobs
+- `POST /api/dispatch`: run dispatch via HTTP
+- `POST /api/worker/heartbeat`: worker heartbeat endpoint
+
+`/api/dispatch` accepts:
+
+```json
+{
+  "args": ["--query", "mac install"],
+  "working_dir": "",
+  "timeout_ms": 120000
+}
+```
+
+Optional tenant routing header:
+- `x-tenant-id: <tenant>`
+
+If license is configured with a tenant, dispatch checks `x-tenant-id` before running.
 
 Analyze a corpus and emit a suggested `lint-ai.json`:
 

@@ -1,4 +1,7 @@
-use crate::cli::{ChunkStrategy, Tier1NerProvider, Tier1TermRankerKind};
+use crate::cli::{
+    ChunkStrategy, GraphExportFormat, GraphLevel, LlmChunkStrategy, Tier1NerProvider,
+    Tier1TermRankerKind,
+};
 use crate::config::{load_config, normalize_list, Config};
 use crate::filters::is_noise_concept;
 use crate::graph::{normalize_concept, Graph, Tier0Record};
@@ -866,6 +869,11 @@ fn build_memory_index(
         .iter()
         .map(|r| (r.source.clone(), r))
         .collect();
+    let concept_to_rel: HashMap<String, String> = graph
+        .pages
+        .iter()
+        .map(|p| (p.concept.clone(), p.rel_path.clone()))
+        .collect();
 
     let mut records = Vec::new();
     for doc in docs {
@@ -911,6 +919,17 @@ fn build_memory_index(
             ),
         };
         let section_chunks = enrich_section_chunks(base_chunks, &key_entities, &important_terms);
+        let doc_links = graph
+            .pages
+            .iter()
+            .find(|p| p.rel_path == doc.id)
+            .map(|p| {
+                p.links
+                    .iter()
+                    .filter_map(|c| concept_to_rel.get(c).cloned())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         records.push(DocRecord {
             doc_id: doc.id.clone(),
             source: doc.source.clone(),
@@ -921,6 +940,7 @@ fn build_memory_index(
             probable_topic,
             doc_type_guess,
             headings: doc.headings.clone(),
+            doc_links,
             key_entities,
             important_terms,
             section_chunks,
@@ -955,6 +975,10 @@ struct CachedQueryIndex {
 }
 
 const QUERY_CACHE_VERSION: &str = "v1-query-cache";
+const DEFAULT_QUERY_TOP_K: usize = 5;
+const LLM_CONTEXT_CANDIDATE_TOP_K: usize = 20;
+const LLM_CONTEXT_DUPLICATE_DOC_PENALTY: f32 = 0.35;
+const MAX_RESULT_COUNT: usize = 50;
 
 #[derive(Debug, Clone)]
 struct CacheSettings<'a> {
@@ -1176,6 +1200,282 @@ struct QueryOutput {
     results: Vec<crate::index::SearchResult>,
 }
 
+#[derive(Clone, Serialize)]
+struct LlmContextChunk {
+    doc_id: String,
+    source: String,
+    chunk_id: String,
+    heading: String,
+    start_line: usize,
+    end_line: usize,
+    matched_entities: Vec<String>,
+    matched_terms: Vec<String>,
+    score: f32,
+    score_breakdown: ChunkScoreBreakdown,
+    text: String,
+}
+
+#[derive(Clone, Serialize, Default)]
+struct ChunkScoreBreakdown {
+    entity_overlap: f32,
+    term_overlap: f32,
+    heading_overlap: f32,
+    chunk_link_score: f32,
+    entity_graph_score: f32,
+}
+
+#[derive(Serialize)]
+struct LlmContextOutput {
+    mode: String,
+    query: String,
+    generated_at_unix: u64,
+    corpus_path: String,
+    elapsed_ms: u128,
+    chunk_result_count: usize,
+    top_chunks: Vec<LlmContextChunk>,
+    prompt_policy: String,
+}
+
+#[derive(Clone, Copy)]
+struct ChunkRankingWeights {
+    entity_overlap: f32,
+    term_overlap: f32,
+    heading_overlap: f32,
+}
+
+impl Default for ChunkRankingWeights {
+    fn default() -> Self {
+        Self {
+            entity_overlap: 2.0,
+            term_overlap: 1.0,
+            heading_overlap: 0.4,
+        }
+    }
+}
+
+fn truncate_for_llm(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    text.chars().take(max_chars).collect::<String>()
+}
+
+fn score_chunk_for_query(
+    chunk: &SectionChunk,
+    matched_entities_l: &[String],
+    matched_terms_l: &[String],
+    weights: ChunkRankingWeights,
+    link_bonus: f32,
+    entity_graph_bonus: f32,
+) -> (f32, ChunkScoreBreakdown) {
+    let hay = format!("{}\n{}", chunk.heading, chunk.content).to_lowercase();
+    let heading_l = chunk.heading.to_lowercase();
+    let entity_hits = matched_entities_l
+        .iter()
+        .filter(|e| !e.is_empty() && hay.contains(e.as_str()))
+        .count() as f32;
+    let term_hits = matched_terms_l
+        .iter()
+        .filter(|t| !t.is_empty() && hay.contains(t.as_str()))
+        .count() as f32;
+    let heading_hits = matched_terms_l
+        .iter()
+        .chain(matched_entities_l.iter())
+        .filter(|x| !x.is_empty() && heading_l.contains(x.as_str()))
+        .count() as f32;
+    let breakdown = ChunkScoreBreakdown {
+        entity_overlap: entity_hits * weights.entity_overlap,
+        term_overlap: term_hits * weights.term_overlap,
+        heading_overlap: heading_hits * weights.heading_overlap,
+        chunk_link_score: link_bonus,
+        entity_graph_score: entity_graph_bonus,
+    };
+    let total = breakdown.entity_overlap + breakdown.term_overlap + breakdown.heading_overlap;
+    (
+        total + breakdown.chunk_link_score + breakdown.entity_graph_score,
+        breakdown,
+    )
+}
+
+fn build_llm_context_output(
+    index: &MemoryIndex,
+    query: &str,
+    corpus_path: &str,
+    elapsed_ms: u128,
+    chunk_candidates: &[crate::index::SearchResult],
+    strategy: &LlmChunkStrategy,
+    result_count: usize,
+) -> LlmContextOutput {
+    let generated_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut top_chunks = Vec::new();
+    let weights = ChunkRankingWeights::default();
+    let mut chunk_candidates_scored: Vec<(String, f32, LlmContextChunk)> = Vec::new();
+    let anchor_doc_ids: HashSet<String> = chunk_candidates
+        .iter()
+        .take(5)
+        .map(|r| r.doc_id.clone())
+        .collect();
+    let mut anchor_entities: HashSet<String> = HashSet::new();
+    for r in chunk_candidates.iter().take(5) {
+        if let Some(doc) = index.docs.get(&r.doc_id) {
+            for e in &doc.key_entities {
+                let k = normalize_concept(&e.text);
+                if !k.is_empty() {
+                    anchor_entities.insert(k);
+                }
+            }
+        }
+    }
+
+    for result in chunk_candidates {
+        let Some(doc) = index.docs.get(&result.doc_id) else {
+            continue;
+        };
+        let matched_terms_l = result
+            .matched_terms
+            .iter()
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>();
+        let matched_entities_l = result
+            .matched_entities
+            .iter()
+            .map(|e| e.to_lowercase())
+            .collect::<Vec<_>>();
+
+        let mut chunk_scores = Vec::new();
+        for chunk in &doc.section_chunks {
+            let link_hits = doc
+                .doc_links
+                .iter()
+                .filter(|d| anchor_doc_ids.contains(d.as_str()))
+                .count();
+            let link_bonus = (0.15 * link_hits as f32).min(0.6);
+            let entity_overlap = chunk
+                .key_entities
+                .iter()
+                .map(|e| normalize_concept(e))
+                .filter(|e| !e.is_empty() && anchor_entities.contains(e))
+                .count();
+            let entity_graph_bonus = (0.10 * entity_overlap as f32).min(0.6);
+            let (score, breakdown) = score_chunk_for_query(
+                chunk,
+                &matched_entities_l,
+                &matched_terms_l,
+                weights,
+                link_bonus,
+                entity_graph_bonus,
+            );
+            chunk_scores.push((score, breakdown, chunk));
+        }
+        chunk_scores.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for (score, breakdown, chunk) in chunk_scores {
+            if score <= 0.0 {
+                continue;
+            }
+            let combined_score = score + 0.25 * result.score.max(0.0);
+            chunk_candidates_scored.push((
+                result.doc_id.clone(),
+                combined_score,
+                LlmContextChunk {
+                doc_id: doc.doc_id.clone(),
+                source: doc.source.clone(),
+                chunk_id: chunk.chunk_id.clone(),
+                heading: chunk.heading.clone(),
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                matched_entities: result.matched_entities.clone(),
+                matched_terms: result.matched_terms.clone(),
+                score: combined_score,
+                score_breakdown: breakdown,
+                text: truncate_for_llm(&chunk.content, 1200),
+                },
+            ));
+        }
+    }
+
+    match strategy {
+        LlmChunkStrategy::All => {
+            chunk_candidates_scored.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            top_chunks.extend(
+                chunk_candidates_scored
+                    .into_iter()
+                    .take(result_count)
+                    .map(|(_, _, chunk)| chunk),
+            );
+        }
+        LlmChunkStrategy::ByDoc => {
+            let mut best_by_doc: HashMap<String, (f32, LlmContextChunk)> = HashMap::new();
+            let mut leftovers: Vec<(String, f32, LlmContextChunk)> = Vec::new();
+            for (doc_id, combined, chunk) in chunk_candidates_scored {
+                match best_by_doc.get(&doc_id) {
+                    Some((best, _)) if *best >= combined => leftovers.push((doc_id, combined, chunk)),
+                    Some((_, prev)) => {
+                        leftovers.push((doc_id.clone(), *best_by_doc.get(&doc_id).map(|x| &x.0).unwrap_or(&combined), prev.clone()));
+                        best_by_doc.insert(doc_id, (combined, chunk));
+                    }
+                    None => {
+                        best_by_doc.insert(doc_id, (combined, chunk));
+                    }
+                }
+            }
+            let mut selected_docs: HashSet<String> = HashSet::new();
+            for result in chunk_candidates {
+                if top_chunks.len() >= result_count {
+                    break;
+                }
+                if let Some((_, chunk)) = best_by_doc.remove(&result.doc_id) {
+                    selected_docs.insert(result.doc_id.clone());
+                    top_chunks.push(chunk);
+                }
+            }
+            leftovers.sort_by(|a, b| {
+                let a_s = if selected_docs.contains(&a.0) {
+                    a.1 - LLM_CONTEXT_DUPLICATE_DOC_PENALTY
+                } else {
+                    a.1
+                };
+                let b_s = if selected_docs.contains(&b.0) {
+                    b.1 - LLM_CONTEXT_DUPLICATE_DOC_PENALTY
+                } else {
+                    b.1
+                };
+                b_s.partial_cmp(&a_s).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (doc_id, _, chunk) in leftovers {
+                if top_chunks.len() >= result_count {
+                    break;
+                }
+                selected_docs.insert(doc_id);
+                top_chunks.push(chunk);
+            }
+        }
+    }
+    top_chunks.truncate(result_count);
+
+    LlmContextOutput {
+        mode: "llm_context".to_string(),
+        query: query.to_string(),
+        generated_at_unix,
+        corpus_path: corpus_path.to_string(),
+        elapsed_ms,
+        chunk_result_count: top_chunks.len(),
+        top_chunks,
+        prompt_policy:
+            "Use only provided evidence. Every claim must cite source+chunk_id+line range; no citation means unknown."
+                .to_string(),
+    }
+}
+
 fn write_tier0_index(path: &str, records: &[Tier0Record], scanned_path: &str) -> Result<String> {
     let mut output_path = Path::new(path).to_path_buf();
     if output_path.extension().is_none() {
@@ -1197,13 +1497,696 @@ fn write_tier0_index(path: &str, records: &[Tier0Record], scanned_path: &str) ->
         documents_by_id,
     };
     let json = serde_json::to_string_pretty(&payload)?;
-    if let Some(parent) = output_path.parent() {
+    safe_write_text_file(&output_path.display().to_string(), &json)?;
+    Ok(output_path.display().to_string())
+}
+
+fn dot_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\"', "\\\"")
+}
+
+fn js_string_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        // Prevent HTML parser from terminating inline <script> blocks.
+        .replace("</", "<\\/")
+}
+
+fn safe_write_text_file(out_path: &str, content: &str) -> Result<()> {
+    let path = Path::new(out_path);
+    if path.is_dir() {
+        anyhow::bail!("refusing to write: output path is a directory");
+    }
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            anyhow::bail!("refusing to write: output path is a symlink");
+        }
+    }
+    if let Some(parent) = path.parent() {
+        // Reject symlink components in the existing parent chain.
+        let mut cur = if parent.is_absolute() {
+            PathBuf::from("/")
+        } else {
+            std::env::current_dir()?
+        };
+        for comp in parent.components() {
+            use std::path::Component;
+            match comp {
+                Component::RootDir | Component::CurDir => continue,
+                Component::ParentDir => anyhow::bail!("refusing to write: parent traversal is not allowed"),
+                Component::Normal(seg) => {
+                    cur.push(seg);
+                    if let Ok(meta) = fs::symlink_metadata(&cur) {
+                        if meta.file_type().is_symlink() {
+                            anyhow::bail!(
+                                "refusing to write: parent path component is a symlink ({})",
+                                cur.display()
+                            );
+                        }
+                    }
+                }
+                Component::Prefix(_) => {}
+            }
+        }
+    }
+    if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)?;
         }
     }
-    fs::write(&output_path, json)?;
-    Ok(output_path.display().to_string())
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn export_graph_dot(graph: &Graph, out_path: &str) -> Result<String> {
+    let mut lines = Vec::new();
+    lines.push("digraph lint_ai_graph {".to_string());
+    lines.push("  rankdir=LR;".to_string());
+    lines.push("  node [shape=box, style=rounded];".to_string());
+
+    let mut concept_to_rel: HashMap<String, String> = HashMap::new();
+    for page in &graph.pages {
+        concept_to_rel.insert(page.concept.clone(), page.rel_path.clone());
+    }
+
+    for page in &graph.pages {
+        let node_id = format!("n_{}", dot_escape(&page.concept.replace(' ', "_")));
+        let label = format!("{}\\n({})", dot_escape(&page.rel_path), dot_escape(&page.concept));
+        lines.push(format!("  \"{}\" [label=\"{}\"];", node_id, label));
+    }
+
+    for page in &graph.pages {
+        let from_id = format!("n_{}", dot_escape(&page.concept.replace(' ', "_")));
+        for link in &page.links {
+            if concept_to_rel.contains_key(link) {
+                let to_id = format!("n_{}", dot_escape(&link.replace(' ', "_")));
+                lines.push(format!("  \"{}\" -> \"{}\";", from_id, to_id));
+            }
+        }
+    }
+
+    lines.push("}".to_string());
+    safe_write_text_file(out_path, &lines.join("\n"))?;
+    Ok(out_path.to_string())
+}
+
+fn export_chunk_graph_dot(graph: &Graph, out_path: &str) -> Result<String> {
+    let mut lines = Vec::new();
+    lines.push("digraph lint_ai_chunk_graph {".to_string());
+    lines.push("  rankdir=LR;".to_string());
+    lines.push("  node [shape=box, style=rounded];".to_string());
+    for chunk in &graph.chunks {
+        let node_id = dot_escape(&chunk.chunk_id);
+        let label = format!(
+            "{}\\n{}:{}-{}",
+            dot_escape(&chunk.doc_rel_path),
+            dot_escape(&chunk.heading),
+            chunk.start_line,
+            chunk.end_line
+        );
+        lines.push(format!("  \"{}\" [label=\"{}\"];", node_id, label));
+    }
+    for edge in graph.chunk_graph.raw_edges() {
+        let from = &graph.chunk_graph[edge.source()];
+        let to = &graph.chunk_graph[edge.target()];
+        lines.push(format!("  \"{}\" -> \"{}\";", dot_escape(from), dot_escape(to)));
+    }
+    lines.push("}".to_string());
+    safe_write_text_file(out_path, &lines.join("\n"))?;
+    Ok(out_path.to_string())
+}
+
+fn export_entity_graph_dot(graph: &Graph, out_path: &str) -> Result<String> {
+    let mut lines = Vec::new();
+    lines.push("digraph lint_ai_entity_graph {".to_string());
+    lines.push("  rankdir=LR;".to_string());
+    lines.push("  node [shape=ellipse, style=filled, fillcolor=\"#e8f1ff\"];".to_string());
+    for ent in graph.entity_index.keys() {
+        let id = dot_escape(ent);
+        lines.push(format!("  \"{}\" [label=\"{}\"];", id, id));
+    }
+    for edge in graph.entity_graph.raw_edges() {
+        let from = &graph.entity_graph[edge.source()];
+        let to = &graph.entity_graph[edge.target()];
+        let label = match edge.weight {
+            crate::graph::EntityEdgeKind::CoOccurs => "co_occurs",
+            crate::graph::EntityEdgeKind::DocLink => "doc_link",
+        };
+        lines.push(format!(
+            "  \"{}\" -> \"{}\" [label=\"{}\"];",
+            dot_escape(from),
+            dot_escape(to),
+            label
+        ));
+    }
+    lines.push("}".to_string());
+    safe_write_text_file(out_path, &lines.join("\n"))?;
+    Ok(out_path.to_string())
+}
+
+#[derive(Serialize)]
+struct GraphJsonNode {
+    id: String,
+    concept: String,
+    source: String,
+}
+
+#[derive(Serialize)]
+struct GraphJsonEdge {
+    source: String,
+    target: String,
+}
+
+#[derive(Serialize)]
+struct GraphJsonExport {
+    nodes: Vec<GraphJsonNode>,
+    edges: Vec<GraphJsonEdge>,
+}
+
+fn build_graph_json_export(graph: &Graph) -> GraphJsonExport {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut concept_exists: HashSet<String> = HashSet::new();
+
+    for page in &graph.pages {
+        concept_exists.insert(page.concept.clone());
+        nodes.push(GraphJsonNode {
+            id: page.concept.clone(),
+            concept: page.concept.clone(),
+            source: page.rel_path.clone(),
+        });
+    }
+
+    for page in &graph.pages {
+        for link in &page.links {
+            if concept_exists.contains(link) {
+                edges.push(GraphJsonEdge {
+                    source: page.concept.clone(),
+                    target: link.clone(),
+                });
+            }
+        }
+    }
+
+    GraphJsonExport { nodes, edges }
+}
+
+fn export_graph_json(graph: &Graph, out_path: &str) -> Result<String> {
+    let payload = build_graph_json_export(graph);
+    safe_write_text_file(out_path, &serde_json::to_string_pretty(&payload)?)?;
+    Ok(out_path.to_string())
+}
+
+#[derive(Serialize)]
+struct ChunkGraphJsonNode {
+    id: String,
+    chunk_id: String,
+    doc_id: String,
+    heading: String,
+    start_line: usize,
+    end_line: usize,
+}
+
+#[derive(Serialize)]
+struct ChunkGraphJsonEdge {
+    source: String,
+    target: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+struct ChunkGraphJsonExport {
+    nodes: Vec<ChunkGraphJsonNode>,
+    edges: Vec<ChunkGraphJsonEdge>,
+}
+
+fn build_chunk_graph_json_export(graph: &Graph) -> ChunkGraphJsonExport {
+    let nodes = graph
+        .chunks
+        .iter()
+        .map(|c| ChunkGraphJsonNode {
+            id: c.chunk_id.clone(),
+            chunk_id: c.chunk_id.clone(),
+            doc_id: c.doc_rel_path.clone(),
+            heading: c.heading.clone(),
+            start_line: c.start_line,
+            end_line: c.end_line,
+        })
+        .collect::<Vec<_>>();
+    let edges = graph
+        .chunk_graph
+        .raw_edges()
+        .iter()
+        .map(|e| {
+            let kind = match e.weight {
+                crate::graph::ChunkEdgeKind::Next => "next",
+                crate::graph::ChunkEdgeKind::DocLink => "doc_link",
+            };
+            ChunkGraphJsonEdge {
+                source: graph.chunk_graph[e.source()].clone(),
+                target: graph.chunk_graph[e.target()].clone(),
+                kind: kind.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    ChunkGraphJsonExport { nodes, edges }
+}
+
+fn export_chunk_graph_json(graph: &Graph, out_path: &str) -> Result<String> {
+    let payload = build_chunk_graph_json_export(graph);
+    safe_write_text_file(out_path, &serde_json::to_string_pretty(&payload)?)?;
+    Ok(out_path.to_string())
+}
+
+#[derive(Serialize)]
+struct EntityGraphJsonNode {
+    id: String,
+    label: String,
+}
+
+#[derive(Serialize)]
+struct EntityGraphJsonEdge {
+    source: String,
+    target: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+struct EntityGraphJsonExport {
+    nodes: Vec<EntityGraphJsonNode>,
+    edges: Vec<EntityGraphJsonEdge>,
+}
+
+fn build_entity_graph_json_export(graph: &Graph) -> EntityGraphJsonExport {
+    let nodes = graph
+        .entity_index
+        .keys()
+        .map(|e| EntityGraphJsonNode {
+            id: e.clone(),
+            label: e.clone(),
+        })
+        .collect::<Vec<_>>();
+    let edges = graph
+        .entity_graph
+        .raw_edges()
+        .iter()
+        .map(|e| {
+            let kind = match e.weight {
+                crate::graph::EntityEdgeKind::CoOccurs => "co_occurs",
+                crate::graph::EntityEdgeKind::DocLink => "doc_link",
+            };
+            EntityGraphJsonEdge {
+                source: graph.entity_graph[e.source()].clone(),
+                target: graph.entity_graph[e.target()].clone(),
+                kind: kind.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    EntityGraphJsonExport { nodes, edges }
+}
+
+fn export_entity_graph_json(graph: &Graph, out_path: &str) -> Result<String> {
+    let payload = build_entity_graph_json_export(graph);
+    safe_write_text_file(out_path, &serde_json::to_string_pretty(&payload)?)?;
+    Ok(out_path.to_string())
+}
+
+fn export_graph_cytoscape_html(graph: &Graph, out_path: &str) -> Result<String> {
+    let payload = build_graph_json_export(graph);
+    let nodes_js = payload
+        .nodes
+        .iter()
+        .map(|n| {
+            format!(
+                "{{ data: {{ id: \"{}\", label: \"{}\", source: \"{}\" }} }}",
+                js_string_escape(&n.id),
+                js_string_escape(&n.concept),
+                js_string_escape(&n.source)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let edges_js = payload
+        .edges
+        .iter()
+        .map(|e| {
+            format!(
+                "{{ data: {{ source: \"{}\", target: \"{}\" }} }}",
+                js_string_escape(&e.source),
+                js_string_escape(&e.target)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+
+    let html = format!(
+        r#"<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Lint-AI Graph</title>
+  <script src="./cytoscape.min.js"></script>
+  <style>
+    html, body {{ width: 100%; height: 100%; margin: 0; }}
+    #cy {{ width: 100%; height: 100%; }}
+  </style>
+</head>
+<body>
+  <div id="cy"></div>
+  <script>
+    const elements = {{
+      nodes: [{nodes_js}],
+      edges: [{edges_js}]
+    }};
+    const cy = cytoscape({{
+      container: document.getElementById('cy'),
+      elements,
+      layout: {{ name: 'cose', animate: false }},
+      style: [
+        {{
+          selector: 'node',
+          style: {{
+            'label': 'data(label)',
+            'font-size': 10,
+            'background-color': '#1f77b4',
+            'color': '#111'
+          }}
+        }},
+        {{
+          selector: 'edge',
+          style: {{
+            'curve-style': 'bezier',
+            'target-arrow-shape': 'triangle',
+            'line-color': '#888',
+            'target-arrow-color': '#888',
+            'width': 1
+          }}
+        }}
+      ]
+    }});
+  </script>
+</body>
+</html>"#
+    );
+    safe_write_text_file(out_path, &html)?;
+    Ok(out_path.to_string())
+}
+
+fn export_chunk_graph_cytoscape_html(graph: &Graph, out_path: &str) -> Result<String> {
+    let payload = build_chunk_graph_json_export(graph);
+    let nodes_js = payload
+        .nodes
+        .iter()
+        .map(|n| {
+            format!(
+                "{{ data: {{ id: \"{}\", label: \"{}\", source: \"{}\" }} }}",
+                js_string_escape(&n.id),
+                js_string_escape(&n.heading),
+                js_string_escape(&n.doc_id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let edges_js = payload
+        .edges
+        .iter()
+        .map(|e| {
+            format!(
+                "{{ data: {{ source: \"{}\", target: \"{}\", kind: \"{}\" }} }}",
+                js_string_escape(&e.source),
+                js_string_escape(&e.target),
+                js_string_escape(&e.kind)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let html = format!(
+        r#"<!doctype html>
+<html><head><meta charset="utf-8" /><title>Lint-AI Chunk Graph</title>
+<script src="./cytoscape.min.js"></script>
+<style>html, body {{ width: 100%; height: 100%; margin: 0; }} #cy {{ width:100%; height:100%; }}</style>
+</head><body><div id="cy"></div><script>
+const elements = {{ nodes:[{nodes_js}], edges:[{edges_js}] }};
+cytoscape({{
+  container: document.getElementById('cy'),
+  elements,
+  layout: {{ name: 'cose', animate: false }},
+  style: [
+    {{ selector: 'node', style: {{ 'label': 'data(label)', 'font-size': 9, 'background-color': '#2a9d8f' }} }},
+    {{ selector: 'edge', style: {{ 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'line-color': '#777', 'target-arrow-color': '#777', 'width': 1 }} }}
+  ]
+}});
+</script></body></html>"#
+    );
+    safe_write_text_file(out_path, &html)?;
+    Ok(out_path.to_string())
+}
+
+fn export_entity_graph_cytoscape_html(graph: &Graph, out_path: &str) -> Result<String> {
+    let payload = build_entity_graph_json_export(graph);
+    let nodes_js = payload
+        .nodes
+        .iter()
+        .map(|n| {
+            format!(
+                "{{ data: {{ id: \"{}\", label: \"{}\" }} }}",
+                js_string_escape(&n.id),
+                js_string_escape(&n.label)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let edges_js = payload
+        .edges
+        .iter()
+        .map(|e| {
+            format!(
+                "{{ data: {{ source: \"{}\", target: \"{}\", kind: \"{}\" }} }}",
+                js_string_escape(&e.source),
+                js_string_escape(&e.target),
+                js_string_escape(&e.kind)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    let html = format!(
+        r#"<!doctype html>
+<html><head><meta charset="utf-8" /><title>Lint-AI Entity Graph</title>
+<script src="./cytoscape.min.js"></script>
+<style>html, body {{ width:100%; height:100%; margin:0; }} #cy {{ width:100%; height:100%; }}</style>
+</head><body><div id="cy"></div><script>
+const elements = {{ nodes:[{nodes_js}], edges:[{edges_js}] }};
+cytoscape({{
+  container: document.getElementById('cy'),
+  elements,
+  layout: {{ name: 'cose', animate: false }},
+  style: [
+    {{ selector: 'node', style: {{ 'label': 'data(label)', 'font-size': 10, 'background-color': '#457b9d' }} }},
+    {{ selector: 'edge', style: {{ 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'line-color': '#666', 'target-arrow-color': '#666', 'width': 1 }} }}
+  ]
+}});
+</script></body></html>"#
+    );
+    safe_write_text_file(out_path, &html)?;
+    Ok(out_path.to_string())
+}
+
+#[derive(Serialize)]
+struct ChunkGraphStats {
+    chunk_nodes: usize,
+    chunk_edges: usize,
+    next_edges: usize,
+    doc_link_edges: usize,
+    docs_with_chunks: usize,
+    avg_chunks_per_doc: f32,
+}
+
+fn chunk_graph_stats(graph: &Graph) -> ChunkGraphStats {
+    let mut next_edges = 0usize;
+    let mut doc_link_edges = 0usize;
+    for e in graph.chunk_graph.raw_edges() {
+        match e.weight {
+            crate::graph::ChunkEdgeKind::Next => next_edges += 1,
+            crate::graph::ChunkEdgeKind::DocLink => doc_link_edges += 1,
+        }
+    }
+    let docs_with_chunks = graph.doc_to_chunks.len();
+    let avg_chunks_per_doc = if docs_with_chunks == 0 {
+        0.0
+    } else {
+        graph.chunks.len() as f32 / docs_with_chunks as f32
+    };
+    ChunkGraphStats {
+        chunk_nodes: graph.chunks.len(),
+        chunk_edges: graph.chunk_graph.edge_count(),
+        next_edges,
+        doc_link_edges,
+        docs_with_chunks,
+        avg_chunks_per_doc,
+    }
+}
+
+#[derive(Serialize)]
+struct OntologyNode {
+    id: String,
+    node_type: String,
+    label: String,
+    metadata: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct OntologyEdge {
+    source: String,
+    target: String,
+    edge_type: String,
+    weight: f32,
+    confidence: f32,
+    provenance: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct OntologyExport {
+    version: String,
+    generated_at_unix: u64,
+    corpus_path: String,
+    node_count: usize,
+    edge_count: usize,
+    nodes: Vec<OntologyNode>,
+    edges: Vec<OntologyEdge>,
+}
+
+fn canonical_entity_id(text: &str) -> String {
+    let base = normalize_concept(text);
+    let key = if base.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        base.replace(' ', "_")
+    };
+    format!("entity:{}", key)
+}
+
+fn export_ontology_json(index: &MemoryIndex, out_path: &str, corpus_path: &str) -> Result<String> {
+    let mut nodes: Vec<OntologyNode> = Vec::new();
+    let mut edges: Vec<OntologyEdge> = Vec::new();
+    let mut node_ids: HashSet<String> = HashSet::new();
+    let mut entity_aliases: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut cooccur_counts: HashMap<(String, String), usize> = HashMap::new();
+
+    for doc in index.docs.values() {
+        let doc_node_id = format!("doc:{}", doc.doc_id);
+        if node_ids.insert(doc_node_id.clone()) {
+            nodes.push(OntologyNode {
+                id: doc_node_id.clone(),
+                node_type: "doc".to_string(),
+                label: doc.source.clone(),
+                metadata: serde_json::json!({
+                    "doc_id": doc.doc_id,
+                    "source": doc.source,
+                    "timestamp": doc.timestamp,
+                    "probable_topic": doc.probable_topic,
+                    "doc_type_guess": doc.doc_type_guess,
+                }),
+            });
+        }
+
+        for chunk in &doc.section_chunks {
+            let chunk_node_id = format!("chunk:{}", chunk.chunk_id);
+            if node_ids.insert(chunk_node_id.clone()) {
+                nodes.push(OntologyNode {
+                    id: chunk_node_id.clone(),
+                    node_type: "chunk".to_string(),
+                    label: chunk.heading.clone(),
+                    metadata: serde_json::json!({
+                        "chunk_id": chunk.chunk_id,
+                        "doc_id": doc.doc_id,
+                        "start_line": chunk.start_line,
+                        "end_line": chunk.end_line,
+                    }),
+                });
+            }
+            edges.push(OntologyEdge {
+                source: chunk_node_id.clone(),
+                target: doc_node_id.clone(),
+                edge_type: "belongs_to".to_string(),
+                weight: 1.0,
+                confidence: 1.0,
+                provenance: serde_json::json!({"source":"chunk-structure"}),
+            });
+
+            let mut canonical_in_chunk: Vec<String> = Vec::new();
+            for ent in &chunk.key_entities {
+                let eid = canonical_entity_id(ent);
+                entity_aliases
+                    .entry(eid.clone())
+                    .or_default()
+                    .insert(ent.clone());
+                canonical_in_chunk.push(eid.clone());
+                if node_ids.insert(eid.clone()) {
+                    nodes.push(OntologyNode {
+                        id: eid.clone(),
+                        node_type: "entity".to_string(),
+                        label: ent.clone(),
+                        metadata: serde_json::json!({}),
+                    });
+                }
+                edges.push(OntologyEdge {
+                    source: chunk_node_id.clone(),
+                    target: eid,
+                    edge_type: "mentions".to_string(),
+                    weight: 1.0,
+                    confidence: 0.8,
+                    provenance: serde_json::json!({"source":"tier1_chunk_entities"}),
+                });
+            }
+            canonical_in_chunk.sort();
+            canonical_in_chunk.dedup();
+            for i in 0..canonical_in_chunk.len() {
+                for j in (i + 1)..canonical_in_chunk.len() {
+                    let a = canonical_in_chunk[i].clone();
+                    let b = canonical_in_chunk[j].clone();
+                    let key = if a <= b { (a, b) } else { (b, a) };
+                    *cooccur_counts.entry(key).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    for (eid, aliases) in entity_aliases {
+        if let Some(node) = nodes.iter_mut().find(|n| n.id == eid) {
+            let mut alias_list = aliases.into_iter().collect::<Vec<_>>();
+            alias_list.sort();
+            node.metadata = serde_json::json!({ "aliases": alias_list });
+        }
+    }
+
+    for ((a, b), count) in cooccur_counts {
+        edges.push(OntologyEdge {
+            source: a,
+            target: b,
+            edge_type: "co_occurs".to_string(),
+            weight: count as f32,
+            confidence: 0.6,
+            provenance: serde_json::json!({"source":"chunk_cooccurrence","count":count}),
+        });
+    }
+
+    let generated_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let payload = OntologyExport {
+        version: "v0.1-seed".to_string(),
+        generated_at_unix,
+        corpus_path: corpus_path.to_string(),
+        node_count: nodes.len(),
+        edge_count: edges.len(),
+        nodes,
+        edges,
+    };
+    safe_write_text_file(out_path, &serde_json::to_string_pretty(&payload)?)?;
+    Ok(out_path.to_string())
 }
 
 /// Run the lint pipeline using CLI arguments.
@@ -1217,7 +2200,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         args.max_config_bytes,
     )
     .map_err(|err| anyhow::anyhow!(err))?;
-    if args.query.is_some() {
+    if args.query.is_some() || args.llm_context.is_some() {
         let cache_settings = CacheSettings {
             root_path: &args.path,
             ner_provider: &args.tier1_ner_provider,
@@ -1273,16 +2256,51 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             }
             built
         };
-        if let Some(query) = args.query.as_deref() {
+        let query_value = args
+            .llm_context
+            .as_deref()
+            .or(args.query.as_deref());
+        if let Some(query) = query_value {
             let started = Instant::now();
-            let results = index.query(query, 20);
-            let payload = QueryOutput {
-                query: query.to_string(),
-                elapsed_ms: started.elapsed().as_millis(),
-                result_count: results.len(),
-                results,
-            };
-            println!("{}", serde_json::to_string_pretty(&payload)?);
+            if args.llm_context.is_some() {
+                let requested = args.result_count.clamp(1, MAX_RESULT_COUNT);
+                let candidate_top_k = requested.max(LLM_CONTEXT_CANDIDATE_TOP_K);
+                let candidate_results = index.query(query, candidate_top_k);
+                let elapsed_ms = started.elapsed().as_millis();
+                let payload = build_llm_context_output(
+                    &index,
+                    query,
+                    &args.path,
+                    elapsed_ms,
+                    &candidate_results,
+                    &args.llm_chunk_strategy,
+                    requested,
+                );
+                if args.simplified {
+                    let top_text = payload
+                        .top_chunks
+                        .iter()
+                        .map(|c| c.text.clone())
+                        .collect::<Vec<_>>();
+                    let mut value = serde_json::to_value(&payload)?;
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("top_chunks".to_string(), serde_json::json!(top_text));
+                    }
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                }
+            } else {
+                let results = index.query(query, DEFAULT_QUERY_TOP_K);
+                let elapsed_ms = started.elapsed().as_millis();
+                let payload = QueryOutput {
+                    query: query.to_string(),
+                    elapsed_ms,
+                    result_count: results.len(),
+                    results,
+                };
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            }
         }
         return Ok(());
     }
@@ -1395,6 +2413,68 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 println!("- {}", heading);
             }
         }
+        return Ok(());
+    }
+    if args.show_chunk_graph_stats {
+        println!("{}", serde_json::to_string_pretty(&chunk_graph_stats(&graph))?);
+        return Ok(());
+    }
+    if let Some(format) = args.export_graph.as_ref() {
+        let written = match (&args.graph_level, format) {
+            (GraphLevel::Doc, GraphExportFormat::Dot) => export_graph_dot(&graph, &args.graph_out)?,
+            (GraphLevel::Doc, GraphExportFormat::Json) => {
+                export_graph_json(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Doc, GraphExportFormat::CytoscapeHtml) => {
+                export_graph_cytoscape_html(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Chunk, GraphExportFormat::Dot) => {
+                export_chunk_graph_dot(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Chunk, GraphExportFormat::Json) => {
+                export_chunk_graph_json(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Chunk, GraphExportFormat::CytoscapeHtml) => {
+                export_chunk_graph_cytoscape_html(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Entity, GraphExportFormat::Dot) => {
+                export_entity_graph_dot(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Entity, GraphExportFormat::Json) => {
+                export_entity_graph_json(&graph, &args.graph_out)?
+            }
+            (GraphLevel::Entity, GraphExportFormat::CytoscapeHtml) => {
+                export_entity_graph_cytoscape_html(&graph, &args.graph_out)?
+            }
+        };
+        println!(
+            "Wrote graph export ({:?}, level={:?}) with {} pages to {}",
+            format,
+            args.graph_level,
+            graph.pages.len(),
+            written
+        );
+        return Ok(());
+    }
+    if args.export_ontology {
+        let index = build_memory_index(
+            &graph,
+            &args.tier1_ner_provider,
+            &args.spacy_model,
+            &args.tier1_term_ranker,
+            &args.chunk_strategy,
+            args.chunk_lines,
+            args.chunk_overlap,
+            args.chunk_target_tokens,
+            args.chunk_max_tokens,
+            None,
+        )?;
+        let written = export_ontology_json(&index, &args.ontology_out, &args.path)?;
+        println!(
+            "Wrote ontology export with {} docs to {}",
+            index.docs.len(),
+            written
+        );
         return Ok(());
     }
     let mut report = Report::new();

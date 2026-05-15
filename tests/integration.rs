@@ -8,6 +8,11 @@ use lint_ai::tier1::{RankedTerm, Tier1Entity};
 use std::fs;
 use std::path::PathBuf;
 
+const MAX_BYTES: usize = 5_000_000;
+const MAX_FILES: usize = 50_000;
+const MAX_DEPTH: usize = 20;
+const MAX_TOTAL_BYTES: usize = 50_000_000;
+
 fn setup_fixture() -> PathBuf {
     let root = std::env::temp_dir().join(format!(
         "lint_ai_fixture_{}_{}",
@@ -62,7 +67,14 @@ Alpha Beta
 #[test]
 fn lint_reports_orphans_and_missing_links() {
     let root = setup_fixture();
-    let graph = Graph::build(root.to_str().unwrap(), 5_000_000, 50_000, 20, 50_000_000).unwrap();
+    let graph = Graph::build(
+        root.to_str().unwrap(),
+        MAX_BYTES,
+        MAX_FILES,
+        MAX_DEPTH,
+        MAX_TOTAL_BYTES,
+    )
+    .unwrap();
     let cfg = Config::default();
     let mut report = Report::new();
 
@@ -86,7 +98,14 @@ fn lint_reports_orphans_and_missing_links() {
 #[test]
 fn ignore_related_section_for_crossrefs() {
     let root = setup_fixture();
-    let graph = Graph::build(root.to_str().unwrap(), 5_000_000, 50_000, 20, 50_000_000).unwrap();
+    let graph = Graph::build(
+        root.to_str().unwrap(),
+        MAX_BYTES,
+        MAX_FILES,
+        MAX_DEPTH,
+        MAX_TOTAL_BYTES,
+    )
+    .unwrap();
     let mut cfg = Config::default();
     cfg.ignore_crossref_sections = vec!["related".to_string()];
     let mut report = Report::new();
@@ -100,7 +119,14 @@ fn ignore_related_section_for_crossrefs() {
 #[test]
 fn allowlist_limits_crossrefs() {
     let root = setup_fixture();
-    let graph = Graph::build(root.to_str().unwrap(), 5_000_000, 50_000, 20, 50_000_000).unwrap();
+    let graph = Graph::build(
+        root.to_str().unwrap(),
+        MAX_BYTES,
+        MAX_FILES,
+        MAX_DEPTH,
+        MAX_TOTAL_BYTES,
+    )
+    .unwrap();
     let mut cfg = Config::default();
     cfg.allowlist_concepts = vec!["gamma".to_string()];
     let mut report = Report::new();
@@ -114,7 +140,14 @@ fn allowlist_limits_crossrefs() {
 #[test]
 fn analyze_suggests_config() {
     let root = setup_fixture();
-    let graph = Graph::build(root.to_str().unwrap(), 5_000_000, 50_000, 20, 50_000_000).unwrap();
+    let graph = Graph::build(
+        root.to_str().unwrap(),
+        MAX_BYTES,
+        MAX_FILES,
+        MAX_DEPTH,
+        MAX_TOTAL_BYTES,
+    )
+    .unwrap();
     let cfg = Config::default();
 
     let output = lint_ai::engine::analyze_for_tests(&graph, &cfg);
@@ -138,6 +171,7 @@ fn query_baseline_still_works_without_semantic_match() {
         doc_type_guess: None,
         headings: vec!["Install".to_string()],
         doc_links: vec![],
+        temporal_terms: vec![],
         key_entities: vec![Tier1Entity {
             text: "docker".to_string(),
             label: "CONCEPT".to_string(),
@@ -182,6 +216,7 @@ fn semantic_expansion_improves_recall_for_synonyms() {
         doc_type_guess: None,
         headings: vec!["Occupation".to_string()],
         doc_links: vec![],
+        temporal_terms: vec![],
         key_entities: vec![],
         important_terms: vec![RankedTerm {
             term: "job".to_string(),

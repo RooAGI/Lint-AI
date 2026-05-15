@@ -1,287 +1,163 @@
-# Lint AI
+# Lint-AI
 
-Lint-AI is a system for analyzing and aligning large corpora of AI-generated documentation.
+Lint-AI is for teams building agent memory over large, fast-changing corpora: assistant sessions, task notes, traces, reports, decisions, and documentation that accumulate faster than any team can review manually.
 
-As AI systems produce increasing amounts of documentation--task records, traces, logs, decisions, and reports--these artifacts often become inconsistent, outdated, or misaligned with each other. Lint-AI addresses this by treating documentation as a network of facts, rather than isolated text.
+It is a good fit for people who maintain:
+- long-running agent memory over conversations, notes, and decisions
+- markdown knowledge bases with lots of cross-links
+- internal docs where terminology drifts over time
+- corpora where “what changed?” and “what is current?” matter as much as keyword search
 
-## How it works
+Use Lint-AI when plain search is not enough and memory recall needs evidence. It treats stored context as a network of facts, concepts, links, claims, and timestamps, then surfaces misalignment, missing context, and retrieval results suited for downstream review or LLM grounding.
 
-Lint-AI processes documentation in several stages:
+The problem it solves is **system-level consistency**: reading individual documents is not enough when terminology drifts, definitions conflict, or outdated claims persist across a growing corpus. Lint-AI analyzes documentation collectively, not in isolation, to catch these issues before they spread.
 
-### 1. Fact Extraction
-Extracts entities, concepts, and claims from each document.
+Why people use it:
+- to recover the right past session or note when an agent needs context
+- to catch contradictions before they spread
+- to detect terminology drift across documents
+- to find orphaned or weakly linked pages
+- to ask corpus-level questions over facts, entities, and time
+- to feed grounded context into an LLM instead of raw text blobs
 
-### 2. Concept & Entity Resolution
-Identifies when different documents refer to the same concept using different terms.
+## Benchmark
 
-### 3. Fact Graph Construction
-Builds a network of normalized facts with context such as:
-- source document
-- time
-- confidence
-- status (current, deprecated, proposed)
+Evaluated on **LongMemEval-S** (500 questions), a public benchmark for long-context agent memory retrieval over multi-session conversation corpora. The scoped variant is used: each query searches only the sessions attached to that question, matching the realistic setting where a system knows which sessions are candidates for a given user. No embedding vectors are used anywhere in the pipeline.
 
-### 4. Misalignment Detection
-Identifies potential issues such as:
-- contradictions
-- terminology drift
-- scope conflicts
-- unsupported claims
-- missing required context
+The section below shows both the rust-bert POS/NER branch result and the default heuristic release result.
 
-### 5. AI Review
-Routes suspicious cases to an AI reviewer that verifies and explains the issue with context.
+### Rust-BERT POS/NER Branch
 
-Instead of enforcing rigid templates, Lint-AI focuses on understanding and comparing what documents actually say, enabling systematic detection of misalignment at scale.
+**Aggregate (n=500):**
 
-The result is a continuous alignment layer that helps ensure AI-generated work remains consistent, interpretable, and trustworthy over time.
+| metric | value |
+|---|---|
+| recall@5 | 86.9% |
+| recall@10 | 93.8% |
+| recall@20 | 94.4% |
+| recall_any@5 | 94.8% |
+| recall_any@10 | 98.2% |
+| MRR | 87.1% |
+| NDCG@10 | 86.0% |
+| avg query latency | 5.1 ms |
 
-## Why Lint-AI?
+`recall@k` is fractional recall over all gold sessions. `recall_any@k` counts 1.0 if any gold session appears in the top k. Latency is measured on a single CPU core with no GPU.
 
-AI systems don't just produce outputs--they produce documentation about their work.
+**By question type:**
 
-Over time, this creates a growing body of:
-- task summaries
-- decision notes
-- traces and logs
-- generated reports
+| question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
+|---|---|---|---|---|---|---|
+| single-session-assistant | 56 | 100.0% | 100.0% | 100.0% | 99.1% | 99.3% |
+| single-session-user | 70 | 97.1% | 98.6% | 97.1% | 86.8% | 89.8% |
+| knowledge-update | 78 | 96.8% | 98.7% | 100.0% | 95.2% | 94.4% |
+| single-session-preference | 30 | 80.0% | 96.7% | 80.0% | 64.7% | 72.3% |
+| temporal-reasoning | 133 | 81.1% | 92.0% | 91.7% | 84.1% | 82.3% |
+| multi-session | 133 | 77.7% | 87.1% | 94.7% | 85.3% | 80.2% |
 
-Without alignment:
-- terminology drifts
-- definitions conflict
-- outdated concepts persist
-- claims become unsupported or inconsistent
+Results file: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
 
-Reading individual documents is not enough. The problem is **system-level consistency**.
+### Heuristic Release Backend
 
-Lint-AI addresses this by analyzing documentation collectively, not in isolation.
+**Aggregate (n=500):**
 
-## Vision
+| metric | value |
+|---|---|
+| recall@5 | 83.7% |
+| recall@10 | 89.6% |
+| recall@20 | 91.1% |
+| recall_any@5 | 92.4% |
+| recall_any@10 | 95.6% |
+| recall_any@20 | 97.0% |
+| MRR | 84.3% |
+| NDCG@10 | 81.9% |
+| avg query latency | 6.1 ms |
 
-As AI systems perform more work, they will continuously generate documentation describing their actions, decisions, and outputs.
+`recall@k` is fractional recall over all gold sessions. `recall_any@k` counts 1.0 if any gold session appears in the top k. Latency is measured on a single CPU core with no GPU.
 
-Lint-AI aims to ensure that this growing body of AI-generated knowledge remains:
-- consistent
-- traceable
-- interpretable
-- aligned over time
+**By question type:**
 
-## Under the hood
+| question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
+|---|---|---|---|---|---|---|
+| single-session-assistant | 56 | 100.0% | 100.0% | 100.0% | 98.2% | 98.7% |
+| single-session-user | 70 | 94.3% | 98.6% | 94.3% | 77.4% | 82.6% |
+| knowledge-update | 78 | 94.2% | 96.8% | 98.7% | 94.6% | 92.4% |
+| single-session-preference | 30 | 80.0% | 93.3% | 80.0% | 65.8% | 72.2% |
+| temporal-reasoning | 133 | 77.0% | 85.7% | 86.5% | 81.8% | 78.2% |
+| multi-session | 133 | 72.5% | 79.3% | 93.2% | 82.7% | 74.3% |
 
-Lint-AI builds on techniques such as:
-- concept extraction
-- corpus-wide matching
-- terminology analysis
+Results file: `benchmark/data/lintai_longmemeval_scoped_results.json`
 
-These are used as part of a larger system for fact extraction and alignment reasoning.
+## Quickstart
 
-## Usage
+See [docs/quickstart.md](docs/quickstart.md) for the shortest path to build, run, query, and use the crate from Rust.
 
-### How To Use
+## How It Works
 
-Run the linter against a docs directory:
+Lint-AI ingests sessions, notes, traces, and documents, builds a lexical index plus sparse entity/term tables, and overlays graph structure for links and co-occurrence. Queries are analyzed for intent, entities, and temporal hints, then scored with a blend of lexical, semantic, claim, topic, timestamp, and graph signals. The same corpus analysis also powers misalignment checks such as missing cross-refs, orphan pages, and low-confidence claims.
+
+If you want the deeper implementation view, see:
+- `docs/chunk-strategy.md`
+- `docs/lexical-data.md`
+- `docs/artifact-indexing.md`
+
+## How To Use
+
+Query semantics currently use the heuristic backend in the release build.
+The model-backed POS/NER path was used in the experimental rust-bert branch and is kept separate from the audited release graph.
+
+### CLI
+
+Lint a corpus:
 
 ```bash
 ./lint-ai /path/to/repo
 ```
 
-### Tier 0 and Tier 1 Outputs
-
-Show Tier 0 ingestion records:
+If you prefer `cargo run`:
 
 ```bash
-./lint-ai /path/to/repo --show-tier0
+cargo run --bin lint-ai -- /path/to/repo
 ```
 
-Write a Tier 0 index JSON:
-
-```bash
-./lint-ai /path/to/repo --tier0-index-out
-```
-
-Show Tier 1 key entities:
-
-```bash
-./lint-ai /path/to/repo --show-tier1-entities
-```
-
-Use spaCy for Tier 1 entities (falls back to heuristic if unavailable):
-
-```bash
-./lint-ai /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
-```
-
-Show Tier 1 important terms:
-
-```bash
-./lint-ai /path/to/repo --show-tier1-terms --tier1-term-ranker yake
-```
-
-Available term rankers:
-- `yake`
-- `rake`
-- `cvalue`
-- `textrank`
-
-### Index and Query
-
-Build and print the in-memory hybrid index:
-
-```bash
-./lint-ai --index /path/to/repo/docs
-```
-
-Query the corpus (index is built automatically behind the scenes):
+Query the corpus:
 
 ```bash
 ./lint-ai --query "docker install linux" /path/to/repo/docs
 ```
 
-Generate LLM-ready retrieval context (same index/query engine, different output schema):
+Get LLM-ready retrieval context:
 
 ```bash
 ./lint-ai --llm-context "docker install linux" /path/to/repo/docs
-./lint-ai --llm-context "docker install linux" --result-count 10 /path/to/repo/docs
-./lint-ai --llm-context "docker install linux" --simplified /path/to/repo/docs
 ```
 
-`--llm-context` is chunk-focused output for LLM grounding (`top_chunks` + citation policy), while `--query` stays doc-focused.
-
-Chunk selection strategy for `--llm-context`:
+Inspect the derived inventory:
 
 ```bash
-./lint-ai --llm-context "docker install linux" --llm-chunk-strategy all /path/to/repo/docs
-./lint-ai --llm-context "docker install linux" --llm-chunk-strategy by-doc /path/to/repo/docs
+./lint-ai /path/to/repo/docs --show-concepts
+./lint-ai /path/to/repo/docs --show-headings
 ```
 
-Default is `all` (global chunk scoring).
-
-Export graph for visualization (Graphviz DOT):
+Show the main query-oriented modes:
 
 ```bash
-./lint-ai /path/to/repo/docs --export-graph dot --graph-out lint-ai-graph.dot
-dot -Tpng lint-ai-graph.dot -o lint-ai-graph.png
+./lint-ai --index /path/to/repo/docs
+./lint-ai --show-tier0 /path/to/repo
+./lint-ai --show-tier1-entities /path/to/repo
+./lint-ai --show-tier1-terms /path/to/repo --tier1-term-ranker yake
 ```
 
-Export chunk-level graph (DOT):
+Use spaCy for Tier 1 entities if available:
 
 ```bash
-./lint-ai /path/to/repo/docs --export-graph dot --graph-level chunk --graph-out lint-ai-chunk-graph.dot
-dot -Tpng lint-ai-chunk-graph.dot -o lint-ai-chunk-graph.png
+./lint-ai /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
 ```
 
-Export entity-level graph (DOT):
+Common graph exports, chunking knobs, lexical subset regeneration, and artifact indexing details are documented in `docs/`.
 
-```bash
-./lint-ai /path/to/repo/docs --export-graph dot --graph-level entity --graph-out lint-ai-entity-graph.dot
-dot -Tpng lint-ai-entity-graph.dot -o lint-ai-entity-graph.png
-```
+### Rust Library
 
-Export graph as JSON (for D3/Cytoscape integration):
-
-```bash
-./lint-ai /path/to/repo/docs --export-graph json --graph-out lint-ai-graph.json
-./lint-ai /path/to/repo/docs --export-graph json --graph-level chunk --graph-out lint-ai-chunk-graph.json
-./lint-ai /path/to/repo/docs --export-graph json --graph-level entity --graph-out lint-ai-entity-graph.json
-```
-
-Export interactive Cytoscape.js HTML:
-
-```bash
-./lint-ai /path/to/repo/docs --export-graph cytoscape-html --graph-out lint-ai-graph.html
-./lint-ai /path/to/repo/docs --export-graph cytoscape-html --graph-level chunk --graph-out lint-ai-chunk-graph.html
-./lint-ai /path/to/repo/docs --export-graph cytoscape-html --graph-level entity --graph-out lint-ai-entity-graph.html
-```
-
-Note: Cytoscape HTML exports load `./cytoscape.min.js` from the same directory as the HTML file.
-
-Show chunk graph stats:
-
-```bash
-./lint-ai /path/to/repo/docs --show-chunk-graph-stats
-```
-
-Export seed entity ontology graph (JSON):
-
-```bash
-./lint-ai /path/to/repo/docs --export-ontology --ontology-out lint-ai-ontology.json
-```
-
-Query output includes:
-- `query`
-- `elapsed_ms`
-- `result_count`
-- `results`
-
-Chunking options:
-
-```bash
-./lint-ai --index /path/to/repo/docs --chunk-strategy hybrid --chunk-lines 40 --chunk-overlap 10 --chunk-target-tokens 450 --chunk-max-tokens 800
-```
-
-The query pipeline uses hybrid scoring with:
-- BM25 lexical scoring
-- key-entity overlap
-- important-term overlap
-- topic/doc-type boosts when available
-- score breakdown output for transparency
-
-Lexical expansion data is kept as small checked-in JSON subsets under
-`data/lexical/`. The upstream ConceptNet assertions dump is large, roughly
-hundreds of MB compressed and about 1.2 GB extracted, so the full raw file is
-not committed to this repo. WordNet is much smaller, typically tens of MB
-depending on the package.
-
-Download locations:
-- ConceptNet assertions: `https://s3.amazonaws.com/conceptnet/downloads/2019/edges/conceptnet-assertions-5.7.0.csv.gz`
-- ConceptNet download docs: `https://github.com/commonsense/conceptnet5/wiki/Downloads`
-- Princeton WordNet downloads: `https://wordnet.princeton.edu/`
-
-To regenerate the checked-in subsets from local upstream downloads:
-
-```bash
-python3 scripts/build_lexical_subsets.py \
-  --wordnet-dict /path/to/WordNet-3.0/dict \
-  --conceptnet-assertions /path/to/conceptnet-assertions-5.7.0.csv.gz
-```
-
-Seed terms live in `data/lexical/seed_terms.txt`. Edit that file to widen or
-narrow the lexical coverage, then rerun the generator. The script accepts
-either the WordNet `dict/` directory itself or the parent WordNet package
-directory that contains `dict/`.
-
-The generated JSON writes back to:
-
-- `data/lexical/wordnet_subset.json`
-- `data/lexical/conceptnet_subset.json`
-
-More detail is in `docs/lexical-data.md`.
-
-Chunk strategy details: `docs/chunk-strategy.md`
-
-Artifact indexing and update model: `docs/artifact-indexing.md`
-Temporal fact / assertion layer: `docs/artifact-indexing.md` (see "Temporal Fact / Assertion Layer")
-
-## Library Use
-
-`lint-ai` can also be used as a library for artifact-oriented indexing.
-
-The current public model is:
-
-- `IndexStore`
-  - mutable artifact-facing facade
-  - owns source documents, cached derived records, tombstones, internal Tantivy lexical state, and refresh lifecycle
-- `MemoryIndex`
-  - built immutable query structure
-  - optimized for semantic and hybrid search signals
-
-Typical flow:
-
-1. Normalize external content into `SourceDocument`
-2. Insert or update it inside `IndexStore`
-3. Call `query(...)`, which refreshes the semantic `MemoryIndex` when needed and merges it with Tantivy BM25 hits
-
-Example:
+Use `IndexStore` when you want mutable ingestion, `MemoryIndex` when you want an immutable query snapshot, and `SourceDocument` to add content.
 
 ```rust
 use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
@@ -294,6 +170,7 @@ fn main() -> anyhow::Result<()> {
         source: "artifact://artifact-1".to_string(),
         content: "docker install guide for linux hosts".to_string(),
         concept: "docker install".to_string(),
+        group_id: None,
         headings: vec!["Overview".to_string()],
         links: vec![],
         timestamp: None,
@@ -316,8 +193,7 @@ use lint_ai::{IndexStore, PipelineOptions};
 let index = IndexStore::for_corpus(Path::new("/path/to/corpus"), PipelineOptions::default())?;
 ```
 
-If you already have fully prepared `DocRecord` values and want the built search
-structure directly, use `lint_ai::index::MemoryIndex`.
+If you already have prepared `DocRecord` values and want the built search structure directly, use `lint_ai::index::MemoryIndex`.
 
 ## Advanced
 
@@ -339,103 +215,17 @@ Limit total bytes read across the corpus:
 ./lint-ai /path/to/repo --max-total-bytes 100000000
 ```
 
-The tool will automatically scope to `/path/to/repo/docs/**` when that folder exists.
+The tool automatically scopes to `/path/to/repo/docs/**` when that folder exists.
 
-Example with a local repo:
+## Configuration
 
-```bash
-./lint-ai /path/to/openclaw
-```
-
-Show the inferred concept inventory:
+Analyze a corpus and emit a suggested `lint-ai.json` config:
 
 ```bash
-./lint-ai /path/to/openclaw/docs/channels --show-concepts
+./lint-ai /path/to/repo/docs --analyze
 ```
 
-Show Markdown headings per file (structure/architecture hints):
-
-```bash
-./lint-ai /path/to/openclaw/docs/channels --show-headings
-```
-
-Debug phrase matches (prints matched text fragments and concepts):
-
-```bash
-./lint-ai /path/to/openclaw/docs/channels --debug-matches
-```
-
-## Coordinator + Workers
-
-`lint-service` can run as a coordinator in front of multiple long-running `lint-client` workers.
-
-### Components
-
-- `lint-service`: gRPC coordinator + HTTP gateway/UI
-- `lint-client`: worker process that executes `lint-ai`
-- `lint-dispatch`: dispatch CLI that sends one request to coordinator and returns aggregated JSON
-
-### Start coordinator
-
-```bash
-cd /home/louis/sources/lint-service
-LINT_SERVICE_ADDR=127.0.0.1:50051 \
-LINT_HTTP_ADDR=127.0.0.1:8080 \
-cargo run --bin lint-service
-```
-
-### Start a worker
-
-```bash
-cd /home/louis/sources/lint-service
-LINT_AI_PATH=/home/louis/sources/lint-ai/target/debug/lint-ai \
-LINT_WORKER_ADDR=127.0.0.1:50052 \
-LINT_WORKER_ID=worker-1 \
-LINT_WORKER_PATH=/home/louis/sources/openclaw/docs \
-LINT_HTTP_ADDR=http://127.0.0.1:8080 \
-cargo run --bin lint-client
-```
-
-Workers send heartbeats to coordinator every 5s. Coordinator keeps a presence table and drops stale workers automatically.
-
-### Dispatch a query
-
-```bash
-cd /home/louis/sources/lint-service
-LINT_SERVICE_ADDR=http://127.0.0.1:50051 \
-cargo run --bin lint-dispatch -- --query "mac install"
-```
-
-### HTTP gateway and UI
-
-- `GET /`: web UI (workers + recent jobs + top results)
-- `GET /api/workers`: current worker presence
-- `GET /api/jobs`: recent dispatch jobs
-- `POST /api/dispatch`: run dispatch via HTTP
-- `POST /api/worker/heartbeat`: worker heartbeat endpoint
-
-`/api/dispatch` accepts:
-
-```json
-{
-  "args": ["--query", "mac install"],
-  "working_dir": "",
-  "timeout_ms": 120000
-}
-```
-
-Optional tenant routing header:
-- `x-tenant-id: <tenant>`
-
-If license is configured with a tenant, dispatch checks `x-tenant-id` before running.
-
-Analyze a corpus and emit a suggested `lint-ai.json`:
-
-```bash
-./lint-ai /path/to/openclaw/docs/channels --analyze
-```
-
-Example analysis output (Openclaw channels):
+Example output:
 
 ```
 Suggested config:
@@ -455,33 +245,15 @@ top concepts:
 - channel routing (22)
 - slack (11)
 - telegram (11)
-- signal (10)
-- whatsapp (10)
-- discord (9)
-- troubleshooting (9)
-- line (8)
-- imessage (7)
-- matrix (6)
-- zalo (4)
-- irc (3)
-- location (3)
 top sections:
 - configuration (41)
 - setup (35)
 - unscoped (31)
 - security (28)
 - related (22)
-- troubleshooting (22)
-- bundled plugin (14)
-- routing (14)
-- overview (10)
-- notes (4)
 ```
 
-## Configuration
-
-You can place a `lint-ai.json` file in the target root (or pass `--config /path/to/lint-ai.json`)
-to control filters.
+You can place a `lint-ai.json` file in the target root, or pass `--config /path/to/lint-ai.json`, to control filters.
 
 Use `--strict-config` to fail fast if the config is invalid.
 
@@ -491,17 +263,7 @@ Limit config size:
 ./lint-ai /path/to/repo --max-config-bytes 2000000
 ```
 
-```json
-{
-  "stopwords": ["workflow", "example"],
-  "ignore_sections": ["related", "unscoped"],
-  "ignore_crossref_sections": ["related", "unscoped"],
-  "ignore_paths": ["docs/reference/"]
-}
-```
-
-Example used for Openclaw channels (reduce false positives by skipping "Related" sections and
-ignoring generic terms):
+Example used for Openclaw channels:
 
 ```json
 {
@@ -514,91 +276,39 @@ ignoring generic terms):
 }
 ```
 
-Run it:
+Run it with `./lint-ai /path/to/openclaw/docs/channels --config /path/to/openclaw/lint-ai.json`.
 
-```bash
-./lint-ai /path/to/openclaw/docs/channels --config /path/to/openclaw/lint-ai.json
-```
+## Contributing
 
-## Development
-
-### Build
+If you want to contribute, the most useful workflow is:
 
 ```bash
 cargo build
-```
-
-### Test
-
-```bash
 cargo test
+cargo fmt --all
 ```
 
-### Contributing
+Please keep changes focused and include tests when behavior changes.
 
-1. Fork the repo and create a feature branch.
-2. Make changes with tests where appropriate.
-3. Run `cargo test`.
-4. Open a PR.
+Useful contribution rules:
 
-## Concept Examples
+- run `cargo test` before opening a PR
+- run `cargo fmt --all` for Rust code changes
+- update docs when CLI flags, benchmarks, or query behavior change
+- include benchmark notes when ranking or retrieval logic changes
+- prefer small PRs with a clear scope
 
-Concept inventory (derived from filenames in `docs/channels/**`):
-
-```
-discord
-slack
-telegram
-whatsapp
-group messages
-channel routing
-```
-
-Concepts grouped by section (aggregated across the corpus):
-
-```
-Section: setup
-- pairing (4)
-- signal (3)
-- feishu (2)
-- zalo (2)
-
-Section: configuration
-- pairing (7)
-- signal (6)
-- feishu (3)
-- groups (3)
-
-Section: related
-- channel routing (21)
-- groups (21)
-- pairing (21)
-```
-
-Surface forms (for matching text to a concept):
-
-```
-group messages
-group-messages
-group_messages
-groupmessages
-group message
-group messages
-```
+If the change affects query quality, mention the benchmark result it moves.
 
 ## Output Examples
 
-Sample findings now include severity tags and link‑debt signals:
+Running the linter emits findings tagged with severity and link-debt signals:
 
-```
+```text
 Missing cross-ref in docs/channels/discord.md -> [[signal]] (high)
 Low link density in docs/channels/location.md (outgoing 1, avg 4.2)
 Unreachable page: docs/channels/legacy.md
 Orphan page: docs/channels/unused.md
 ```
 
-Orphan detection example command:
-
-```bash
-./lint-ai /path/to/openclaw/docs/channels
-```
+Use `--show-concepts` when you need the derived concept inventory for tuning stopwords or allowlists in `lint-ai.json`.

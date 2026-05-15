@@ -8,7 +8,7 @@ For every document, extract a cheap fingerprint.
 - key entities/concepts
 - important terms
 - document type guess
-- summary embedding
+- optional embedding placeholder for future vector workflows
 - a few top claims
 
 ## What This Enables
@@ -90,7 +90,7 @@ Use heading patterns and lexical cues.
 2-4 sentence cheap summary (extractive first, abstractive optional).
 
 ### 6. Embedding
-One document embedding over cleaned text (or title + headings + lead paragraph for cost cap).
+Embedding is currently stored as an optional field, but the live pipeline does not use vector retrieval.
 
 ### 7. Top Claims
 Extract 3-8 claim tuples:
@@ -134,7 +134,7 @@ CLI examples:
 
 Behavior:
 - default provider is `heuristic`
-- `spacy` provider calls `scripts/spacy_ner.py` via `python3`
+- `spacy` provider calls `scripts/spacy_ner.py` via a crate-relative path resolved from `CARGO_MANIFEST_DIR`
 - if spaCy is unavailable, the pipeline falls back to heuristic entities
 
 ## Important Terms Rankers

@@ -48,11 +48,12 @@ impl ClaimExtractor for ConservativeClaimExtractor {
 fn chunk_claims(record: &DocRecord, chunk: &SectionChunk) -> Vec<Claim> {
     let mut out = Vec::new();
 
-    if let Some(topic) = record.probable_topic.as_ref().filter(|s| !s.trim().is_empty()) {
-        if chunk
-            .heading
-            .to_lowercase()
-            .contains(&topic.to_lowercase())
+    if let Some(topic) = record
+        .probable_topic
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        if chunk.heading.to_lowercase().contains(&topic.to_lowercase())
             || chunk.content.to_lowercase().contains(&topic.to_lowercase())
         {
             out.push(Claim {
@@ -110,7 +111,11 @@ fn dedupe_claims(claims: &mut Vec<Claim>) {
             .cmp(&b.subject)
             .then_with(|| a.predicate.cmp(&b.predicate))
             .then_with(|| a.object.cmp(&b.object))
-            .then_with(|| a.confidence.partial_cmp(&b.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
     claims.dedup_by(|a, b| {
         a.subject == b.subject && a.predicate == b.predicate && a.object == b.object

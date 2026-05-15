@@ -3,17 +3,18 @@ use crate::cli::{GraphExportFormat, GraphLevel, LlmChunkStrategy};
 use crate::config::{load_config, normalize_list, Config};
 use crate::filters::is_noise_concept;
 use crate::graph::{normalize_concept, Graph, Tier0Record};
-use crate::index::{DocRecord, MemoryIndex, SectionChunk};
+use crate::index::{DocRecord, MemoryIndex, SectionChunk, TemporalQueryContext, TemporalQueryHint};
 use crate::pipeline::{
     source_documents_to_tier1_inputs, ChunkStrategy, Tier1NerProvider, Tier1TermRankerKind,
 };
+use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
 use crate::report::Report;
 use crate::rules::cross_refs::check_cross_refs;
 use crate::rules::orphan_pages::check_orphans;
 use crate::source::SourceDocument;
 use crate::tier1::{
-    HeuristicKeyEntityRanker, ImportantTermRanker, KeyEntityRanker, SpacyKeyEntityRanker,
-    Tier1DocEntities, Tier1DocInput, Tier1DocTerms,
+    default_spacy_script_path, HeuristicKeyEntityRanker, ImportantTermRanker, KeyEntityRanker,
+    SpacyKeyEntityRanker, Tier1DocEntities, Tier1DocInput, Tier1DocTerms,
 };
 use aho_corasick::AhoCorasick;
 use anyhow::Result;
@@ -67,6 +68,33 @@ fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
             }
         })
         .collect()
+}
+
+fn query_temporal_context(analysis: &QueryAnalysis) -> TemporalQueryContext<'_> {
+    TemporalQueryContext {
+        starts_from: None,
+        ends_at: None,
+        window_days: match analysis.time_hint {
+            Some(QueryTimeHint::Past) => 365,
+            Some(QueryTimeHint::Present) => 30,
+            Some(QueryTimeHint::Ongoing) => 14,
+            Some(QueryTimeHint::Mixed) => 30,
+            None => 7,
+        },
+        hard_filter: false,
+        time_hint: analysis
+            .time_hint
+            .map(|hint| match hint {
+                QueryTimeHint::Past => TemporalQueryHint::Past,
+                QueryTimeHint::Present => TemporalQueryHint::Present,
+                QueryTimeHint::Ongoing => TemporalQueryHint::Ongoing,
+                QueryTimeHint::Mixed => TemporalQueryHint::Mixed,
+            })
+            .filter(|_| analysis.temporal.is_some()),
+        query_routing_intent: analysis.query_routing_intent,
+        has_explicit_temporal: analysis.temporal.is_some(),
+        allowed_doc_ids: None,
+    }
 }
 
 fn surface_forms(raw: &str) -> Vec<String> {
@@ -527,7 +555,7 @@ fn show_tier1_entities(
         Tier1NerProvider::Spacy => {
             let spacy = SpacyKeyEntityRanker {
                 model: spacy_model.to_string(),
-                script_path: "scripts/spacy_ner.py".to_string(),
+                script_path: default_spacy_script_path().display().to_string(),
             };
             match spacy.rank_docs(&docs) {
                 Ok(out) => out,
@@ -809,8 +837,7 @@ fn load_cached_query_index(s: &CacheSettings<'_>, corpus_fingerprint: &str) -> O
         &core_file,
         Some(&lexical_dir),
         false,
-    )
-    {
+    ) {
         Ok(index) => return Some(index),
         Err(err) => {
             eprintln!(
@@ -852,9 +879,88 @@ fn save_cached_query_index(
         corpus_fingerprint: corpus_fingerprint.to_string(),
         records,
     };
-    fs::write(cache_file, serde_json::to_string(&payload)?)?;
+    safe_write_text_file(
+        &cache_file.display().to_string(),
+        &serde_json::to_string(&payload)?,
+    )?;
     let core_file = query_cache_core_file(s);
-    index.save_binary_core(&core_file)?;
+    save_binary_core_atomic(index, &core_file)?;
+    Ok(())
+}
+
+fn ensure_safe_output_path(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        anyhow::bail!("refusing to write: output path is a directory");
+    }
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            anyhow::bail!("refusing to write: output path is a symlink");
+        }
+    }
+    if let Some(parent) = path.parent() {
+        let mut cur = if parent.is_absolute() {
+            PathBuf::from("/")
+        } else {
+            std::env::current_dir()?
+        };
+        for comp in parent.components() {
+            use std::path::Component;
+            match comp {
+                Component::RootDir | Component::CurDir => continue,
+                Component::ParentDir => {
+                    anyhow::bail!("refusing to write: parent traversal is not allowed")
+                }
+                Component::Normal(seg) => {
+                    cur.push(seg);
+                    if let Ok(meta) = fs::symlink_metadata(&cur) {
+                        if meta.file_type().is_symlink() {
+                            anyhow::bail!(
+                                "refusing to write: parent path component is a symlink ({})",
+                                cur.display()
+                            );
+                        }
+                    }
+                }
+                Component::Prefix(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..1000u32 {
+        let candidate = parent.join(format!(".{}.{}.{}.tmp", stem, pid, nanos + attempt as u128));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "unable to allocate temporary file path for {}",
+        path.display()
+    )
+}
+
+fn save_binary_core_atomic(index: &MemoryIndex, path: &Path) -> Result<()> {
+    ensure_safe_output_path(path)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temp_path = atomic_temp_path(path)?;
+    index.save_binary_core(&temp_path)?;
+    fs::rename(&temp_path, path)?;
     Ok(())
 }
 
@@ -872,6 +978,7 @@ struct QueryOutput {
     query: String,
     elapsed_ms: u128,
     result_count: usize,
+    analysis: QueryAnalysis,
     results: Vec<crate::index::SearchResult>,
     aggregation: Option<crate::aggregation::AggregateOutput>,
 }
@@ -1950,10 +2057,15 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let query_value = args.llm_context.as_deref().or(args.query.as_deref());
         if let Some(query) = query_value {
             let started = Instant::now();
+            let analysis = analyze_query(query);
+            let search_query = analysis.augmented_query.clone();
+            let temporal_context = query_temporal_context(&analysis);
             if args.llm_context.is_some() {
                 let requested = args.result_count.clamp(1, MAX_RESULT_COUNT);
                 let candidate_top_k = requested.max(LLM_CONTEXT_CANDIDATE_TOP_K);
-                let candidate_results = index.query(query, candidate_top_k);
+                let candidate_results = index
+                    .query_with_temporal_context(&search_query, candidate_top_k, temporal_context)
+                    .0;
                 let elapsed_ms = started.elapsed().as_millis();
                 let payload = build_llm_context_output(
                     &index,
@@ -1979,7 +2091,13 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 }
             } else {
-                let results = index.query(query, DEFAULT_QUERY_TOP_K);
+                let results = index
+                    .query_with_temporal_context(
+                        &search_query,
+                        DEFAULT_QUERY_TOP_K,
+                        temporal_context,
+                    )
+                    .0;
                 let elapsed_ms = started.elapsed().as_millis();
                 let aggregation =
                     build_aggregate_output(&index, query, &results, DEFAULT_QUERY_TOP_K);
@@ -1987,6 +2105,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     query: query.to_string(),
                     elapsed_ms,
                     result_count: results.len(),
+                    analysis,
                     results,
                     aggregation,
                 };

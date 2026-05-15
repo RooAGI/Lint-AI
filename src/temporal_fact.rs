@@ -275,11 +275,7 @@ impl TemporalFactStore {
         facts
     }
 
-    pub fn timeline_events_between(
-        &self,
-        start: &str,
-        end: &str,
-    ) -> Vec<TimelineEvent<'_>> {
+    pub fn timeline_events_between(&self, start: &str, end: &str) -> Vec<TimelineEvent<'_>> {
         let Some((start, end)) = normalize_range(start, end) else {
             return Vec::new();
         };
@@ -297,8 +293,16 @@ impl TemporalFactStore {
         events.sort_by(|a, b| {
             a.date
                 .cmp(&b.date)
-                .then_with(|| a.fact.normalized_subject().cmp(&b.fact.normalized_subject()))
-                .then_with(|| a.fact.normalized_predicate().cmp(&b.fact.normalized_predicate()))
+                .then_with(|| {
+                    a.fact
+                        .normalized_subject()
+                        .cmp(&b.fact.normalized_subject())
+                })
+                .then_with(|| {
+                    a.fact
+                        .normalized_predicate()
+                        .cmp(&b.fact.normalized_predicate())
+                })
                 .then_with(|| a.fact.source_doc_id.cmp(&b.fact.source_doc_id))
                 .then_with(|| a.fact.source_chunk_id.cmp(&b.fact.source_chunk_id))
         });
@@ -325,8 +329,16 @@ impl TemporalFactStore {
         events.sort_by(|a, b| {
             a.date
                 .cmp(&b.date)
-                .then_with(|| a.fact.normalized_subject().cmp(&b.fact.normalized_subject()))
-                .then_with(|| a.fact.normalized_predicate().cmp(&b.fact.normalized_predicate()))
+                .then_with(|| {
+                    a.fact
+                        .normalized_subject()
+                        .cmp(&b.fact.normalized_subject())
+                })
+                .then_with(|| {
+                    a.fact
+                        .normalized_predicate()
+                        .cmp(&b.fact.normalized_predicate())
+                })
                 .then_with(|| a.fact.source_doc_id.cmp(&b.fact.source_doc_id))
                 .then_with(|| a.fact.source_chunk_id.cmp(&b.fact.source_chunk_id))
         });
@@ -634,7 +646,8 @@ mod tests {
                 confidence: 0.8,
             }],
         );
-        let store = TemporalFactStore::from_records([&record1, &record2, &record3], &HashMap::new());
+        let store =
+            TemporalFactStore::from_records([&record1, &record2, &record3], &HashMap::new());
         let window = store.timeline_events_between("2024-01-01", "2024-01-03");
         assert_eq!(window.len(), 2);
         assert_eq!(window[0].fact.object.as_deref(), Some("Charity Walk"));
@@ -643,7 +656,10 @@ mod tests {
         let pairs = store.adjacent_pairs_between("2024-01-01", "2024-01-10", Some(2));
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].first.fact.object.as_deref(), Some("Charity Walk"));
-        assert_eq!(pairs[0].second.fact.object.as_deref(), Some("Charity Bike Ride"));
+        assert_eq!(
+            pairs[0].second.fact.object.as_deref(),
+            Some("Charity Bike Ride")
+        );
         assert_eq!(pairs[0].gap_days, 1);
     }
 }

@@ -20,7 +20,7 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import DefaultDict, Iterable
+from typing import DefaultDict
 
 
 WORDNET_FILES = ("data.noun", "data.verb", "data.adj", "data.adv")

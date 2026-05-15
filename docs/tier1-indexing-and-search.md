@@ -7,16 +7,15 @@ Store one Tier 1 record per `doc_id` with:
 - `probable_topic`
 - `key_entities` (text, label, score)
 - `important_terms` (term, score, ranker source)
-- `doc_type_guess` (when added)
-- `embedding` (when added)
-- `top_claims` (when added)
+- `doc_type_guess`
+- `embedding` (reserved for future vector workflows; not used by the live query path)
+- `top_claims`
 
 ## Indexing Strategy
 Build multiple indexes from Tier 1 outputs:
 - lexical inverted index on `important_terms` and headings
 - entity index (`entity -> doc_ids`)
 - topic and document-type facets
-- vector index for embeddings
 
 Keep provenance fields (`source`, timestamps, ranker version) to support reindexing and reproducibility.
 
@@ -24,7 +23,7 @@ Keep provenance fields (`source`, timestamps, ranker version) to support reindex
 Use hybrid retrieval:
 - BM25 or keyword retrieval on content and important terms
 - entity-match boost from key-entity overlap
-- vector similarity search (when embeddings exist)
+- no vector similarity search in the current live pipeline
 
 Re-rank candidates with Tier 1 signals:
 - entity score overlap
@@ -37,12 +36,12 @@ Use claim hints (when available) to select comparison candidates for contradicti
 ## Query Flow
 1. Parse query into entities and terms.
 2. Retrieve top N from lexical and entity indexes.
-3. Merge with vector top N.
-4. Re-rank using Tier 1 features.
-5. Return documents with transparent match reasons (matched entities and terms).
+3. Re-rank using Tier 1 features.
+4. Return documents with transparent match reasons (matched entities and terms).
 
 ## Expected Outcomes
-- improved clustering quality (entity + term + vector signals)
+- improved clustering quality from entity, term, topic, and claim signals
 - faster comparison-candidate generation
 - terminology drift detection over time
 - prioritization using salience, confidence, recency, and conflict likelihood
+- vector retrieval can be added later without changing the Tier 1 record shape

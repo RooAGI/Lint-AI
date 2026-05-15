@@ -12,7 +12,7 @@ Required now:
 
 Planned fields:
 - `doc_type_guess`
-- `embedding`
+- `embedding` (reserved for future vector workflows)
 - `top_claims`
 
 Provenance fields (required):
@@ -43,8 +43,7 @@ Build multiple in-memory indexes from Tier 1 records.
 - doc-type facet: `doc_type_guess -> doc_ids` (when available)
 
 ### 2.4 Vector Index
-- in-memory embedding table: `doc_id -> embedding`
-- used for vector similarity retrieval when embeddings are available
+- not part of the current live query path
 
 ## 3. Search / Retrieval Strategy
 Use hybrid retrieval, then re-rank.
@@ -52,7 +51,7 @@ Use hybrid retrieval, then re-rank.
 ### 3.1 Candidate Retrieval
 - lexical retrieval (BM25/keyword style on content + important terms)
 - entity retrieval (entity overlap boost)
-- vector retrieval (when embeddings exist)
+- no vector retrieval in the current live pipeline
 
 ### 3.2 Candidate Merge
 - union candidate sets by `doc_id`
@@ -76,9 +75,8 @@ Return ranked docs with transparent reasons:
 ## 4. Query Flow
 1. Parse query into entities and terms.
 2. Retrieve top N from lexical and entity indexes.
-3. Merge with vector top N (if available).
-4. Re-rank using Tier 1 features.
-5. Return results with `why_matched` evidence.
+3. Re-rank using Tier 1 features.
+4. Return results with `why_matched` evidence.
 
 ## 5. Claim-Hint Extension (Later)
 When `top_claims` is available, use claim overlap/conflict hints to:
@@ -90,3 +88,4 @@ When `top_claims` is available, use claim overlap/conflict hints to:
 - Keep indexing deterministic and reproducible via provenance/version fields.
 - Rebuild index whenever ranker/provider/version changes.
 - Keep index structures plain memory objects for algorithm-first iteration.
+- Leave vector retrieval as a future extension, not a current dependency.

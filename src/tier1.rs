@@ -4,9 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
+
+const SPACY_SUBPROCESS_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Debug, Clone)]
 pub struct Tier1DocInput {
@@ -106,50 +110,46 @@ impl HeuristicKeyEntityRanker {
             );
         }
 
-        if let Ok(title_case_re) = Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b") {
-            for cap in title_case_re.captures_iter(&doc.content).take(80) {
-                let m = cap.get(1).expect("capture exists");
-                let text = m.as_str().trim();
-                if text.len() < 3 {
-                    continue;
-                }
-                let key = text.to_string();
-                let section_hits = section_bounds
-                    .iter()
-                    .filter(|(s, e)| m.start() >= *s && m.start() < *e)
-                    .count()
-                    .max(1);
-                let entry = candidates.entry(key).or_insert(Cand {
-                    start: m.start(),
-                    end: m.end(),
-                    mentions: 0,
-                    heading_hits: 0,
-                    section_hits: 0,
-                    first_pos: m.start(),
-                    label: "PROPN",
-                });
-                entry.mentions += 1;
-                entry.section_hits = entry.section_hits.max(section_hits);
-                entry.first_pos = entry.first_pos.min(m.start());
+        for cap in title_case_regex().captures_iter(&doc.content).take(80) {
+            let m = cap.get(1).expect("capture exists");
+            let text = m.as_str().trim();
+            if text.len() < 3 {
+                continue;
             }
+            let key = text.to_string();
+            let section_hits = section_bounds
+                .iter()
+                .filter(|(s, e)| m.start() >= *s && m.start() < *e)
+                .count()
+                .max(1);
+            let entry = candidates.entry(key).or_insert(Cand {
+                start: m.start(),
+                end: m.end(),
+                mentions: 0,
+                heading_hits: 0,
+                section_hits: 0,
+                first_pos: m.start(),
+                label: "PROPN",
+            });
+            entry.mentions += 1;
+            entry.section_hits = entry.section_hits.max(section_hits);
+            entry.first_pos = entry.first_pos.min(m.start());
         }
 
-        if let Ok(acronym_re) = Regex::new(r"\b([A-Z]{2,8})\b") {
-            for m in acronym_re.find_iter(&doc.content).take(50) {
-                let text = m.as_str();
-                let key = text.to_string();
-                let entry = candidates.entry(key).or_insert(Cand {
-                    start: m.start(),
-                    end: m.end(),
-                    mentions: 0,
-                    heading_hits: 0,
-                    section_hits: 1,
-                    first_pos: m.start(),
-                    label: "ACRONYM",
-                });
-                entry.mentions += 1;
-                entry.first_pos = entry.first_pos.min(m.start());
-            }
+        for m in acronym_regex().find_iter(&doc.content).take(50) {
+            let text = m.as_str();
+            let key = text.to_string();
+            let entry = candidates.entry(key).or_insert(Cand {
+                start: m.start(),
+                end: m.end(),
+                mentions: 0,
+                heading_hits: 0,
+                section_hits: 1,
+                first_pos: m.start(),
+                label: "ACRONYM",
+            });
+            entry.mentions += 1;
+            entry.first_pos = entry.first_pos.min(m.start());
         }
 
         for heading in &doc.headings {
@@ -224,6 +224,65 @@ pub struct SpacyKeyEntityRanker {
     pub script_path: String,
 }
 
+pub fn default_spacy_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_ner.py")
+}
+
+pub fn detect_python_executable() -> String {
+    if let Ok(value) = std::env::var("PYTHON_EXECUTABLE") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
+    if let Ok(value) = std::env::var("PYTHON") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
+
+    if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
+        let mut venv_path = PathBuf::from(venv);
+        if cfg!(windows) {
+            venv_path.push("Scripts");
+            venv_path.push("python.exe");
+        } else {
+            venv_path.push("bin");
+            venv_path.push("python3");
+            if !venv_path.exists() {
+                venv_path.pop();
+                venv_path.push("python");
+            }
+        }
+        if venv_path.exists() {
+            return venv_path.to_string_lossy().into_owned();
+        }
+    }
+
+    "python3".to_string()
+}
+
+fn title_case_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b").expect("valid regex"))
+}
+
+fn acronym_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,8})\b").expect("valid regex"))
+}
+
+fn content_word_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"))
+}
+
+fn rake_token_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{1,}").expect("valid regex"))
+}
+
 #[derive(Serialize)]
 struct SpacyDocInput<'a> {
     id: &'a str,
@@ -271,7 +330,8 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
         };
         let input_json = serde_json::to_string(&payload)?;
 
-        let mut child = Command::new("python3")
+        let python_executable = detect_python_executable();
+        let mut child = Command::new(&python_executable)
             .arg("-I")
             .arg(&self.script_path)
             .stdin(Stdio::piped())
@@ -281,7 +341,7 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
         if let Some(stdin) = child.stdin.as_mut() {
             stdin.write_all(input_json.as_bytes())?;
         }
-        let timeout = Duration::from_secs(20);
+        let timeout = Duration::from_secs(SPACY_SUBPROCESS_TIMEOUT_SECS);
         let start = Instant::now();
         loop {
             if let Some(status) = child.try_wait()? {
@@ -343,8 +403,8 @@ fn default_stopwords() -> HashSet<&'static str> {
 }
 
 fn tokenize_words(content: &str) -> Vec<String> {
-    let re = Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex");
-    re.find_iter(content)
+    content_word_regex()
+        .find_iter(content)
         .map(|m| m.as_str().to_lowercase())
         .collect()
 }
@@ -426,8 +486,7 @@ impl ImportantTermRanker for RakeStyleTermRanker {
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
         let stop = default_stopwords();
-        let token_re = Regex::new(r"[A-Za-z][A-Za-z0-9_-]{1,}").expect("valid regex");
-        let tokens: Vec<String> = token_re
+        let tokens: Vec<String> = rake_token_regex()
             .find_iter(&doc.content)
             .map(|m| m.as_str().to_lowercase())
             .collect();

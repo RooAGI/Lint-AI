@@ -1,9 +1,10 @@
 use crate::ids::stable_chunk_id;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
+use crate::query_semantics::QueryRoutingIntent;
 use crate::temporal::{parse_temporal_date, resolve_temporal_target};
 use crate::tier1::{RankedTerm, Tier1Entity};
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use deunicode::deunicode;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::document::TantivyDocument;
@@ -39,6 +40,7 @@ const GRAPH_MAX_BOOST: f32 = 0.6;
 const ENTITY_GRAPH_WEIGHT: f32 = 0.08;
 const ENTITY_GRAPH_MAX_CANDIDATES: usize = 100;
 const FINAL_RERANK_WINDOW: usize = 200;
+const MAX_DOC_POSTINGS: usize = 500;
 const MAX_RESULTS_PER_GROUP: usize = 2;
 const TEXT_RERANK_WEIGHT: f32 = 0.08;
 const TEXT_RERANK_NGRAM_WEIGHT: f32 = 0.08;
@@ -347,6 +349,10 @@ pub struct MemoryIndex {
     #[serde(skip_serializing)]
     entity_postings_chunk: Vec<Vec<(u32, f32)>>,
     #[serde(skip_serializing)]
+    entity_postings_doc: Vec<Vec<(u32, f32)>>,
+    #[serde(skip_serializing)]
+    term_postings_doc: Vec<Vec<(u32, f32)>>,
+    #[serde(skip_serializing)]
     #[allow(dead_code)]
     chunk_terms: Vec<Vec<u32>>,
     #[serde(skip_serializing)]
@@ -360,6 +366,12 @@ pub struct MemoryIndex {
     doc_interval_trees: Vec<IntervalTree>,
     #[serde(skip_serializing)]
     doc_key_entities: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    doc_rerank_texts: Vec<String>,
+    #[serde(skip_serializing)]
+    doc_rerank_tokens: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    doc_has_number: Vec<bool>,
     #[serde(skip_serializing)]
     claim_scoring: bool,
     #[serde(skip_serializing)]
@@ -385,6 +397,7 @@ pub struct ScoreBreakdown {
     pub entity_score: f32,
     pub term_score: f32,
     pub claim_score: f32,
+    pub semantic_score: f32,
     pub topic_score: f32,
     pub doc_type_score: f32,
     pub recency_score: f32,
@@ -415,12 +428,18 @@ pub struct QueryTimings {
     pub rerank_ms: f64,
     pub parse_ms: f64,
     pub sparse_scoring_ms: f64,
+    pub lexical_merge_ms: f64,
+    pub posting_scoring_ms: f64,
+    pub routing_seed_ms: f64,
     pub candidate_accumulation_ms: f64,
     pub candidate_rank_ms: f64,
     pub metadata_ms: f64,
     pub graph_ms: f64,
     pub entity_graph_ms: f64,
     pub sequence_rerank_ms: f64,
+    pub evidence_ms: f64,
+    pub group_build_ms: f64,
+    pub group_sort_ms: f64,
     pub ranking_ms: f64,
 }
 
@@ -432,12 +451,16 @@ pub struct QueryDiagnostics {
     pub candidates: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct TemporalQueryContext<'a> {
     pub starts_from: Option<&'a str>,
     pub ends_at: Option<&'a str>,
     pub window_days: i64,
     pub hard_filter: bool,
+    pub time_hint: Option<TemporalQueryHint>,
+    pub query_routing_intent: Option<QueryRoutingIntent>,
+    pub has_explicit_temporal: bool,
+    pub allowed_doc_ids: Option<&'a HashSet<String>>,
 }
 
 impl<'a> Default for TemporalQueryContext<'a> {
@@ -447,6 +470,10 @@ impl<'a> Default for TemporalQueryContext<'a> {
             ends_at: None,
             window_days: 7,
             hard_filter: false,
+            time_hint: None,
+            query_routing_intent: None,
+            has_explicit_temporal: false,
+            allowed_doc_ids: None,
         }
     }
 }
@@ -457,6 +484,18 @@ struct CandidateState {
     breakdown: ScoreBreakdown,
     matched_entities: Vec<String>,
     matched_terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EvidenceFeatures {
+    score: f32,
+    matched_terms: usize,
+    has_number: bool,
+    has_unit: bool,
+    has_date: bool,
+    has_temporal_terms: bool,
+    predicate_signal: bool,
+    distractor_penalty: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -476,6 +515,14 @@ pub struct RedactedMemoryIndex {
     pub docs: HashMap<String, RedactedDocRecord>,
     pub topic_to_docs: HashMap<String, Vec<String>>,
     pub doc_type_to_docs: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TemporalQueryHint {
+    Past,
+    Present,
+    Ongoing,
+    Mixed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -564,6 +611,9 @@ impl MemoryIndex {
         let mut chunk_terms: Vec<Vec<u32>> = Vec::new();
         let mut chunk_entities: Vec<Vec<u32>> = Vec::new();
         let mut doc_key_entities: Vec<Vec<String>> = Vec::new();
+        let mut doc_rerank_texts: Vec<String> = Vec::new();
+        let mut doc_rerank_tokens: Vec<Vec<String>> = Vec::new();
+        let mut doc_has_number: Vec<bool> = Vec::new();
 
         for mut record in records {
             let doc_id = record.doc_id.clone();
@@ -572,6 +622,10 @@ impl MemoryIndex {
             doc_u32_to_id.push(doc_id.clone());
             doc_to_chunks.push(Vec::new());
             doc_key_entities.push(normalized_entity_keys(&record.key_entities));
+            let (rerank_text, rerank_tokens) = build_doc_rerank_cache(&record);
+            doc_has_number.push(contains_number_like(&rerank_text));
+            doc_rerank_texts.push(rerank_text);
+            doc_rerank_tokens.push(rerank_tokens);
             if record.section_chunks.is_empty() {
                 record.section_chunks.push(SectionChunk {
                     chunk_id: stable_chunk_id(
@@ -685,13 +739,10 @@ impl MemoryIndex {
             if claim_scoring {
                 for claim in &record.top_claims {
                     for token in claim_tokens(claim) {
-                        claim_to_docs
-                            .entry(token)
-                            .or_default()
-                            .push(TermPosting {
-                                doc_id: doc_id.clone(),
-                                score: claim.confidence.max(0.1),
-                            });
+                        claim_to_docs.entry(token).or_default().push(TermPosting {
+                            doc_id: doc_id.clone(),
+                            score: claim.confidence.max(0.1),
+                        });
                     }
                 }
             }
@@ -784,7 +835,7 @@ impl MemoryIndex {
                         .push(TermPosting {
                             doc_id: doc_id.clone(),
                             score: *score,
-                    });
+                        });
                 }
             }
             for (entity_u32, postings) in entity_postings_chunk.iter().enumerate() {
@@ -819,6 +870,11 @@ impl MemoryIndex {
             &chunks,
             doc_u32_to_id.len(),
         );
+
+        let entity_postings_doc =
+            derive_doc_postings(&entity_postings_chunk, &chunks, MAX_DOC_POSTINGS);
+        let term_postings_doc =
+            derive_doc_postings(&term_postings_chunk, &chunks, MAX_DOC_POSTINGS);
 
         for postings in entity_to_docs.values_mut() {
             postings.sort_by(|a, b| {
@@ -860,12 +916,17 @@ impl MemoryIndex {
             entity_lexicon,
             term_postings_chunk,
             entity_postings_chunk,
+            entity_postings_doc,
+            term_postings_doc,
             chunk_terms,
             chunk_entities,
             term_trie,
             entity_trie,
             doc_interval_trees,
             doc_key_entities,
+            doc_rerank_texts,
+            doc_rerank_tokens,
+            doc_has_number,
             claim_scoring,
             text_rerank_ngram,
             text_rerank_lcs,
@@ -971,9 +1032,20 @@ impl MemoryIndex {
             core.doc_u32_to_id.len(),
         );
         let mut doc_key_entities = vec![Vec::new(); core.doc_u32_to_id.len()];
+        let mut doc_rerank_texts = vec![String::new(); core.doc_u32_to_id.len()];
+        let mut doc_rerank_tokens = vec![Vec::new(); core.doc_u32_to_id.len()];
+        let entity_postings_doc =
+            derive_doc_postings(&core.entity_postings_chunk, &core.chunks, MAX_DOC_POSTINGS);
+        let term_postings_doc =
+            derive_doc_postings(&core.term_postings_chunk, &core.chunks, MAX_DOC_POSTINGS);
+        let mut doc_has_number = vec![false; core.doc_u32_to_id.len()];
         for (doc_id, record) in &docs {
             if let Some(&doc_u32) = core.doc_id_to_u32.get(doc_id) {
                 doc_key_entities[doc_u32 as usize] = normalized_entity_keys(&record.key_entities);
+                let (rerank_text, rerank_tokens) = build_doc_rerank_cache(record);
+                doc_has_number[doc_u32 as usize] = contains_number_like(&rerank_text);
+                doc_rerank_texts[doc_u32 as usize] = rerank_text;
+                doc_rerank_tokens[doc_u32 as usize] = rerank_tokens;
             }
         }
         Ok(Self {
@@ -997,12 +1069,17 @@ impl MemoryIndex {
             entity_lexicon: core.entity_lexicon,
             term_postings_chunk: core.term_postings_chunk,
             entity_postings_chunk: core.entity_postings_chunk,
+            entity_postings_doc,
+            term_postings_doc,
             chunk_terms: core.chunk_terms,
             chunk_entities: core.chunk_entities,
             term_trie,
             entity_trie,
             doc_interval_trees,
             doc_key_entities,
+            doc_rerank_texts,
+            doc_rerank_tokens,
+            doc_has_number,
             claim_scoring,
             text_rerank_ngram: false,
             text_rerank_lcs: false,
@@ -1099,7 +1176,7 @@ impl MemoryIndex {
             }
         } else {
             let ram = Index::create_in_ram(schema);
-            let mut writer = ram.writer(50_000_000)?;
+            let mut writer = ram.writer(15_000_001)?;
             for doc in docs.values() {
                 let headings_text = doc
                     .section_chunks
@@ -1216,9 +1293,13 @@ impl MemoryIndex {
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
-        let search_k = top_k.saturating_mul(5).max(20);
+        let search_k = match temporal.query_routing_intent {
+            Some(_) => top_k.saturating_mul(10).max(25),
+            None => top_k.saturating_mul(5).max(20),
+        };
         let total_start = Instant::now();
-        let (mut results, mut timings, diagnostics) = self.query_timed(query, search_k);
+        let (mut results, mut timings, diagnostics) =
+            self.query_timed_with_context(query, search_k, temporal);
         let (temporal_start, temporal_end) =
             normalize_temporal_bounds(temporal.starts_from, temporal.ends_at);
         let relative_anchor = temporal_start
@@ -1228,7 +1309,11 @@ impl MemoryIndex {
             .or(temporal.starts_from)
             .or(temporal.ends_at);
         let target = resolve_temporal_target(query, relative_anchor);
-        if target.is_none() && temporal_start.is_none() && temporal_end.is_none() {
+        if target.is_none()
+            && temporal_start.is_none()
+            && temporal_end.is_none()
+            && temporal.time_hint.is_none()
+        {
             timings.total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
             results.truncate(top_k);
             return (results, timings, diagnostics);
@@ -1236,6 +1321,8 @@ impl MemoryIndex {
 
         let window_days = temporal.window_days.max(1);
         let hard_filter = temporal.hard_filter;
+        let time_hint = temporal.time_hint;
+        let now_date = DateTime::<Utc>::from(SystemTime::now()).date_naive();
         let mut rescored = Vec::with_capacity(results.len());
         for mut result in results.drain(..) {
             let Some(doc) = self.docs.get(&result.doc_id) else {
@@ -1280,6 +1367,52 @@ impl MemoryIndex {
                     result.score_breakdown.recency_score += boost;
                 }
             }
+            if temporal.has_explicit_temporal
+                && target.is_none()
+                && temporal_start.is_none()
+                && temporal_end.is_none()
+            {
+                if let Some(hint) = time_hint {
+                    let delta_days = (doc_date.signed_duration_since(now_date).num_days()).abs();
+                    let boost = match hint {
+                        TemporalQueryHint::Past => {
+                            if doc_date <= now_date {
+                                0.03
+                            } else {
+                                0.0
+                            }
+                        }
+                        TemporalQueryHint::Present => {
+                            if delta_days <= 30 {
+                                let proximity = 1.0 - (delta_days as f32 / 30.0);
+                                proximity.clamp(0.0, 1.0) * 0.25
+                            } else {
+                                0.0
+                            }
+                        }
+                        TemporalQueryHint::Ongoing => {
+                            if delta_days <= 14 {
+                                let proximity = 1.0 - (delta_days as f32 / 14.0);
+                                proximity.clamp(0.0, 1.0) * 0.3
+                            } else {
+                                0.0
+                            }
+                        }
+                        TemporalQueryHint::Mixed => {
+                            if delta_days <= 30 {
+                                let proximity = 1.0 - (delta_days as f32 / 30.0);
+                                proximity.clamp(0.0, 1.0) * 0.15
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
+                    if boost > 0.0 {
+                        result.score += boost;
+                        result.score_breakdown.recency_score += boost;
+                    }
+                }
+            }
             rescored.push(result);
         }
         rescored.sort_by(|a, b| {
@@ -1297,6 +1430,15 @@ impl MemoryIndex {
         query: &str,
         top_k: usize,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_timed_with_context(query, top_k, TemporalQueryContext::default())
+    }
+
+    fn query_timed_with_context(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let total_start = Instant::now();
         let lexical_start = Instant::now();
         let lexical_hits = match self.lexical_bm25(query, top_k.saturating_mul(5).max(20)) {
@@ -1308,8 +1450,14 @@ impl MemoryIndex {
         };
         let lexical_bm25_ms = lexical_start.elapsed().as_secs_f64() * 1000.0;
         let snapshot_start = Instant::now();
-        let (results, mut timings, diagnostics) =
-            self.query_with_lexical_hits_timed(query, top_k, lexical_hits.as_ref());
+        let (results, mut timings, diagnostics) = self.query_with_lexical_hits_timed(
+            query,
+            top_k,
+            lexical_hits.as_ref(),
+            temporal.query_routing_intent,
+            temporal.has_explicit_temporal,
+            temporal.allowed_doc_ids,
+        );
         let snapshot_query_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
         let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
         timings.snapshot_query_ms = snapshot_query_ms;
@@ -1324,7 +1472,7 @@ impl MemoryIndex {
         top_k: usize,
         lexical_hits: Option<&HashMap<String, f32>>,
     ) -> Vec<SearchResult> {
-        self.query_with_lexical_hits_timed(query, top_k, lexical_hits)
+        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None)
             .0
     }
 
@@ -1333,6 +1481,9 @@ impl MemoryIndex {
         query: &str,
         top_k: usize,
         lexical_hits: Option<&HashMap<String, f32>>,
+        query_routing_intent: Option<QueryRoutingIntent>,
+        has_explicit_temporal: bool,
+        allowed_doc_ids: Option<&HashSet<String>>,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         const MAX_QUERY_CHARS: usize = 4096;
         const MAX_QUERY_TOKENS: usize = 128;
@@ -1368,6 +1519,15 @@ impl MemoryIndex {
         }
         let expanded = expand_query_terms(&q_terms);
         let expanded_terms = expanded.expanded_terms;
+        let mut query_entities: HashSet<String> = HashSet::new();
+        if self.entity_trie.get(&q).is_some() {
+            query_entities.insert(q.clone());
+        }
+        for term in &q_terms {
+            if self.entity_trie.get(term).is_some() {
+                query_entities.insert(term.clone());
+            }
+        }
         if self.doc_u32_to_id.is_empty() {
             return (
                 Vec::new(),
@@ -1379,40 +1539,71 @@ impl MemoryIndex {
         let sparse_start = Instant::now();
         let mut candidates: HashMap<usize, CandidateState> = HashMap::new();
         let query_set: HashSet<String> = q_terms.iter().cloned().collect();
+        let allowed_doc_u32s: Option<HashSet<usize>> = allowed_doc_ids.map(|allowed| {
+            allowed
+                .iter()
+                .filter_map(|doc_id| self.doc_id_to_u32.get(doc_id).copied())
+                .map(|doc_u32| doc_u32 as usize)
+                .collect()
+        });
 
         fn score_doc<F>(
             candidates: &mut HashMap<usize, CandidateState>,
             doc_u32: usize,
             delta: f32,
+            allowed_doc_u32s: Option<&HashSet<usize>>,
             apply: F,
         ) where
             F: FnOnce(&mut CandidateState),
         {
+            if let Some(allowed_doc_u32s) = allowed_doc_u32s {
+                if !allowed_doc_u32s.contains(&doc_u32) {
+                    return;
+                }
+            }
             let entry = candidates.entry(doc_u32).or_default();
             entry.score += delta;
             apply(entry);
         }
 
+        let lexical_merge_start = Instant::now();
         if let Some(lexical_hits) = lexical_hits {
             for (doc_id, bm25_score) in lexical_hits {
                 if let Some(&doc_u32) = self.doc_id_to_u32.get(doc_id) {
-                    score_doc(&mut candidates, doc_u32 as usize, *bm25_score, |entry| {
-                        entry.breakdown.lexical_score += *bm25_score;
-                        });
+                    score_doc(
+                        &mut candidates,
+                        doc_u32 as usize,
+                        *bm25_score,
+                        allowed_doc_u32s.as_ref(),
+                        |entry| {
+                            entry.breakdown.lexical_score += *bm25_score;
+                        },
+                    );
                 }
             }
         }
+        let lexical_merge_ms = lexical_merge_start.elapsed().as_secs_f64() * 1000.0;
+
+        let posting_scoring_start = Instant::now();
 
         // Full-query entity hit.
         if let Some(entity_u32) = self.entity_trie.get(&q) {
-            if let Some(postings) = self.entity_postings_chunk.get(entity_u32 as usize) {
-                for (chunk_u32, post_score) in postings {
-                    let doc_u32 = self.chunks[*chunk_u32 as usize].doc_u32;
-                    let delta = FULL_QUERY_ENTITY_WEIGHT * *post_score;
-                    score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                        entry.breakdown.entity_score += delta;
-                        entry.matched_entities.push(q.clone());
-                    });
+            if let Some(postings) = self.entity_postings_doc.get(entity_u32 as usize) {
+                for &(doc_u32, post_score) in postings {
+                    let mut delta = FULL_QUERY_ENTITY_WEIGHT * post_score;
+                    if !query_entities.is_empty() {
+                        delta *= 1.25;
+                    }
+                    score_doc(
+                        &mut candidates,
+                        doc_u32 as usize,
+                        delta,
+                        allowed_doc_u32s.as_ref(),
+                        |entry| {
+                            entry.breakdown.entity_score += delta;
+                            entry.matched_entities.push(q.clone());
+                        },
+                    );
                 }
             }
         }
@@ -1427,14 +1618,23 @@ impl MemoryIndex {
                 }
             }
             for (entity_u32, mult) in entity_ids {
-                if let Some(postings) = self.entity_postings_chunk.get(entity_u32 as usize) {
-                    for (chunk_u32, post_score) in postings {
-                        let doc_u32 = self.chunks[*chunk_u32 as usize].doc_u32;
-                        let delta = ENTITY_TERM_WEIGHT * *post_score * mult;
-                        score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                            entry.breakdown.entity_score += delta;
-                            entry.matched_entities.push(term.clone());
-                        });
+                if let Some(postings) = self.entity_postings_doc.get(entity_u32 as usize) {
+                    for &(doc_u32, post_score) in postings {
+                        let exact_entity_match = query_entities.contains(term);
+                        let mut delta = ENTITY_TERM_WEIGHT * post_score * mult;
+                        if exact_entity_match {
+                            delta *= 1.4;
+                        }
+                        score_doc(
+                            &mut candidates,
+                            doc_u32 as usize,
+                            delta,
+                            allowed_doc_u32s.as_ref(),
+                            |entry| {
+                                entry.breakdown.entity_score += delta;
+                                entry.matched_entities.push(term.clone());
+                            },
+                        );
                     }
                 }
             }
@@ -1447,14 +1647,19 @@ impl MemoryIndex {
                 }
             }
             for (term_u32, mult) in term_ids {
-                if let Some(postings) = self.term_postings_chunk.get(term_u32 as usize) {
-                    for (chunk_u32, post_score) in postings {
-                        let doc_u32 = self.chunks[*chunk_u32 as usize].doc_u32;
-                        let delta = IMPORTANT_TERM_WEIGHT * *post_score * mult;
-                        score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                            entry.breakdown.term_score += delta;
-                            entry.matched_terms.push(term.clone());
-                        });
+                if let Some(postings) = self.term_postings_doc.get(term_u32 as usize) {
+                    for &(doc_u32, post_score) in postings {
+                        let delta = IMPORTANT_TERM_WEIGHT * post_score * mult;
+                        score_doc(
+                            &mut candidates,
+                            doc_u32 as usize,
+                            delta,
+                            allowed_doc_u32s.as_ref(),
+                            |entry| {
+                                entry.breakdown.term_score += delta;
+                                entry.matched_terms.push(term.clone());
+                            },
+                        );
                     }
                 }
             }
@@ -1463,10 +1668,16 @@ impl MemoryIndex {
                     for posting in postings {
                         if let Some(&doc_u32) = self.doc_id_to_u32.get(&posting.doc_id) {
                             let delta = 0.7 * posting.score;
-                            score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                                entry.breakdown.claim_score += delta;
-                                entry.matched_terms.push(term.clone());
-                            });
+                            score_doc(
+                                &mut candidates,
+                                doc_u32 as usize,
+                                delta,
+                                allowed_doc_u32s.as_ref(),
+                                |entry| {
+                                    entry.breakdown.claim_score += delta;
+                                    entry.matched_terms.push(term.clone());
+                                },
+                            );
                         }
                     }
                 }
@@ -1476,24 +1687,37 @@ impl MemoryIndex {
         // Expanded semantic terms are lower-weight than original terms.
         for term in &expanded_terms {
             if let Some(entity_u32) = self.entity_trie.get(term) {
-                if let Some(postings) = self.entity_postings_chunk.get(entity_u32 as usize) {
-                    for (chunk_u32, post_score) in postings {
-                        let doc_u32 = self.chunks[*chunk_u32 as usize].doc_u32;
-                        let delta = EXPANDED_ENTITY_WEIGHT * *post_score;
-                        score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                            entry.breakdown.entity_score += delta;
-                        });
+                if let Some(postings) = self.entity_postings_doc.get(entity_u32 as usize) {
+                    for &(doc_u32, post_score) in postings {
+                        let mut delta = EXPANDED_ENTITY_WEIGHT * post_score;
+                        if query_entities.contains(term) {
+                            delta *= 1.2;
+                        }
+                        score_doc(
+                            &mut candidates,
+                            doc_u32 as usize,
+                            delta,
+                            allowed_doc_u32s.as_ref(),
+                            |entry| {
+                                entry.breakdown.entity_score += delta;
+                            },
+                        );
                     }
                 }
             }
             if let Some(term_u32) = self.term_trie.get(term) {
-                if let Some(postings) = self.term_postings_chunk.get(term_u32 as usize) {
-                    for (chunk_u32, post_score) in postings {
-                        let doc_u32 = self.chunks[*chunk_u32 as usize].doc_u32;
-                        let delta = EXPANDED_TERM_WEIGHT * *post_score;
-                        score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                            entry.breakdown.term_score += delta;
-                        });
+                if let Some(postings) = self.term_postings_doc.get(term_u32 as usize) {
+                    for &(doc_u32, post_score) in postings {
+                        let delta = EXPANDED_TERM_WEIGHT * post_score;
+                        score_doc(
+                            &mut candidates,
+                            doc_u32 as usize,
+                            delta,
+                            allowed_doc_u32s.as_ref(),
+                            |entry| {
+                                entry.breakdown.term_score += delta;
+                            },
+                        );
                     }
                 }
             }
@@ -1502,14 +1726,35 @@ impl MemoryIndex {
                     for posting in postings {
                         if let Some(&doc_u32) = self.doc_id_to_u32.get(&posting.doc_id) {
                             let delta = 0.7 * 0.6 * posting.score;
-                            score_doc(&mut candidates, doc_u32 as usize, delta, |entry| {
-                                entry.breakdown.claim_score += delta;
-                            });
+                            score_doc(
+                                &mut candidates,
+                                doc_u32 as usize,
+                                delta,
+                                allowed_doc_u32s.as_ref(),
+                                |entry| {
+                                    entry.breakdown.claim_score += delta;
+                                },
+                            );
                         }
                     }
                 }
             }
         }
+        let posting_scoring_ms = posting_scoring_start.elapsed().as_secs_f64() * 1000.0;
+
+        let routing_seed_start = Instant::now();
+        if let Some(intent) = query_routing_intent {
+            let candidate_doc_ids = candidates.keys().copied().collect::<Vec<_>>();
+            seed_routing_candidates(
+                self,
+                &mut candidates,
+                &candidate_doc_ids,
+                &q_terms,
+                &query_entities,
+                intent,
+            );
+        }
+        let routing_seed_ms = routing_seed_start.elapsed().as_secs_f64() * 1000.0;
         let sparse_scoring_ms = sparse_start.elapsed().as_secs_f64() * 1000.0;
 
         let candidate_accumulation_start = Instant::now();
@@ -1592,69 +1837,81 @@ impl MemoryIndex {
 
         // Graph-aware rerank features with bounded contribution.
         // Use current hybrid score as base so graph signals cannot dominate.
-        let graph_start = Instant::now();
-        let anchors = ranked_docs.iter().take(5).cloned().collect::<Vec<_>>();
+        let disable_followup_boosts = matches!(
+            query_routing_intent,
+            Some(QueryRoutingIntent::Count) | Some(QueryRoutingIntent::Sum)
+        );
 
-        // 1-hop doc-link proximity boost.
-        for (anchor_idx, anchor_score) in &anchors {
-            let anchor_doc_id = &self.doc_u32_to_id[*anchor_idx];
-            let Some(anchor_doc) = self.docs.get(anchor_doc_id) else {
-                continue;
-            };
-            let anchor_weight = (*anchor_score / (1.0 + *anchor_score)).clamp(0.0, 1.0);
-            for linked in &anchor_doc.doc_links {
-                if let Some(&doc_u32) = self.doc_id_to_u32.get(linked) {
-                    let Some(entry) = candidates.get_mut(&(doc_u32 as usize)) else {
+        let graph_ms;
+        let entity_graph_ms;
+        if disable_followup_boosts {
+            graph_ms = 0.0;
+            entity_graph_ms = 0.0;
+        } else {
+            let graph_start = Instant::now();
+            let anchors = ranked_docs.iter().take(5).cloned().collect::<Vec<_>>();
+
+            // 1-hop doc-link proximity boost.
+            for (anchor_idx, anchor_score) in &anchors {
+                let anchor_doc_id = &self.doc_u32_to_id[*anchor_idx];
+                let Some(anchor_doc) = self.docs.get(anchor_doc_id) else {
+                    continue;
+                };
+                let anchor_weight = (*anchor_score / (1.0 + *anchor_score)).clamp(0.0, 1.0);
+                for linked in &anchor_doc.doc_links {
+                    if let Some(&doc_u32) = self.doc_id_to_u32.get(linked) {
+                        let Some(entry) = candidates.get_mut(&(doc_u32 as usize)) else {
+                            continue;
+                        };
+                        let delta = (DOC_LINK_GRAPH_WEIGHT * anchor_weight)
+                            .min(GRAPH_MAX_BOOST - entry.breakdown.graph_link_score);
+                        if delta > 0.0 {
+                            entry.score += delta;
+                            entry.breakdown.graph_link_score += delta;
+                        }
+                    }
+                }
+            }
+            graph_ms = graph_start.elapsed().as_secs_f64() * 1000.0;
+
+            let entity_graph_start = Instant::now();
+            // Entity-graph proximity boost: overlap against anchor-entity set.
+            let mut anchor_entities: HashSet<String> = HashSet::new();
+            for (doc_u32, _) in &anchors {
+                if let Some(keys) = self.doc_key_entities.get(*doc_u32) {
+                    for key in keys {
+                        if !key.is_empty() {
+                            anchor_entities.insert(key.clone());
+                        }
+                    }
+                }
+            }
+            if !anchor_entities.is_empty() {
+                let candidate_doc_ids = ranked_docs
+                    .iter()
+                    .take(ENTITY_GRAPH_MAX_CANDIDATES)
+                    .map(|(doc_u32, _)| *doc_u32)
+                    .collect::<Vec<_>>();
+                for doc_u32 in candidate_doc_ids {
+                    let Some(entry) = candidates.get_mut(&doc_u32) else {
                         continue;
                     };
-                    let delta = (DOC_LINK_GRAPH_WEIGHT * anchor_weight)
-                        .min(GRAPH_MAX_BOOST - entry.breakdown.graph_link_score);
-                    if delta > 0.0 {
-                        entry.score += delta;
-                        entry.breakdown.graph_link_score += delta;
+                    let Some(keys) = self.doc_key_entities.get(doc_u32) else {
+                        continue;
+                    };
+                    let overlap = keys.iter().filter(|k| anchor_entities.contains(*k)).count();
+                    if overlap > 0 {
+                        let delta = (ENTITY_GRAPH_WEIGHT * overlap as f32)
+                            .min(GRAPH_MAX_BOOST - entry.breakdown.entity_graph_score);
+                        if delta > 0.0 {
+                            entry.score += delta;
+                            entry.breakdown.entity_graph_score += delta;
+                        }
                     }
                 }
             }
+            entity_graph_ms = entity_graph_start.elapsed().as_secs_f64() * 1000.0;
         }
-        let graph_ms = graph_start.elapsed().as_secs_f64() * 1000.0;
-
-        let entity_graph_start = Instant::now();
-        // Entity-graph proximity boost: overlap against anchor-entity set.
-        let mut anchor_entities: HashSet<String> = HashSet::new();
-        for (doc_u32, _) in &anchors {
-            if let Some(keys) = self.doc_key_entities.get(*doc_u32) {
-                for key in keys {
-                    if !key.is_empty() {
-                        anchor_entities.insert(key.clone());
-                    }
-                }
-            }
-        }
-        if !anchor_entities.is_empty() {
-            let candidate_doc_ids = ranked_docs
-                .iter()
-                .take(ENTITY_GRAPH_MAX_CANDIDATES)
-                .map(|(doc_u32, _)| *doc_u32)
-                .collect::<Vec<_>>();
-            for doc_u32 in candidate_doc_ids {
-                let Some(entry) = candidates.get_mut(&doc_u32) else {
-                    continue;
-                };
-                let Some(keys) = self.doc_key_entities.get(doc_u32) else {
-                    continue;
-                };
-                let overlap = keys.iter().filter(|k| anchor_entities.contains(*k)).count();
-                if overlap > 0 {
-                    let delta = (ENTITY_GRAPH_WEIGHT * overlap as f32)
-                        .min(GRAPH_MAX_BOOST - entry.breakdown.entity_graph_score);
-                    if delta > 0.0 {
-                        entry.score += delta;
-                        entry.breakdown.entity_graph_score += delta;
-                    }
-                }
-            }
-        }
-        let entity_graph_ms = entity_graph_start.elapsed().as_secs_f64() * 1000.0;
 
         let sequence_rerank_start = Instant::now();
         let rerank_window = ranked_docs
@@ -1662,28 +1919,53 @@ impl MemoryIndex {
             .take(TEXT_RERANK_WINDOW.min(FINAL_RERANK_WINDOW))
             .map(|(doc_u32, _)| *doc_u32)
             .collect::<Vec<_>>();
-        if !q_terms.is_empty() {
+        let skip_sequence_rerank = query_routing_intent.is_some() && !has_explicit_temporal;
+        if !skip_sequence_rerank && !q_terms.is_empty() {
             for doc_u32 in rerank_window {
-                let Some(doc_id) = self.doc_u32_to_id.get(doc_u32) else {
+                let Some(candidate_tokens) = cached_doc_rerank_tokens(self, doc_u32) else {
+                    let Some(doc_id) = self.doc_u32_to_id.get(doc_u32) else {
+                        continue;
+                    };
+                    let Some(doc) = self.docs.get(doc_id) else {
+                        continue;
+                    };
+                    let fallback_text = normalize_for_index(&candidate_rerank_text(doc));
+                    let owned_tokens = tokenize_query_terms(&fallback_text);
+                    if owned_tokens.is_empty() {
+                        continue;
+                    }
+                    let token_overlap = token_overlap_ratio(&q_terms, &owned_tokens);
+                    let mut delta = TEXT_RERANK_WEIGHT * token_overlap;
+                    if self.text_rerank_ngram {
+                        let ngram_overlap =
+                            ngram_overlap_ratio(&q_terms, &owned_tokens, TEXT_RERANK_NGRAM_SIZE);
+                        delta += TEXT_RERANK_NGRAM_WEIGHT * ngram_overlap;
+                    }
+                    if self.text_rerank_lcs {
+                        let lcs_overlap = lcs_ratio(&q_terms, &owned_tokens);
+                        delta += TEXT_RERANK_LCS_WEIGHT * lcs_overlap;
+                    }
+                    if delta <= 0.0 {
+                        continue;
+                    }
+                    if let Some(entry) = candidates.get_mut(&doc_u32) {
+                        entry.score += delta;
+                        entry.breakdown.sequence_rerank_score += delta;
+                    }
                     continue;
                 };
-                let Some(doc) = self.docs.get(doc_id) else {
-                    continue;
-                };
-                let candidate_text = candidate_rerank_text(doc);
-                let candidate_tokens = tokenize_query_terms(&normalize_for_index(&candidate_text));
                 if candidate_tokens.is_empty() {
                     continue;
                 }
-                let token_overlap = token_overlap_ratio(&q_terms, &candidate_tokens);
+                let token_overlap = token_overlap_ratio(&q_terms, candidate_tokens);
                 let mut delta = TEXT_RERANK_WEIGHT * token_overlap;
                 if self.text_rerank_ngram {
                     let ngram_overlap =
-                        ngram_overlap_ratio(&q_terms, &candidate_tokens, TEXT_RERANK_NGRAM_SIZE);
+                        ngram_overlap_ratio(&q_terms, candidate_tokens, TEXT_RERANK_NGRAM_SIZE);
                     delta += TEXT_RERANK_NGRAM_WEIGHT * ngram_overlap;
                 }
                 if self.text_rerank_lcs {
-                    let lcs_overlap = lcs_ratio(&q_terms, &candidate_tokens);
+                    let lcs_overlap = lcs_ratio(&q_terms, candidate_tokens);
                     delta += TEXT_RERANK_LCS_WEIGHT * lcs_overlap;
                 }
                 if delta <= 0.0 {
@@ -1697,6 +1979,16 @@ impl MemoryIndex {
         }
         let sequence_rerank_ms = sequence_rerank_start.elapsed().as_secs_f64() * 1000.0;
 
+        let count_query = {
+            let lower = query.to_lowercase();
+            lower.starts_with("how many")
+                || lower.starts_with("count ")
+                || lower.contains(" number of ")
+                || lower.contains(" number of")
+                || lower.contains("count the ")
+                || lower.contains("times did i")
+        };
+        let group_build_start = Instant::now();
         let mut ranked_docs: Vec<(usize, f32)> = candidates
             .iter()
             .filter_map(|(doc_u32, state)| {
@@ -1734,16 +2026,142 @@ impl MemoryIndex {
                 .entry(group_key)
                 .or_insert_with(|| (doc.group_id.clone(), doc.source.clone()));
         }
+        let group_build_ms = group_build_start.elapsed().as_secs_f64() * 1000.0;
 
         let mut ranked_groups: Vec<(String, f32, Vec<(usize, f32)>)> = grouped_ranked_docs
             .into_iter()
             .map(|(group_key, mut items)| {
                 items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                let score = aggregate_group_score(&items);
+                let mut unique_entities: HashSet<String> = HashSet::new();
+                let mut unique_terms: HashSet<String> = HashSet::new();
+                let mut dates: Vec<NaiveDate> = Vec::new();
+                let support_threshold = (items[0].1 * 0.35).max(0.15);
+                let mut supporting_docs = 0usize;
+
+                for (doc_u32, score) in &items {
+                    if let Some(state) = candidates.get(doc_u32) {
+                        if *score >= support_threshold {
+                            supporting_docs += 1;
+                        }
+                        for entity in &state.matched_entities {
+                            if !entity.is_empty() {
+                                unique_entities.insert(entity.clone());
+                            }
+                        }
+                        for term in &state.matched_terms {
+                            if !term.is_empty() {
+                                unique_terms.insert(term.clone());
+                            }
+                        }
+                    }
+                    if let Some(doc_id) = self.doc_u32_to_id.get(*doc_u32) {
+                        if let Some(doc) = self.docs.get(doc_id) {
+                            if let Some(date) = doc_temporal_date(doc) {
+                                dates.push(date);
+                            }
+                        }
+                    }
+                }
+
+                let mut score = aggregate_group_score(&items, count_query);
+                if !query_entities.is_empty() {
+                    let exact_entity_matches = items
+                        .iter()
+                        .filter(|(doc_u32, _)| {
+                            candidates
+                                .get(doc_u32)
+                                .map(|state| {
+                                    state
+                                        .matched_entities
+                                        .iter()
+                                        .any(|entity| query_entities.contains(entity.as_str()))
+                                })
+                                .unwrap_or(false)
+                        })
+                        .count();
+                    score += (exact_entity_matches.min(3) as f32) * 0.10;
+                    score += (unique_entities
+                        .iter()
+                        .filter(|entity| query_entities.contains(*entity))
+                        .count()
+                        .min(3) as f32)
+                        * 0.08;
+                }
+                score += (unique_entities.len().min(4) as f32) * 0.04;
+                score += (unique_terms.len().min(6) as f32) * 0.015;
+                score += (supporting_docs.min(4) as f32) * if count_query { 0.06 } else { 0.03 };
+                if dates.len() >= 2 {
+                    dates.sort();
+                    let span_days = dates
+                        .last()
+                        .zip(dates.first())
+                        .map(|(end, start)| end.signed_duration_since(*start).num_days().abs())
+                        .unwrap_or(0);
+                    if span_days <= 7 {
+                        score += if count_query { 0.12 } else { 0.08 };
+                    } else if span_days <= 30 {
+                        score += if count_query { 0.06 } else { 0.04 };
+                    }
+                }
                 (group_key, score, items)
             })
             .collect();
+        let mut group_sort_ms = 0.0;
+        let group_sort_start = Instant::now();
         ranked_groups.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
+        let evidence_start = Instant::now();
+        if let Some(intent) = query_routing_intent {
+            let evidence_terms = routing_content_terms(&q_terms);
+            let unit_terms = routing_unit_terms(&q_terms);
+            for (_group_key, score, items) in ranked_groups.iter_mut() {
+                let mut evidence_supporting_docs = 0usize;
+                let mut evidence_score = 0.0f32;
+                let mut evidence_term_matches = 0usize;
+                let mut evidence_numbers = 0usize;
+                let mut evidence_units = 0usize;
+                let mut evidence_dates = 0usize;
+                let mut evidence_predicates = 0usize;
+                let mut evidence_penalty = 0.0f32;
+                for (doc_u32, _) in items.iter() {
+                    if let Some(features) = self.evidence_features_for_doc(
+                        *doc_u32,
+                        &evidence_terms,
+                        &unit_terms,
+                        intent,
+                    ) {
+                        if features.score > 0.0 {
+                            evidence_supporting_docs += 1;
+                            evidence_score += features.score;
+                            evidence_term_matches += features.matched_terms;
+                            evidence_numbers += usize::from(features.has_number);
+                            evidence_units += usize::from(features.has_unit);
+                            evidence_dates +=
+                                usize::from(features.has_date || features.has_temporal_terms);
+                            evidence_predicates += usize::from(features.predicate_signal);
+                            evidence_penalty += features.distractor_penalty;
+                        }
+                    }
+                }
+                let evidence_boost = group_evidence_boost(
+                    intent,
+                    evidence_supporting_docs,
+                    evidence_score,
+                    evidence_term_matches,
+                    evidence_numbers,
+                    evidence_units,
+                    evidence_dates,
+                    evidence_predicates,
+                    evidence_penalty,
+                );
+                *score = *score * 0.80 + evidence_boost;
+            }
+            let group_sort_start = Instant::now();
+            ranked_groups
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
+        }
+        let evidence_ms = evidence_start.elapsed().as_secs_f64() * 1000.0;
 
         let mut per_group_counts: HashMap<String, usize> = HashMap::new();
         let mut results = Vec::new();
@@ -1812,12 +2230,18 @@ impl MemoryIndex {
                 rerank_ms,
                 parse_ms,
                 sparse_scoring_ms,
+                lexical_merge_ms,
+                posting_scoring_ms,
+                routing_seed_ms,
                 candidate_accumulation_ms,
                 candidate_rank_ms,
                 metadata_ms,
                 graph_ms,
                 entity_graph_ms,
                 sequence_rerank_ms,
+                evidence_ms,
+                group_build_ms,
+                group_sort_ms,
                 ranking_ms,
             },
             QueryDiagnostics {
@@ -2157,7 +2581,8 @@ impl SemanticAggregate {
         for postings in self.claim_to_docs.values_mut() {
             postings.retain(|posting| posting.doc_id != doc_id);
         }
-        self.claim_to_docs.retain(|_, postings| !postings.is_empty());
+        self.claim_to_docs
+            .retain(|_, postings| !postings.is_empty());
         for docs in self.topic_to_docs.values_mut() {
             docs.retain(|id| id != doc_id);
         }
@@ -2245,6 +2670,48 @@ fn candidate_rerank_text(doc: &DocRecord) -> String {
     parts.join(" ")
 }
 
+fn derive_doc_postings(
+    chunk_postings: &[Vec<(u32, f32)>],
+    chunks: &[ChunkMeta],
+    cap: usize,
+) -> Vec<Vec<(u32, f32)>> {
+    chunk_postings
+        .iter()
+        .map(|postings| {
+            let mut doc_scores: HashMap<u32, f32> = HashMap::new();
+            for &(chunk_u32, score) in postings {
+                let doc_u32 = chunks[chunk_u32 as usize].doc_u32;
+                doc_scores
+                    .entry(doc_u32)
+                    .and_modify(|s| *s = s.max(score))
+                    .or_insert(score);
+            }
+            let mut out: Vec<(u32, f32)> = doc_scores.into_iter().collect();
+            out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            out.truncate(cap);
+            out
+        })
+        .collect()
+}
+
+fn build_doc_rerank_cache(doc: &DocRecord) -> (String, Vec<String>) {
+    let rerank_text = candidate_rerank_text(doc);
+    let normalized = normalize_for_index(&rerank_text);
+    let tokens = tokenize_query_terms(&normalized);
+    (normalized, tokens)
+}
+
+fn cached_doc_rerank_text<'a>(index: &'a MemoryIndex, doc_u32: usize) -> Option<&'a str> {
+    index.doc_rerank_texts.get(doc_u32).map(|s| s.as_str())
+}
+
+fn cached_doc_rerank_tokens<'a>(index: &'a MemoryIndex, doc_u32: usize) -> Option<&'a [String]> {
+    index
+        .doc_rerank_tokens
+        .get(doc_u32)
+        .map(|tokens| tokens.as_slice())
+}
+
 fn doc_has_timestamped_chunk(doc: &DocRecord) -> bool {
     doc.section_chunks
         .iter()
@@ -2273,7 +2740,422 @@ fn normalize_temporal_bounds(
     }
 }
 
-fn aggregate_group_score(items: &[(usize, f32)]) -> f32 {
+fn seed_routing_candidates(
+    index: &MemoryIndex,
+    candidates: &mut HashMap<usize, CandidateState>,
+    candidate_doc_ids: &[usize],
+    q_terms: &[String],
+    query_entities: &HashSet<String>,
+    intent: QueryRoutingIntent,
+) {
+    if candidate_doc_ids.is_empty() {
+        return;
+    }
+
+    let content_terms = routing_content_terms(q_terms);
+    let unit_terms = routing_unit_terms(q_terms);
+
+    for doc_u32 in candidate_doc_ids.iter().copied() {
+        let Some(doc_id) = index.doc_u32_to_id.get(doc_u32) else {
+            continue;
+        };
+        let Some(doc) = index.docs.get(doc_id) else {
+            continue;
+        };
+        let Some(doc_terms) = cached_doc_rerank_tokens(index, doc_u32) else {
+            continue;
+        };
+        if doc_terms.is_empty() {
+            continue;
+        }
+        let matched_terms = content_terms
+            .iter()
+            .filter(|term| doc_terms.iter().any(|tok| tok == *term))
+            .count() as f32;
+        let doc_entities = index
+            .doc_key_entities
+            .get(doc_u32)
+            .map(|keys| keys.as_slice())
+            .unwrap_or(&[]);
+        let matched_entities = doc_entities
+            .iter()
+            .filter(|entity| query_entities.contains(entity.as_str()))
+            .count() as f32;
+        let has_number = index.doc_has_number.get(doc_u32).copied().unwrap_or(false);
+        let has_unit = !unit_terms.is_empty()
+            && unit_terms
+                .iter()
+                .any(|unit| doc_terms.iter().any(|tok| tok == unit));
+        let has_date = doc_temporal_date(doc).is_some();
+        let has_temporal_terms = !doc.temporal_terms.is_empty();
+
+        let mut score = match intent {
+            QueryRoutingIntent::Count => {
+                matched_terms * 0.24
+                    + matched_entities * 0.35
+                    + if has_date { 0.05 } else { 0.0 }
+                    + if has_temporal_terms { 0.04 } else { 0.0 }
+            }
+            QueryRoutingIntent::Sum => {
+                matched_terms * 0.20
+                    + matched_entities * 0.12
+                    + if has_number { 0.30 } else { 0.0 }
+                    + if has_unit { 0.18 } else { 0.0 }
+                    + if has_date { 0.04 } else { 0.0 }
+            }
+            QueryRoutingIntent::Sequence => {
+                matched_terms * 0.20
+                    + matched_entities * 0.12
+                    + if has_date { 0.28 } else { 0.0 }
+                    + if has_temporal_terms { 0.14 } else { 0.0 }
+                    + if has_number { 0.08 } else { 0.0 }
+            }
+        };
+
+        if score <= 0.0 {
+            continue;
+        }
+        if matches!(intent, QueryRoutingIntent::Sequence) && !has_date && !has_temporal_terms {
+            continue;
+        }
+        if matches!(intent, QueryRoutingIntent::Sum) && !has_number && !has_unit {
+            continue;
+        }
+
+        score = score.min(0.85);
+        let entry = candidates.entry(doc_u32).or_default();
+        entry.score += score;
+        entry.breakdown.semantic_score += score;
+    }
+}
+
+impl MemoryIndex {
+    fn evidence_features_for_doc(
+        &self,
+        doc_u32: usize,
+        content_terms: &[String],
+        unit_terms: &[String],
+        intent: QueryRoutingIntent,
+    ) -> Option<EvidenceFeatures> {
+        let doc_id = self.doc_u32_to_id.get(doc_u32)?;
+        let doc = self.docs.get(doc_id)?;
+        let normalized = cached_doc_rerank_text(self, doc_u32)?;
+        if normalized.is_empty() {
+            return None;
+        }
+
+        let doc_terms: HashSet<String> = cached_doc_rerank_tokens(self, doc_u32)
+            .map(|tokens| tokens.iter().cloned().collect())
+            .unwrap_or_else(|| tokenize_query_terms(normalized).into_iter().collect());
+        let matched_terms = content_terms
+            .iter()
+            .filter(|term| doc_terms.contains(term.as_str()))
+            .count();
+        let has_number = self
+            .doc_has_number
+            .get(doc_u32)
+            .copied()
+            .unwrap_or_else(|| contains_number_like(normalized));
+        let has_unit = !unit_terms.is_empty()
+            && unit_terms
+                .iter()
+                .any(|unit| doc_terms.contains(unit.as_str()));
+        if matched_terms == 0 && !has_number && !has_unit {
+            return None;
+        }
+        let has_date = doc_temporal_date(doc).is_some();
+        let has_temporal_terms = !doc.temporal_terms.is_empty();
+        let predicate_signal = has_predicate_signal(&normalized, intent);
+        let distractor_penalty = routing_distractor_penalty(&normalized, intent);
+
+        let mut score = matched_terms.min(6) as f32 * 0.18;
+        if predicate_signal {
+            score += 0.55;
+        }
+        if has_date || has_temporal_terms {
+            score += match intent {
+                QueryRoutingIntent::Sequence => 0.45,
+                _ => 0.12,
+            };
+        }
+        if has_number {
+            score += match intent {
+                QueryRoutingIntent::Sum => 0.45,
+                QueryRoutingIntent::Sequence => 0.12,
+                QueryRoutingIntent::Count => 0.08,
+            };
+        }
+        if has_unit {
+            score += match intent {
+                QueryRoutingIntent::Sum => 0.30,
+                QueryRoutingIntent::Sequence => 0.16,
+                QueryRoutingIntent::Count => 0.06,
+            };
+        }
+        score -= distractor_penalty;
+
+        if !predicate_signal && matched_terms < 2 {
+            score *= 0.25;
+        }
+
+        Some(EvidenceFeatures {
+            score: score.max(0.0),
+            matched_terms,
+            has_number,
+            has_unit,
+            has_date,
+            has_temporal_terms,
+            predicate_signal,
+            distractor_penalty,
+        })
+    }
+}
+
+fn group_evidence_boost(
+    intent: QueryRoutingIntent,
+    supporting_docs: usize,
+    evidence_score: f32,
+    evidence_terms: usize,
+    evidence_numbers: usize,
+    evidence_units: usize,
+    evidence_dates: usize,
+    evidence_predicates: usize,
+    evidence_penalty: f32,
+) -> f32 {
+    if supporting_docs == 0 {
+        return 0.0;
+    }
+
+    let mut boost = evidence_score.min(4.0);
+    boost += supporting_docs.min(4) as f32 * 0.22;
+    boost += evidence_terms.min(8) as f32 * 0.04;
+    boost += evidence_predicates.min(3) as f32 * 0.24;
+
+    match intent {
+        QueryRoutingIntent::Count => {
+            boost += supporting_docs.saturating_sub(1).min(3) as f32 * 0.22;
+        }
+        QueryRoutingIntent::Sum => {
+            boost += evidence_numbers.min(3) as f32 * 0.30;
+            boost += evidence_units.min(3) as f32 * 0.18;
+        }
+        QueryRoutingIntent::Sequence => {
+            boost += evidence_dates.min(4) as f32 * 0.30;
+            boost += evidence_numbers.min(2) as f32 * 0.12;
+        }
+    }
+
+    (boost - evidence_penalty.min(1.5)).max(0.0)
+}
+
+fn routing_content_terms(q_terms: &[String]) -> Vec<String> {
+    let stop = routing_stopwords();
+    let mut seen = HashSet::new();
+    q_terms
+        .iter()
+        .filter(|term| term.len() >= 3)
+        .filter(|term| !stop.contains(term.as_str()))
+        .filter(|term| seen.insert((*term).clone()))
+        .take(16)
+        .cloned()
+        .collect()
+}
+
+fn routing_stopwords() -> &'static HashSet<&'static str> {
+    static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    STOP.get_or_init(|| {
+        [
+            "how",
+            "many",
+            "much",
+            "what",
+            "which",
+            "who",
+            "when",
+            "where",
+            "why",
+            "did",
+            "does",
+            "have",
+            "has",
+            "had",
+            "been",
+            "being",
+            "was",
+            "were",
+            "are",
+            "the",
+            "and",
+            "or",
+            "for",
+            "from",
+            "with",
+            "that",
+            "this",
+            "these",
+            "those",
+            "currently",
+            "recently",
+            "past",
+            "last",
+            "next",
+            "into",
+            "onto",
+            "about",
+            "after",
+            "before",
+            "over",
+            "under",
+            "between",
+            "during",
+            "i",
+            "you",
+            "we",
+            "they",
+        ]
+        .into_iter()
+        .collect()
+    })
+}
+
+fn routing_unit_terms(query: &[String]) -> Vec<String> {
+    let units = [
+        "mile",
+        "miles",
+        "km",
+        "kilometer",
+        "kilometers",
+        "meter",
+        "meters",
+        "hour",
+        "hours",
+        "minute",
+        "minutes",
+        "day",
+        "days",
+        "week",
+        "weeks",
+        "month",
+        "months",
+        "dollar",
+        "dollars",
+        "usd",
+        "pound",
+        "pounds",
+        "kg",
+        "kilogram",
+        "kilograms",
+        "screen",
+        "time",
+    ];
+    let unit_set: HashSet<&str> = units.into_iter().collect();
+    query
+        .iter()
+        .filter(|term| unit_set.contains(term.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn contains_number_like(text: &str) -> bool {
+    static NUMBER_RE: OnceLock<Regex> = OnceLock::new();
+    let re = NUMBER_RE.get_or_init(|| {
+        Regex::new(
+            r"\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b",
+        )
+        .expect("valid number regex")
+    });
+    re.is_match(text)
+}
+
+fn has_predicate_signal(text: &str, intent: QueryRoutingIntent) -> bool {
+    let terms = match intent {
+        QueryRoutingIntent::Count => [
+            "led",
+            "lead",
+            "leading",
+            "visited",
+            "attended",
+            "bought",
+            "purchased",
+            "baked",
+            "cooked",
+            "tried",
+            "used",
+            "played",
+            "learned",
+            "presented",
+            "participated",
+            "sibling",
+            "brother",
+            "sister",
+            "doctor",
+            "project",
+        ]
+        .as_slice(),
+        QueryRoutingIntent::Sum => [
+            "total",
+            "distance",
+            "cost",
+            "spent",
+            "paid",
+            "miles",
+            "kilometers",
+            "hours",
+            "days",
+        ]
+        .as_slice(),
+        QueryRoutingIntent::Sequence => [
+            "consecutive",
+            "before",
+            "after",
+            "weekend",
+            "days",
+            "weeks",
+            "earliest",
+            "latest",
+            "first",
+            "last",
+        ]
+        .as_slice(),
+    };
+    terms.iter().any(|term| text.contains(term))
+}
+
+fn routing_distractor_penalty(text: &str, intent: QueryRoutingIntent) -> f32 {
+    let generic_markers = [
+        "write a story",
+        "fiction",
+        "character",
+        "captain america",
+        "area of",
+        "formula",
+        "table showing",
+        "census",
+        "survey",
+        "article",
+        "research studies",
+        "here are some",
+        "resources",
+    ];
+    let mut penalty = generic_markers
+        .iter()
+        .filter(|marker| text.contains(**marker))
+        .count() as f32
+        * 0.35;
+
+    if matches!(intent, QueryRoutingIntent::Count) {
+        if text.contains("how many") && text.contains("here are") {
+            penalty += 0.25;
+        }
+        if text.contains("formula") || text.contains("approximately") {
+            penalty += 0.35;
+        }
+    }
+
+    penalty.min(1.4)
+}
+
+fn aggregate_group_score(items: &[(usize, f32)], count_query: bool) -> f32 {
     if items.is_empty() {
         return 0.0;
     }
@@ -2281,11 +3163,38 @@ fn aggregate_group_score(items: &[(usize, f32)]) -> f32 {
     let support = items
         .iter()
         .skip(1)
-        .take(2)
-        .map(|(_, score)| *score)
+        .take(4)
+        .enumerate()
+        .map(|(idx, (_, score))| {
+            let decay = if count_query {
+                match idx {
+                    0 => 0.45,
+                    1 => 0.28,
+                    2 => 0.16,
+                    _ => 0.08,
+                }
+            } else {
+                match idx {
+                    0 => 0.30,
+                    1 => 0.18,
+                    2 => 0.10,
+                    _ => 0.05,
+                }
+            };
+            decay * *score
+        })
         .sum::<f32>();
-    let coverage = items.len().saturating_sub(1).min(3) as f32;
-    base + 0.16 * support + 0.03 * coverage
+    let supporting_docs = items
+        .iter()
+        .skip(1)
+        .filter(|(_, score)| *score >= (items[0].1 * 0.35).max(0.15))
+        .count();
+    let coverage = supporting_docs.min(4) as f32 * if count_query { 0.08 } else { 0.05 };
+    if count_query {
+        base * 0.75 + support + coverage
+    } else {
+        base + support + coverage
+    }
 }
 
 fn normalized_entity_keys(entities: &[Tier1Entity]) -> Vec<String> {

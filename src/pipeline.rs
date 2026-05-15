@@ -10,15 +10,17 @@ use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
 use crate::temporal_fact::TemporalFactStore;
 use crate::tier1::{
-    CValueStyleTermRanker, HeuristicKeyEntityRanker, ImportantTermRanker, KeyEntityRanker,
-    RakeStyleTermRanker, SpacyKeyEntityRanker, TextRankStyleTermRanker, Tier1DocInput,
-    YakeStyleTermRanker,
+    default_spacy_script_path, CValueStyleTermRanker, HeuristicKeyEntityRanker,
+    ImportantTermRanker, KeyEntityRanker, RakeStyleTermRanker, SpacyKeyEntityRanker,
+    TextRankStyleTermRanker, Tier1DocInput, YakeStyleTermRanker,
 };
 use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -508,7 +510,8 @@ impl IndexStore {
         before: usize,
         after: usize,
     ) -> Vec<crate::temporal_fact::TimelineEvent<'_>> {
-        self.temporal_facts.timeline_window_around(anchor, before, after)
+        self.temporal_facts
+            .timeline_window_around(anchor, before, after)
     }
 
     pub fn temporal_events_between(
@@ -844,17 +847,8 @@ fn persist_store_metadata(store_paths: &StorePaths, options: &PipelineOptions) -
     let Some(metadata_path) = store_paths.metadata_path.as_ref() else {
         return Ok(());
     };
-    if let Some(parent) = metadata_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if let Some(root) = store_paths.root.as_ref() {
-        fs::create_dir_all(root)?;
-    }
-    if let Some(semantic_dir) = store_paths.semantic_dir.as_ref() {
-        fs::create_dir_all(semantic_dir)?;
-    }
     let metadata = current_store_metadata(options);
-    fs::write(metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+    write_text_file_atomic(metadata_path, &serde_json::to_string_pretty(&metadata)?)?;
     Ok(())
 }
 
@@ -993,12 +987,8 @@ fn load_semantic_state(
         .into_iter()
         .map(Into::into)
         .collect::<Vec<DocRecord>>();
-    let snapshot = MemoryIndex::load_with_binary_core(
-        restored_records.clone(),
-        &core_path,
-        None,
-        false,
-    )?;
+    let snapshot =
+        MemoryIndex::load_with_binary_core(restored_records.clone(), &core_path, None, false)?;
     let mut source_docs = HashMap::new();
     let mut records = HashMap::new();
     for record in restored_records {
@@ -1031,9 +1021,9 @@ fn load_semantic_state(
         }
     } else if let Some(chunk_lifecycle_path) = chunk_lifecycle_path(store_paths) {
         if !chunk_lifecycle_path.exists() {
-            fs::write(
-                chunk_lifecycle_path,
-                serde_json::to_string_pretty(
+            write_text_file_atomic(
+                &chunk_lifecycle_path,
+                &serde_json::to_string_pretty(
                     &chunk_lifecycle.values().cloned().collect::<Vec<_>>(),
                 )?,
             )?;
@@ -1067,16 +1057,112 @@ fn persist_semantic_state(
             .cloned()
             .collect::<Vec<ChunkLifecycleMeta>>(),
     };
-    fs::write(records_path, serde_json::to_string_pretty(&payload)?)?;
+    write_text_file_atomic(&records_path, &serde_json::to_string_pretty(&payload)?)?;
     if let Some(lifecycle_path) = chunk_lifecycle_path(store_paths) {
         let mut lifecycle = chunk_lifecycle_map
             .values()
             .cloned()
             .collect::<Vec<ChunkLifecycleMeta>>();
         lifecycle.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
-        fs::write(lifecycle_path, serde_json::to_string_pretty(&lifecycle)?)?;
+        write_text_file_atomic(&lifecycle_path, &serde_json::to_string_pretty(&lifecycle)?)?;
     }
-    snapshot.save_binary_core(&core_path)?;
+    save_binary_core_atomic(snapshot, &core_path)?;
+    Ok(())
+}
+
+fn ensure_safe_output_path(path: &Path) -> Result<()> {
+    if path.is_dir() {
+        anyhow::bail!("refusing to write: output path is a directory");
+    }
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            anyhow::bail!("refusing to write: output path is a symlink");
+        }
+    }
+    if let Some(parent) = path.parent() {
+        let mut cur = if parent.is_absolute() {
+            PathBuf::from("/")
+        } else {
+            std::env::current_dir()?
+        };
+        for comp in parent.components() {
+            use std::path::Component;
+            match comp {
+                Component::RootDir | Component::CurDir => continue,
+                Component::ParentDir => {
+                    anyhow::bail!("refusing to write: parent traversal is not allowed")
+                }
+                Component::Normal(seg) => {
+                    cur.push(seg);
+                    if let Ok(meta) = fs::symlink_metadata(&cur) {
+                        if meta.file_type().is_symlink() {
+                            anyhow::bail!(
+                                "refusing to write: parent path component is a symlink ({})",
+                                cur.display()
+                            );
+                        }
+                    }
+                }
+                Component::Prefix(_) => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..1000u32 {
+        let candidate = parent.join(format!(".{}.{}.{}.tmp", stem, pid, nanos + attempt as u128));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "unable to allocate temporary file path for {}",
+        path.display()
+    )
+}
+
+fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+    ensure_safe_output_path(path)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temp_path = atomic_temp_path(path)?;
+    {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all().ok();
+    }
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
+fn save_binary_core_atomic(snapshot: &MemoryIndex, path: &Path) -> Result<()> {
+    ensure_safe_output_path(path)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let temp_path = atomic_temp_path(path)?;
+    snapshot.save_binary_core(&temp_path)?;
+    fs::rename(&temp_path, path)?;
     Ok(())
 }
 
@@ -1276,7 +1362,7 @@ fn build_doc_records(
         Tier1NerProvider::Spacy => {
             let spacy = SpacyKeyEntityRanker {
                 model: options.spacy_model.clone(),
-                script_path: "scripts/spacy_ner.py".to_string(),
+                script_path: default_spacy_script_path().display().to_string(),
             };
             match spacy.rank_docs(&docs) {
                 Ok(out) => out,
@@ -1342,7 +1428,7 @@ fn build_doc_record(source_doc: &SourceDocument, options: &PipelineOptions) -> R
         Tier1NerProvider::Spacy => {
             let spacy = SpacyKeyEntityRanker {
                 model: options.spacy_model.clone(),
-                script_path: "scripts/spacy_ner.py".to_string(),
+                script_path: default_spacy_script_path().display().to_string(),
             };
             match spacy.rank_docs(std::slice::from_ref(&doc)) {
                 Ok(mut out) => out.remove(&doc.id).unwrap_or_default(),
@@ -1790,7 +1876,7 @@ mod tests {
         fs::create_dir_all(&index_root).expect("index root should be creatable");
         fs::write(
             index_root.join("metadata.json"),
-            r#"{"schema_version":999,"layout_version":"index-store-v1","crate_version":"0.1.5","index_location":"explicit"}"#,
+            r#"{"schema_version":999,"layout_version":"index-store-v1","crate_version":"0.1.6","index_location":"explicit"}"#,
         )
         .expect("metadata file should be writable");
 

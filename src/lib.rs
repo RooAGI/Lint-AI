@@ -18,8 +18,10 @@
 //! check_cross_refs(&graph, &mut report, &cfg);
 //! ```
 
+pub mod adapters;
 pub mod aggregation;
 pub mod chunking;
+pub mod claim_extractor;
 pub mod cli;
 pub mod config;
 pub mod engine;
@@ -29,14 +31,15 @@ pub mod ids;
 pub mod index;
 pub mod pipeline;
 pub mod query_expansion;
+pub mod query_semantics;
 pub mod report;
 pub mod rules;
-pub mod claim_extractor;
 pub mod source;
 pub mod temporal;
 pub mod temporal_fact;
 pub mod tier1;
 
+pub use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor, ExtractedClaims};
 pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
 pub use crate::index::{
     MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult, TemporalQueryContext,
@@ -46,8 +49,5 @@ pub use crate::pipeline::{
     resolve_store_paths, ChunkStrategy, IndexLocation, IndexStore, PipelineOptions, StorePaths,
     Tier1NerProvider, Tier1TermRankerKind,
 };
-pub use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor, ExtractedClaims};
 pub use crate::source::SourceDocument;
-pub use crate::temporal_fact::{
-    TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
-};
+pub use crate::temporal_fact::{TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair};

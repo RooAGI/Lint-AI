@@ -1,23 +1,25 @@
 # Lint-AI
 
-Lint-AI is for teams building agent memory over large, fast-changing corpora: assistant sessions, task notes, traces, reports, decisions, and documentation that accumulate faster than any team can review manually.
+Lint-AI is for teams building agent memory and semantic review over large, fast-changing corpora: assistant sessions, task notes, traces, reports, decisions, code, and documentation that accumulate faster than any team can review manually.
 
 It is a good fit for people who maintain:
 - long-running agent memory over conversations, notes, and decisions
 - markdown knowledge bases with lots of cross-links
 - internal docs where terminology drifts over time
+- codebases where symbols, ownership, usage, and review context matter
 - corpora where “what changed?” and “what is current?” matter as much as keyword search
 
-Use Lint-AI when plain search is not enough and memory recall needs evidence. It treats stored context as a network of facts, concepts, links, claims, and timestamps, then surfaces misalignment, missing context, and retrieval results suited for downstream review or LLM grounding.
+Use Lint-AI when plain search is not enough and memory recall needs evidence. It treats stored context as a network of facts, concepts, links, symbols, ownership facts, and timestamps, then surfaces misalignment, missing context, and retrieval results suited for downstream review or LLM grounding.
 
-The problem it solves is **system-level consistency**: reading individual documents is not enough when terminology drifts, definitions conflict, or outdated claims persist across a growing corpus. Lint-AI analyzes documentation collectively, not in isolation, to catch these issues before they spread.
+The problem it solves is **system-level consistency**: reading individual documents is not enough when terminology drifts, definitions conflict, ownership changes, or outdated claims persist across a growing corpus. Lint-AI analyzes corpora collectively, not in isolation, to catch these issues before they spread.
 
 Why people use it:
 - to recover the right past session or note when an agent needs context
 - to catch contradictions before they spread
 - to detect terminology drift across documents
 - to find orphaned or weakly linked pages
-- to ask corpus-level questions over facts, entities, and time
+- to ask corpus-level questions over facts, entities, symbols, and time
+- to build review packets from changed files and related semantic context
 - to feed grounded context into an LLM instead of raw text blobs
 
 ## Benchmark
@@ -93,7 +95,7 @@ See [docs/quickstart.md](docs/quickstart.md) for the shortest path to build, run
 
 ## How It Works
 
-Lint-AI ingests sessions, notes, traces, and documents, builds a lexical index plus sparse entity/term tables, and overlays graph structure for links and co-occurrence. Queries are analyzed for intent, entities, and temporal hints, then scored with a blend of lexical, semantic, claim, topic, timestamp, and graph signals. The same corpus analysis also powers misalignment checks such as missing cross-refs, orphan pages, and low-confidence claims.
+Lint-AI ingests sessions, notes, traces, documents, and code-oriented artifacts, builds a lexical index plus sparse entity/term tables, and overlays graph structure for links, symbols, ownership, and co-occurrence. Queries are analyzed for intent, entities, and temporal hints, then scored with a blend of lexical, semantic, claim, topic, timestamp, and graph signals. The same corpus analysis also powers misalignment checks such as missing cross-refs, orphan pages, low-confidence claims, and review-oriented packet generation.
 
 If you want the deeper implementation view, see:
 - `docs/chunk-strategy.md`
@@ -157,7 +159,7 @@ Common graph exports, chunking knobs, lexical subset regeneration, and artifact 
 
 ### Rust Library
 
-Use `IndexStore` when you want mutable ingestion, `MemoryIndex` when you want an immutable query snapshot, and `SourceDocument` to add content.
+Use `IndexStore` when you want mutable ingestion, `MemoryIndex` when you want an immutable query snapshot, and `SourceDocument` to add content. For the broader semantic graph, use `CorpusGraph`, `SymbolStore`, `UsageGraph`, and the review model types that are re-exported from the crate root.
 
 ```rust
 use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
@@ -194,6 +196,14 @@ let index = IndexStore::for_corpus(Path::new("/path/to/corpus"), PipelineOptions
 ```
 
 If you already have prepared `DocRecord` values and want the built search structure directly, use `lint_ai::index::MemoryIndex`.
+
+For symbol and review workflows, the crate root also re-exports:
+
+- `CorpusGraph` for querying documents, symbols, and usage together
+- `SymbolRecord` / `SymbolStore` for symbol indexing
+- `OwnershipRecord` / `OwnershipSummary` for ownership facts and summaries
+- `UsageGraph` / `UsageEdge` / `UsageNode` for symbol and ownership relationship tracing
+- `ReviewPacket` / `ReviewFinding` / `ReviewDiff` for structured review output
 
 ## Advanced
 

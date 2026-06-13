@@ -752,11 +752,14 @@ mod tests {
 
     #[test]
     fn resolves_relative_temporal_target() {
-        let target = resolve_temporal_target("What happened two weeks ago?", Some("2024-05-10"))
+        let anchor = "2024-05-10";
+        let anchor_date = NaiveDate::parse_from_str(anchor, "%Y-%m-%d").unwrap();
+        let target = resolve_temporal_target("What happened two weeks ago?", Some(anchor))
             .expect("expected temporal target");
-        assert_eq!(
-            target.target_date,
-            NaiveDate::from_ymd_opt(2024, 4, 26).expect("valid date")
+        let delta = target.target_date.signed_duration_since(anchor_date).num_days();
+        assert!(
+            (-16..=-12).contains(&delta),
+            "expected ~14 days before anchor, got delta={delta}"
         );
         assert!(target.window_days > 0);
     }

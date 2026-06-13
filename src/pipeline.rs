@@ -158,6 +158,8 @@ struct PersistedDocRecord {
     doc_length: usize,
     author_agent: Option<String>,
     group_id: Option<String>,
+    #[serde(default)]
+    filters: std::collections::BTreeMap<String, String>,
     probable_topic: Option<String>,
     doc_type_guess: Option<String>,
     headings: Vec<String>,
@@ -182,6 +184,7 @@ impl From<DocRecord> for PersistedDocRecord {
             doc_length: record.doc_length,
             author_agent: record.author_agent,
             group_id: record.group_id,
+            filters: record.filters,
             probable_topic: record.probable_topic,
             doc_type_guess: record.doc_type_guess,
             headings: record.headings,
@@ -207,6 +210,7 @@ impl From<PersistedDocRecord> for DocRecord {
             doc_length: record.doc_length,
             author_agent: record.author_agent,
             group_id: record.group_id,
+            filters: record.filters,
             probable_topic: record.probable_topic,
             doc_type_guess: record.doc_type_guess,
             headings: record.headings,
@@ -252,6 +256,19 @@ pub fn resolve_store_paths(
             root: Some(path.clone()),
         }),
     }
+}
+
+/// Opaque byte buffers produced by `IndexStore::dump()` and consumed by
+/// `IndexStore::load_from_dump()`. Intended for storage in an external system
+/// (e.g. Postgres `BYTEA` / `JSONB` columns). Callers should treat the contents
+/// as opaque — the schema version embedded in `records_json` guards against
+/// version mismatches on restore.
+#[derive(Debug, Clone)]
+pub struct IndexDump {
+    /// JSON-serialized `PersistedSemanticRecords` (doc records + chunk lifecycle).
+    pub records_json: Vec<u8>,
+    /// Bincode-serialized `PersistedMemoryCore` (BM25 structures, posting lists).
+    pub core_bytes: Vec<u8>,
 }
 
 pub struct IndexStore {
@@ -382,6 +399,137 @@ impl IndexStore {
             index.upsert(doc);
         }
         index
+    }
+
+    /// Serialize the current index state to a pair of opaque byte buffers suitable
+    /// for storage in an external system (e.g. Postgres BYTEA / JSONB columns).
+    /// Call `load_from_dump` to restore.
+    pub fn dump(&mut self) -> Result<IndexDump> {
+        self.refresh()?;
+        let core_bytes = self
+            .snapshot
+            .as_ref()
+            .expect("snapshot exists after refresh")
+            .to_bytes()?;
+        let records: Vec<PersistedDocRecord> = self
+            .records
+            .values()
+            .cloned()
+            .map(PersistedDocRecord::from)
+            .collect();
+        let chunk_lifecycle: Vec<ChunkLifecycleMeta> =
+            self.chunk_lifecycle.values().cloned().collect();
+        let persisted = PersistedSemanticRecords {
+            schema_version: STORE_SCHEMA_VERSION,
+            layout_version: STORE_LAYOUT_VERSION.to_string(),
+            records,
+            chunk_lifecycle,
+        };
+        let records_json = serde_json::to_vec(&persisted)?;
+        Ok(IndexDump {
+            records_json,
+            core_bytes,
+        })
+    }
+
+    /// Restore an `IndexStore` from a dump produced by `dump()`.
+    /// Returns an error if the schema version does not match.
+    pub fn load_from_dump(dump: IndexDump, options: PipelineOptions) -> Result<Self> {
+        let persisted: PersistedSemanticRecords = serde_json::from_slice(&dump.records_json)?;
+        if persisted.schema_version != STORE_SCHEMA_VERSION {
+            anyhow::bail!(
+                "index dump schema mismatch: found {}, expected {}",
+                persisted.schema_version,
+                STORE_SCHEMA_VERSION
+            );
+        }
+        if persisted.layout_version != STORE_LAYOUT_VERSION {
+            anyhow::bail!(
+                "index dump layout mismatch: found {}, expected {}",
+                persisted.layout_version,
+                STORE_LAYOUT_VERSION
+            );
+        }
+        let restored_records: Vec<DocRecord> = persisted
+            .records
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        let snapshot =
+            MemoryIndex::from_bytes(&dump.core_bytes, restored_records.clone())?;
+        let mut source_docs = HashMap::new();
+        let mut records = HashMap::new();
+        let mut chunk_lifecycle: HashMap<String, ChunkLifecycleMeta> = persisted
+            .chunk_lifecycle
+            .into_iter()
+            .map(|m| (m.chunk_id.clone(), m))
+            .collect();
+        for record in &restored_records {
+            source_docs.insert(record.doc_id.clone(), source_document_from_record(record));
+            records.insert(record.doc_id.clone(), record.clone());
+        }
+        if chunk_lifecycle.is_empty() {
+            for record in records.values() {
+                for chunk in &record.section_chunks {
+                    chunk_lifecycle.insert(
+                        chunk.chunk_id.clone(),
+                        ChunkLifecycleMeta {
+                            chunk_id: chunk.chunk_id.clone(),
+                            doc_id: record.doc_id.clone(),
+                            lineage_key: chunk_lineage_key(&record.doc_id, chunk),
+                            version: 1,
+                            is_latest: true,
+                            supersedes_chunk_id: None,
+                            updated_at_ms: current_time_ms(),
+                            change_reason: Some("bootstrap".to_string()),
+                        },
+                    );
+                }
+            }
+        }
+        let chunk_latest_by_lineage = chunk_lifecycle
+            .values()
+            .filter(|m| m.is_latest)
+            .map(|m| (m.lineage_key.clone(), m.chunk_id.clone()))
+            .collect();
+        let temporal_facts = TemporalFactStore::from_records(records.values(), &chunk_lifecycle);
+        let mut semantic_docs = HashMap::new();
+        let mut semantic_aggregate = SemanticAggregate::default();
+        for record in records.values() {
+            let state = build_semantic_doc_state(record, options.claim_extraction);
+            semantic_aggregate.insert_doc_state(&state);
+            semantic_docs.insert(record.doc_id.clone(), state);
+        }
+        let mut lexical = LexicalState::new(None)?;
+        for record in records.values() {
+            lexical.upsert_record(record)?;
+        }
+        lexical.commit_reload()?;
+        let store_paths = StorePaths {
+            root: None,
+            lexical_dir: None,
+            semantic_dir: None,
+            metadata_path: None,
+        };
+        Ok(Self {
+            options,
+            store_paths,
+            source_docs,
+            records,
+            semantic_docs,
+            semantic_aggregate,
+            chunk_lifecycle,
+            chunk_latest_by_lineage,
+            temporal_facts,
+            dirty_docs: HashSet::new(),
+            tombstones: HashSet::new(),
+            lexical,
+            snapshot: Some(snapshot),
+            snapshot_revision: 1,
+            store_revision: 1,
+            background_refresh: None,
+            dirty: false,
+        })
     }
 
     pub fn upsert(&mut self, doc: SourceDocument) {
@@ -645,6 +793,44 @@ impl IndexStore {
         timings.refresh_ms = refresh_ms;
         timings.total_ms += refresh_ms;
         Ok((results, timings, diagnostics))
+    }
+
+    pub fn query_filtered(
+        &mut self,
+        query: &str,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<SearchResult>> {
+        self.refresh()?;
+        let lexical_hits = self.lexical.search(query, top_k.saturating_mul(5).max(20))?;
+        Ok(self
+            .snapshot
+            .as_ref()
+            .expect("snapshot should exist after refresh")
+            .query_with_filters_and_lexical(query, top_k, filters, Some(&lexical_hits)))
+    }
+
+    /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores every
+    /// query. BM25 (tantivy) is still called once per term — that can't be collapsed — but the
+    /// filter scan over all docs happens only once regardless of how many queries are given.
+    /// Returns one `Vec<SearchResult>` per input query, in the same order.
+    pub fn query_filtered_multi(
+        &mut self,
+        queries: &[&str],
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        self.refresh()?;
+        let candidate_k = top_k.saturating_mul(5).max(20);
+        let mut lexical_hits_per_query = Vec::with_capacity(queries.len());
+        for q in queries {
+            lexical_hits_per_query.push(self.lexical.search(q, candidate_k)?);
+        }
+        Ok(self
+            .snapshot
+            .as_ref()
+            .expect("snapshot should exist after refresh")
+            .query_with_filters_multi(queries, top_k, filters, &lexical_hits_per_query))
     }
 
     fn prepare_pending_changes(&mut self) -> Result<()> {
@@ -937,6 +1123,7 @@ fn source_document_from_record(record: &DocRecord) -> SourceDocument {
             .or_else(|| record.probable_topic.clone())
             .unwrap_or_else(|| record.doc_id.clone()),
         group_id: record.group_id.clone(),
+        filters: record.filters.clone(),
         headings: record.headings.clone(),
         links: record.doc_links.clone(),
         timestamp: record.timestamp.clone(),
@@ -1514,6 +1701,7 @@ fn assemble_doc_record(
         doc_length: source_doc.doc_length,
         author_agent: source_doc.author_agent.clone(),
         group_id: source_doc.group_id.clone(),
+        filters: source_doc.filters.clone(),
         probable_topic,
         doc_type_guess: guess_doc_type(&doc.headings, &doc.content),
         headings: doc.headings.clone(),
@@ -1615,6 +1803,7 @@ mod tests {
             content: content.to_string(),
             concept: id.to_string(),
             group_id: None,
+            filters: std::collections::BTreeMap::new(),
             headings: vec!["Overview".to_string()],
             links: vec![],
             timestamp: None,

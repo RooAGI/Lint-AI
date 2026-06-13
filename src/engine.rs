@@ -56,6 +56,7 @@ fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
                 content: p.content.clone(),
                 concept: p.raw_concept.clone(),
                 group_id: None,
+                filters: std::collections::BTreeMap::new(),
                 headings: p.headings.clone(),
                 links: p
                     .links

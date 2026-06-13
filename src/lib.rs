@@ -55,8 +55,8 @@ pub use crate::ownership::{
 };
 pub use crate::pipeline::{
     build_index_store, build_query_snapshot, build_query_snapshot_from_source_documents,
-    resolve_store_paths, ChunkStrategy, IndexLocation, IndexStore, PipelineOptions, StorePaths,
-    Tier1NerProvider, Tier1TermRankerKind,
+    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, PipelineOptions,
+    StorePaths, Tier1NerProvider, Tier1TermRankerKind,
 };
 pub use crate::review::{
     DocumentSummary, OwnershipSummary, ReviewCategory, ReviewContext, ReviewDiff,

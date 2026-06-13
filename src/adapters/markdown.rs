@@ -62,6 +62,7 @@ impl SourceAdapter for MarkdownAdapter {
                     content: page.content,
                     concept: page.raw_concept,
                     group_id: None,
+                    filters: std::collections::BTreeMap::new(),
                     headings: page.headings,
                     links: page.links.into_iter().collect(),
                     timestamp: None,

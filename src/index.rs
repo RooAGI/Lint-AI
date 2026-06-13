@@ -91,6 +91,8 @@ pub struct DocRecord {
     pub doc_length: usize,
     pub author_agent: Option<String>,
     pub group_id: Option<String>,
+    #[serde(default)]
+    pub filters: std::collections::BTreeMap<String, String>,
     pub probable_topic: Option<String>,
     pub doc_type_guess: Option<String>,
     pub headings: Vec<String>,
@@ -975,6 +977,23 @@ impl MemoryIndex {
     ) -> Result<Self> {
         let bytes = fs::read(core_path)?;
         let core: PersistedMemoryCore = bincode::deserialize(&bytes)?;
+        Self::load_from_core_with_options(core, records, lexical_dir, claim_scoring)
+    }
+
+    fn load_from_core(
+        core: PersistedMemoryCore,
+        records: Vec<DocRecord>,
+        lexical_dir: Option<&Path>,
+    ) -> Result<Self> {
+        Self::load_from_core_with_options(core, records, lexical_dir, false)
+    }
+
+    fn load_from_core_with_options(
+        core: PersistedMemoryCore,
+        records: Vec<DocRecord>,
+        lexical_dir: Option<&Path>,
+        claim_scoring: bool,
+    ) -> Result<Self> {
         if core.doc_u32_to_id.is_empty() && !records.is_empty() {
             anyhow::bail!("invalid binary core: empty doc table");
         }
@@ -1084,6 +1103,33 @@ impl MemoryIndex {
             text_rerank_ngram: false,
             text_rerank_lcs: false,
         })
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let core = PersistedMemoryCore {
+            entity_to_docs: self.entity_to_docs.clone(),
+            term_to_docs: self.term_to_docs.clone(),
+            claim_to_docs: self.claim_to_docs.clone(),
+            topic_to_docs: self.topic_to_docs.clone(),
+            doc_type_to_docs: self.doc_type_to_docs.clone(),
+            doc_id_to_u32: self.doc_id_to_u32.clone(),
+            doc_u32_to_id: self.doc_u32_to_id.clone(),
+            chunk_id_to_u32: self.chunk_id_to_u32.clone(),
+            chunks: self.chunks.clone(),
+            doc_to_chunks: self.doc_to_chunks.clone(),
+            term_lexicon: self.term_lexicon.clone(),
+            entity_lexicon: self.entity_lexicon.clone(),
+            term_postings_chunk: self.term_postings_chunk.clone(),
+            entity_postings_chunk: self.entity_postings_chunk.clone(),
+            chunk_terms: self.chunk_terms.clone(),
+            chunk_entities: self.chunk_entities.clone(),
+        };
+        Ok(bincode::serialize(&core)?)
+    }
+
+    pub fn from_bytes(bytes: &[u8], records: Vec<DocRecord>) -> Result<Self> {
+        let core: PersistedMemoryCore = bincode::deserialize(bytes)?;
+        Self::load_from_core(core, records, None)
     }
 
     pub fn save_binary_core(&self, core_path: &Path) -> Result<()> {
@@ -1474,6 +1520,83 @@ impl MemoryIndex {
     ) -> Vec<SearchResult> {
         self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None)
             .0
+    }
+
+    /// Query with exact-match field filtering. All supplied filter key-value pairs must match
+    /// a document's `filters` map for it to be included in results.
+    pub fn query_with_filters(
+        &self,
+        query: &str,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<SearchResult> {
+        self.query_with_filters_and_lexical(query, top_k, filters, None)
+    }
+
+    pub fn query_with_filters_and_lexical(
+        &self,
+        query: &str,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+        lexical_hits: Option<&HashMap<String, f32>>,
+    ) -> Vec<SearchResult> {
+        if filters.is_empty() {
+            return self.query_with_lexical_hits(query, top_k, lexical_hits);
+        }
+        let allowed: HashSet<String> = self
+            .docs
+            .iter()
+            .filter(|(_, doc)| {
+                filters
+                    .iter()
+                    .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
+            })
+            .map(|(doc_id, _)| doc_id.clone())
+            .collect();
+        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, Some(&allowed))
+            .0
+    }
+
+    /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores each
+    /// query against it. At scale (thousands of docs) this avoids rescanning docs N times.
+    /// Returns one `Vec<SearchResult>` per input query, in the same order.
+    pub fn query_with_filters_multi(
+        &self,
+        queries: &[&str],
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+        lexical_hits_per_query: &[HashMap<String, f32>],
+    ) -> Vec<Vec<SearchResult>> {
+        let allowed_opt: Option<HashSet<String>> = if filters.is_empty() {
+            None
+        } else {
+            Some(
+                self.docs
+                    .iter()
+                    .filter(|(_, doc)| {
+                        filters
+                            .iter()
+                            .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
+                    })
+                    .map(|(doc_id, _)| doc_id.clone())
+                    .collect(),
+            )
+        };
+        queries
+            .iter()
+            .zip(lexical_hits_per_query.iter())
+            .map(|(q, hits)| {
+                self.query_with_lexical_hits_timed(
+                    q,
+                    top_k,
+                    Some(hits),
+                    None,
+                    false,
+                    allowed_opt.as_ref(),
+                )
+                .0
+            })
+            .collect()
     }
 
     fn query_with_lexical_hits_timed(
@@ -3301,6 +3424,7 @@ mod tests {
             doc_length: 7,
             author_agent: None,
             group_id: None,
+            filters: std::collections::BTreeMap::new(),
             probable_topic: None,
             doc_type_guess: None,
             headings: vec!["Overview".to_string()],

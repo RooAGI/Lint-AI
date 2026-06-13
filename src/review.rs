@@ -333,6 +333,7 @@ mod tests {
             content: "install guide".to_string(),
             concept: "install guide".to_string(),
             group_id: None,
+            filters: std::collections::BTreeMap::new(),
             headings: vec!["Overview".to_string()],
             links: vec!["docs/setup.md".to_string()],
             timestamp: None,

@@ -137,6 +137,7 @@ mod tests {
             doc_length: 20,
             author_agent: None,
             group_id: Some("group-a".to_string()),
+            filters: std::collections::BTreeMap::new(),
             probable_topic: Some("Alice".to_string()),
             doc_type_guess: Some("note".to_string()),
             headings: vec!["Overview".to_string()],

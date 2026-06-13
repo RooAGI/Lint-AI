@@ -220,6 +220,7 @@ mod tests {
             doc_length: content.len(),
             author_agent: None,
             group_id: group_id.map(|g| g.to_string()),
+            filters: std::collections::BTreeMap::new(),
             probable_topic: Some("hiking".to_string()),
             doc_type_guess: Some("note".to_string()),
             headings: vec!["Overview".to_string()],

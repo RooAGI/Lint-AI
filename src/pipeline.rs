@@ -158,6 +158,8 @@ struct PersistedDocRecord {
     doc_length: usize,
     author_agent: Option<String>,
     group_id: Option<String>,
+    #[serde(default)]
+    filters: std::collections::BTreeMap<String, String>,
     probable_topic: Option<String>,
     doc_type_guess: Option<String>,
     headings: Vec<String>,
@@ -182,6 +184,7 @@ impl From<DocRecord> for PersistedDocRecord {
             doc_length: record.doc_length,
             author_agent: record.author_agent,
             group_id: record.group_id,
+            filters: record.filters,
             probable_topic: record.probable_topic,
             doc_type_guess: record.doc_type_guess,
             headings: record.headings,
@@ -207,6 +210,7 @@ impl From<PersistedDocRecord> for DocRecord {
             doc_length: record.doc_length,
             author_agent: record.author_agent,
             group_id: record.group_id,
+            filters: record.filters,
             probable_topic: record.probable_topic,
             doc_type_guess: record.doc_type_guess,
             headings: record.headings,
@@ -647,6 +651,44 @@ impl IndexStore {
         Ok((results, timings, diagnostics))
     }
 
+    pub fn query_filtered(
+        &mut self,
+        query: &str,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<SearchResult>> {
+        self.refresh()?;
+        let lexical_hits = self.lexical.search(query, top_k.saturating_mul(5).max(20))?;
+        Ok(self
+            .snapshot
+            .as_ref()
+            .expect("snapshot should exist after refresh")
+            .query_with_filters_and_lexical(query, top_k, filters, Some(&lexical_hits)))
+    }
+
+    /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores every
+    /// query. BM25 (tantivy) is still called once per term — that can't be collapsed — but the
+    /// filter scan over all docs happens only once regardless of how many queries are given.
+    /// Returns one `Vec<SearchResult>` per input query, in the same order.
+    pub fn query_filtered_multi(
+        &mut self,
+        queries: &[&str],
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<Vec<SearchResult>>> {
+        self.refresh()?;
+        let candidate_k = top_k.saturating_mul(5).max(20);
+        let mut lexical_hits_per_query = Vec::with_capacity(queries.len());
+        for q in queries {
+            lexical_hits_per_query.push(self.lexical.search(q, candidate_k)?);
+        }
+        Ok(self
+            .snapshot
+            .as_ref()
+            .expect("snapshot should exist after refresh")
+            .query_with_filters_multi(queries, top_k, filters, &lexical_hits_per_query))
+    }
+
     fn prepare_pending_changes(&mut self) -> Result<()> {
         let dirty_doc_ids = self.dirty_docs.iter().cloned().collect::<Vec<String>>();
         for doc_id in &dirty_doc_ids {
@@ -937,6 +979,7 @@ fn source_document_from_record(record: &DocRecord) -> SourceDocument {
             .or_else(|| record.probable_topic.clone())
             .unwrap_or_else(|| record.doc_id.clone()),
         group_id: record.group_id.clone(),
+        filters: record.filters.clone(),
         headings: record.headings.clone(),
         links: record.doc_links.clone(),
         timestamp: record.timestamp.clone(),
@@ -1514,6 +1557,7 @@ fn assemble_doc_record(
         doc_length: source_doc.doc_length,
         author_agent: source_doc.author_agent.clone(),
         group_id: source_doc.group_id.clone(),
+        filters: source_doc.filters.clone(),
         probable_topic,
         doc_type_guess: guess_doc_type(&doc.headings, &doc.content),
         headings: doc.headings.clone(),

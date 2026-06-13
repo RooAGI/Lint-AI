@@ -91,6 +91,8 @@ pub struct DocRecord {
     pub doc_length: usize,
     pub author_agent: Option<String>,
     pub group_id: Option<String>,
+    #[serde(default)]
+    pub filters: std::collections::BTreeMap<String, String>,
     pub probable_topic: Option<String>,
     pub doc_type_guess: Option<String>,
     pub headings: Vec<String>,
@@ -1474,6 +1476,83 @@ impl MemoryIndex {
     ) -> Vec<SearchResult> {
         self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None)
             .0
+    }
+
+    /// Query with exact-match field filtering. All supplied filter key-value pairs must match
+    /// a document's `filters` map for it to be included in results.
+    pub fn query_with_filters(
+        &self,
+        query: &str,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<SearchResult> {
+        self.query_with_filters_and_lexical(query, top_k, filters, None)
+    }
+
+    pub fn query_with_filters_and_lexical(
+        &self,
+        query: &str,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+        lexical_hits: Option<&HashMap<String, f32>>,
+    ) -> Vec<SearchResult> {
+        if filters.is_empty() {
+            return self.query_with_lexical_hits(query, top_k, lexical_hits);
+        }
+        let allowed: HashSet<String> = self
+            .docs
+            .iter()
+            .filter(|(_, doc)| {
+                filters
+                    .iter()
+                    .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
+            })
+            .map(|(doc_id, _)| doc_id.clone())
+            .collect();
+        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, Some(&allowed))
+            .0
+    }
+
+    /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores each
+    /// query against it. At scale (thousands of docs) this avoids rescanning docs N times.
+    /// Returns one `Vec<SearchResult>` per input query, in the same order.
+    pub fn query_with_filters_multi(
+        &self,
+        queries: &[&str],
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+        lexical_hits_per_query: &[HashMap<String, f32>],
+    ) -> Vec<Vec<SearchResult>> {
+        let allowed_opt: Option<HashSet<String>> = if filters.is_empty() {
+            None
+        } else {
+            Some(
+                self.docs
+                    .iter()
+                    .filter(|(_, doc)| {
+                        filters
+                            .iter()
+                            .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
+                    })
+                    .map(|(doc_id, _)| doc_id.clone())
+                    .collect(),
+            )
+        };
+        queries
+            .iter()
+            .zip(lexical_hits_per_query.iter())
+            .map(|(q, hits)| {
+                self.query_with_lexical_hits_timed(
+                    q,
+                    top_k,
+                    Some(hits),
+                    None,
+                    false,
+                    allowed_opt.as_ref(),
+                )
+                .0
+            })
+            .collect()
     }
 
     fn query_with_lexical_hits_timed(
@@ -3301,6 +3380,7 @@ mod tests {
             doc_length: 7,
             author_agent: None,
             group_id: None,
+            filters: std::collections::BTreeMap::new(),
             probable_topic: None,
             doc_type_guess: None,
             headings: vec!["Overview".to_string()],

@@ -326,6 +326,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
                 content: format!("{}: {}", turn.role, turn.content),
                 concept: "longmemeval-turn".to_string(),
                 group_id: Some(session_id.clone()),
+                filters: std::collections::BTreeMap::new(),
                 headings: vec![format!("session:{session_id}")],
                 links: vec![],
                 timestamp: Some(session_date.clone()),

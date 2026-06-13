@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::stable_doc_id_from_source;
@@ -17,6 +19,8 @@ pub struct SourceDocument {
     pub timestamp: Option<String>,
     pub doc_length: usize,
     pub author_agent: Option<String>,
+    #[serde(default)]
+    pub filters: BTreeMap<String, String>,
 }
 
 impl SourceDocument {
@@ -43,6 +47,7 @@ impl SourceDocument {
             timestamp,
             doc_length,
             author_agent,
+            filters: BTreeMap::new(),
         }
     }
 }
@@ -126,5 +131,6 @@ mod tests {
         assert_eq!(decoded.timestamp, doc.timestamp);
         assert_eq!(decoded.doc_length, doc.doc_length);
         assert_eq!(decoded.author_agent, doc.author_agent);
+        assert_eq!(decoded.filters, doc.filters);
     }
 }

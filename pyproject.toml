@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "lint-ai"
+version = "0.1.8"
+description = "Semantic wiki and docs linting for contradictions, stale claims, orphan pages, and missing cross-references"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = []
+keywords = ["lint", "markdown", "knowledge-base", "AI", "agents"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[project.urls]
+Homepage = "https://www.rooagi.com"
+Repository = "https://github.com/RooAGI/Lint-AI"
+
+[tool.maturin]
+features = ["python"]
+module-name = "lint_ai"

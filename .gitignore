@@ -39,3 +39,18 @@ lint-ai-chunk-graph.html
 
 # Optional for library-style workflows
 Cargo.lock
+
+# Local Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local macOS/log artifacts
+.DS_Store
+build.log
+
+# Generated benchmark smoke outputs
+benchmark/*_results.json
+benchmark/data/longmemeval_s_raw.json
+benchmark/data/lintai_longmemeval_scoped_results*.json
+benchmark/data/python_lintai_longmemeval_scoped_results*.json

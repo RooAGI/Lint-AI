@@ -1,0 +1,84 @@
+[
+  {
+    "question_id": "smoke-q1",
+    "question_type": "single-session-user",
+    "question": "What did the user ask about Docker installation?",
+    "question_date": "2026-06-16",
+    "answer_session_ids": ["session-docker"],
+    "haystack_session_ids": ["session-docker", "session-kubernetes", "session-billing"],
+    "haystack_dates": ["2026-06-15", "2026-06-15", "2026-06-15"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "How do I install Docker on Ubuntu?"
+        },
+        {
+          "role": "assistant",
+          "content": "Use the official Docker apt repository and then install docker-ce."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "How do I restart a Kubernetes deployment?"
+        },
+        {
+          "role": "assistant",
+          "content": "Use kubectl rollout restart deployment."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Where can I find the billing invoice?"
+        },
+        {
+          "role": "assistant",
+          "content": "Invoices are available in account settings."
+        }
+      ]
+    ]
+  },
+  {
+    "question_id": "smoke-q2",
+    "question_type": "single-session-assistant",
+    "question": "Which session talked about billing invoices?",
+    "question_date": "2026-06-16",
+    "answer_session_ids": ["session-billing"],
+    "haystack_session_ids": ["session-docker", "session-kubernetes", "session-billing"],
+    "haystack_dates": ["2026-06-15", "2026-06-15", "2026-06-15"],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "How do I install Docker on Ubuntu?"
+        },
+        {
+          "role": "assistant",
+          "content": "Use the official Docker apt repository and then install docker-ce."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "How do I restart a Kubernetes deployment?"
+        },
+        {
+          "role": "assistant",
+          "content": "Use kubectl rollout restart deployment."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "Where can I find the billing invoice?"
+        },
+        {
+          "role": "assistant",
+          "content": "Invoices are available in account settings."
+        }
+      ]
+    ]
+  }
+]

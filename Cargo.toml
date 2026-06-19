@@ -37,7 +37,7 @@ thesaurus = "0.5"
 temps = { version = "3", features = ["chrono"] }
 fuzzydate = "0.4.1"
 console = { version = "0.16.3", features = ["std"] }
-pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 
 [features]
 default = ["heuristic-query-semantics"]

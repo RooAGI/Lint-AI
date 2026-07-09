@@ -727,13 +727,14 @@ impl IndexStore {
         let semantic_aggregate = self.semantic_aggregate.clone();
         let text_rerank_ngram = self.options.text_rerank_ngram;
         let text_rerank_lcs = self.options.text_rerank_lcs;
+        let claim_extraction = self.options.claim_extraction;
         thread::spawn(move || {
             let _ = sender.send(Ok(MemoryIndex::from_records_with_semantic_aggregate(
                 records,
                 semantic_aggregate,
                 text_rerank_ngram,
                 text_rerank_lcs,
-                false,
+                claim_extraction,
             )));
         });
         self.background_refresh = Some(BackgroundRefresh {

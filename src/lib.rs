@@ -37,6 +37,7 @@ pub mod query_semantics;
 pub mod report;
 pub mod review;
 pub mod rules;
+pub mod segments;
 pub mod source;
 pub mod symbols;
 pub mod temporal;

@@ -496,6 +496,8 @@ Remaining gaps:
 - richer concurrent publication model
   - current background refresh is internal-only and simple rather than a full
   multi-reader / multi-writer snapshot system
+  - see [IndexStore and MemoryIndex Concurrency](index-concurrency.md) for the
+    recommended large-corpus publication model
 - stronger freshness policy controls
   - current public API intentionally avoids exposing multiple refresh/query
     modes, and does not yet implement advanced scheduling or debouncing policies
@@ -558,6 +560,12 @@ If scale demands it, redesign internals for true incremental updates:
 
 This is a larger project and should only be pursued if performance data shows
 the current snapshot model is too expensive.
+
+Before that larger redesign, prefer the lighter concurrency path documented in
+[IndexStore and MemoryIndex Concurrency](index-concurrency.md): one published
+query generation plus at most one in-flight replacement generation per logical
+`IndexStore`. A generation may be one `MemoryIndex` today or a segmented set of
+`MemoryIndex` values in a future large-corpus design.
 
 ## Recommended Host Architecture
 

@@ -97,11 +97,21 @@ impl SegmentedMemoryIndex {
     }
 
     pub fn from_records_by_group_id(records: &[DocRecord]) -> Self {
+        Self::from_records_by_group_id_with_global_index(
+            records,
+            MemoryIndex::from_records(records.to_vec()),
+        )
+    }
+
+    pub fn from_records_by_group_id_with_global_index(
+        records: &[DocRecord],
+        global_index: MemoryIndex,
+    ) -> Self {
         let segments = build_segments_by_group_id(records);
         let corpus_stats = SegmentCorpusStats::from_segments(&segments);
         Self {
             segments,
-            global_index: Some(MemoryIndex::from_records(records.to_vec())),
+            global_index: Some(global_index),
             corpus_stats,
         }
     }

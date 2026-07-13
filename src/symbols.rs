@@ -358,7 +358,9 @@ mod tests {
 
         let matches = store.lookup_by_name("virtual machine");
         assert_eq!(matches.len(), 2);
-        assert!(matches.iter().all(|record| record.kind == SymbolKind::Class));
+        assert!(matches
+            .iter()
+            .all(|record| record.kind == SymbolKind::Class));
     }
 
     #[test]

@@ -450,13 +450,9 @@ impl IndexStore {
                 STORE_LAYOUT_VERSION
             );
         }
-        let restored_records: Vec<DocRecord> = persisted
-            .records
-            .into_iter()
-            .map(Into::into)
-            .collect();
-        let snapshot =
-            MemoryIndex::from_bytes(&dump.core_bytes, restored_records.clone())?;
+        let restored_records: Vec<DocRecord> =
+            persisted.records.into_iter().map(Into::into).collect();
+        let snapshot = MemoryIndex::from_bytes(&dump.core_bytes, restored_records.clone())?;
         let mut source_docs = HashMap::new();
         let mut records = HashMap::new();
         let mut chunk_lifecycle: HashMap<String, ChunkLifecycleMeta> = persisted
@@ -803,7 +799,9 @@ impl IndexStore {
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<SearchResult>> {
         self.refresh()?;
-        let lexical_hits = self.lexical.search(query, top_k.saturating_mul(5).max(20))?;
+        let lexical_hits = self
+            .lexical
+            .search(query, top_k.saturating_mul(5).max(20))?;
         Ok(self
             .snapshot
             .as_ref()

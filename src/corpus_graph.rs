@@ -21,7 +21,10 @@ impl CorpusGraph {
     }
 
     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
-        let IngestBundle { documents: source_documents, symbols } = bundle;
+        let IngestBundle {
+            documents: source_documents,
+            symbols,
+        } = bundle;
         let documents = build_query_snapshot(&source_documents, options)?;
         let usage_bundle = IngestBundle::new(source_documents, symbols.clone());
         let symbols = SymbolStore::from_records(symbols);
@@ -81,7 +84,10 @@ mod tests {
         let summary = graph.symbol_usage_summary(&symbol.symbol_id);
         assert_eq!(summary.edge_count, 1);
         assert_eq!(
-            summary.edge_counts.get(&crate::usage::UsageEdgeKind::Declares).copied(),
+            summary
+                .edge_counts
+                .get(&crate::usage::UsageEdgeKind::Declares)
+                .copied(),
             Some(1)
         );
     }

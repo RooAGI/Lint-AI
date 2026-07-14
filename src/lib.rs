@@ -23,8 +23,8 @@ pub mod aggregation;
 pub mod chunking;
 pub mod claim_extractor;
 pub mod cli;
-pub mod corpus_graph;
 pub mod config;
+pub mod corpus_graph;
 pub mod engine;
 pub mod filters;
 pub mod graph;
@@ -56,8 +56,10 @@ pub use crate::ownership::{
 };
 pub use crate::pipeline::{
     build_index_store, build_query_snapshot, build_query_snapshot_from_source_documents,
-    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, PipelineOptions,
-    StorePaths, Tier1NerProvider, Tier1TermRankerKind,
+    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, IndexStoreInspection,
+    MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
+    MemoryIndexSnapshotInspection, PipelineOptions, StorePaths, Tier1NerProvider,
+    Tier1TermRankerKind,
 };
 pub use crate::review::{
     DocumentSummary, OwnershipSummary, ReviewCategory, ReviewContext, ReviewDiff,

@@ -756,7 +756,10 @@ mod tests {
         let anchor_date = NaiveDate::parse_from_str(anchor, "%Y-%m-%d").unwrap();
         let target = resolve_temporal_target("What happened two weeks ago?", Some(anchor))
             .expect("expected temporal target");
-        let delta = target.target_date.signed_duration_since(anchor_date).num_days();
+        let delta = target
+            .target_date
+            .signed_duration_since(anchor_date)
+            .num_days();
         assert!(
             (-16..=-12).contains(&delta),
             "expected ~14 days before anchor, got delta={delta}"

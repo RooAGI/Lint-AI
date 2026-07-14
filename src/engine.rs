@@ -640,6 +640,7 @@ fn build_memory_index(
         index_location: lexical_dir
             .map(|path| crate::pipeline::IndexLocation::Explicit(path.to_path_buf()))
             .unwrap_or(crate::pipeline::IndexLocation::InMemory),
+        memory_index_layout: crate::pipeline::MemoryIndexLayout::Single,
     };
     crate::pipeline::build_query_snapshot(&source_docs, &options)
 }

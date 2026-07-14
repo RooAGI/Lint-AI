@@ -1,4 +1,4 @@
-use crate::index::{DocRecord, MemoryIndex, SearchResult};
+use crate::index::{DocRecord, MemoryIndex, SearchResult, TemporalQueryContext};
 use crate::query_expansion::normalize_for_index;
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -26,6 +26,8 @@ pub struct MemoryIndexSegment {
 
 pub struct SegmentedMemoryIndex {
     pub segments: Vec<MemoryIndexSegment>,
+    pub global_index: Option<MemoryIndex>,
+    corpus_stats: SegmentCorpusStats,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -40,6 +42,7 @@ pub struct SegmentProfile {
 pub struct SegmentRoute {
     pub segment_id: String,
     pub score: f32,
+    pub fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +61,9 @@ pub struct LocalDifferentiator {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SegmentQueryDiagnostics {
     pub selected_segments: Vec<SegmentRoute>,
+    pub fallback_segments: Vec<SegmentRoute>,
+    pub routing_fallback: bool,
+    pub routing_fallback_reason: Option<String>,
     pub local_evidence: Vec<SegmentLocalEvidence>,
     pub queried_segment_count: usize,
     pub per_segment_result_counts: HashMap<String, usize>,
@@ -77,12 +83,36 @@ pub struct SegmentQueryOutput {
 
 impl SegmentedMemoryIndex {
     pub fn from_segments(segments: Vec<MemoryIndexSegment>) -> Self {
-        Self { segments }
+        let records = segments
+            .iter()
+            .flat_map(|segment| segment.index.docs.values().cloned())
+            .collect::<Vec<_>>();
+        let global_index = (!records.is_empty()).then(|| MemoryIndex::from_records(records));
+        let corpus_stats = SegmentCorpusStats::from_segments(&segments);
+        Self {
+            segments,
+            global_index,
+            corpus_stats,
+        }
     }
 
     pub fn from_records_by_group_id(records: &[DocRecord]) -> Self {
+        Self::from_records_by_group_id_with_global_index(
+            records,
+            MemoryIndex::from_records(records.to_vec()),
+        )
+    }
+
+    pub fn from_records_by_group_id_with_global_index(
+        records: &[DocRecord],
+        global_index: MemoryIndex,
+    ) -> Self {
+        let segments = build_segments_by_group_id(records);
+        let corpus_stats = SegmentCorpusStats::from_segments(&segments);
         Self {
-            segments: build_segments_by_group_id(records),
+            segments,
+            global_index: Some(global_index),
+            corpus_stats,
         }
     }
 
@@ -95,7 +125,12 @@ impl SegmentedMemoryIndex {
     }
 
     pub fn route(&self, query: &str) -> Vec<SegmentRoute> {
-        route_segments(query, &self.segments)
+        route_segments_with_corpus_stats(
+            query,
+            &self.segments,
+            SegmentRoutingStrategy::SparseOverlap,
+            &self.corpus_stats,
+        )
     }
 
     pub fn route_with_strategy(
@@ -103,7 +138,7 @@ impl SegmentedMemoryIndex {
         query: &str,
         strategy: SegmentRoutingStrategy,
     ) -> Vec<SegmentRoute> {
-        route_segments_with_strategy(query, &self.segments, strategy)
+        route_segments_with_corpus_stats(query, &self.segments, strategy, &self.corpus_stats)
     }
 
     pub fn query(&self, query: &str, top_k: usize, segment_limit: usize) -> Vec<SearchResult> {
@@ -117,7 +152,12 @@ impl SegmentedMemoryIndex {
         top_k: usize,
         segment_limit: usize,
     ) -> SegmentQueryOutput {
-        query_top_segments_with_diagnostics(query, top_k, &self.segments, segment_limit)
+        self.query_with_diagnostics_and_strategy(
+            query,
+            top_k,
+            segment_limit,
+            SegmentRoutingStrategy::SparseOverlap,
+        )
     }
 
     pub fn query_with_diagnostics_and_strategy(
@@ -127,12 +167,32 @@ impl SegmentedMemoryIndex {
         segment_limit: usize,
         strategy: SegmentRoutingStrategy,
     ) -> SegmentQueryOutput {
-        query_top_segments_with_diagnostics_and_strategy(
+        self.query_with_temporal_context_and_diagnostics_and_strategy(
+            query,
+            top_k,
+            segment_limit,
+            strategy,
+            TemporalQueryContext::default(),
+        )
+    }
+
+    pub fn query_with_temporal_context_and_diagnostics_and_strategy(
+        &self,
+        query: &str,
+        top_k: usize,
+        segment_limit: usize,
+        strategy: SegmentRoutingStrategy,
+        temporal: TemporalQueryContext<'_>,
+    ) -> SegmentQueryOutput {
+        query_top_segments_with_corpus_stats_and_strategy(
             query,
             top_k,
             &self.segments,
             segment_limit,
             strategy,
+            temporal,
+            self.global_index.as_ref(),
+            &self.corpus_stats,
         )
     }
 
@@ -146,7 +206,29 @@ impl SegmentedMemoryIndex {
         query: &str,
         top_k: usize,
     ) -> SegmentQueryOutput {
-        query_all_segments_with_diagnostics(query, top_k, &self.segments)
+        self.query_all_segments_with_temporal_context_and_diagnostics(
+            query,
+            top_k,
+            TemporalQueryContext::default(),
+        )
+    }
+
+    pub fn query_all_segments_with_temporal_context_and_diagnostics(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+    ) -> SegmentQueryOutput {
+        query_top_segments_with_corpus_stats_and_strategy(
+            query,
+            top_k,
+            &self.segments,
+            self.segments.len(),
+            SegmentRoutingStrategy::SparseOverlap,
+            temporal,
+            self.global_index.as_ref(),
+            &self.corpus_stats,
+        )
     }
 }
 
@@ -198,8 +280,17 @@ pub fn route_segments_with_strategy(
     segments: &[MemoryIndexSegment],
     strategy: SegmentRoutingStrategy,
 ) -> Vec<SegmentRoute> {
-    let query_terms = query_tokens(query);
     let corpus_stats = SegmentCorpusStats::from_segments(segments);
+    route_segments_with_corpus_stats(query, segments, strategy, &corpus_stats)
+}
+
+fn route_segments_with_corpus_stats(
+    query: &str,
+    segments: &[MemoryIndexSegment],
+    strategy: SegmentRoutingStrategy,
+    corpus_stats: &SegmentCorpusStats,
+) -> Vec<SegmentRoute> {
+    let query_terms = query_tokens(query);
     let mut routes = segments
         .iter()
         .map(|segment| SegmentRoute {
@@ -207,8 +298,9 @@ pub fn route_segments_with_strategy(
             score: segment.profile.score_query_terms_with_strategy(
                 &query_terms,
                 strategy,
-                &corpus_stats,
+                corpus_stats,
             ),
+            fallback: false,
         })
         .collect::<Vec<_>>();
     routes.sort_by(|a, b| {
@@ -251,12 +343,16 @@ pub fn query_top_segments_with_diagnostics(
     segments: &[MemoryIndexSegment],
     segment_limit: usize,
 ) -> SegmentQueryOutput {
-    query_top_segments_with_diagnostics_and_strategy(
+    let corpus_stats = SegmentCorpusStats::from_segments(segments);
+    query_top_segments_with_corpus_stats_and_strategy(
         query,
         top_k,
         segments,
         segment_limit,
         SegmentRoutingStrategy::SparseOverlap,
+        TemporalQueryContext::default(),
+        None,
+        &corpus_stats,
     )
 }
 
@@ -266,6 +362,31 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
     segments: &[MemoryIndexSegment],
     segment_limit: usize,
     strategy: SegmentRoutingStrategy,
+    temporal: TemporalQueryContext<'_>,
+    global_index: Option<&MemoryIndex>,
+) -> SegmentQueryOutput {
+    let corpus_stats = SegmentCorpusStats::from_segments(segments);
+    query_top_segments_with_corpus_stats_and_strategy(
+        query,
+        top_k,
+        segments,
+        segment_limit,
+        strategy,
+        temporal,
+        global_index,
+        &corpus_stats,
+    )
+}
+
+fn query_top_segments_with_corpus_stats_and_strategy(
+    query: &str,
+    top_k: usize,
+    segments: &[MemoryIndexSegment],
+    segment_limit: usize,
+    strategy: SegmentRoutingStrategy,
+    temporal: TemporalQueryContext<'_>,
+    global_index: Option<&MemoryIndex>,
+    corpus_stats: &SegmentCorpusStats,
 ) -> SegmentQueryOutput {
     let query_terms = query_tokens(query);
     if top_k == 0 || segment_limit == 0 {
@@ -279,27 +400,50 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
         };
     }
 
-    let routes = route_segments_with_strategy(query, segments, strategy);
-    let selected_segments = routes
+    let routes = route_segments_with_corpus_stats(query, segments, strategy, corpus_stats);
+    let signal_routes = routes
+        .iter()
+        .filter(|route| route_has_signal(route, strategy, &query_terms))
+        .cloned()
+        .collect::<Vec<_>>();
+    let selected_segments = signal_routes
         .iter()
         .take(segment_limit)
         .cloned()
         .collect::<Vec<_>>();
+    let fallback_segments = routes
+        .iter()
+        .filter(|route| !route_has_signal(route, strategy, &query_terms))
+        .take(segment_limit.saturating_sub(selected_segments.len()))
+        .map(|route| SegmentRoute {
+            segment_id: route.segment_id.clone(),
+            score: route.score,
+            fallback: true,
+        })
+        .collect::<Vec<_>>();
+    let routing_fallback_reason = if query_terms.is_empty() {
+        Some("empty_query_terms".to_string())
+    } else if selected_segments.is_empty() && !routes.is_empty() {
+        Some("no_signal_routes".to_string())
+    } else if selected_segments.len() < segment_limit && !fallback_segments.is_empty() {
+        Some("insufficient_signal_routes".to_string())
+    } else {
+        None
+    };
     let local_evidence = selected_segments
         .iter()
         .filter_map(|route| {
             segments
                 .iter()
                 .find(|segment| segment.segment_id == route.segment_id)
-                .map(|segment| segment.local_evidence(&query_terms, segments))
+                .map(|segment| segment.local_evidence(&query_terms, corpus_stats))
         })
         .collect::<Vec<_>>();
     let mut merged = Vec::new();
-    let mut seen_doc_ids = HashSet::new();
     let mut per_segment_result_counts = HashMap::new();
     let mut queried_segment_count = 0usize;
-    let mut segments_with_results = Vec::new();
     let mut covered_query_terms = HashSet::new();
+    let mut selected_doc_ids = HashSet::new();
     for route in selected_segments.iter() {
         let Some(segment) = segments
             .iter()
@@ -313,27 +457,101 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
                 covered_query_terms.insert(term.clone());
             }
         }
-        let mut segment_results = 0usize;
-        for result in segment.index.query(query, top_k) {
-            if seen_doc_ids.insert(result.doc_id.clone()) {
-                segment_results += 1;
-                merged.push(result);
-            }
+        for doc_id in &segment.doc_ids {
+            selected_doc_ids.insert(doc_id.clone());
         }
-        if segment_results > 0 {
-            segments_with_results.push(segment.segment_id.clone());
-        }
-        per_segment_result_counts.insert(segment.segment_id.clone(), segment_results);
+        per_segment_result_counts.insert(segment.segment_id.clone(), 0);
     }
 
-    merged.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| a.doc_id.cmp(&b.doc_id))
-    });
+    if !selected_doc_ids.is_empty() {
+        if let Some(global_index) = global_index {
+            let allowed_doc_ids =
+                intersect_allowed_doc_ids(&selected_doc_ids, temporal.allowed_doc_ids);
+            let scoped_temporal = TemporalQueryContext {
+                allowed_doc_ids: Some(&allowed_doc_ids),
+                ..temporal
+            };
+            merged = global_index
+                .query_with_temporal_context(query, top_k, scoped_temporal)
+                .0;
+        } else if let Some(global_index) = build_global_index_from_segments(segments) {
+            let allowed_doc_ids =
+                intersect_allowed_doc_ids(&selected_doc_ids, temporal.allowed_doc_ids);
+            let scoped_temporal = TemporalQueryContext {
+                allowed_doc_ids: Some(&allowed_doc_ids),
+                ..temporal
+            };
+            merged = global_index
+                .query_with_temporal_context(query, top_k, scoped_temporal)
+                .0;
+        } else {
+            let mut seen_doc_ids = HashSet::new();
+            for route in selected_segments.iter() {
+                let Some(segment) = segments
+                    .iter()
+                    .find(|segment| segment.segment_id == route.segment_id)
+                else {
+                    continue;
+                };
+                let segment_doc_ids = segment.doc_ids.iter().cloned().collect();
+                let segment_allowed_doc_ids =
+                    intersect_allowed_doc_ids(&segment_doc_ids, temporal.allowed_doc_ids);
+                let scoped_temporal = TemporalQueryContext {
+                    allowed_doc_ids: Some(&segment_allowed_doc_ids),
+                    ..temporal
+                };
+                for result in segment
+                    .index
+                    .query_with_temporal_context(query, top_k, scoped_temporal)
+                    .0
+                {
+                    if seen_doc_ids.insert(result.doc_id.clone()) {
+                        merged.push(result);
+                    }
+                }
+            }
+            merged.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| a.doc_id.cmp(&b.doc_id))
+            });
+            merged.truncate(top_k);
+        }
+    }
+
+    let selected_segment_ids = selected_segments
+        .iter()
+        .map(|route| route.segment_id.as_str())
+        .collect::<HashSet<_>>();
+    let doc_id_to_segment_id = segments
+        .iter()
+        .filter(|segment| selected_segment_ids.contains(segment.segment_id.as_str()))
+        .flat_map(|segment| {
+            segment
+                .doc_ids
+                .iter()
+                .map(|doc_id| (doc_id.as_str(), segment.segment_id.as_str()))
+        })
+        .collect::<HashMap<_, _>>();
+    for result in &merged {
+        if let Some(segment_id) = doc_id_to_segment_id.get(result.doc_id.as_str()) {
+            *per_segment_result_counts
+                .entry((*segment_id).to_string())
+                .or_default() += 1;
+        }
+    }
+    let segments_with_results = selected_segments
+        .iter()
+        .filter_map(|route| {
+            per_segment_result_counts
+                .get(&route.segment_id)
+                .copied()
+                .filter(|count| *count > 0)
+                .map(|_| route.segment_id.clone())
+        })
+        .collect::<Vec<_>>();
     let merged_result_count = merged.len();
-    merged.truncate(top_k);
     let final_result_count = merged.len();
     let uncovered_query_terms = query_terms
         .difference(&covered_query_terms)
@@ -343,6 +561,9 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
         results: merged,
         diagnostics: SegmentQueryDiagnostics {
             selected_segments,
+            fallback_segments,
+            routing_fallback: routing_fallback_reason.is_some(),
+            routing_fallback_reason,
             local_evidence,
             queried_segment_count,
             per_segment_result_counts,
@@ -356,12 +577,57 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
     }
 }
 
+fn build_global_index_from_segments(segments: &[MemoryIndexSegment]) -> Option<MemoryIndex> {
+    let records = segments
+        .iter()
+        .flat_map(|segment| segment.index.docs.values().cloned())
+        .collect::<Vec<_>>();
+    (!records.is_empty()).then(|| MemoryIndex::from_records(records))
+}
+
+fn intersect_allowed_doc_ids(
+    selected_doc_ids: &HashSet<String>,
+    existing_allowed_doc_ids: Option<&HashSet<String>>,
+) -> HashSet<String> {
+    match existing_allowed_doc_ids {
+        Some(existing) => selected_doc_ids
+            .intersection(existing)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        None => selected_doc_ids.clone(),
+    }
+}
+
 pub fn query_all_segments_with_diagnostics(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
 ) -> SegmentQueryOutput {
-    query_top_segments_with_diagnostics(query, top_k, segments, segments.len())
+    query_all_segments_with_temporal_context_and_diagnostics(
+        query,
+        top_k,
+        segments,
+        TemporalQueryContext::default(),
+    )
+}
+
+pub fn query_all_segments_with_temporal_context_and_diagnostics(
+    query: &str,
+    top_k: usize,
+    segments: &[MemoryIndexSegment],
+    temporal: TemporalQueryContext<'_>,
+) -> SegmentQueryOutput {
+    let corpus_stats = SegmentCorpusStats::from_segments(segments);
+    query_top_segments_with_corpus_stats_and_strategy(
+        query,
+        top_k,
+        segments,
+        segments.len(),
+        SegmentRoutingStrategy::SparseOverlap,
+        temporal,
+        None,
+        &corpus_stats,
+    )
 }
 
 impl SegmentProfile {
@@ -514,9 +780,8 @@ impl MemoryIndexSegment {
     fn local_evidence(
         &self,
         query_terms: &HashSet<String>,
-        segments: &[MemoryIndexSegment],
+        corpus_stats: &SegmentCorpusStats,
     ) -> SegmentLocalEvidence {
-        let corpus_stats = SegmentCorpusStats::from_segments(segments);
         let mut differentiators = query_terms
             .iter()
             .filter_map(|term| {
@@ -718,6 +983,22 @@ fn sorted_terms(terms: &HashSet<String>) -> Vec<String> {
     let mut out = terms.iter().cloned().collect::<Vec<_>>();
     out.sort();
     out
+}
+
+fn route_has_signal(
+    route: &SegmentRoute,
+    strategy: SegmentRoutingStrategy,
+    query_terms: &HashSet<String>,
+) -> bool {
+    if query_terms.is_empty() {
+        return false;
+    }
+    match strategy {
+        SegmentRoutingStrategy::SparseOverlap | SegmentRoutingStrategy::LocalDistinctiveness => {
+            route.score > 0.0
+        }
+        SegmentRoutingStrategy::KlDivergence => route.score.is_finite(),
+    }
 }
 
 fn is_routing_stopword(token: &str) -> bool {
@@ -979,6 +1260,65 @@ mod tests {
     }
 
     #[test]
+    fn sparse_router_does_not_query_zero_signal_padding_segments() {
+        let records = vec![
+            record("doc-a", "session-a", "docker install guide", &["docker"]),
+            record("doc-b", "session-b", "kubernetes cluster", &["kubernetes"]),
+            record("doc-c", "session-c", "postgres index tuning", &["postgres"]),
+        ];
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+
+        let output = segmented.query_with_diagnostics("docker", 5, 3);
+
+        assert_eq!(output.diagnostics.selected_segments.len(), 1);
+        assert_eq!(
+            output.diagnostics.selected_segments[0].segment_id,
+            "session-a"
+        );
+        assert_eq!(output.diagnostics.queried_segment_count, 1);
+        assert_eq!(output.diagnostics.fallback_segments.len(), 2);
+        assert!(output.diagnostics.routing_fallback);
+        assert_eq!(
+            output.diagnostics.routing_fallback_reason.as_deref(),
+            Some("insufficient_signal_routes")
+        );
+        assert_eq!(
+            output
+                .results
+                .iter()
+                .map(|result| result.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["doc-a"]
+        );
+        assert!(output
+            .diagnostics
+            .fallback_segments
+            .iter()
+            .all(|route| route.fallback));
+    }
+
+    #[test]
+    fn sparse_router_reports_no_signal_without_querying_lexicographic_first_segment() {
+        let records = vec![
+            record("doc-a", "session-a", "docker install guide", &["docker"]),
+            record("doc-b", "session-b", "kubernetes cluster", &["kubernetes"]),
+        ];
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+
+        let output = segmented.query_with_diagnostics("espresso grinder", 5, 1);
+
+        assert!(output.results.is_empty());
+        assert!(output.diagnostics.selected_segments.is_empty());
+        assert_eq!(output.diagnostics.queried_segment_count, 0);
+        assert_eq!(output.diagnostics.fallback_segments.len(), 1);
+        assert!(output.diagnostics.routing_fallback);
+        assert_eq!(
+            output.diagnostics.routing_fallback_reason.as_deref(),
+            Some("no_signal_routes")
+        );
+    }
+
+    #[test]
     fn kl_router_prefers_closest_segment_distribution() {
         let records = vec![
             record(
@@ -1095,5 +1435,165 @@ mod tests {
                 && differentiator
                     .evidence_types
                     .contains(&"local_memory".to_string())));
+    }
+
+    #[test]
+    fn segmented_query_passes_temporal_allowed_doc_ids_to_inner_indexes() {
+        let records = vec![
+            record(
+                "doc-a",
+                "session-a",
+                "docker install guide for linux",
+                &["docker", "install", "linux"],
+            ),
+            record(
+                "doc-b",
+                "session-b",
+                "docker compose troubleshooting",
+                &["docker", "compose", "troubleshooting"],
+            ),
+        ];
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+        let allowed_doc_ids = HashSet::from(["doc-b".to_string()]);
+
+        let output = segmented.query_with_temporal_context_and_diagnostics_and_strategy(
+            "docker",
+            5,
+            2,
+            SegmentRoutingStrategy::SparseOverlap,
+            TemporalQueryContext {
+                allowed_doc_ids: Some(&allowed_doc_ids),
+                ..TemporalQueryContext::default()
+            },
+        );
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].doc_id, "doc-b");
+        assert_eq!(
+            output
+                .diagnostics
+                .per_segment_result_counts
+                .get("session-a")
+                .copied(),
+            Some(0)
+        );
+        assert_eq!(
+            output
+                .diagnostics
+                .per_segment_result_counts
+                .get("session-b")
+                .copied(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn all_segment_query_matches_global_memory_index_on_asymmetric_corpus() {
+        let records = vec![
+            record(
+                "doc-a1",
+                "session-a",
+                "docker install guide for linux",
+                &["docker", "install", "linux"],
+            ),
+            record(
+                "doc-a2",
+                "session-a",
+                "docker setup notes and troubleshooting",
+                &["docker", "setup", "troubleshooting"],
+            ),
+            record(
+                "doc-a3",
+                "session-a",
+                "linux package manager notes",
+                &["linux", "package"],
+            ),
+            record(
+                "doc-b1",
+                "session-b",
+                "docker compose production incident",
+                &["docker", "compose", "production"],
+            ),
+        ];
+        let global = MemoryIndex::from_records(records.clone());
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+
+        let global_doc_ids = global
+            .query("docker compose troubleshooting", 4)
+            .into_iter()
+            .map(|result| result.doc_id)
+            .collect::<Vec<_>>();
+        let segmented_doc_ids = segmented
+            .query_all_segments("docker compose troubleshooting", 4)
+            .into_iter()
+            .map(|result| result.doc_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(segmented_doc_ids, global_doc_ids);
+    }
+
+    #[test]
+    fn all_segment_query_reconstructs_global_index_when_missing() {
+        let records = vec![
+            record(
+                "doc-a",
+                "session-a",
+                "docker install guide for linux",
+                &["docker", "install", "linux"],
+            ),
+            record(
+                "doc-b",
+                "session-b",
+                "docker compose troubleshooting",
+                &["docker", "compose", "troubleshooting"],
+            ),
+            record(
+                "doc-c",
+                "session-c",
+                "postgres index tuning",
+                &["postgres", "index", "tuning"],
+            ),
+        ];
+        let segmented_with_global = SegmentedMemoryIndex::from_records_by_group_id(&records);
+        let segmented_without_global = SegmentedMemoryIndex {
+            segments: build_segments_by_group_id(&records),
+            global_index: None,
+            corpus_stats: SegmentCorpusStats::from_segments(&build_segments_by_group_id(&records)),
+        };
+
+        let expected = segmented_with_global
+            .query_all_segments("docker compose troubleshooting", 3)
+            .into_iter()
+            .map(|result| result.doc_id)
+            .collect::<Vec<_>>();
+        let actual = segmented_without_global
+            .query_all_segments_with_diagnostics("docker compose troubleshooting", 3)
+            .results
+            .into_iter()
+            .map(|result| result.doc_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn sparse_router_marks_empty_query_terms_as_fallback() {
+        let records = vec![
+            record("doc-a", "session-a", "docker install guide", &["docker"]),
+            record("doc-b", "session-b", "kubernetes cluster", &["kubernetes"]),
+        ];
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+
+        let output = segmented.query_with_diagnostics("the and to", 5, 2);
+
+        assert!(output.results.is_empty());
+        assert!(output.diagnostics.selected_segments.is_empty());
+        assert_eq!(output.diagnostics.queried_segment_count, 0);
+        assert!(output.diagnostics.routing_fallback);
+        assert_eq!(
+            output.diagnostics.routing_fallback_reason.as_deref(),
+            Some("empty_query_terms")
+        );
+        assert_eq!(output.diagnostics.fallback_segments.len(), 2);
     }
 }

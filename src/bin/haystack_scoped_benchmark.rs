@@ -379,6 +379,7 @@ fn run_scoped_benchmark(
                 &relevant,
                 timings.total_ms,
                 &global_results,
+                temporal,
             )?)
         } else {
             None
@@ -477,6 +478,7 @@ fn build_segment_comparison(
     relevant: &HashSet<String>,
     global_latency_ms: f64,
     global_results: &[SearchResult],
+    temporal: TemporalQueryContext<'_>,
 ) -> Result<SegmentComparisonMetrics> {
     let index_store = build_index_store(source_docs, options)?;
     let records = index_store
@@ -488,22 +490,43 @@ fn build_segment_comparison(
     let top_n = segment_top_n.max(1);
 
     let top_1_start = Instant::now();
-    let top_1 = segmented.query_with_diagnostics_and_strategy(query_text, max_k, 1, segment_router);
+    let top_1 = segmented.query_with_temporal_context_and_diagnostics_and_strategy(
+        query_text,
+        max_k,
+        1,
+        segment_router,
+        temporal,
+    );
     let top_1_latency_ms = top_1_start.elapsed().as_secs_f64() * 1000.0;
 
     let top_3_start = Instant::now();
-    let top_3_output =
-        segmented.query_with_diagnostics_and_strategy(query_text, max_k, 3, segment_router);
+    let top_3_output = segmented.query_with_temporal_context_and_diagnostics_and_strategy(
+        query_text,
+        max_k,
+        3,
+        segment_router,
+        temporal,
+    );
     let top_3_latency_ms = top_3_start.elapsed().as_secs_f64() * 1000.0;
 
     let top_5_start = Instant::now();
-    let top_5_output =
-        segmented.query_with_diagnostics_and_strategy(query_text, max_k, 5, segment_router);
+    let top_5_output = segmented.query_with_temporal_context_and_diagnostics_and_strategy(
+        query_text,
+        max_k,
+        5,
+        segment_router,
+        temporal,
+    );
     let top_5_latency_ms = top_5_start.elapsed().as_secs_f64() * 1000.0;
 
     let top_n_start = Instant::now();
-    let top_n_output =
-        segmented.query_with_diagnostics_and_strategy(query_text, max_k, top_n, segment_router);
+    let top_n_output = segmented.query_with_temporal_context_and_diagnostics_and_strategy(
+        query_text,
+        max_k,
+        top_n,
+        segment_router,
+        temporal,
+    );
     let top_n_latency_ms = top_n_start.elapsed().as_secs_f64() * 1000.0;
     let top_n_connection = connection_diagnostics(&records, &top_n_output.diagnostics, relevant);
     let top_n_rewrite_stability = rewrite_stability_diagnostics(
@@ -514,10 +537,12 @@ fn build_segment_comparison(
         segment_router,
         relevant,
         &top_n_output.diagnostics,
+        temporal,
     );
 
     let all_start = Instant::now();
-    let all_output = segmented.query_all_segments_with_diagnostics(query_text, max_k);
+    let all_output = segmented
+        .query_all_segments_with_temporal_context_and_diagnostics(query_text, max_k, temporal);
     let all_latency_ms = all_start.elapsed().as_secs_f64() * 1000.0;
 
     Ok(SegmentComparisonMetrics {
@@ -701,6 +726,7 @@ fn rewrite_stability_diagnostics(
     strategy: SegmentRoutingStrategy,
     relevant: &HashSet<String>,
     base_diagnostics: &SegmentQueryDiagnostics,
+    temporal: TemporalQueryContext<'_>,
 ) -> QueryRewriteStability {
     let base_selected = base_diagnostics
         .selected_segments
@@ -715,8 +741,13 @@ fn rewrite_stability_diagnostics(
     let rewrites = query_rewrites(query_text);
     let mut rewrite_diagnostics = Vec::new();
     for rewrite in rewrites {
-        let output =
-            segmented.query_with_diagnostics_and_strategy(&rewrite, max_k, segment_limit, strategy);
+        let output = segmented.query_with_temporal_context_and_diagnostics_and_strategy(
+            &rewrite,
+            max_k,
+            segment_limit,
+            strategy,
+            temporal,
+        );
         let selected_sessions = output
             .diagnostics
             .selected_segments

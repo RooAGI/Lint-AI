@@ -692,10 +692,18 @@ impl IndexStore {
         docs
     }
 
+    pub fn source_document_by_id(&self, doc_id: &str) -> Option<&SourceDocument> {
+        self.source_docs.get(doc_id)
+    }
+
     pub fn records(&self) -> Vec<&DocRecord> {
         let mut records: Vec<&DocRecord> = self.records.values().collect();
         records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
         records
+    }
+
+    pub fn record_by_id(&self, doc_id: &str) -> Option<&DocRecord> {
+        self.records.get(doc_id)
     }
 
     pub fn memory_index_snapshot(&self) -> Option<&MemoryIndexSnapshot> {

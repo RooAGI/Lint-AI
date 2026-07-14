@@ -21,10 +21,30 @@ pub enum GraphLevel {
     Entity,
 }
 
+#[cfg(feature = "claude-code")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ClaudeCodeHook {
+    SessionStart,
+    UserPromptSubmit,
+    UserPromptExpansion,
+    PreCompact,
+    Stop,
+    SessionEnd,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum IndexInspectView {
+    Summary,
+    SourceDocuments,
+    Records,
+    Segments,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "lint-ai")]
 /// CLI arguments for the lint-ai binary.
 pub struct Args {
+    #[arg(default_value = ".")]
     pub path: String,
     #[arg(long)]
     pub show_concepts: bool,
@@ -94,6 +114,25 @@ pub struct Args {
     pub max_depth: usize,
     #[arg(long)]
     pub strict_config: bool,
+    #[arg(long)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_serve: bool,
+    #[arg(long, value_enum)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_hook: Option<ClaudeCodeHook>,
+    #[arg(long)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_config: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_settings: Option<String>,
+    #[arg(long)]
+    pub inspect_index: Option<String>,
+    #[arg(long, value_enum, default_value = "summary")]
+    pub inspect_view: IndexInspectView,
     #[arg(long, default_value_t = 2_000_000)]
     pub max_config_bytes: u64,
     #[arg(long, default_value_t = 100_000_000)]
@@ -103,4 +142,30 @@ pub struct Args {
 /// Parse CLI arguments from the environment.
 pub fn parse() -> Args {
     Args::parse()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_index_inspection_view() {
+        let args = Args::try_parse_from([
+            "lint-ai",
+            "--inspect-index",
+            ".lint-ai/claude-memory",
+            "--inspect-view",
+            "source-documents",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args.inspect_index.as_deref(),
+            Some(".lint-ai/claude-memory")
+        );
+        assert!(matches!(
+            args.inspect_view,
+            IndexInspectView::SourceDocuments
+        ));
+    }
 }

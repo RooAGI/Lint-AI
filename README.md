@@ -155,6 +155,9 @@ Use spaCy for Tier 1 entities if available:
 ./lint-ai /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
 ```
 
+For optional Claude Code support, build with `--features claude-code` and see
+[docs/claude-code.md](docs/claude-code.md) for the MCP, hooks, and install flow.
+
 Common graph exports, chunking knobs, lexical subset regeneration, and artifact indexing details are documented in `docs/`.
 
 ### Rust Library

@@ -30,6 +30,8 @@ pub mod filters;
 pub mod graph;
 pub mod ids;
 pub mod index;
+#[cfg(feature = "claude-code")]
+pub mod integrations;
 pub mod ownership;
 pub mod pipeline;
 pub mod query_expansion;

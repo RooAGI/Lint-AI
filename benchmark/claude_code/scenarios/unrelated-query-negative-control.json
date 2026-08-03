@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "unrelated-query-negative-control",
+  "category": "negative-control",
+  "description": "Measure whether unrelated routing memory is withheld from an unrelated documentation question.",
+  "negative_control": true,
+  "repository": { "path": ".", "revision": "HEAD" },
+  "setup_messages": [
+    {
+      "prompt": "Remember that Claude session routing uses LocalDistinctiveness and query_top_n 3.",
+      "establishes_fact_ids": ["routing-distractor"]
+    }
+  ],
+  "continuation_prompt": "Which repository file implements the Python smoke benchmark? Answer only with its path.",
+  "expected_facts": [
+    {
+      "id": "python-smoke-command",
+      "description": "The answer identifies the repository Python smoke benchmark file.",
+      "match_any": ["benchmark/python_smoke_benchmark.py"]
+    }
+  ],
+  "forbidden_facts": [
+    {
+      "id": "routing-distractor",
+      "description": "Unrelated routing memory must not appear in the answer.",
+      "match_any": ["LocalDistinctiveness", "query_top_n"]
+    }
+  ],
+  "validators": [
+    {
+      "name": "python-smoke-script-exists",
+      "command": ["test", "-f", "benchmark/python_smoke_benchmark.py"]
+    }
+  ],
+  "limits": {
+    "timeout_seconds": 180,
+    "max_turns": 2,
+    "max_budget_usd": 0.5,
+    "max_injected_context_bytes": 0
+  }
+}

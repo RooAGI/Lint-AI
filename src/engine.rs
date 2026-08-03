@@ -1,11 +1,18 @@
 use crate::aggregation::build_aggregate_output;
-use crate::cli::{GraphExportFormat, GraphLevel, LlmChunkStrategy};
+use crate::cli::{GraphExportFormat, GraphLevel, IndexInspectView, LlmChunkStrategy};
 use crate::config::{load_config, normalize_list, Config};
 use crate::filters::is_noise_concept;
 use crate::graph::{normalize_concept, Graph, Tier0Record};
 use crate::index::{DocRecord, MemoryIndex, SectionChunk, TemporalQueryContext, TemporalQueryHint};
+#[cfg(feature = "claude-code")]
+use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
+#[cfg(feature = "claude-code")]
+use crate::integrations::claude_code::{
+    install_hook_settings, install_user_config, run_server, ClaudeCodeServerOptions,
+};
 use crate::pipeline::{
-    source_documents_to_tier1_inputs, ChunkStrategy, Tier1NerProvider, Tier1TermRankerKind,
+    source_documents_to_tier1_inputs, ChunkStrategy, IndexStore, MemoryIndexLayout,
+    PipelineOptions, Tier1NerProvider, Tier1TermRankerKind,
 };
 use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
 use crate::report::Report;
@@ -1990,6 +1997,56 @@ fn export_ontology_json(index: &MemoryIndex, out_path: &str, corpus_path: &str) 
 ///
 /// This is the main entry point used by the CLI wrapper in `main.rs`.
 pub fn run(args: crate::cli::Args) -> Result<()> {
+    if let Some(index_path) = args.inspect_index.as_deref() {
+        return inspect_index_store(Path::new(index_path), args.inspect_view);
+    }
+
+    #[cfg(feature = "claude-code")]
+    if let Some(hook) = args.claude_code_hook {
+        let kind = match hook {
+            crate::cli::ClaudeCodeHook::SessionStart => ClaudeHookKind::SessionStart,
+            crate::cli::ClaudeCodeHook::UserPromptSubmit => ClaudeHookKind::UserPromptSubmit,
+            crate::cli::ClaudeCodeHook::UserPromptExpansion => ClaudeHookKind::UserPromptExpansion,
+            crate::cli::ClaudeCodeHook::PreCompact => ClaudeHookKind::PreCompact,
+            crate::cli::ClaudeCodeHook::Stop => ClaudeHookKind::Stop,
+            crate::cli::ClaudeCodeHook::SessionEnd => ClaudeHookKind::SessionEnd,
+        };
+        return run_hook(kind, Path::new(&args.path));
+    }
+
+    #[cfg(feature = "claude-code")]
+    if args.claude_code_install {
+        let config_path = args.claude_code_config.as_deref().map(Path::new);
+        let written = install_user_config(Path::new(&args.path), config_path)?;
+        println!("Wrote Claude Code config to {}", written.display());
+        let settings_path = args.claude_code_settings.as_deref().map(Path::new);
+        let written = install_hook_settings(Path::new(&args.path), settings_path)?;
+        println!("Wrote Claude Code hook settings to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "claude-code")]
+    if args.claude_code_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_server(
+            Path::new(&args.path),
+            ClaudeCodeServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
     let cfg = load_config(
         args.config.as_deref(),
         &args.path,
@@ -2301,6 +2358,41 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
     check_cross_refs(&graph, &mut report, &cfg);
 
     report.print();
+    Ok(())
+}
+
+fn inspect_index_store(index_path: &Path, view: IndexInspectView) -> Result<()> {
+    if !index_path.exists() {
+        anyhow::bail!("index path does not exist: {}", index_path.display());
+    }
+    let options = PipelineOptions {
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: 3,
+            routing_strategy: crate::segments::SegmentRoutingStrategy::LocalDistinctiveness,
+        },
+        ..PipelineOptions::default()
+    };
+    let mut store = IndexStore::at_path(index_path, options)?;
+    store.refresh()?;
+    let payload = match view {
+        IndexInspectView::Summary => serde_json::json!({
+            "index_path": index_path,
+            "index_store": store.inspection(),
+        }),
+        IndexInspectView::SourceDocuments => serde_json::json!({
+            "index_path": index_path,
+            "source_documents": store.source_documents(),
+        }),
+        IndexInspectView::Records => serde_json::json!({
+            "index_path": index_path,
+            "records": store.records(),
+        }),
+        IndexInspectView::Segments => serde_json::json!({
+            "index_path": index_path,
+            "snapshot": store.inspection().snapshot,
+        }),
+    };
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 

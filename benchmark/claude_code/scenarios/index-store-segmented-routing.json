@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "index-store-segmented-routing",
+  "category": "decision-recall",
+  "description": "Recall the ownership and routing boundary selected for Claude memory.",
+  "negative_control": false,
+  "repository": { "path": ".", "revision": "HEAD" },
+  "setup_messages": [
+    {
+      "prompt": "For the Claude integration, remember this architecture decision: adapters must use IndexStore rather than constructing MemoryIndex directly. Configure MemoryIndexLayout::Segmented with SegmentRoutingStrategy::LocalDistinctiveness. IndexStore remains the owner of single or segmented snapshots and preserves the global fallback index.",
+      "establishes_fact_ids": ["index-store-owner", "local-distinctiveness"]
+    }
+  ],
+  "continuation_prompt": "Without asking me to repeat our previous architecture discussion, explain which existing Lint-AI API the Claude adapter should use for memory, which routing strategy we selected, and why a global index is still retained.",
+  "expected_facts": [
+    {
+      "id": "index-store-owner",
+      "description": "IndexStore owns the memory snapshot and adapter operations.",
+      "match_any": ["IndexStore owns", "use IndexStore", "IndexStore::query"]
+    },
+    {
+      "id": "local-distinctiveness",
+      "description": "Claude memory uses segmented LocalDistinctiveness routing.",
+      "match_any": ["LocalDistinctiveness", "local distinctiveness"]
+    },
+    {
+      "id": "global-fallback",
+      "description": "The global index supports persistence and compatible fallback query paths.",
+      "match_any": ["global fallback", "global index", "persistence"]
+    }
+  ],
+  "forbidden_facts": [
+    {
+      "id": "bare-memory-index",
+      "description": "The adapter should not own a bare MemoryIndex.",
+      "match_any": ["construct MemoryIndex directly", "use a bare MemoryIndex"]
+    }
+  ],
+  "validators": [
+    {
+      "name": "segmented-index-store-tests",
+      "command": ["cargo", "test", "--features", "claude-code", "pipeline::tests::index_store_publishes_and_queries_segmented_snapshot"]
+    }
+  ],
+  "limits": {
+    "timeout_seconds": 300,
+    "max_turns": 4,
+    "max_budget_usd": 1.0,
+    "max_injected_context_bytes": 8000
+  }
+}

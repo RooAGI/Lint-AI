@@ -54,3 +54,5 @@ benchmark/*_results.json
 benchmark/data/longmemeval_s_raw.json
 benchmark/data/lintai_longmemeval_scoped_results*.json
 benchmark/data/python_lintai_longmemeval_scoped_results*.json
+benchmark/claude_code/results/*
+!benchmark/claude_code/results/.gitkeep

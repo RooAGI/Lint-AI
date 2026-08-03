@@ -10,6 +10,14 @@ use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 use crate::integrations::claude_code::{
     install_hook_settings, install_user_config, run_server, ClaudeCodeServerOptions,
 };
+#[cfg(feature = "codex")]
+use crate::integrations::codex::hooks::{run_hook as run_codex_hook, CodexHookKind};
+#[cfg(feature = "codex")]
+use crate::integrations::codex::{
+    install_hook_settings as install_codex_hook_settings,
+    install_user_config as install_codex_user_config, run_server as run_codex_server,
+    CodexServerOptions,
+};
 use crate::pipeline::{
     source_documents_to_tier1_inputs, ChunkStrategy, IndexStore, MemoryIndexLayout,
     PipelineOptions, Tier1NerProvider, Tier1TermRankerKind,
@@ -2014,6 +2022,25 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return run_hook(kind, Path::new(&args.path));
     }
 
+    #[cfg(feature = "codex")]
+    if let Some(hook) = args.codex_hook {
+        let kind = match hook {
+            crate::cli::CodexHook::SessionStart => CodexHookKind::SessionStart,
+            crate::cli::CodexHook::UserPromptSubmit => CodexHookKind::UserPromptSubmit,
+            crate::cli::CodexHook::PreToolUse => CodexHookKind::PreToolUse,
+            crate::cli::CodexHook::PermissionRequest => CodexHookKind::PermissionRequest,
+            crate::cli::CodexHook::PostToolUse => CodexHookKind::PostToolUse,
+            crate::cli::CodexHook::UserPromptExpansion => CodexHookKind::UserPromptExpansion,
+            crate::cli::CodexHook::PreCompact => CodexHookKind::PreCompact,
+            crate::cli::CodexHook::PostCompact => CodexHookKind::PostCompact,
+            crate::cli::CodexHook::Stop => CodexHookKind::Stop,
+            crate::cli::CodexHook::SessionEnd => CodexHookKind::SessionEnd,
+            crate::cli::CodexHook::SubagentStart => CodexHookKind::SubagentStart,
+            crate::cli::CodexHook::SubagentStop => CodexHookKind::SubagentStop,
+        };
+        return run_codex_hook(kind, Path::new(&args.path));
+    }
+
     #[cfg(feature = "claude-code")]
     if args.claude_code_install {
         let config_path = args.claude_code_config.as_deref().map(Path::new);
@@ -2022,6 +2049,17 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let settings_path = args.claude_code_settings.as_deref().map(Path::new);
         let written = install_hook_settings(Path::new(&args.path), settings_path)?;
         println!("Wrote Claude Code hook settings to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_install {
+        let config_path = args.codex_config.as_deref().map(Path::new);
+        let written = install_codex_user_config(Path::new(&args.path), config_path)?;
+        println!("Wrote Codex config to {}", written.display());
+        let settings_path = args.codex_settings.as_deref().map(Path::new);
+        let written = install_codex_hook_settings(Path::new(&args.path), settings_path)?;
+        println!("Wrote Codex hook settings to {}", written.display());
         return Ok(());
     }
 
@@ -2253,6 +2291,28 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             graph.tier0_records.len(),
             written_path
         );
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_codex_server(
+            Path::new(&args.path),
+            CodexServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
         return Ok(());
     }
     if args.show_concepts {

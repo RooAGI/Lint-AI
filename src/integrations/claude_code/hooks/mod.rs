@@ -7,10 +7,10 @@ use anyhow::{Context, Result};
 use protocol::{ClaudeHookInput, ClaudeHookOutput};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_CONTEXT_BYTES: usize = 8_000;
@@ -46,6 +46,7 @@ impl ClaudeHookKind {
 pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
     let input: ClaudeHookInput = serde_json::from_reader(std::io::stdin().lock())
         .context("failed to parse Claude hook input")?;
+    let started = Instant::now();
     let output = match handle_hook(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
@@ -53,9 +54,42 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
             ClaudeHookOutput::default()
         }
     };
+    write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;
     Ok(())
+}
+
+fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHookOutput) {
+    let Ok(path) = std::env::var("LINT_AI_HOOK_TIMINGS_PATH") else {
+        return;
+    };
+    let operation = match kind {
+        ClaudeHookKind::SessionStart
+        | ClaudeHookKind::UserPromptSubmit
+        | ClaudeHookKind::UserPromptExpansion => "retrieve",
+        ClaudeHookKind::PreCompact | ClaudeHookKind::Stop | ClaudeHookKind::SessionEnd => {
+            "capture"
+        }
+    };
+    let context_bytes = output
+        .hook_specific_output
+        .as_ref()
+        .map(|value| value.additional_context.len())
+        .unwrap_or(0);
+    let record = serde_json::json!({
+        "event_name": kind.event_name(),
+        "operation": operation,
+        "elapsed_ms": elapsed_ms,
+        "context_bytes": context_bytes,
+    });
+    let Ok(encoded) = serde_json::to_vec(&record) else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(&encoded);
+        let _ = file.write_all(b"\n");
+    }
 }
 
 fn handle_hook(

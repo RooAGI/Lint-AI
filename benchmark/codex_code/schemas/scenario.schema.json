@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lint-ai.dev/schemas/codex-code-scenario.schema.json",
+  "title": "Lint-AI Codex performance scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "category",
+    "description",
+    "repository",
+    "setup_messages",
+    "continuation_prompt",
+    "expected_facts",
+    "forbidden_facts",
+    "validators",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$" },
+    "category": {
+      "enum": [
+        "decision-recall",
+        "unresolved-work",
+        "failure-avoidance",
+        "repository-navigation",
+        "temporal-correction",
+        "segment-isolation",
+        "negative-control",
+        "tool-use-recall",
+        "subagent-handoff"
+      ]
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "negative_control": { "type": "boolean", "default": false },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "revision"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "setup_messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["prompt"],
+        "properties": {
+          "prompt": { "type": "string", "minLength": 1 },
+          "establishes_fact_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true,
+            "default": []
+          }
+        }
+      }
+    },
+    "continuation_prompt": { "type": "string", "minLength": 1 },
+    "expected_facts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fact" },
+      "uniqueItems": true
+    },
+    "forbidden_facts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fact" },
+      "uniqueItems": true
+    },
+    "validators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "command"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "command": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeout_seconds", "max_turns", "max_budget_usd"],
+      "properties": {
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "max_turns": { "type": "integer", "minimum": 1 },
+        "max_budget_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "max_injected_context_bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "match_any"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$" },
+        "description": { "type": "string", "minLength": 1 },
+        "match_any": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

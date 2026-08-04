@@ -99,6 +99,21 @@ The server should expose two tools:
 - `search`: run a corpus query and return ranked results plus diagnostics
 - `info`: return basic workspace information
 
+## Verify Installation
+
+After installation, verify that the configured MCP process can start and
+complete both the MCP initialize and tool-list handshakes:
+
+```bash
+LINT_AI_MCP_HEALTH_PATH=/tmp/lint-ai-codex-mcp-health.json \
+  ./lint-ai --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+```
+
+The command emits JSON with startup and handshake timings, protocol version,
+tool count, and captured server diagnostics. A healthy result has
+`"status": "healthy"`. Use a longer timeout for the first run on a large
+repository because the persistent index may need to be built.
+
 ## Notes
 
 - The integration uses Codex's documented lifecycle and hook/config layering

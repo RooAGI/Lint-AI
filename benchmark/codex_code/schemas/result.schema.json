@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lint-ai.dev/schemas/claude-code-result.schema.json",
-  "title": "Lint-AI Claude Code performance result",
+  "$id": "https://lint-ai.dev/schemas/codex-code-result.schema.json",
+  "title": "Lint-AI Codex performance result",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -23,9 +23,9 @@
     "environment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["claude_version", "model", "lint_ai_revision", "fixture_revision"],
+      "required": ["codex_version", "model", "lint_ai_revision", "fixture_revision"],
       "properties": {
-        "claude_version": { "type": "string" },
+        "codex_version": { "type": "string" },
         "model": { "type": "string" },
         "lint_ai_revision": { "type": "string" },
         "fixture_revision": { "type": "string" },

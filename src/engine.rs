@@ -8,7 +8,8 @@ use crate::index::{DocRecord, MemoryIndex, SectionChunk, TemporalQueryContext, T
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::{
-    install_hook_settings, install_user_config, run_server, ClaudeCodeServerOptions,
+    install_hook_settings, install_memory_skill, install_user_config, run_server,
+    ClaudeCodeServerOptions,
 };
 #[cfg(feature = "codex")]
 use crate::integrations::codex::hooks::{run_hook as run_codex_hook, CodexHookKind};
@@ -2049,6 +2050,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let settings_path = args.claude_code_settings.as_deref().map(Path::new);
         let written = install_hook_settings(Path::new(&args.path), settings_path)?;
         println!("Wrote Claude Code hook settings to {}", written.display());
+        let written = install_memory_skill(Path::new(&args.path))?;
+        println!("Wrote Claude Code memory skill to {}", written.display());
         return Ok(());
     }
 
@@ -2081,6 +2084,16 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 max_total_bytes: args.max_total_bytes,
                 ignore_paths: &cfg.ignore_paths,
             },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "claude-code")]
+    if args.claude_code_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--claude-code-serve",
+            args.mcp_timeout_ms,
         )?;
         return Ok(());
     }
@@ -2312,6 +2325,16 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 max_total_bytes: args.max_total_bytes,
                 ignore_paths: &cfg.ignore_paths,
             },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--codex-serve",
+            args.mcp_timeout_ms,
         )?;
         return Ok(());
     }

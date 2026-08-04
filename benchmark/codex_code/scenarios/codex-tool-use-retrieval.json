@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "id": "codex-tool-use-retrieval",
+  "category": "tool-use-recall",
+  "description": "Recall how Codex tool-use hooks route retrieval queries through Lint-AI.",
+  "negative_control": false,
+  "repository": { "path": ".", "revision": "HEAD" },
+  "setup_messages": [
+    {
+      "prompt": "Remember that Codex tool-use retrieval is handled by PreToolUse, PermissionRequest, and PostToolUse. The query should include turn_id, agent_id, agent_type, tool_name, permission_mode, trigger, reason, tool_input, and tool_response, while keeping excerpts bounded.",
+      "establishes_fact_ids": ["codex-tool-hooks", "codex-tool-query-fields"]
+    }
+  ],
+  "continuation_prompt": "When Codex intercepts a tool call, which hook events retrieve memory, and which request fields are used to build the query? Keep the answer focused on the Codex adapter behavior.",
+  "expected_facts": [
+    {
+      "id": "codex-tool-hooks",
+      "description": "PreToolUse, PermissionRequest, and PostToolUse all route through retrieval.",
+      "match_any": ["PreToolUse", "PermissionRequest", "PostToolUse"]
+    },
+    {
+      "id": "codex-tool-query-fields",
+      "description": "The retrieval query includes turn, agent, tool, permission, and tool payload fields.",
+      "match_any": [
+        "turn_id",
+        "agent_id",
+        "agent_type",
+        "tool_name",
+        "permission_mode",
+        "trigger",
+        "reason",
+        "tool_input",
+        "tool_response"
+      ]
+    },
+    {
+      "id": "bounded-excerpts",
+      "description": "Retrieved memories should be bounded excerpts, not complete records.",
+      "match_any": ["bounded excerpts", "not complete records", "at most one preferred document"]
+    }
+  ],
+  "forbidden_facts": [
+    {
+      "id": "tool-hooks-ignored",
+      "description": "Tool-use hooks must not be described as unsupported or ignored.",
+      "match_any": ["tool hooks are ignored", "PreToolUse is unsupported"]
+    }
+  ],
+  "validators": [
+    {
+      "name": "codex-tool-use-tests",
+      "command": ["cargo", "+stable", "test", "--features", "codex", "integrations::codex::hooks::tests::stop_capture_persists_and_prompt_retrieves_memory", "--", "--exact"]
+    }
+  ],
+  "limits": {
+    "timeout_seconds": 300,
+    "max_turns": 4,
+    "max_budget_usd": 1.0,
+    "max_injected_context_bytes": 8000
+  }
+}

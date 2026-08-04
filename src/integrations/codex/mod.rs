@@ -2,6 +2,11 @@ pub mod document;
 pub mod hooks;
 
 use crate::config::normalize_list;
+use crate::integrations::mcp_index;
+use crate::integrations::mcp_transport;
+use crate::integrations::mcp_transport::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
+};
 use crate::graph::{Graph, Tier0Record};
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
@@ -12,7 +17,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -21,7 +26,7 @@ use toml::Value as TomlValue;
 
 const SERVER_NAME: &str = "lint-ai";
 const DEFAULT_QUERY_TOP_K: usize = 5;
-const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const MCP_STARTUP_TIMEOUT_SECONDS: i64 = 120;
 const HOOK_MARKER: &str = "--codex-hook";
 const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session-start"),
@@ -63,43 +68,14 @@ struct CodexConfig {
     extra: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct JsonRpcRequest {
-    #[serde(default)]
-    id: Option<Value>,
-    method: String,
-    #[serde(default)]
-    params: Option<Value>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct JsonRpcResponse {
-    jsonrpc: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct JsonRpcError {
-    code: i64,
-    message: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ToolDefinition {
-    name: String,
-    description: String,
-    #[serde(rename = "inputSchema")]
-    input_schema: Value,
-}
-
 struct CodexMcp {
     root: PathBuf,
-    store: Mutex<IndexStore>,
+    max_bytes: usize,
+    max_files: usize,
+    max_depth: usize,
+    max_total_bytes: usize,
+    ignore_paths: Vec<String>,
+    store: Mutex<Option<IndexStore>>,
 }
 
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
@@ -134,6 +110,10 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let mut entry = TomlMap::new();
     entry.insert("command".to_string(), TomlValue::String("lint-ai".to_string()));
     entry.insert(
+        "startup_timeout_sec".to_string(),
+        TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
+    );
+    entry.insert(
         "args".to_string(),
         TomlValue::Array(vec![
             TomlValue::String("--codex-serve".to_string()),
@@ -141,6 +121,16 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         ]),
     );
     mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
+    let features = table
+        .entry("features".to_string())
+        .or_insert_with(|| TomlValue::Table(TomlMap::new()));
+    let features = features
+        .as_table_mut()
+        .context("Codex config 'features' must be a table")?;
+    features.insert(
+        "mcp_2026_07_28".to_string(),
+        TomlValue::Boolean(true),
+    );
     write_text_object(&config_path, &toml::to_string_pretty(&config)?)
         .context("failed to write Codex config")?;
     Ok(config_path)
@@ -187,25 +177,15 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
 }
 
 pub fn run_server(root: &Path, options: CodexServerOptions<'_>) -> Result<()> {
-    let graph = build_graph(
-        root,
-        options.max_bytes,
-        options.max_files,
-        options.max_depth,
-        options.max_total_bytes,
-    )?;
-    let graph = apply_ignores(graph, options.ignore_paths);
-    let source_docs = graph_to_source_documents(&graph);
-    let mut store = IndexStore::new(segmented_store_options());
-    for document in source_docs {
-        store.upsert(document);
-    }
-    sync_memory_documents(root, &mut store)?;
-    store.refresh()?;
-
+    mcp_index::trace_event("server-start");
     let mcp = CodexMcp {
         root: root.to_path_buf(),
-        store: Mutex::new(store),
+        max_bytes: options.max_bytes,
+        max_files: options.max_files,
+        max_depth: options.max_depth,
+        max_total_bytes: options.max_total_bytes,
+        ignore_paths: options.ignore_paths.to_vec(),
+        store: Mutex::new(None),
     };
     mcp.serve()
 }
@@ -284,18 +264,46 @@ fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
 }
 
 impl CodexMcp {
+    fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<IndexStore>>> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        if store.is_none() {
+            let graph = build_graph(
+                &self.root,
+                self.max_bytes,
+                self.max_files,
+                self.max_depth,
+                self.max_total_bytes,
+            )?;
+            let graph = apply_ignores(graph, &self.ignore_paths);
+            let documents = graph_to_source_documents(&graph);
+            let root = self.root.clone();
+            *store = Some(mcp_index::open_persistent_store(
+                &root,
+                "codex-mcp-index",
+                "codex-memory",
+                || Ok(documents),
+            )?);
+        }
+        Ok(store)
+    }
+
     fn serve(self) -> Result<()> {
         let stdin = io::stdin();
         let stdout = io::stdout();
         let mut reader = BufReader::new(stdin.lock());
         let mut writer = stdout.lock();
 
-        while let Some(request) = read_request(&mut reader)? {
+        while let Some((request, line_framed)) = mcp_transport::read_request(&mut reader)? {
+            mcp_index::trace_event(&format!("request:{}", request.method));
             if request.id.is_none() {
                 continue;
             }
             let response = self.handle_request(request)?;
-            write_response(&mut writer, &response)?;
+            mcp_transport::write_response(&mut writer, &response, line_framed)?;
+            mcp_index::trace_event("response-written");
         }
         Ok(())
     }
@@ -320,14 +328,17 @@ impl CodexMcp {
                 })),
                 error: None,
             }),
-            "tools/list" => Ok(JsonRpcResponse {
-                jsonrpc: "2.0",
-                id,
-                result: Some(json!({
-                    "tools": self.tools(),
-                })),
-                error: None,
-            }),
+            "tools/list" => {
+                let _store = self.store()?;
+                Ok(JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(json!({
+                        "tools": self.tools(),
+                    })),
+                    error: None,
+                })
+            }
             "tools/call" => self.handle_tool_call(id, request.params),
             _ => Ok(JsonRpcResponse {
                 jsonrpc: "2.0",
@@ -379,11 +390,12 @@ impl CodexMcp {
                     .unwrap_or(DEFAULT_QUERY_TOP_K as u64)
                     .clamp(1, 20) as usize;
                 let started = Instant::now();
-                let mut store = self
-                    .store
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
-                sync_memory_documents(&self.root, &mut store)?;
+                let mut store = self.store()?;
+                let store = store.as_mut().expect("MCP store initialized");
+                mcp_index::sync_memory_documents(
+                    &self.root.join(".lint-ai").join("codex-memory"),
+                    &mut *store,
+                )?;
                 let results = store.query(query, top_k)?;
                 let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
                 let diagnostics = store.inspection();
@@ -418,10 +430,8 @@ impl CodexMcp {
                         &format!("unknown info argument: {name}"),
                     ));
                 }
-                let store = self
-                    .store
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+                let store = self.store()?;
+                let store = store.as_ref().expect("MCP store initialized");
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -483,32 +493,6 @@ fn segmented_store_options() -> PipelineOptions {
     }
 }
 
-fn sync_memory_documents(root: &Path, target: &mut IndexStore) -> Result<()> {
-    let memory_root = root.join(".lint-ai").join("codex-memory");
-    if !memory_root.exists() {
-        return Ok(());
-    }
-    let memory = IndexStore::at_path(&memory_root, segmented_store_options())?;
-    for document in memory.source_documents() {
-        let unchanged = target
-            .source_document_by_id(&document.doc_id)
-            .map(|current| {
-                current.source == document.source
-                    && current.content == document.content
-                    && current.group_id == document.group_id
-                    && current.timestamp == document.timestamp
-                    && current.filters == document.filters
-                    && current.headings == document.headings
-                    && current.links == document.links
-            })
-            .unwrap_or(false);
-        if !unchanged {
-            target.upsert(document.clone());
-        }
-    }
-    Ok(())
-}
-
 fn unknown_argument<'a>(arguments: &'a Value, allowed: &[&str]) -> Option<&'a str> {
     arguments
         .as_object()?
@@ -527,44 +511,6 @@ fn error_response(id: Option<Value>, code: i64, message: &str) -> JsonRpcRespons
             message: message.to_string(),
         }),
     }
-}
-
-fn read_request(reader: &mut impl BufRead) -> Result<Option<JsonRpcRequest>> {
-    let mut content_length = None;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
-            return Ok(None);
-        }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-            content_length = Some(
-                rest.trim()
-                    .parse::<usize>()
-                    .context("invalid Content-Length header")?,
-            );
-        }
-    }
-
-    let len = content_length.context("missing Content-Length header")?;
-    if len > MAX_REQUEST_BYTES {
-        anyhow::bail!("MCP request body exceeds {MAX_REQUEST_BYTES} byte limit: {len} bytes");
-    }
-    let mut body = vec![0u8; len];
-    reader.read_exact(&mut body)?;
-    let request: JsonRpcRequest = serde_json::from_slice(&body)?;
-    Ok(Some(request))
-}
-
-fn write_response(writer: &mut impl Write, response: &JsonRpcResponse) -> Result<()> {
-    let body = serde_json::to_vec(response)?;
-    write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
-    writer.write_all(&body)?;
-    writer.flush()?;
-    Ok(())
 }
 
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
@@ -643,7 +589,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time should move forward")
             .as_nanos();
-        env::temp_dir().join(format!("lint-ai-{name}-{nanos}.json"))
+        env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("lint-ai-{name}-{nanos}.json"))
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -660,7 +609,12 @@ mod tests {
         store.refresh().unwrap();
         CodexMcp {
             root,
-            store: Mutex::new(store),
+            max_bytes: 0,
+            max_files: 0,
+            max_depth: 0,
+            max_total_bytes: 0,
+            ignore_paths: Vec::new(),
+            store: Mutex::new(Some(store)),
         }
     }
 
@@ -695,6 +649,11 @@ args = ["old"]
             parsed["mcp_servers"]["lint-ai"]["command"].as_str(),
             Some("lint-ai")
         );
+        assert_eq!(
+            parsed["mcp_servers"]["lint-ai"]["startup_timeout_sec"].as_integer(),
+            Some(MCP_STARTUP_TIMEOUT_SECONDS)
+        );
+        assert_eq!(parsed["features"]["mcp_2026_07_28"].as_bool(), Some(true));
         assert_eq!(
             parsed["mcp_servers"]["lint-ai"]["args"]
                 .as_array()
@@ -759,6 +718,33 @@ args = ["old"]
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["search".to_string(), "info".to_string()]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tools_list_requires_store_initialization() {
+        let root = temp_dir("mcp-lazy-store");
+        let mcp = CodexMcp {
+            root: root.clone(),
+            max_bytes: 1_000_000,
+            max_files: 100,
+            max_depth: 5,
+            max_total_bytes: 2_000_000,
+            ignore_paths: Vec::new(),
+            store: Mutex::new(None),
+        };
+
+        assert!(mcp.store.lock().unwrap().is_none());
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(1)),
+                method: "tools/list".to_string(),
+                params: None,
+            })
+            .unwrap();
+
+        assert!(response.error.is_none());
+        assert!(mcp.store.lock().unwrap().is_some());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -860,10 +846,4 @@ args = ["old"]
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn read_request_rejects_oversized_body() {
-        let request = format!("Content-Length: {}\r\n\r\n", MAX_REQUEST_BYTES + 1);
-        let error = read_request(&mut std::io::Cursor::new(request)).unwrap_err();
-        assert!(error.to_string().contains("exceeds"));
-    }
 }

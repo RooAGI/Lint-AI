@@ -26,6 +26,7 @@ target/release
 
 # Lint-AI local cache
 .lint-ai-cache/
+.lint-ai/
 
 # Local workspace file
 lint-ai.code-workspace

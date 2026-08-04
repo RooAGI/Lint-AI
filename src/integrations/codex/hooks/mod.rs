@@ -7,10 +7,10 @@ use anyhow::{Context, Result};
 use protocol::{CodexHookInput, CodexHookOutput};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_CONTEXT_BYTES: usize = 8_000;
@@ -58,6 +58,7 @@ impl CodexHookKind {
 pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
     let input: CodexHookInput = serde_json::from_reader(std::io::stdin().lock())
         .context("failed to parse Codex hook input")?;
+    let started = Instant::now();
     let output = match handle_hook(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
@@ -65,9 +66,48 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
             CodexHookOutput::default()
         }
     };
+    write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;
     Ok(())
+}
+
+fn write_timing_record(kind: CodexHookKind, elapsed_ms: f64, output: &CodexHookOutput) {
+    let Ok(path) = std::env::var("LINT_AI_HOOK_TIMINGS_PATH") else {
+        return;
+    };
+    let operation = match kind {
+        CodexHookKind::SessionStart
+        | CodexHookKind::UserPromptSubmit
+        | CodexHookKind::PreToolUse
+        | CodexHookKind::PermissionRequest
+        | CodexHookKind::PostToolUse
+        | CodexHookKind::UserPromptExpansion
+        | CodexHookKind::SubagentStart => "retrieve",
+        CodexHookKind::PreCompact
+        | CodexHookKind::PostCompact
+        | CodexHookKind::Stop
+        | CodexHookKind::SessionEnd
+        | CodexHookKind::SubagentStop => "capture",
+    };
+    let context_bytes = output
+        .hook_specific_output
+        .as_ref()
+        .map(|value| value.additional_context.len())
+        .unwrap_or(0);
+    let record = serde_json::json!({
+        "event_name": kind.event_name(),
+        "operation": operation,
+        "elapsed_ms": elapsed_ms,
+        "context_bytes": context_bytes,
+    });
+    let Ok(encoded) = serde_json::to_vec(&record) else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(&encoded);
+        let _ = file.write_all(b"\n");
+    }
 }
 
 fn handle_hook(
@@ -345,11 +385,11 @@ fn capture(
     input: CodexHookInput,
     document_type: CodexDocumentType,
 ) -> Result<CodexHookOutput> {
-    let Some(transcript_path) = input.transcript_path.as_deref() else {
+    let Some(transcript_path) = transcript_path(&input) else {
         return Ok(CodexHookOutput::default());
     };
     let affected_paths = affected_paths(&input.extra);
-    let content = extract_structured_memory(transcript_path, document_type, &affected_paths)?;
+    let content = extract_structured_memory(&transcript_path, document_type, &affected_paths)?;
     if content.trim().is_empty() {
         return Ok(CodexHookOutput::default());
     }
@@ -376,6 +416,42 @@ fn capture(
     store.upsert(document.into_source_document()?);
     store.refresh()?;
     Ok(CodexHookOutput::default())
+}
+
+fn transcript_path(input: &CodexHookInput) -> Option<PathBuf> {
+    if let Some(path) = input.transcript_path.as_ref().filter(|path| path.exists()) {
+        return Some(path.clone());
+    }
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
+    find_session_transcript(&codex_home.join("sessions"), &input.session_id)
+}
+
+fn find_session_transcript(sessions_root: &Path, session_id: &str) -> Option<PathBuf> {
+    let expected_suffix = format!("-{session_id}.jsonl");
+    let mut pending = VecDeque::from([sessions_root.to_path_buf()]);
+    let mut visited = 0usize;
+    while let Some(directory) = pending.pop_front() {
+        let entries = std::fs::read_dir(directory).ok()?;
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 10_000 {
+                return None;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push_back(path);
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(&expected_suffix))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn open_store(root: &Path) -> Result<IndexStore> {
@@ -477,7 +553,12 @@ fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(message) = value.get("message") else {
+        let message = value.get("message").or_else(|| {
+            value
+                .get("payload")
+                .filter(|payload| payload.get("type").and_then(Value::as_str) == Some("message"))
+        });
+        let Some(message) = message else {
             continue;
         };
         let role = message
@@ -552,7 +633,12 @@ fn text_blocks(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
             .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .filter(|block| {
+                matches!(
+                    block.get("type").and_then(Value::as_str),
+                    Some("text" | "input_text" | "output_text")
+                )
+            })
             .filter_map(|block| block.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -658,6 +744,21 @@ mod tests {
             "hook_event_name": event
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn finds_persisted_codex_session_transcript_by_session_id() {
+        let root = temp_dir("session-transcript");
+        let sessions = root.join("sessions/2026/08/03");
+        fs::create_dir_all(&sessions).unwrap();
+        let transcript = sessions.join("rollout-2026-08-03T12-00-00-session-1.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+
+        assert_eq!(
+            find_session_transcript(&root.join("sessions"), "session-1"),
+            Some(transcript)
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -783,6 +884,28 @@ mod tests {
         assert!(content.contains("Finished work"));
         assert!(content.contains("Memory type: outcome"));
         assert!(content.contains("Result:"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn transcript_extraction_supports_codex_rollout_messages() {
+        let root = temp_dir("codex-rollout");
+        let transcript = root.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Remember cobalt routing"}]}}"#,
+                "\n",
+                r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Implemented cobalt routing"}]}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let content =
+            extract_structured_memory(&transcript, CodexDocumentType::Outcome, &[]).unwrap();
+        assert!(content.contains("Remember cobalt routing"));
+        assert!(content.contains("Implemented cobalt routing"));
         fs::remove_dir_all(root).unwrap();
     }
 

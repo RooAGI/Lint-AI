@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "oversized-transcript-recovery",
+  "category": "failure-avoidance",
+  "description": "Recall why fixed-size transcript tails failed and the bounded recovery design.",
+  "negative_control": false,
+  "repository": { "path": ".", "revision": "HEAD" },
+  "setup_messages": [
+    {
+      "prompt": "Remember this failure: reading only the final 64 KiB of an agent JSONL transcript can begin inside an oversized tool-result record. Dropping that partial line may leave no conversation to capture. The selected fix starts at 64 KiB and expands backward up to 4 MiB until complete conversational messages are found, while retaining only six extracted messages and excluding tool-result blocks.",
+      "establishes_fact_ids": ["oversized-jsonl-failure", "bounded-expanding-scan"]
+    }
+  ],
+  "continuation_prompt": "A real agent Stop hook returns an empty object and creates no memory after a session with a very large tool result. Diagnose the likely transcript parsing failure and describe the bounded fix we selected.",
+  "expected_facts": [
+    {
+      "id": "oversized-jsonl-failure",
+      "description": "A fixed tail can start inside a large JSONL record and discard useful context.",
+      "match_any": [
+        "inside a huge JSONL",
+        "inside an oversized",
+        "partial first line",
+        "partial JSONL",
+        "large JSONL",
+        "large tool-result",
+        "tool_result"
+      ]
+    },
+    {
+      "id": "bounded-expanding-scan",
+      "description": "Expand the scan from 64 KiB up to 4 MiB until messages are found.",
+      "match_any": ["4 MiB", "4MB", "expand backward", "doubling"]
+    },
+    {
+      "id": "six-message-bound",
+      "description": "Only six useful conversation messages are retained.",
+      "match_any": ["six extracted", "six useful", "six messages", "at most six", "6 messages"]
+    }
+  ],
+  "forbidden_facts": [
+    {
+      "id": "unbounded-full-transcript",
+      "description": "The fix must not ingest an unbounded complete transcript.",
+      "match_any": ["read the entire transcript without a limit", "store the full transcript"]
+    }
+  ],
+  "validators": [
+    {
+      "name": "codex-oversized-transcript-test",
+      "command": ["cargo", "+stable", "test", "--features", "codex", "integrations::codex::hooks::tests::transcript_extraction_scans_past_oversized_jsonl_record", "--", "--exact"]
+    }
+  ],
+  "limits": {
+    "timeout_seconds": 300,
+    "max_turns": 4,
+    "max_budget_usd": 1.0,
+    "max_injected_context_bytes": 8000
+  }
+}

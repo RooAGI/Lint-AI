@@ -21,21 +21,30 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
+use toml::map::Map as TomlMap;
+use toml::Value as TomlValue;
 
 const SERVER_NAME: &str = "lint-ai";
 const DEFAULT_QUERY_TOP_K: usize = 5;
-const HOOK_MARKER: &str = "--claude-code-hook";
+const MCP_STARTUP_TIMEOUT_SECONDS: i64 = 120;
+const HOOK_MARKER: &str = "--codex-hook";
 const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session-start"),
     ("UserPromptSubmit", "user-prompt-submit"),
+    ("PreToolUse", "pre-tool-use"),
+    ("PermissionRequest", "permission-request"),
+    ("PostToolUse", "post-tool-use"),
     ("UserPromptExpansion", "user-prompt-expansion"),
     ("PreCompact", "pre-compact"),
+    ("PostCompact", "post-compact"),
     ("Stop", "stop"),
     ("SessionEnd", "session-end"),
+    ("SubagentStart", "subagent-start"),
+    ("SubagentStop", "subagent-stop"),
 ];
 
 #[derive(Debug, Clone)]
-pub struct ClaudeCodeServerOptions<'a> {
+pub struct CodexServerOptions<'a> {
     pub max_bytes: usize,
     pub max_files: usize,
     pub max_depth: usize,
@@ -43,15 +52,23 @@ pub struct ClaudeCodeServerOptions<'a> {
     pub ignore_paths: &'a [String],
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpServerEntry {
+    command: String,
+    args: Vec<String>,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct ClaudeConfig {
+struct CodexConfig {
     #[serde(rename = "mcpServers", default)]
-    mcp_servers: Map<String, Value>,
+    mcp_servers: HashMap<String, McpServerEntry>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
 
-struct ClaudeMcp {
+struct CodexMcp {
     root: PathBuf,
     max_bytes: usize,
     max_files: usize,
@@ -64,48 +81,65 @@ struct ClaudeMcp {
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
-        None => default_claude_config_path()?,
+        None => default_codex_config_path()?,
     };
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
-    let mut config = read_claude_config(&config_path)?;
-    let entry = config
-        .mcp_servers
-        .entry(SERVER_NAME.to_string())
-        .or_insert_with(|| json!({}));
-    let entry = entry
-        .as_object_mut()
-        .context("Claude MCP server entry must be a JSON object")?;
-    entry.insert("command".to_string(), json!("lint-ai"));
+    let mut config = if config_path.exists() {
+        let current = fs::read_to_string(&config_path)?;
+        if current.trim().is_empty() {
+            TomlValue::Table(TomlMap::new())
+        } else {
+            current
+                .parse::<TomlValue>()
+                .context("failed to parse Codex TOML config")?
+        }
+    } else {
+        TomlValue::Table(TomlMap::new())
+    };
+    let table = config
+        .as_table_mut()
+        .context("Codex config must be a TOML table")?;
+    let mcp_servers = table
+        .entry("mcp_servers".to_string())
+        .or_insert_with(|| TomlValue::Table(TomlMap::new()));
+    let mcp_servers = mcp_servers
+        .as_table_mut()
+        .context("Codex config 'mcp_servers' must be a table")?;
+    let mut entry = TomlMap::new();
+    entry.insert("command".to_string(), TomlValue::String("lint-ai".to_string()));
+    entry.insert(
+        "startup_timeout_sec".to_string(),
+        TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
+    );
     entry.insert(
         "args".to_string(),
-        json!(["--claude-code-serve", root.to_string_lossy().into_owned()]),
+        TomlValue::Array(vec![
+            TomlValue::String("--codex-serve".to_string()),
+            TomlValue::String(root.to_string_lossy().into_owned()),
+        ]),
     );
-    write_claude_config(&config_path, &config)?;
+    mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
+    let features = table
+        .entry("features".to_string())
+        .or_insert_with(|| TomlValue::Table(TomlMap::new()));
+    let features = features
+        .as_table_mut()
+        .context("Codex config 'features' must be a table")?;
+    features.insert(
+        "mcp_2026_07_28".to_string(),
+        TomlValue::Boolean(true),
+    );
+    write_text_object(&config_path, &toml::to_string_pretty(&config)?)
+        .context("failed to write Codex config")?;
     Ok(config_path)
-}
-
-pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
-    let root = root
-        .canonicalize()
-        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
-    let skill_path = root
-        .join(".claude")
-        .join("skills")
-        .join("lint-ai-memory")
-        .join("SKILL.md");
-    if let Some(parent) = skill_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&skill_path, include_str!("skill.md"))?;
-    Ok(skill_path)
 }
 
 pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Result<PathBuf> {
     let settings_path = match settings_path {
         Some(path) => path.to_path_buf(),
-        None => default_claude_settings_path()?,
+        None => default_codex_settings_path()?,
     };
     let _root = root
         .canonicalize()
@@ -120,7 +154,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         .or_insert_with(|| json!({}));
     let hooks = hooks
         .as_object_mut()
-        .context("Claude settings 'hooks' must be an object")?;
+        .context("Codex settings 'hooks' must be an object")?;
 
     for (event_name, hook_name) in HOOK_EVENTS {
         let entries = hooks
@@ -128,7 +162,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
             .or_insert_with(|| json!([]));
         let entries = entries
             .as_array_mut()
-            .with_context(|| format!("Claude hook event '{event_name}' must be an array"))?;
+            .with_context(|| format!("Codex hook event '{event_name}' must be an array"))?;
         entries.retain(|entry| !contains_lint_ai_hook(entry));
         entries.push(json!({
             "hooks": [{
@@ -142,9 +176,9 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     Ok(settings_path)
 }
 
-pub fn run_server(root: &Path, options: ClaudeCodeServerOptions<'_>) -> Result<()> {
+pub fn run_server(root: &Path, options: CodexServerOptions<'_>) -> Result<()> {
     mcp_index::trace_event("server-start");
-    let mcp = ClaudeMcp {
+    let mcp = CodexMcp {
         root: root.to_path_buf(),
         max_bytes: options.max_bytes,
         max_files: options.max_files,
@@ -229,7 +263,7 @@ fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
         .collect()
 }
 
-impl ClaudeMcp {
+impl CodexMcp {
     fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<IndexStore>>> {
         let mut store = self
             .store
@@ -248,8 +282,8 @@ impl ClaudeMcp {
             let root = self.root.clone();
             *store = Some(mcp_index::open_persistent_store(
                 &root,
-                "claude-mcp-index",
-                "claude-memory",
+                "codex-mcp-index",
+                "codex-memory",
                 || Ok(documents),
             )?);
         }
@@ -359,7 +393,7 @@ impl ClaudeMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("claude-memory"),
+                    &self.root.join(".lint-ai").join("codex-memory"),
                     &mut *store,
                 )?;
                 let results = store.query(query, top_k)?;
@@ -479,23 +513,6 @@ fn error_response(id: Option<Value>, code: i64, message: &str) -> JsonRpcRespons
     }
 }
 
-fn read_claude_config(path: &Path) -> Result<ClaudeConfig> {
-    if !path.exists() {
-        return Ok(ClaudeConfig::default());
-    }
-    let text = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&text)?)
-}
-
-fn write_claude_config(path: &Path, config: &ClaudeConfig) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let text = serde_json::to_string_pretty(config)?;
-    fs::write(path, text)?;
-    Ok(())
-}
-
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {
         return Ok(Map::new());
@@ -504,7 +521,7 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     value
         .as_object()
         .cloned()
-        .context("Claude settings must be a JSON object")
+        .context("Codex settings must be a JSON object")
 }
 
 fn write_json_object(path: &Path, value: &Map<String, Value>) -> Result<()> {
@@ -529,28 +546,36 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn default_claude_config_path() -> Result<PathBuf> {
-    if let Some(home) = env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join(".claude.json"));
+fn write_text_object(path: &Path, value: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
     }
-    if cfg!(windows) {
-        if let Some(profile) = env::var_os("USERPROFILE") {
-            return Ok(PathBuf::from(profile).join(".claude.json"));
-        }
-    }
-    anyhow::bail!("unable to determine Claude Code config path; set --claude-code-config");
+    fs::write(path, value)?;
+    Ok(())
 }
 
-fn default_claude_settings_path() -> Result<PathBuf> {
+fn default_codex_config_path() -> Result<PathBuf> {
     if let Some(home) = env::var_os("HOME") {
-        return Ok(PathBuf::from(home).join(".claude").join("settings.json"));
+        return Ok(PathBuf::from(home).join(".codex").join("config.toml"));
     }
     if cfg!(windows) {
         if let Some(profile) = env::var_os("USERPROFILE") {
-            return Ok(PathBuf::from(profile).join(".claude").join("settings.json"));
+            return Ok(PathBuf::from(profile).join(".codex").join("config.toml"));
         }
     }
-    anyhow::bail!("unable to determine Claude Code settings path")
+    anyhow::bail!("unable to determine Codex config path; set --codex-config");
+}
+
+fn default_codex_settings_path() -> Result<PathBuf> {
+    if let Some(home) = env::var_os("HOME") {
+        return Ok(PathBuf::from(home).join(".codex").join("hooks.json"));
+    }
+    if cfg!(windows) {
+        if let Some(profile) = env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(profile).join(".codex").join("hooks.json"));
+        }
+    }
+    anyhow::bail!("unable to determine Codex hooks path")
 }
 
 #[cfg(test)]
@@ -576,13 +601,13 @@ mod tests {
         path
     }
 
-    fn test_mcp(root: PathBuf, documents: Vec<SourceDocument>) -> ClaudeMcp {
+    fn test_mcp(root: PathBuf, documents: Vec<SourceDocument>) -> CodexMcp {
         let mut store = IndexStore::new(segmented_store_options());
         for document in documents {
             store.upsert(document);
         }
         store.refresh().unwrap();
-        ClaudeMcp {
+        CodexMcp {
             root,
             max_bytes: 0,
             max_files: 0,
@@ -598,7 +623,17 @@ mod tests {
         let config_path = temp_path("claude-config");
         fs::write(
             &config_path,
-            r#"{"mcpServers":{"existing":{"command":"npx","args":["-y","existing"],"env":{"A":"1"}},"lint-ai":{"env":{"KEEP":"yes"}}},"x":1}"#,
+            r#"# keep this comment
+title = "keep"
+
+[mcp_servers.existing]
+command = "npx"
+args = ["-y", "existing"]
+
+[mcp_servers.lint-ai]
+command = "old"
+args = ["old"]
+"#,
         )
         .unwrap();
         let root = env::current_dir().unwrap();
@@ -606,27 +641,28 @@ mod tests {
         let written = install_user_config(&root, Some(&config_path)).unwrap();
         assert_eq!(written, config_path);
 
-        let parsed: ClaudeConfig =
-            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
-        assert!(parsed.mcp_servers.contains_key("existing"));
+        let text = fs::read_to_string(&config_path).unwrap();
+        let parsed: TomlValue = text.parse().unwrap();
+        assert_eq!(parsed["title"].as_str(), Some("keep"));
+        assert_eq!(parsed["mcp_servers"]["existing"]["command"].as_str(), Some("npx"));
         assert_eq!(
-            parsed.mcp_servers["existing"]["env"]["A"].as_str(),
-            Some("1")
+            parsed["mcp_servers"]["lint-ai"]["command"].as_str(),
+            Some("lint-ai")
         );
         assert_eq!(
-            parsed.mcp_servers["lint-ai"]["env"]["KEEP"].as_str(),
-            Some("yes")
+            parsed["mcp_servers"]["lint-ai"]["startup_timeout_sec"].as_integer(),
+            Some(MCP_STARTUP_TIMEOUT_SECONDS)
         );
-        assert_eq!(parsed.mcp_servers["lint-ai"]["command"].as_str(), Some("lint-ai"));
+        assert_eq!(parsed["features"]["mcp_2026_07_28"].as_bool(), Some(true));
         assert_eq!(
-            parsed.mcp_servers["lint-ai"]["args"]
+            parsed["mcp_servers"]["lint-ai"]["args"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(Value::as_str)
+                .map(TomlValue::as_str)
                 .collect::<Option<Vec<_>>>()
                 .unwrap(),
-            vec!["--claude-code-serve", root.to_string_lossy().as_ref()]
+            vec!["--codex-serve", root.to_string_lossy().as_ref()]
         );
     }
 
@@ -652,7 +688,7 @@ mod tests {
         assert!(stop[1]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("--claude-code-hook stop"));
+            .contains("--codex-hook stop"));
         assert_eq!(
             settings["hooks"]["UserPromptExpansion"]
                 .as_array()
@@ -688,7 +724,7 @@ mod tests {
     #[test]
     fn tools_list_requires_store_initialization() {
         let root = temp_dir("mcp-lazy-store");
-        let mcp = ClaudeMcp {
+        let mcp = CodexMcp {
             root: root.clone(),
             max_bytes: 1_000_000,
             max_files: 100,
@@ -773,20 +809,20 @@ mod tests {
     fn search_tool_synchronizes_memory_captured_after_startup() {
         let root = temp_dir("mcp-live-memory");
         let mcp = test_mcp(root.clone(), vec![]);
-        let memory_root = root.join(".lint-ai").join("claude-memory");
+        let memory_root = root.join(".lint-ai").join("codex-memory");
         let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
         memory.upsert(SourceDocument {
             doc_id: "memory-1".to_string(),
-            source: "claude-code://project/session/outcome".to_string(),
+            source: "codex://project/session/outcome".to_string(),
             content: "The durable routing codename is cobalt".to_string(),
-            concept: "Claude Code outcome".to_string(),
-            group_id: Some("claude-session:session".to_string()),
+            concept: "Codex Code outcome".to_string(),
+            group_id: Some("codex-session:session".to_string()),
             filters: std::collections::BTreeMap::new(),
             headings: vec![],
             links: vec![],
             timestamp: None,
             doc_length: 38,
-            author_agent: Some("claude-code".to_string()),
+            author_agent: Some("codex".to_string()),
         });
         memory.refresh().unwrap();
         drop(memory);

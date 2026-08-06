@@ -32,6 +32,23 @@ pub enum ClaudeCodeHook {
     SessionEnd,
 }
 
+#[cfg(feature = "codex")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CodexHook {
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
+    UserPromptExpansion,
+    PreCompact,
+    PostCompact,
+    Stop,
+    SessionEnd,
+    SubagentStart,
+    SubagentStop,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum IndexInspectView {
     Summary,
@@ -115,11 +132,15 @@ pub struct Args {
     #[arg(long)]
     pub strict_config: bool,
     #[arg(long)]
+    pub mcp_timeout_ms: Option<u64>,
+    #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_install: bool,
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_serve: bool,
+    #[arg(long)]
+    pub claude_code_verify_mcp: bool,
     #[arg(long, value_enum)]
     #[cfg(feature = "claude-code")]
     pub claude_code_hook: Option<ClaudeCodeHook>,
@@ -129,6 +150,23 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_serve: bool,
+    #[arg(long)]
+    pub codex_verify_mcp: bool,
+    #[arg(long, value_enum)]
+    #[cfg(feature = "codex")]
+    pub codex_hook: Option<CodexHook>,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_config: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_settings: Option<String>,
     #[arg(long)]
     pub inspect_index: Option<String>,
     #[arg(long, value_enum, default_value = "summary")]

@@ -1,10 +1,10 @@
 mod protocol;
 
-use super::document::{ClaudeCodeDocument, ClaudeCodeDocumentType};
+use super::document::{CodexDocument, CodexDocumentType};
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
-use protocol::{ClaudeHookInput, ClaudeHookOutput};
+use protocol::{CodexHookInput, CodexHookOutput};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
@@ -21,37 +21,49 @@ const MAX_MEMORY_FIELD_BYTES: usize = 1_500;
 const MAX_EXCERPT_BYTES: usize = 800;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClaudeHookKind {
+pub enum CodexHookKind {
     SessionStart,
     UserPromptSubmit,
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
     UserPromptExpansion,
     PreCompact,
+    PostCompact,
     Stop,
     SessionEnd,
+    SubagentStart,
+    SubagentStop,
 }
 
-impl ClaudeHookKind {
+impl CodexHookKind {
     pub fn event_name(self) -> &'static str {
         match self {
             Self::SessionStart => "SessionStart",
             Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::PreToolUse => "PreToolUse",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PostToolUse => "PostToolUse",
             Self::UserPromptExpansion => "UserPromptExpansion",
             Self::PreCompact => "PreCompact",
+            Self::PostCompact => "PostCompact",
             Self::Stop => "Stop",
             Self::SessionEnd => "SessionEnd",
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
         }
     }
 }
 
-pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
-    let input: ClaudeHookInput = serde_json::from_reader(std::io::stdin().lock())
-        .context("failed to parse Claude hook input")?;
+pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
+    let input: CodexHookInput = serde_json::from_reader(std::io::stdin().lock())
+        .context("failed to parse Codex hook input")?;
     let started = Instant::now();
     let output = match handle_hook(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
-            eprintln!("warning: Lint-AI Claude hook failed open: {error:#}");
-            ClaudeHookOutput::default()
+            eprintln!("warning: Lint-AI Codex hook failed open: {error:#}");
+            CodexHookOutput::default()
         }
     };
     write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
@@ -60,17 +72,23 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHookOutput) {
+fn write_timing_record(kind: CodexHookKind, elapsed_ms: f64, output: &CodexHookOutput) {
     let Ok(path) = std::env::var("LINT_AI_HOOK_TIMINGS_PATH") else {
         return;
     };
     let operation = match kind {
-        ClaudeHookKind::SessionStart
-        | ClaudeHookKind::UserPromptSubmit
-        | ClaudeHookKind::UserPromptExpansion => "retrieve",
-        ClaudeHookKind::PreCompact | ClaudeHookKind::Stop | ClaudeHookKind::SessionEnd => {
-            "capture"
-        }
+        CodexHookKind::SessionStart
+        | CodexHookKind::UserPromptSubmit
+        | CodexHookKind::PreToolUse
+        | CodexHookKind::PermissionRequest
+        | CodexHookKind::PostToolUse
+        | CodexHookKind::UserPromptExpansion
+        | CodexHookKind::SubagentStart => "retrieve",
+        CodexHookKind::PreCompact
+        | CodexHookKind::PostCompact
+        | CodexHookKind::Stop
+        | CodexHookKind::SessionEnd
+        | CodexHookKind::SubagentStop => "capture",
     };
     let context_bytes = output
         .hook_specific_output
@@ -93,30 +111,33 @@ fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHoo
 }
 
 fn handle_hook(
-    kind: ClaudeHookKind,
-    input: ClaudeHookInput,
+    kind: CodexHookKind,
+    input: CodexHookInput,
     fallback_root: &Path,
-) -> Result<ClaudeHookOutput> {
+) -> Result<CodexHookOutput> {
     if input.hook_event_name != kind.event_name() {
         anyhow::bail!(
-            "Claude hook event mismatch: expected {}, got {}",
+            "Codex hook event mismatch: expected {}, got {}",
             kind.event_name(),
             input.hook_event_name
         );
     }
     let root = resolve_root(&input.cwd, fallback_root)?;
     match kind {
-        ClaudeHookKind::SessionStart => retrieve(
+        CodexHookKind::SessionStart => retrieve(
             &root,
             kind.event_name(),
             "decisions unresolved work failures implemented changes",
         ),
-        ClaudeHookKind::UserPromptSubmit => retrieve(
+        CodexHookKind::UserPromptSubmit => retrieve(
             &root,
             kind.event_name(),
             input.prompt.as_deref().unwrap_or_default(),
         ),
-        ClaudeHookKind::UserPromptExpansion => {
+        CodexHookKind::PreToolUse
+        | CodexHookKind::PermissionRequest
+        | CodexHookKind::PostToolUse => retrieve(&root, kind.event_name(), &tool_query(&input)),
+        CodexHookKind::UserPromptExpansion => {
             let query = [
                 input.expansion_type.as_deref(),
                 input.command_name.as_deref(),
@@ -130,20 +151,27 @@ fn handle_hook(
             .join(" ");
             retrieve(&root, kind.event_name(), &query)
         }
-        ClaudeHookKind::PreCompact => capture(&root, input, ClaudeCodeDocumentType::Checkpoint),
-        ClaudeHookKind::Stop if input.stop_hook_active => Ok(ClaudeHookOutput::default()),
-        ClaudeHookKind::Stop => capture(&root, input, ClaudeCodeDocumentType::Outcome),
-        ClaudeHookKind::SessionEnd => capture(&root, input, ClaudeCodeDocumentType::SessionSummary),
+        CodexHookKind::PreCompact => capture(&root, input, CodexDocumentType::Checkpoint),
+        CodexHookKind::PostCompact => capture(&root, input, CodexDocumentType::Checkpoint),
+        CodexHookKind::Stop if input.stop_hook_active => Ok(CodexHookOutput::default()),
+        CodexHookKind::Stop => capture(&root, input, CodexDocumentType::Outcome),
+        CodexHookKind::SessionEnd => capture(&root, input, CodexDocumentType::SessionSummary),
+        CodexHookKind::SubagentStart => retrieve(
+            &root,
+            kind.event_name(),
+            input.prompt.as_deref().unwrap_or_default(),
+        ),
+        CodexHookKind::SubagentStop => capture(&root, input, CodexDocumentType::Outcome),
     }
 }
 
-fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<ClaudeHookOutput> {
+fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<CodexHookOutput> {
     if query.trim().is_empty() || !memory_root(root).exists() {
-        return Ok(ClaudeHookOutput::default());
+        return Ok(CodexHookOutput::default());
     }
     let mut store = open_store(root)?;
     if store.is_empty() {
-        return Ok(ClaudeHookOutput::default());
+        return Ok(CodexHookOutput::default());
     }
     let results = store.query(query, DEFAULT_TOP_K * 3)?;
     let selected = select_session_documents(&store, results, DEFAULT_TOP_K);
@@ -190,9 +218,42 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<ClaudeHookOutp
         context.push_str(&entry);
     }
     if seen.is_empty() {
-        return Ok(ClaudeHookOutput::default());
+        return Ok(CodexHookOutput::default());
     }
-    Ok(ClaudeHookOutput::additional_context(event_name, context))
+    Ok(CodexHookOutput::additional_context(event_name, context))
+}
+
+fn tool_query(input: &CodexHookInput) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = input.turn_id.as_deref().filter(|value| !value.trim().is_empty()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.agent_id.as_deref().filter(|value| !value.trim().is_empty()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.agent_type.as_deref().filter(|value| !value.trim().is_empty()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.tool_name.as_deref().filter(|value| !value.trim().is_empty()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.permission_mode.as_deref().filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.trigger.as_deref().filter(|value| !value.trim().is_empty()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.reason.as_deref().filter(|value| !value.trim().is_empty()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.tool_input.as_ref() {
+        parts.push(truncate_utf8(&value.to_string(), MAX_EXCERPT_BYTES));
+    }
+    if let Some(value) = input.tool_response.as_ref() {
+        parts.push(truncate_utf8(&value.to_string(), MAX_EXCERPT_BYTES));
+    }
+    parts.join(" ")
 }
 
 fn select_session_documents(
@@ -321,16 +382,16 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 
 fn capture(
     root: &Path,
-    input: ClaudeHookInput,
-    document_type: ClaudeCodeDocumentType,
-) -> Result<ClaudeHookOutput> {
-    let Some(transcript_path) = input.transcript_path.as_deref() else {
-        return Ok(ClaudeHookOutput::default());
+    input: CodexHookInput,
+    document_type: CodexDocumentType,
+) -> Result<CodexHookOutput> {
+    let Some(transcript_path) = transcript_path(&input) else {
+        return Ok(CodexHookOutput::default());
     };
     let affected_paths = affected_paths(&input.extra);
-    let content = extract_structured_memory(transcript_path, document_type, &affected_paths)?;
+    let content = extract_structured_memory(&transcript_path, document_type, &affected_paths)?;
     if content.trim().is_empty() {
-        return Ok(ClaudeHookOutput::default());
+        return Ok(CodexHookOutput::default());
     }
     let event_id = format!(
         "{}:{}:{}",
@@ -338,7 +399,7 @@ fn capture(
         document_type.as_str(),
         crate::ids::stable_doc_id_from_source(&content)
     );
-    let document = ClaudeCodeDocument {
+    let document = CodexDocument {
         event_id,
         session_id: input.session_id,
         document_type,
@@ -354,7 +415,43 @@ fn capture(
     let mut store = open_store(root)?;
     store.upsert(document.into_source_document()?);
     store.refresh()?;
-    Ok(ClaudeHookOutput::default())
+    Ok(CodexHookOutput::default())
+}
+
+fn transcript_path(input: &CodexHookInput) -> Option<PathBuf> {
+    if let Some(path) = input.transcript_path.as_ref().filter(|path| path.exists()) {
+        return Some(path.clone());
+    }
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
+    find_session_transcript(&codex_home.join("sessions"), &input.session_id)
+}
+
+fn find_session_transcript(sessions_root: &Path, session_id: &str) -> Option<PathBuf> {
+    let expected_suffix = format!("-{session_id}.jsonl");
+    let mut pending = VecDeque::from([sessions_root.to_path_buf()]);
+    let mut visited = 0usize;
+    while let Some(directory) = pending.pop_front() {
+        let entries = std::fs::read_dir(directory).ok()?;
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 10_000 {
+                return None;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push_back(path);
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(&expected_suffix))
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn open_store(root: &Path) -> Result<IndexStore> {
@@ -369,7 +466,7 @@ fn open_store(root: &Path) -> Result<IndexStore> {
 }
 
 fn memory_root(root: &Path) -> PathBuf {
-    root.join(".lint-ai").join("claude-memory")
+    root.join(".lint-ai").join("codex-memory")
 }
 
 fn resolve_root(cwd: &Path, fallback_root: &Path) -> Result<PathBuf> {
@@ -380,7 +477,7 @@ fn resolve_root(cwd: &Path, fallback_root: &Path) -> Result<PathBuf> {
     };
     candidate.canonicalize().with_context(|| {
         format!(
-            "failed to resolve Claude project root {}",
+            "failed to resolve Codex project root {}",
             candidate.display()
         )
     })
@@ -394,7 +491,7 @@ struct ConversationMessage {
 
 fn extract_structured_memory(
     path: &Path,
-    document_type: ClaudeCodeDocumentType,
+    document_type: CodexDocumentType,
     affected_paths: &[String],
 ) -> Result<String> {
     let messages = extract_recent_messages(path)?;
@@ -427,7 +524,7 @@ fn extract_structured_memory(
 
 fn extract_recent_messages(path: &Path) -> Result<VecDeque<ConversationMessage>> {
     let mut file = File::open(path)
-        .with_context(|| format!("failed to open Claude transcript {}", path.display()))?;
+        .with_context(|| format!("failed to open Codex transcript {}", path.display()))?;
     let len = file.metadata()?.len();
     let mut scan_bytes = INITIAL_TRANSCRIPT_BYTES.min(len);
     loop {
@@ -456,7 +553,12 @@ fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(message) = value.get("message") else {
+        let message = value.get("message").or_else(|| {
+            value
+                .get("payload")
+                .filter(|payload| payload.get("type").and_then(Value::as_str) == Some("message"))
+        });
+        let Some(message) = message else {
             continue;
         };
         let role = message
@@ -531,7 +633,12 @@ fn text_blocks(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
             .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+            .filter(|block| {
+                matches!(
+                    block.get("type").and_then(Value::as_str),
+                    Some("text" | "input_text" | "output_text")
+                )
+            })
             .filter_map(|block| block.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -629,7 +736,7 @@ mod tests {
         path
     }
 
-    fn input(root: &Path, transcript: Option<PathBuf>, event: &str) -> ClaudeHookInput {
+    fn input(root: &Path, transcript: Option<PathBuf>, event: &str) -> CodexHookInput {
         serde_json::from_value(serde_json::json!({
             "session_id": "session-1",
             "transcript_path": transcript,
@@ -640,10 +747,25 @@ mod tests {
     }
 
     #[test]
+    fn finds_persisted_codex_session_transcript_by_session_id() {
+        let root = temp_dir("session-transcript");
+        let sessions = root.join("sessions/2026/08/03");
+        fs::create_dir_all(&sessions).unwrap();
+        let transcript = sessions.join("rollout-2026-08-03T12-00-00-session-1.jsonl");
+        fs::write(&transcript, "{}\n").unwrap();
+
+        assert_eq!(
+            find_session_transcript(&root.join("sessions"), "session-1"),
+            Some(transcript)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn session_start_does_not_create_memory_store() {
         let root = temp_dir("session-start");
         let output = handle_hook(
-            ClaudeHookKind::SessionStart,
+            CodexHookKind::SessionStart,
             input(&root, None, "SessionStart"),
             &root,
         )
@@ -658,7 +780,7 @@ mod tests {
     fn empty_prompt_does_not_open_memory_store() {
         let root = temp_dir("empty-prompt");
         let output = handle_hook(
-            ClaudeHookKind::UserPromptSubmit,
+            CodexHookKind::UserPromptSubmit,
             input(&root, None, "UserPromptSubmit"),
             &root,
         )
@@ -679,7 +801,7 @@ mod tests {
         .unwrap();
         let mut stop = input(&root, Some(transcript), "Stop");
         stop.stop_hook_active = true;
-        let output = handle_hook(ClaudeHookKind::Stop, stop, &root).unwrap();
+        let output = handle_hook(CodexHookKind::Stop, stop, &root).unwrap();
         assert!(output.hook_specific_output.is_none());
         assert!(!memory_root(&root).exists());
         fs::remove_dir_all(root).unwrap();
@@ -701,8 +823,8 @@ mod tests {
         .unwrap();
 
         let stop_input = input(&root, Some(transcript.clone()), "Stop");
-        handle_hook(ClaudeHookKind::Stop, stop_input.clone(), &root).unwrap();
-        handle_hook(ClaudeHookKind::Stop, stop_input, &root).unwrap();
+        handle_hook(CodexHookKind::Stop, stop_input.clone(), &root).unwrap();
+        handle_hook(CodexHookKind::Stop, stop_input, &root).unwrap();
 
         let mut stored = open_store(&root).unwrap();
         stored.refresh().unwrap();
@@ -720,7 +842,7 @@ mod tests {
 
         let mut prompt = input(&root, None, "UserPromptSubmit");
         prompt.prompt = Some("docker routing".to_string());
-        let output = handle_hook(ClaudeHookKind::UserPromptSubmit, prompt, &root).unwrap();
+        let output = handle_hook(CodexHookKind::UserPromptSubmit, prompt, &root).unwrap();
         let context = output
             .hook_specific_output
             .expect("captured memory should be retrieved")
@@ -731,7 +853,7 @@ mod tests {
         expansion.command_name = Some("review".to_string());
         expansion.command_args = Some("docker routing".to_string());
         expansion.prompt = Some("/review docker routing".to_string());
-        let output = handle_hook(ClaudeHookKind::UserPromptExpansion, expansion, &root).unwrap();
+        let output = handle_hook(CodexHookKind::UserPromptExpansion, expansion, &root).unwrap();
         assert!(output
             .hook_specific_output
             .unwrap()
@@ -755,13 +877,35 @@ mod tests {
         .unwrap();
 
         let content =
-            extract_structured_memory(&transcript, ClaudeCodeDocumentType::Outcome, &[]).unwrap();
+            extract_structured_memory(&transcript, CodexDocumentType::Outcome, &[]).unwrap();
         assert!(!content.contains("Bash"));
         assert!(!content.contains("secret"));
         assert!(content.contains("[REDACTED]"));
         assert!(content.contains("Finished work"));
         assert!(content.contains("Memory type: outcome"));
         assert!(content.contains("Result:"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn transcript_extraction_supports_codex_rollout_messages() {
+        let root = temp_dir("codex-rollout");
+        let transcript = root.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Remember cobalt routing"}]}}"#,
+                "\n",
+                r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Implemented cobalt routing"}]}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let content =
+            extract_structured_memory(&transcript, CodexDocumentType::Outcome, &[]).unwrap();
+        assert!(content.contains("Remember cobalt routing"));
+        assert!(content.contains("Implemented cobalt routing"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -778,7 +922,7 @@ mod tests {
         });
         fs::write(&transcript, format!("{useful}\n{oversized}\n")).unwrap();
         let content =
-            extract_structured_memory(&transcript, ClaudeCodeDocumentType::Outcome, &[]).unwrap();
+            extract_structured_memory(&transcript, CodexDocumentType::Outcome, &[]).unwrap();
         assert!(content.contains("Remember cobalt routing"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -833,9 +977,9 @@ mod tests {
         .unwrap();
 
         for (kind, event) in [
-            (ClaudeHookKind::PreCompact, "PreCompact"),
-            (ClaudeHookKind::Stop, "Stop"),
-            (ClaudeHookKind::SessionEnd, "SessionEnd"),
+            (CodexHookKind::PreCompact, "PreCompact"),
+            (CodexHookKind::Stop, "Stop"),
+            (CodexHookKind::SessionEnd, "SessionEnd"),
         ] {
             handle_hook(kind, input(&root, Some(transcript.clone()), event), &root).unwrap();
         }

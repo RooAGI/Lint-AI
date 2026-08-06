@@ -26,6 +26,7 @@ target/release
 
 # Lint-AI local cache
 .lint-ai-cache/
+.lint-ai/
 
 # Local workspace file
 lint-ai.code-workspace
@@ -51,6 +52,8 @@ build.log
 
 # Generated benchmark smoke outputs
 benchmark/*_results.json
+benchmark/codex_code/results/*
+!benchmark/codex_code/results/.gitkeep
 benchmark/data/longmemeval_s_raw.json
 benchmark/data/lintai_longmemeval_scoped_results*.json
 benchmark/data/python_lintai_longmemeval_scoped_results*.json

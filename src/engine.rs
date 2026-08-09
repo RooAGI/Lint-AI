@@ -8,7 +8,7 @@ use crate::index::{DocRecord, MemoryIndex, SectionChunk, TemporalQueryContext, T
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::{
-    install_hook_settings, install_memory_skill, install_user_config, run_server,
+    install_hook_settings, install_memory_skill, install_user_config, run_server, run_status_line,
     ClaudeCodeServerOptions,
 };
 #[cfg(feature = "codex")]
@@ -17,7 +17,7 @@ use crate::integrations::codex::hooks::{run_hook as run_codex_hook, CodexHookKin
 use crate::integrations::codex::{
     install_hook_settings as install_codex_hook_settings,
     install_user_config as install_codex_user_config, run_server as run_codex_server,
-    CodexServerOptions,
+    run_status_line as run_codex_status_line, CodexServerOptions,
 };
 use crate::pipeline::{
     source_documents_to_tier1_inputs, ChunkStrategy, IndexStore, MemoryIndexLayout,
@@ -2010,17 +2010,86 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
 
+    if args.promote_session.is_some() {
+        #[cfg(any(feature = "claude-code", feature = "codex"))]
+        {
+            let session_id = args.promote_session.as_deref().expect("checked above");
+            let provider = match args.session_provider {
+                crate::cli::SessionProvider::Claude => {
+                    crate::integrations::session_recording::RecordingProvider::Claude
+                }
+                crate::cli::SessionProvider::Codex => {
+                    crate::integrations::session_recording::RecordingProvider::Codex
+                }
+            };
+            let report = crate::integrations::session_recording::promote_recorded_session(
+                provider,
+                Path::new(&args.path),
+                args.session_root.as_deref().map(Path::new),
+                session_id,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        #[cfg(not(any(feature = "claude-code", feature = "codex")))]
+        {
+            anyhow::bail!("session promotion requires the Claude Code or Codex feature");
+        }
+    }
+
+    if args.replay_session.is_some() {
+        #[cfg(any(feature = "claude-code", feature = "codex"))]
+        {
+            let session_id = args.replay_session.as_deref().expect("checked above");
+            let provider = match args.session_provider {
+                crate::cli::SessionProvider::Claude => {
+                    crate::integrations::session_recording::RecordingProvider::Claude
+                }
+                crate::cli::SessionProvider::Codex => {
+                    crate::integrations::session_recording::RecordingProvider::Codex
+                }
+            };
+            let report = crate::integrations::session_recording::replay_recorded_session(
+                provider,
+                Path::new(&args.path),
+                args.session_root.as_deref().map(Path::new),
+                session_id,
+                args.replay_enable_lint_ai,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        #[cfg(not(any(feature = "claude-code", feature = "codex")))]
+        {
+            anyhow::bail!("session replay requires the Claude Code or Codex feature");
+        }
+    }
+
+    #[cfg(feature = "claude-code")]
+    if args.claude_code_statusline {
+        return run_status_line();
+    }
+
     #[cfg(feature = "claude-code")]
     if let Some(hook) = args.claude_code_hook {
         let kind = match hook {
             crate::cli::ClaudeCodeHook::SessionStart => ClaudeHookKind::SessionStart,
             crate::cli::ClaudeCodeHook::UserPromptSubmit => ClaudeHookKind::UserPromptSubmit,
             crate::cli::ClaudeCodeHook::UserPromptExpansion => ClaudeHookKind::UserPromptExpansion,
+            crate::cli::ClaudeCodeHook::PreToolUse => ClaudeHookKind::PreToolUse,
+            crate::cli::ClaudeCodeHook::PostToolUse => ClaudeHookKind::PostToolUse,
             crate::cli::ClaudeCodeHook::PreCompact => ClaudeHookKind::PreCompact,
             crate::cli::ClaudeCodeHook::Stop => ClaudeHookKind::Stop,
             crate::cli::ClaudeCodeHook::SessionEnd => ClaudeHookKind::SessionEnd,
+            crate::cli::ClaudeCodeHook::SubagentStart => ClaudeHookKind::SubagentStart,
+            crate::cli::ClaudeCodeHook::SubagentStop => ClaudeHookKind::SubagentStop,
         };
         return run_hook(kind, Path::new(&args.path));
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_statusline {
+        return run_codex_status_line();
     }
 
     #[cfg(feature = "codex")]

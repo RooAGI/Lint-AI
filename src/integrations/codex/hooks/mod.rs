@@ -1,6 +1,10 @@
 mod protocol;
 
 use super::document::{CodexDocument, CodexDocumentType};
+use crate::integrations::session_recording::{
+    lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
+    RecordingProvider,
+};
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
@@ -19,6 +23,7 @@ const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CAPTURED_MESSAGES: usize = 6;
 const MAX_MEMORY_FIELD_BYTES: usize = 1_500;
 const MAX_EXCERPT_BYTES: usize = 800;
+const MIN_TOOL_QUERY_TERMS: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexHookKind {
@@ -56,8 +61,51 @@ impl CodexHookKind {
 }
 
 pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
-    let input: CodexHookInput = serde_json::from_reader(std::io::stdin().lock())
+    let raw: Value = serde_json::from_reader(std::io::stdin().lock())
         .context("failed to parse Codex hook input")?;
+    let input: CodexHookInput =
+        serde_json::from_value(raw).context("failed to decode Codex hook input")?;
+    let root = resolve_root(&input.cwd, fallback_root)?;
+    let payload = serde_json::json!({
+        "hook_event_name": input.hook_event_name,
+        "prompt": input.prompt,
+        "tool_name": input.tool_name,
+        "tool_input": input.tool_input,
+        "tool_response": input.tool_response,
+        "transcript_path": input.transcript_path,
+        "agent_id": input.agent_id,
+        "agent_type": input.agent_type,
+        "turn_id": input.turn_id,
+        "expansion_type": input.expansion_type,
+        "command_name": input.command_name,
+        "command_args": input.command_args,
+        "command_source": input.command_source,
+        "permission_mode": input.permission_mode,
+        "trigger": input.trigger,
+        "reason": input.reason,
+        "extra": input.extra,
+    });
+    if let Err(error) = record_event_if_enabled(
+        RecordingProvider::Codex,
+        &root,
+        &input.session_id,
+        kind.event_name(),
+        payload,
+    ) {
+        eprintln!("warning: Lint-AI session recording failed open: {error:#}");
+    }
+    if matches!(kind, CodexHookKind::Stop) && !input.stop_hook_active {
+        if let Err(error) = record_transcript_usage_if_available(
+            RecordingProvider::Codex,
+            &root,
+            &input.session_id,
+            input.transcript_path.as_deref(),
+            input.turn_id.as_deref(),
+            "codex-transcript",
+        ) {
+            eprintln!("warning: Codex transcript usage capture failed open: {error:#}");
+        }
+    }
     let started = Instant::now();
     let output = match handle_hook(kind, input, fallback_root) {
         Ok(output) => output,
@@ -123,6 +171,9 @@ fn handle_hook(
         );
     }
     let root = resolve_root(&input.cwd, fallback_root)?;
+    if !lint_ai_enabled(RecordingProvider::Codex, &root)? {
+        return Ok(CodexHookOutput::default());
+    }
     match kind {
         CodexHookKind::SessionStart => retrieve(
             &root,
@@ -134,9 +185,16 @@ fn handle_hook(
             kind.event_name(),
             input.prompt.as_deref().unwrap_or_default(),
         ),
-        CodexHookKind::PreToolUse
-        | CodexHookKind::PermissionRequest
-        | CodexHookKind::PostToolUse => retrieve(&root, kind.event_name(), &tool_query(&input)),
+        CodexHookKind::PreToolUse | CodexHookKind::PermissionRequest => {
+            retrieve(&root, kind.event_name(), &tool_query(&input))
+        }
+        CodexHookKind::PostToolUse => {
+            let query = tool_query(&input);
+            if query_terms(&query).len() < MIN_TOOL_QUERY_TERMS {
+                return Ok(CodexHookOutput::default());
+            }
+            retrieve(&root, kind.event_name(), &query)
+        }
         CodexHookKind::UserPromptExpansion => {
             let query = [
                 input.expansion_type.as_deref(),
@@ -225,26 +283,53 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<CodexHookOutpu
 
 fn tool_query(input: &CodexHookInput) -> String {
     let mut parts = Vec::new();
-    if let Some(value) = input.turn_id.as_deref().filter(|value| !value.trim().is_empty()) {
-        parts.push(value.to_string());
-    }
-    if let Some(value) = input.agent_id.as_deref().filter(|value| !value.trim().is_empty()) {
-        parts.push(value.to_string());
-    }
-    if let Some(value) = input.agent_type.as_deref().filter(|value| !value.trim().is_empty()) {
-        parts.push(value.to_string());
-    }
-    if let Some(value) = input.tool_name.as_deref().filter(|value| !value.trim().is_empty()) {
-        parts.push(value.to_string());
-    }
-    if let Some(value) = input.permission_mode.as_deref().filter(|value| !value.trim().is_empty())
+    if let Some(value) = input
+        .turn_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
     {
         parts.push(value.to_string());
     }
-    if let Some(value) = input.trigger.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = input
+        .agent_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         parts.push(value.to_string());
     }
-    if let Some(value) = input.reason.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(value) = input
+        .agent_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .tool_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .permission_mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .trigger
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .reason
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         parts.push(value.to_string());
     }
     if let Some(value) = input.tool_input.as_ref() {
@@ -445,7 +530,9 @@ fn find_session_transcript(sessions_root: &Path, session_id: &str) -> Option<Pat
             } else if path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(&expected_suffix))
+                .is_some_and(|name| {
+                    name.starts_with("rollout-") && name.ends_with(&expected_suffix)
+                })
             {
                 return Some(path);
             }
@@ -470,17 +557,26 @@ fn memory_root(root: &Path) -> PathBuf {
 }
 
 fn resolve_root(cwd: &Path, fallback_root: &Path) -> Result<PathBuf> {
-    let candidate = if cwd.as_os_str().is_empty() {
-        fallback_root
-    } else {
-        cwd
-    };
-    candidate.canonicalize().with_context(|| {
+    let fallback = fallback_root.canonicalize().with_context(|| {
         format!(
-            "failed to resolve Codex project root {}",
-            candidate.display()
+            "failed to resolve Codex fallback project root {}",
+            fallback_root.display()
         )
-    })
+    })?;
+    let candidate = if cwd.as_os_str().is_empty() {
+        fallback.clone()
+    } else {
+        cwd.canonicalize()
+            .with_context(|| format!("failed to resolve Codex project root {}", cwd.display()))?
+    };
+    if !candidate.starts_with(&fallback) {
+        anyhow::bail!(
+            "Codex hook cwd {} is outside configured project root {}",
+            candidate.display(),
+            fallback.display()
+        );
+    }
+    Ok(candidate)
 }
 
 #[derive(Debug, Clone)]
@@ -723,6 +819,7 @@ fn current_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrations::session_recording::set_lint_ai_state;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -787,6 +884,18 @@ mod tests {
         .unwrap();
         assert!(output.hook_specific_output.is_none());
         assert!(!memory_root(&root).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disabled_memory_skips_retrieval_without_affecting_hook_success() {
+        let root = temp_dir("memory-disabled");
+        set_lint_ai_state(RecordingProvider::Codex, &root, false).unwrap();
+        let mut prompt = input(&root, None, "UserPromptSubmit");
+        prompt.prompt = Some("retrieve prior routing decision".to_string());
+        let output = handle_hook(CodexHookKind::UserPromptSubmit, prompt, &root).unwrap();
+        assert!(output.hook_specific_output.is_none());
+        assert!(!memory_root(&root).join("index.json").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

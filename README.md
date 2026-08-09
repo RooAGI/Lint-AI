@@ -93,6 +93,99 @@ Results file: `benchmark/data/lintai_longmemeval_scoped_results.json`
 
 See [docs/quickstart.md](docs/quickstart.md) for the shortest path to build, run, query, and use the crate from Rust.
 
+## Claude Code and Codex integrations
+
+Lint-AI provides provider-specific integrations for Claude Code and Codex. Each
+integration is opt-in at build time and combines lifecycle hooks with a
+project-scoped MCP server:
+
+| Feature | Claude Code | Codex |
+|---|---:|---:|
+| Project-scoped MCP server | Yes | Yes |
+| Lifecycle memory retrieval and capture | Yes | Yes |
+| Segmented persistent memory | Yes | Yes |
+| `search` and `info` MCP tools | Yes | Yes |
+| `record_session` control | Yes | Yes |
+| Enable/disable Lint-AI at runtime | Yes | Yes |
+| Session status reporting | Native status line plus MCP | MCP plus terminal status line |
+| Replay with Lint-AI enabled or disabled | Yes | Yes |
+| Session import into provider memory | Yes | Yes |
+
+Build and install both integrations:
+
+```bash
+cargo build --release --features claude-code,codex
+./lint-ai --claude-code-install /path/to/project
+./lint-ai --codex-install /path/to/project
+```
+
+Provider memory remains isolated:
+
+```text
+/path/to/project/.lint-ai/claude-memory/
+/path/to/project/.lint-ai/codex-memory/
+```
+
+The MCP controls are available inside either client:
+
+```text
+mcp__lint-ai__record_session       {"action":"start|stop|status"}
+mcp__lint-ai__enable_lint_ai       {}
+mcp__lint-ai__disable_lint_ai      {}
+mcp__lint-ai__lint_ai_status        {}
+```
+
+Enabling Lint-AI enables recording by default. Recording can then be stopped
+independently, so memory retrieval and full session capture remain separate
+choices. Recording is local, bounded, redacted, and capture-only; it does not
+inject memory by itself.
+
+For a baseline/replay A/B comparison:
+
+```bash
+./lint-ai --replay-session <session-id> \
+  --session-provider codex \
+  --replay-disable-lint-ai
+./lint-ai --replay-session <session-id> \
+  --session-provider codex \
+  --replay-enable-lint-ai
+```
+
+Each replay receives a new `replay-*` session ID and a separate archive. The
+comparison workflow measures task quality, token usage, latency, tool
+activity, memory retrieval, and recording completeness.
+
+### Integration benchmark
+
+These are the latest validated smoke-run measurements for the segmented-routing
+scenario: one repetition, continuation phase only. They are diagnostic results
+for the stated run, not universal performance guarantees.
+
+| Provider / arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Claude native memory | 22.47 s | 123,536 | 123,526 | 1,239 | 4 | 2/3 | 0 ms |
+| Claude Lint-AI only | 7.05 s | 15,914 | 15,912 | 376 | 0 | 3/3 | 1.40 s |
+| Claude both layers | 7.17 s | 15,914 | 15,912 | 271 | 0 | 3/3 | 1.36 s |
+| Codex native memory | 38.13 s | 151,000 | 99,840 | 1,505 | 5 | 2/3 | 0 ms |
+| Codex Lint-AI only | 18.53 s | 62,478 | 43,264 | 604 | 2 | 2/3 | 1.33 s |
+| Codex both layers | 13.98 s | 31,684 | 25,088 | 454 | 1 | 2/3 | 1.39 s |
+
+The corresponding reports and run conditions are documented in the [Claude
+Code performance tests](docs/claude-code-performance-tests.md) and [Codex
+performance tests](docs/codex-performance-tests.md). Both documents describe
+the one-run limitation and the provider/model/repository versions used.
+
+MCP-path smoke validation measured 47.09 s for Claude MCP-only and 9.38 s for
+Codex with Lint-AI MCP. The Codex run recorded 13,246 input tokens, 77 output
+tokens, 2/3 recall, and 1.35 s hook time; the Claude run recorded 189,022
+input tokens, 3,678 output tokens, and one Lint-AI MCP call. A separate direct
+Claude MCP search check returned results in approximately 220 ms; it did not
+measure agent search-selection behavior.
+
+More detail: [Claude Code integration](docs/claude-code.md), [Codex
+integration](docs/codex.md), [shared integration architecture](src/integrations/README.md),
+and [session metrics](metrics/README.md).
+
 ## How It Works
 
 Lint-AI ingests sessions, notes, traces, documents, and code-oriented artifacts, builds a lexical index plus sparse entity/term tables, and overlays graph structure for links, symbols, ownership, and co-occurrence. Queries are analyzed for intent, entities, and temporal hints, then scored with a blend of lexical, semantic, claim, topic, timestamp, and graph signals. The same corpus analysis also powers misalignment checks such as missing cross-refs, orphan pages, low-confidence claims, and review-oriented packet generation.

@@ -170,6 +170,37 @@ The stores are separate because Claude and Codex capture different lifecycle
 payloads and document schemas. They use the same indexing and retrieval
 implementation and can be queried through the same MCP tool contract.
 
+## Session recording and controls
+
+Both integrations expose the same MCP control surface:
+
+```text
+record_session       { action: start | stop | status }
+enable_lint_ai       {}
+disable_lint_ai      {}
+lint_ai_status       {}
+```
+
+Recording is an independent, capture-only event archive. It can be enabled
+without memory retrieval, and enabling Lint-AI turns recording on by default.
+Users can stop recording without disabling memory. Archives are stored under
+provider-specific session roots and can be promoted into the corresponding
+segmented memory store later.
+
+Replay is an orchestrated new provider session rather than a conversation
+fork. It always records a new `replay-*` archive, supports explicit
+`--replay-enable-lint-ai` and `--replay-disable-lint-ai` arms, and preserves the
+baseline archive. Codex resumes the provider conversation after its first
+prompt; Claude runs prompts independently because it lacks a portable resume
+API.
+
+Session reports are generated separately from immutable archives. They measure
+quality and efficiency independently, including task outcome, token usage,
+duration, time to first response, hook/MCP latency, tool calls, repeated
+exploration, retrieved memory, and recording completeness. Values are reported
+for the exact provider, model, repository, and benchmark revision being run;
+the integration README does not claim universal thresholds.
+
 ## Claude Code
 
 Build with the Claude feature:

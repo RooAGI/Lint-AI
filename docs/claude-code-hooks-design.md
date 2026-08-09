@@ -2,13 +2,17 @@
 
 ## Status
 
-This document defines the Claude Code hook integration. The first implementation
-supports the six hooks described below, persistent segmented session memory,
-bounded transcript capture, context injection, and settings installation.
+This document defines the Claude Code hook integration. The current
+implementation supports ten hooks: the original six (`SessionStart`,
+`UserPromptSubmit`, `UserPromptExpansion`, `PreCompact`, `Stop`, `SessionEnd`)
+plus four added in the second release (`PreToolUse`, `PostToolUse`,
+`SubagentStart`, `SubagentStop`). It also provides persistent segmented session
+memory, bounded transcript capture, context injection, and settings
+installation.
 
 Structured semantic summarization, configurable budgets, stronger secret
-classification, cross-process MCP memory sharing, and the deferred hooks remain
-future work.
+classification, cross-process MCP memory sharing, `PostToolUseFailure` capture,
+and a subagent parent/child segment split remain future work.
 
 The design deliberately keeps Claude-specific protocol types at the integration
 boundary. Lint-AI's public ingestion and query APIs remain `SourceDocument`,
@@ -330,13 +334,70 @@ using the query and the index's matched terms, keeps up to three matching lines,
 and limits each excerpt to 800 UTF-8 bytes. Records with no matching line use a
 small bounded leading excerpt.
 
+### SubagentStart
+
+Purpose: retrieve memory relevant to a delegated subagent's task before it
+begins.
+
+Operation:
+
+1. Use the subagent's prompt as the retrieval query.
+2. Route through the segmented store using the parent session's context.
+3. Return bounded `additionalContext`.
+
+The subagent runs in the same session segment as its parent. A parent/child
+segment split is deferred pending evidence that it improves retrieval precision.
+
+This hook does not create a `SourceDocument`.
+
+### SubagentStop
+
+Purpose: capture the durable outcome after a subagent finishes.
+
+The adapter captures the subagent's completed work as an `Outcome` document in
+the current session segment. This follows the same pattern as the `Stop` hook.
+The subagent does not check the `stop_hook_active` recursion guard because
+`SubagentStop` is only delivered to the parent hook process, not re-entered.
+
+### PostToolUse
+
+Purpose: retrieve memory relevant to a tool result, so Claude has past context
+about this tool or related paths before acting on the output.
+
+Operation:
+
+1. Build a retrieval query from `tool_name`, `tool_input`, `tool_response`,
+   `turn_id`, `agent_id`, and `agent_type` fields.
+2. Truncate large `tool_input` and `tool_response` values to `MAX_EXCERPT_BYTES`
+   before forming the query string.
+3. Route through the segmented store.
+4. Return bounded `additionalContext`.
+
+This hook performs retrieval only. Capture on tool events is deferred because
+raw tool output is high-volume and requires stronger filtering before
+committing to the memory store.
+
+### PreToolUse
+
+Purpose: retrieve memory relevant to a tool call before Claude executes it.
+
+The adapter builds a query from the available tool name, input, turn, agent,
+and response metadata and returns bounded `additionalContext`. Unlike
+`PostToolUse`, this hook does not require a minimum query-term threshold because
+the pre-tool event is the earliest opportunity to provide context for the
+planned action.
+
+This hook performs retrieval only. It does not approve, deny, or modify the
+tool call; tool policy remains Claude Code's responsibility.
+
 ## Hooks Deferred From The First Release
 
-- `PostToolUse`: potentially useful for artifact changes, but raw tool events
-  are high-volume and require stronger capture filtering.
-- `PostToolUseFailure`: useful only after failure deduplication is defined.
-- `SubagentStart` and `SubagentStop`: require a parent/child segment policy.
-- `PreToolUse` and `PermissionRequest`: policy hooks rather than memory hooks.
+- `PostToolUseFailure`: useful after failure deduplication is defined. The
+  failure case is currently not distinguishable without additional filtering.
+- `SubagentStart`/`SubagentStop` parent/child segment split: subagents
+  currently write into the parent session segment. A dedicated child segment
+  and cross-segment retrieval policy is deferred pending benchmark evidence.
+- `PermissionRequest`: a policy hook rather than a memory hook.
 - notification and configuration hooks: do not add durable memory value yet.
 
 ## Hook Response
@@ -410,9 +471,13 @@ Installed hook command shape:
 lint-ai --claude-code-hook session-start /path/to/project
 lint-ai --claude-code-hook user-prompt-submit /path/to/project
 lint-ai --claude-code-hook user-prompt-expansion /path/to/project
+lint-ai --claude-code-hook pre-tool-use /path/to/project
+lint-ai --claude-code-hook post-tool-use /path/to/project
 lint-ai --claude-code-hook pre-compact /path/to/project
 lint-ai --claude-code-hook stop /path/to/project
 lint-ai --claude-code-hook session-end /path/to/project
+lint-ai --claude-code-hook subagent-start /path/to/project
+lint-ai --claude-code-hook subagent-stop /path/to/project
 ```
 
 Each command reads one Claude hook payload from stdin and writes one hook
@@ -421,13 +486,14 @@ response to stdout.
 ## Remaining Work
 
 1. Add benchmark coverage for retrieval quality, hook latency, and injected
-   token usage.
+   token usage — including the three new hooks added in this release.
 2. Replace deterministic bounded transcript extraction with optional structured
    summarization after its quality and cost are measured.
 3. Add configurable context budgets, routing thresholds, and retention.
 4. Define cross-process locking and snapshot reload semantics before sharing the
    hook memory store with the long-running MCP server.
-5. Evaluate the deferred hooks using benchmark evidence.
+5. Evaluate `PostToolUseFailure` capture after failure deduplication is defined.
+6. Evaluate a parent/child segment split for subagents using benchmark evidence.
 
 ## Acceptance Criteria
 
@@ -441,3 +507,7 @@ response to stdout.
 - hook failures do not interrupt normal Claude use by default
 - installation preserves unrelated Claude configuration
 - tests cover every supported hook payload and response shape
+- `PostToolUse` retrieval uses tool name and truncated input/response as query
+- `PreToolUse` retrieval uses the planned tool call as query
+- `SubagentStart` retrieval uses the subagent prompt
+- `SubagentStop` capture is idempotent and stores an `outcome` document type

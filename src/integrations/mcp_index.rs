@@ -93,12 +93,21 @@ fn workspace_state(root: &Path) -> Option<Value> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").args(args).current_dir(root).output().ok()?;
-    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn index_is_current(index_root: &Path, state: Option<&Value>) -> bool {
-    let Some(state) = state else { return false; };
+    let Some(state) = state else {
+        return false;
+    };
     fs::read_to_string(index_root.join("workspace-state.json"))
         .ok()
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
@@ -107,8 +116,13 @@ fn index_is_current(index_root: &Path, state: Option<&Value>) -> bool {
 }
 
 fn write_index_state(index_root: &Path, state: Option<&Value>) -> Result<()> {
-    let Some(state) = state else { return Ok(()); };
+    let Some(state) = state else {
+        return Ok(());
+    };
     fs::create_dir_all(index_root)?;
-    fs::write(index_root.join("workspace-state.json"), serde_json::to_string_pretty(state)?)?;
+    fs::write(
+        index_root.join("workspace-state.json"),
+        serde_json::to_string_pretty(state)?,
+    )?;
     Ok(())
 }

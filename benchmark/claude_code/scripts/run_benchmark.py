@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -85,14 +86,47 @@ def main() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="lint-ai-claude-perf."))
     binary = repo_root / "target" / "debug" / "lint-ai"
     runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
+    cargo_bin = Path.home() / ".cargo" / "bin"
+    base_path = f"{cargo_bin}:{os.environ.get('PATH', '')}"
     reports: dict[str, dict[str, object]] = {}
     try:
         print("step: build Claude-enabled binary", flush=True)
         subprocess.run(
             ["cargo", "+stable", "build", "--features", "claude-code", "--quiet"],
             cwd=repo_root,
+            env={**os.environ, "PATH": base_path},
             check=True,
         )
+        # Read auth fields from the user's global settings so isolated arms can authenticate.
+        user_settings_path = Path.home() / ".claude" / "settings.json"
+        user_settings: dict = {}
+        if user_settings_path.exists():
+            try:
+                user_settings = json.loads(user_settings_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        auth_fields: dict = {}
+        if "apiKeyHelper" in user_settings:
+            auth_fields["apiKeyHelper"] = user_settings["apiKeyHelper"]
+        if "apiKeyHelperTTLMs" in user_settings:
+            auth_fields["apiKeyHelperTTLMs"] = user_settings["apiKeyHelperTTLMs"]
+        if "sandbox" in user_settings:
+            auth_fields["sandbox"] = user_settings["sandbox"]
+        # Carry through auth-related env vars (e.g. Apple TTL and custom headers).
+        auth_env_keys = {
+            "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+            "ANTHROPIC_CUSTOM_HEADERS",
+            "CLAUDE_CODE_DISABLE_SANDBOX",
+        }
+        user_env = user_settings.get("env", {})
+        if isinstance(user_env, dict):
+            auth_fields.setdefault("env", {})
+            for key in auth_env_keys:
+                if key in user_env:
+                    auth_fields["env"][key] = user_env[key]
+        if not auth_fields.get("env"):
+            auth_fields.pop("env", None)
+
         for arm in args.arms:
             arm_root = temp_root / arm
             claude_home = Path.home()
@@ -103,24 +137,34 @@ def main() -> None:
             auto_memory_dir = arm_root / "auto-memory"
             claude_config_dir.mkdir(parents=True, exist_ok=True)
             write_json(claude_config, {})
-            write_json(
-                settings_path,
-                {"autoMemoryDirectory": str(auto_memory_dir)}
-                if arm in ("claude-native", "claude-both")
-                else {"autoMemoryEnabled": False},
-            )
+            arm_settings = {
+                **(
+                    {"autoMemoryDirectory": str(auto_memory_dir)}
+                    if arm in ("claude-native", "claude-both")
+                    else {"autoMemoryEnabled": False}
+                ),
+                **auth_fields,
+            }
+            write_json(settings_path, arm_settings)
             env = os.environ.copy()
+            # Propagate sandbox and auth env vars from user settings into the process env.
+            # sandbox_apply runs before Claude Code reads settings, so these must be real env vars.
+            for key in auth_env_keys:
+                if key in user_env:
+                    env[key] = user_env[key]
             env.update({
                 "HOME": str(claude_home),
+                "CLAUDE_CONFIG_DIR": str(claude_config_dir),
                 "LINT_AI_CLAUDE_SETTINGS": str(settings_path),
                 "LINT_AI_CLAUDE_MODEL": args.model,
                 "LINT_AI_CLAUDE_MCP_CONFIG": str(mcp_config_path),
                 "LINT_AI_BENCHMARK_SKILL_PATH": str(
                     repo_root / "src" / "integrations" / "claude_code" / "skill.md"
                 ),
-                "PATH": f"{repo_root / 'target' / 'debug'}:{env.get('PATH', '')}",
+                "PATH": f"{repo_root / 'target' / 'debug'}:{base_path}",
             })
             env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+            env.pop("CLAUDE_CODE_SHELL_PREFIX", None)  # Apple sandbox wrapper causes sandbox_apply failure
             if arm == "claude-lint-ai":
                 env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
             if arm != "claude-native":
@@ -159,12 +203,12 @@ def main() -> None:
             wrapper.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                "exec claude --print --verbose --output-format stream-json --include-hook-events "
+                f"exec claude --print --verbose --output-format stream-json --include-hook-events "
                 "--model \"$LINT_AI_CLAUDE_MODEL\" "
                 "--dangerously-skip-permissions "
-                "--permission-mode bypassPermissions --setting-sources local "
-                "--strict-mcp-config --mcp-config \"$LINT_AI_CLAUDE_MCP_CONFIG\" "
-                "--settings \"$LINT_AI_CLAUDE_SETTINGS\" -\n",
+                "--permission-mode bypassPermissions "
+                f"--strict-mcp-config --mcp-config {shlex.quote(str(mcp_config_path))} "
+                "-- -\n",
                 encoding="utf-8",
             )
             wrapper.chmod(0o755)

@@ -2,12 +2,15 @@ pub mod document;
 pub mod hooks;
 
 use crate::config::normalize_list;
+use crate::graph::{Graph, Tier0Record};
 use crate::integrations::mcp_index;
 use crate::integrations::mcp_transport;
 use crate::integrations::mcp_transport::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
 };
-use crate::graph::{Graph, Tier0Record};
+use crate::integrations::session_recording::{
+    lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
+};
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
@@ -17,7 +20,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -29,9 +32,13 @@ const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session-start"),
     ("UserPromptSubmit", "user-prompt-submit"),
     ("UserPromptExpansion", "user-prompt-expansion"),
+    ("PreToolUse", "pre-tool-use"),
+    ("PostToolUse", "post-tool-use"),
     ("PreCompact", "pre-compact"),
     ("Stop", "stop"),
     ("SessionEnd", "session-end"),
+    ("SubagentStart", "subagent-start"),
+    ("SubagentStop", "subagent-stop"),
 ];
 
 #[derive(Debug, Clone)]
@@ -69,6 +76,10 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+    let executable = env::current_exe()
+        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .to_string_lossy()
+        .into_owned();
     let mut config = read_claude_config(&config_path)?;
     let entry = config
         .mcp_servers
@@ -77,7 +88,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let entry = entry
         .as_object_mut()
         .context("Claude MCP server entry must be a JSON object")?;
-    entry.insert("command".to_string(), json!("lint-ai"));
+    entry.insert("command".to_string(), json!(executable));
     entry.insert(
         "args".to_string(),
         json!(["--claude-code-serve", root.to_string_lossy().into_owned()]),
@@ -98,6 +109,17 @@ pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
     if let Some(parent) = skill_path.parent() {
         fs::create_dir_all(parent)?;
     }
+    if skill_path.exists() {
+        let existing = fs::read_to_string(&skill_path)
+            .with_context(|| format!("failed to read existing skill {}", skill_path.display()))?;
+        if existing != include_str!("skill.md") {
+            anyhow::bail!(
+                "refusing to overwrite existing Claude skill {}; remove it or back it up first",
+                skill_path.display()
+            );
+        }
+        return Ok(skill_path);
+    }
     fs::write(&skill_path, include_str!("skill.md"))?;
     Ok(skill_path)
 }
@@ -111,9 +133,9 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "lint-ai".to_string());
+        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .to_string_lossy()
+        .into_owned();
     let mut settings = read_json_object(&settings_path)?;
     let hooks = settings
         .entry("hooks".to_string())
@@ -138,8 +160,47 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         }));
     }
 
+    // Claude supports a custom persistent status line. Preserve an existing
+    // user status line and only install ours when no status line is configured.
+    if !settings.contains_key("statusLine") {
+        settings.insert(
+            "statusLine".to_string(),
+            json!({
+                "type": "command",
+                "command": format!("{} --claude-code-statusline", shell_quote(&executable)),
+                "refreshInterval": 2
+            }),
+        );
+    }
+
     write_json_object(&settings_path, &settings)?;
     Ok(settings_path)
+}
+
+/// Render the compact state indicator consumed by Claude Code's status line.
+/// Claude sends session metadata as JSON on stdin, including the active cwd.
+pub fn run_status_line() -> Result<()> {
+    let mut input = String::new();
+    io::stdin().lock().read_to_string(&mut input)?;
+    let payload: Value = serde_json::from_str(&input).unwrap_or_default();
+    let cwd = payload
+        .get("workspace")
+        .and_then(|workspace| workspace.get("current_dir"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("cwd").and_then(Value::as_str))
+        .unwrap_or(".");
+    let root = Path::new(cwd);
+    let memory_on = lint_ai_enabled(RecordingProvider::Claude, root)?;
+    let recording_on = recording_state(RecordingProvider::Claude, root)
+        .ok()
+        .and_then(|state| state.get("enabled").and_then(Value::as_bool))
+        .unwrap_or(false);
+    println!(
+        "Lint-AI:{} | Record:{}",
+        if memory_on { "ON" } else { "OFF" },
+        if recording_on { "ON" } else { "OFF" }
+    );
+    Ok(())
 }
 
 pub fn run_server(root: &Path, options: ClaudeCodeServerOptions<'_>) -> Result<()> {
@@ -388,6 +449,87 @@ impl ClaudeMcp {
                     error: None,
                 })
             }
+            "enable_lint_ai" => {
+                if let Some(name) = unknown_argument(&arguments, &[]) {
+                    return Ok(error_response(
+                        id,
+                        -32602,
+                        &format!("unknown argument: {name}"),
+                    ));
+                }
+                let state = set_lint_ai_state(RecordingProvider::Claude, &self.root, true)?;
+                set_recording_state(RecordingProvider::Claude, &self.root, true)?;
+                Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
+            }
+            "disable_lint_ai" => {
+                if let Some(name) = unknown_argument(&arguments, &[]) {
+                    return Ok(error_response(
+                        id,
+                        -32602,
+                        &format!("unknown argument: {name}"),
+                    ));
+                }
+                let state = set_lint_ai_state(RecordingProvider::Claude, &self.root, false)?;
+                Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
+            }
+            "lint_ai_status" => {
+                if let Some(name) = unknown_argument(&arguments, &[]) {
+                    return Ok(error_response(
+                        id,
+                        -32602,
+                        &format!("unknown argument: {name}"),
+                    ));
+                }
+                let memory_on = lint_ai_enabled(RecordingProvider::Claude, &self.root)?;
+                let recording_on = recording_state(RecordingProvider::Claude, &self.root)?
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let state = json!({
+                    "provider": "claude",
+                    "enabled": memory_on,
+                    "recording_enabled": recording_on,
+                    "display": format!(
+                        "Lint-AI:{} | Record:{}",
+                        if memory_on { "ON" } else { "OFF" },
+                        if recording_on { "ON" } else { "OFF" }
+                    )
+                });
+                Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
+            }
+            "record_session" => {
+                if let Some(name) = unknown_argument(&arguments, &["action"]) {
+                    return Ok(error_response(
+                        id,
+                        -32602,
+                        &format!("unknown record_session argument: {name}"),
+                    ));
+                }
+                let action = arguments
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or("status");
+                let state = match action {
+                    "start" => set_recording_state(RecordingProvider::Claude, &self.root, true)?,
+                    "stop" => set_recording_state(RecordingProvider::Claude, &self.root, false)?,
+                    "status" => recording_state(RecordingProvider::Claude, &self.root)?,
+                    _ => {
+                        return Ok(error_response(
+                            id,
+                            -32602,
+                            "action must be start, stop, or status",
+                        ))
+                    }
+                };
+                Ok(JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(json!({
+                        "content": [{"type": "text", "text": serde_json::to_string_pretty(&state)?}]
+                    })),
+                    error: None,
+                })
+            }
             "info" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
@@ -445,6 +587,32 @@ impl ClaudeMcp {
                     "additionalProperties": false
                 }),
             },
+            ToolDefinition {
+                name: "record_session".to_string(),
+                description: "Start, stop, or inspect opt-in local session recording. Recording is capture-only and does not inject memory.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["start", "stop", "status"], "default": "status"}
+                    },
+                    "additionalProperties": false
+                }),
+            },
+            ToolDefinition {
+                name: "enable_lint_ai".to_string(),
+                description: "Enable Lint-AI memory retrieval and capture for future hook events. This also turns on session recording by default; use record_session stop to override recording independently.".to_string(),
+                input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+            },
+            ToolDefinition {
+                name: "disable_lint_ai".to_string(),
+                description: "Disable Lint-AI memory retrieval and capture for future hook events. Session recording remains unchanged and can be controlled with record_session.".to_string(),
+                input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+            },
+            ToolDefinition {
+                name: "lint_ai_status".to_string(),
+                description: "Report whether Lint-AI memory behavior is enabled for this project.".to_string(),
+                input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
+            },
         ]
     }
 }
@@ -476,6 +644,15 @@ fn error_response(id: Option<Value>, code: i64, message: &str) -> JsonRpcRespons
             code,
             message: message.to_string(),
         }),
+    }
+}
+
+fn text_response(id: Option<Value>, text: &str) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0",
+        id,
+        result: Some(json!({"content": [{"type": "text", "text": text}]})),
+        error: None,
     }
 }
 
@@ -593,6 +770,21 @@ mod tests {
         }
     }
 
+    fn call_tool(mcp: &ClaudeMcp, name: &str, arguments: Value) -> Value {
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(1)),
+                method: "tools/call".to_string(),
+                params: Some(json!({"name": name, "arguments": arguments})),
+            })
+            .unwrap();
+        let text = response.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        serde_json::from_str(&text).unwrap()
+    }
+
     #[test]
     fn install_user_config_merges_existing_servers() {
         let config_path = temp_path("claude-config");
@@ -617,7 +809,10 @@ mod tests {
             parsed.mcp_servers["lint-ai"]["env"]["KEEP"].as_str(),
             Some("yes")
         );
-        assert_eq!(parsed.mcp_servers["lint-ai"]["command"].as_str(), Some("lint-ai"));
+        assert_eq!(
+            parsed.mcp_servers["lint-ai"]["command"].as_str(),
+            Some(env::current_exe().unwrap().to_string_lossy().as_ref())
+        );
         assert_eq!(
             parsed.mcp_servers["lint-ai"]["args"]
                 .as_array()
@@ -653,6 +848,11 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("--claude-code-hook stop"));
+        assert_eq!(settings["statusLine"]["type"], "command");
+        assert!(settings["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--claude-code-statusline"));
         assert_eq!(
             settings["hooks"]["UserPromptExpansion"]
                 .as_array()
@@ -664,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_search_and_info() {
+    fn tools_list_exposes_search_info_and_recording() {
         let root = temp_dir("mcp-tools");
         let mcp = test_mcp(root.clone(), vec![]);
         let response = mcp
@@ -681,7 +881,67 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["search".to_string(), "info".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "search".to_string(),
+                "info".to_string(),
+                "record_session".to_string(),
+                "enable_lint_ai".to_string(),
+                "disable_lint_ai".to_string(),
+                "lint_ai_status".to_string()
+            ]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn control_tools_cover_recording_and_memory_matrix() {
+        let root = temp_dir("control-matrix");
+        let mcp = test_mcp(root.clone(), vec![]);
+
+        assert_eq!(
+            call_tool(&mcp, "record_session", json!({"action": "status"}))["enabled"],
+            false
+        );
+        assert_eq!(
+            call_tool(&mcp, "enable_lint_ai", json!({}))["enabled"],
+            true
+        );
+        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["recording_enabled"], true);
+        assert_eq!(status["display"], "Lint-AI:ON | Record:ON");
+        assert_eq!(
+            call_tool(&mcp, "record_session", json!({"action": "stop"}))["enabled"],
+            false
+        );
+        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["recording_enabled"], false);
+        assert_eq!(status["display"], "Lint-AI:ON | Record:OFF");
+        assert_eq!(
+            call_tool(&mcp, "disable_lint_ai", json!({}))["enabled"],
+            false
+        );
+        assert_eq!(
+            call_tool(&mcp, "record_session", json!({"action": "start"}))["enabled"],
+            true
+        );
+        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        assert_eq!(status["enabled"], false);
+        assert_eq!(status["recording_enabled"], true);
+        assert_eq!(status["display"], "Lint-AI:OFF | Record:ON");
+        assert_eq!(
+            call_tool(&mcp, "enable_lint_ai", json!({}))["enabled"],
+            true
+        );
+        assert_eq!(
+            call_tool(&mcp, "record_session", json!({"action": "stop"}))["enabled"],
+            false
+        );
+        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        assert_eq!(status["display"], "Lint-AI:ON | Record:OFF");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -809,5 +1069,4 @@ mod tests {
         assert_eq!(payload["results"][0]["doc_id"], "memory-1");
         fs::remove_dir_all(root).unwrap();
     }
-
 }

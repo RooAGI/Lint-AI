@@ -21,14 +21,15 @@ class ScenarioScore:
 
 
 def _match_fact_ids(facts: list[dict[str, Any]], text: str) -> list[str]:
-    text_lower = text.lower()
+    # Strip Markdown code backticks so patterns like "use IndexStore" match "uses `IndexStore`"
+    text_lower = text.lower().replace("`", "")
     matched: list[str] = []
     for fact in facts:
         fact_id = str(fact.get("id", ""))
         match_any = fact.get("match_any", [])
         if not fact_id or not isinstance(match_any, list):
             continue
-        if any(str(pattern).lower() in text_lower for pattern in match_any):
+        if any(str(pattern).lower().replace("`", "") in text_lower for pattern in match_any):
             matched.append(fact_id)
     return matched
 

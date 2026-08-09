@@ -21,15 +21,25 @@ pub enum GraphLevel {
     Entity,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SessionProvider {
+    Claude,
+    Codex,
+}
+
 #[cfg(feature = "claude-code")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ClaudeCodeHook {
     SessionStart,
     UserPromptSubmit,
     UserPromptExpansion,
+    PreToolUse,
+    PostToolUse,
     PreCompact,
     Stop,
     SessionEnd,
+    SubagentStart,
+    SubagentStop,
 }
 
 #[cfg(feature = "codex")]
@@ -139,6 +149,9 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_serve: bool,
+    #[arg(long, hide = true)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_statusline: bool,
     #[arg(long)]
     pub claude_code_verify_mcp: bool,
     #[arg(long, value_enum)]
@@ -156,6 +169,9 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "codex")]
     pub codex_serve: bool,
+    #[arg(long, hide = true)]
+    #[cfg(feature = "codex")]
+    pub codex_statusline: bool,
     #[arg(long)]
     pub codex_verify_mcp: bool,
     #[arg(long, value_enum)]
@@ -169,6 +185,18 @@ pub struct Args {
     pub codex_settings: Option<String>,
     #[arg(long)]
     pub inspect_index: Option<String>,
+    #[arg(long)]
+    pub promote_session: Option<String>,
+    #[arg(long)]
+    pub replay_session: Option<String>,
+    #[arg(long)]
+    pub replay_enable_lint_ai: bool,
+    #[arg(long, conflicts_with = "replay_enable_lint_ai")]
+    pub replay_disable_lint_ai: bool,
+    #[arg(long, value_enum, default_value = "claude")]
+    pub session_provider: SessionProvider,
+    #[arg(long)]
+    pub session_root: Option<String>,
     #[arg(long, value_enum, default_value = "summary")]
     pub inspect_view: IndexInspectView,
     #[arg(long, default_value_t = 2_000_000)]

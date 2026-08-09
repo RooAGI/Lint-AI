@@ -104,7 +104,11 @@ mod tests {
     #[test]
     fn reads_content_length_requests() {
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
-        let input = format!("Content-Length: {}\r\n\r\n{}", body.len(), String::from_utf8_lossy(body));
+        let input = format!(
+            "Content-Length: {}\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        );
         let (_, line_framed) = read_request(&mut Cursor::new(input)).unwrap().unwrap();
         assert!(!line_framed);
     }

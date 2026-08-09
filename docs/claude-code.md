@@ -57,6 +57,74 @@ exact, ancestor, diverged, or unknown revision status.
 Retrieval injects at most one preferred document per session and uses bounded
 query-relevant excerpts instead of complete records.
 
+## Runtime controls and session recording
+
+The MCP server exposes independent controls for memory behavior and recording:
+
+| Tool | Purpose |
+|---|---|
+| `record_session` | Start, stop, or inspect local capture-only recording |
+| `enable_lint_ai` | Enable memory retrieval/capture and recording by default |
+| `disable_lint_ai` | Disable Lint-AI memory behavior while preserving recording state |
+| `lint_ai_status` | Return `Lint-AI:ON/OFF` and `Record:ON/OFF` |
+
+Call `mcp__lint-ai__record_session` from Claude Code with one of:
+
+```json
+{"action":"start"}
+{"action":"stop"}
+{"action":"status"}
+```
+
+Recording is project- and provider-scoped, independent from memory injection,
+and does not automatically promote a session into durable memory. Claude's
+installed status line displays the same state when no user status line already
+exists:
+
+```text
+Lint-AI:ON | Record:ON
+```
+
+## Replay and A/B comparison
+
+Replay a recorded Claude session with memory disabled or enabled:
+
+```bash
+lint-ai --replay-session <session-id> \
+  --session-provider claude \
+  --replay-disable-lint-ai
+
+lint-ai --replay-session <session-id> \
+  --session-provider claude \
+  --replay-enable-lint-ai
+```
+
+Replay always creates a new recorded `replay-*` session. Claude print mode
+runs each recorded prompt as a fresh non-interactive process because Claude
+does not expose a portable resume API. The baseline archive remains unchanged.
+
+Generate a report from a session archive, or compare baseline and replay:
+
+```bash
+python3 metrics/generate_session_metric_report.py \
+  --session .lint-ai/claude-sessions/<session-id> \
+  --compare-session .lint-ai/claude-sessions/<replay-id> \
+  --output metrics/reports/claude-comparison.json
+```
+
+Reports separate quality from efficiency and include task status, token usage
+when Claude exposes it, duration, time to first response, hook latency,
+recording completeness, memory events, and baseline/replay deltas.
+
+## Performance expectations
+
+The Claude integration benchmark measures task success, retrieved-fact
+accuracy, parent and all-model token usage, end-to-end latency, hook latency,
+MCP synchronization, context bytes, and repeated exploration. Results are
+specific to the provider/model/repository/revision under test. See [Claude Code
+Performance Test Design](claude-code-performance-tests.md) for the controlled
+A/B protocol and measured run artifacts.
+
 ## Inspect Memory
 
 Inspect the persisted store summary:

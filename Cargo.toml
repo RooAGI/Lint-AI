@@ -46,6 +46,3 @@ heuristic-query-semantics = []
 claude-code = []
 codex = []
 python = ["dep:pyo3"]
-
-[dev-dependencies]
-lru = "0.16.3"

@@ -13,6 +13,18 @@ pub struct ClaudeHookInput {
     #[serde(default)]
     pub prompt: Option<String>,
     #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_input: Option<Value>,
+    #[serde(default)]
+    pub tool_response: Option<Value>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    #[serde(default)]
     pub expansion_type: Option<String>,
     #[serde(default)]
     pub command_name: Option<String>,
@@ -94,5 +106,41 @@ mod tests {
         }))
         .unwrap();
         assert!(input.cwd.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn parses_post_tool_use_fields() {
+        let input: ClaudeHookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "cwd": "/tmp",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo test"},
+            "tool_response": {"output": "test result: ok"},
+            "turn_id": "turn-42"
+        }))
+        .unwrap();
+
+        assert_eq!(input.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(input.turn_id.as_deref(), Some("turn-42"));
+        assert!(input.tool_input.is_some());
+        assert!(input.tool_response.is_some());
+    }
+
+    #[test]
+    fn parses_subagent_fields() {
+        let input: ClaudeHookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "cwd": "/tmp",
+            "hook_event_name": "SubagentStart",
+            "agent_id": "agent-7",
+            "agent_type": "claude",
+            "prompt": "review the auth module"
+        }))
+        .unwrap();
+
+        assert_eq!(input.agent_id.as_deref(), Some("agent-7"));
+        assert_eq!(input.agent_type.as_deref(), Some("claude"));
+        assert_eq!(input.prompt.as_deref(), Some("review the auth module"));
     }
 }

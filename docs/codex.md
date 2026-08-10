@@ -25,6 +25,8 @@ From the repository root:
 By default this should:
 
 - merge a `mcp_servers.lint-ai` entry into `~/.codex/config.toml`
+- enable Codex's stable `[features].hooks = true` gate while preserving other
+  feature flags
 - merge Lint-AI commands into `~/.codex/hooks.json` for the supported Codex
   lifecycle events
 - preserve unrelated MCP servers, hooks, and settings
@@ -42,6 +44,13 @@ Codex project memory should be persisted under:
 ```text
 <project>/.lint-ai/codex-memory/
 ```
+
+Hook execution is fail-open: recording, indexing, or retrieval failures are
+reported diagnostically and do not block Codex from continuing its session.
+
+After installation, restart Codex Desktop so its app-server reloads
+`config.toml` and `hooks.json`. Desktop versions that enforce hook trust may
+also require approving the installed commands before they become runnable.
 
 `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`,
 `PermissionRequest`, `PostToolUse`, and `SubagentStart` retrieve context.

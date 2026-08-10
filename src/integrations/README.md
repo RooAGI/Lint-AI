@@ -175,6 +175,7 @@ implementation and can be queried through the same MCP tool contract.
 Both integrations expose the same MCP control surface:
 
 ```text
+list_memories         { limit: 1..100 }
 record_session       { action: start | stop | status }
 enable_lint_ai       {}
 disable_lint_ai      {}

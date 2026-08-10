@@ -95,9 +95,9 @@ See [docs/quickstart.md](docs/quickstart.md) for the shortest path to build, run
 
 ## Claude Code and Codex integrations
 
-Lint-AI provides provider-specific integrations for Claude Code and Codex. Each
+Lint-AI provides provider-specific integrations for Claude Code, Codex, and Gemini CLI. Each
 integration is opt-in at build time and combines lifecycle hooks with a
-project-scoped MCP server:
+project-scoped memory layer:
 
 | Feature | Claude Code | Codex |
 |---|---:|---:|
@@ -110,6 +110,27 @@ project-scoped MCP server:
 | Session status reporting | Native status line plus MCP | MCP plus terminal status line |
 | Replay with Lint-AI enabled or disabled | Yes | Yes |
 | Session import into provider memory | Yes | Yes |
+
+Gemini CLI uses the opt-in `gemini-cli` feature and its documented JSON hooks:
+
+```bash
+cargo build --release --features gemini-cli
+./lint-ai --gemini-cli-install /path/to/project
+```
+
+Gemini records hook events, injects project memory, and exposes the shared MCP
+tools through `SessionStart`, `BeforeAgent`, model, tool, compression, and
+session-end events. See [docs/gemini-cli.md](docs/gemini-cli.md) for details.
+
+Antigravity CLI (`agy`) uses the opt-in `agy` feature and the same
+Gemini-compatible MCP and lifecycle-hook protocol:
+
+```bash
+cargo build --release --features agy
+./lint-ai --agy-install /path/to/project
+```
+
+See [docs/agy.md](docs/agy.md) for configuration paths and session recording.
 
 Build and install both integrations:
 
@@ -130,6 +151,7 @@ The MCP controls are available inside either client:
 
 ```text
 mcp__lint-ai__record_session       {"action":"start|stop|status"}
+mcp__lint-ai__list_memories        {"limit":20}
 mcp__lint-ai__enable_lint_ai       {}
 mcp__lint-ai__disable_lint_ai      {}
 mcp__lint-ai__lint_ai_status        {}
@@ -184,6 +206,7 @@ measure agent search-selection behavior.
 
 More detail: [Claude Code integration](docs/claude-code.md), [Codex
 integration](docs/codex.md), [shared integration architecture](src/integrations/README.md),
+and the [integration test strategy](docs/integration-test-strategy.md).
 and [session metrics](metrics/README.md).
 
 ## How It Works

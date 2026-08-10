@@ -10,14 +10,21 @@ runner can support the local Codex binary or a wrapper script.
 from __future__ import annotations
 
 import argparse
+import errno
+import fcntl
 import importlib.util
 import hashlib
 import json
 import os
+import pty
+import select
+import signal
 import shutil
 import subprocess
+import termios
 import tempfile
 import time
+import re
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -260,6 +267,115 @@ def run_command(
     )
 
 
+def run_pty_command(
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    stdin_text: str,
+    timeout_seconds: int,
+    output_dir: Path,
+    phase: str,
+) -> PhaseResult:
+    """Run an interactive CLI through a pseudo-terminal.
+
+    AGY only emits its lifecycle hooks from the interactive execution loop.
+    The prompt is followed by EOT so one benchmark phase remains bounded and
+    can still be launched as a fresh conversation or resumed by its wrapper.
+    """
+    stdout_path = output_dir / f"{phase}.stdout.log"
+    stderr_path = output_dir / f"{phase}.stderr.log"
+    started = time.monotonic()
+    master, slave = pty.openpty()
+    chunks: list[bytes] = []
+    timed_out = False
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=True,
+            preexec_fn=lambda: fcntl.ioctl(slave, termios.TIOCSCTTY, 0),
+        )
+        os.close(slave)
+        os.write(master, stdin_text.encode("utf-8"))
+        if not stdin_text.endswith("\n"):
+            os.write(master, b"\n")
+        # AGY enters its interactive prompt asynchronously. Sending EOT before
+        # that transition is consumed as part of the initial prompt instead of
+        # closing the phase.
+        time.sleep(2.0)
+        os.write(master, b"\x04")
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                process.kill()
+                break
+            ready, _, _ = select.select([master], [], [], min(0.25, remaining))
+            if ready:
+                try:
+                    chunks.append(os.read(master, 65536))
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        raise
+                    break
+            if process.poll() is not None and not ready:
+                break
+            # Some AGY versions keep the interactive shell alive after EOT.
+            # Once the response has had time to flush, interrupt only that
+            # shell; the captured transcript remains valid for scoring.
+            if process.poll() is None and time.monotonic() - started > min(20.0, timeout_seconds):
+                try:
+                    os.killpg(process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except (PermissionError, ProcessLookupError):
+                        pass
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=3)
+                break
+        returncode = process.wait(timeout=5) if process.poll() is None else process.returncode
+    finally:
+        try:
+            os.close(master)
+        except OSError:
+            pass
+        if 'slave' in locals():
+            try:
+                os.close(slave)
+            except OSError:
+                pass
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    output = b"".join(chunks).decode("utf-8", errors="replace")
+    stdout_path.write_text(output, encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    if timed_out:
+        returncode = 124
+    return PhaseResult(
+        phase=phase,
+        command=command,
+        returncode=returncode,
+        stdout_path=str(stdout_path),
+        stderr_path=str(stderr_path),
+        last_path=str(output_dir / f"{phase}.last"),
+        metrics_path=None,
+        hook_timings_path=str(output_dir / f"{phase}.hook-timings.jsonl"),
+        elapsed_ms=elapsed_ms,
+    )
+
+
 def run_validators(
     validators: list[dict[str, Any]], cwd: Path, env: dict[str, str], output_dir: Path
 ) -> list[ValidatorResult]:
@@ -343,6 +459,8 @@ def execute_scenario(
     results_root: Path,
     timeout_scale: float,
     metrics_mode: str,
+    execution_mode: str,
+    metrics_root: Path | None,
 ) -> list[ScenarioRunRecord]:
     repo_root = canonical_repo_root(repo_root)
     revision = resolve_revision(repo_root, str(scenario["repository"]["revision"]))
@@ -385,7 +503,8 @@ def execute_scenario(
                 f"scenario {scenario['id']} repetition {repetition}: running setup "
                 f"phase with timeout={timeout_seconds}s"
             )
-            setup = run_command(
+            phase_runner = run_pty_command if execution_mode == "pty" else run_command
+            setup = phase_runner(
                 agent_command,
                 cwd=worktree_path,
                 env=phase_env,
@@ -404,6 +523,14 @@ def execute_scenario(
             if setup.returncode != 0:
                 invalid_reason = f"setup command exited {setup.returncode}"
             else:
+                if execution_mode == "pty":
+                    setup_output = Path(setup.stdout_path).read_text(encoding="utf-8", errors="replace")
+                    conversation_ids = re.findall(
+                        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}",
+                        setup_output,
+                    )
+                    if conversation_ids:
+                        (run_dir / "conversation.id").write_text(conversation_ids[-1] + "\n", encoding="utf-8")
                 phase_env = build_phase_env(
                     base_env,
                     benchmark_root=benchmark_root,
@@ -419,7 +546,7 @@ def execute_scenario(
                     f"scenario {scenario['id']} repetition {repetition}: running "
                     f"continuation phase with timeout={timeout_seconds}s"
                 )
-                continuation = run_command(
+                continuation = phase_runner(
                     agent_command,
                     cwd=worktree_path,
                     env=phase_env,
@@ -435,19 +562,29 @@ def execute_scenario(
                 if continuation.returncode != 0:
                     invalid_reason = f"continuation command exited {continuation.returncode}"
                 else:
-                    if metrics_mode in ("codex", "claude"):
+                    if metrics_mode in ("codex", "claude", "agy"):
                         parser = load_peer_module(
                             "parse_run.py",
                             f"{metrics_mode}_parse_run",
-                            benchmark_root / "src",
+                            (metrics_root or benchmark_root) / "src",
                         )
                         if metrics_mode == "codex":
                             metrics = parser.parse_codex_exec_log(Path(continuation.stdout_path))
-                        else:
+                        elif metrics_mode == "claude":
                             metrics = parser.parse_run(
                                 Path(continuation.stdout_path),
                                 Path(continuation.stdout_path),
                             )
+                        else:
+                            metrics = parser.parse_agy_output(Path(continuation.stdout_path))
+                        shared_metrics = load_peer_module(
+                            "metrics.py",
+                            "integration_metrics",
+                            Path(__file__).resolve().parents[2] / "integration" / "src",
+                        )
+                        metrics = shared_metrics.canonical_metrics(
+                            metrics, provider=metrics_mode
+                        )
                         metrics_path = run_dir / "continuation.metrics.json"
                         write_json(metrics_path, metrics)
                         continuation = replace(continuation, metrics_path=str(metrics_path))
@@ -576,7 +713,9 @@ def main() -> None:
         help="Scenario id to execute; repeat to select multiple scenarios",
     )
     parser.add_argument("--arm", default="lint-ai")
-    parser.add_argument("--metrics", choices=("codex", "claude", "none"), default="codex")
+    parser.add_argument("--metrics", choices=("codex", "claude", "agy", "none"), default="codex")
+    parser.add_argument("--execution-mode", choices=("pipe", "pty"), default="pipe")
+    parser.add_argument("--metrics-root", type=Path, default=None)
     parser.add_argument("--results-dir", type=Path, default=None)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
     parser.add_argument("--out", type=Path)
@@ -638,6 +777,8 @@ def main() -> None:
                     results_root=results_dir,
                     timeout_scale=args.timeout_scale,
                     metrics_mode=args.metrics,
+                    execution_mode=args.execution_mode,
+                    metrics_root=args.metrics_root,
                 )
             )
         payload["execution"] = {

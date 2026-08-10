@@ -4,6 +4,7 @@ pub mod hooks;
 use crate::config::normalize_list;
 use crate::graph::{Graph, Tier0Record};
 use crate::integrations::mcp_index;
+use crate::integrations::mcp_tools;
 use crate::integrations::mcp_transport;
 use crate::integrations::mcp_transport::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
@@ -11,7 +12,10 @@ use crate::integrations::mcp_transport::{
 use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::pipeline::IndexStore;
+#[cfg(test)]
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+#[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
@@ -557,6 +561,31 @@ impl ClaudeMcp {
                     error: None,
                 })
             }
+            "list_memories" => {
+                let limit = match mcp_tools::parse_list_memories_limit(&arguments) {
+                    Ok(limit) => limit,
+                    Err(_) => {
+                        return Ok(error_response(id, -32602, "unknown list_memories argument"))
+                    }
+                };
+                let mut store = self.store()?;
+                let store = store.as_mut().expect("MCP store initialized");
+                mcp_index::sync_memory_documents(
+                    &self.root.join(".lint-ai").join("claude-memory"),
+                    &mut *store,
+                )?;
+                Ok(JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id,
+                    result: Some(json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&mcp_tools::list_memories(store, limit))?,
+                        }]
+                    })),
+                    error: None,
+                })
+            }
             _ => Ok(error_response(id, -32602, "unknown tool")),
         }
     }
@@ -587,6 +616,7 @@ impl ClaudeMcp {
                     "additionalProperties": false
                 }),
             },
+            mcp_tools::list_memories_tool_definition(),
             ToolDefinition {
                 name: "record_session".to_string(),
                 description: "Start, stop, or inspect opt-in local session recording. Recording is capture-only and does not inject memory.".to_string(),
@@ -617,6 +647,7 @@ impl ClaudeMcp {
     }
 }
 
+#[cfg(test)]
 fn segmented_store_options() -> PipelineOptions {
     PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
@@ -886,6 +917,7 @@ mod tests {
             vec![
                 "search".to_string(),
                 "info".to_string(),
+                "list_memories".to_string(),
                 "record_session".to_string(),
                 "enable_lint_ai".to_string(),
                 "disable_lint_ai".to_string(),

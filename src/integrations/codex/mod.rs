@@ -4,6 +4,7 @@ pub mod hooks;
 use crate::config::normalize_list;
 use crate::graph::{Graph, Tier0Record};
 use crate::integrations::mcp_index;
+use crate::integrations::mcp_tools;
 use crate::integrations::mcp_transport;
 use crate::integrations::mcp_transport::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
@@ -11,7 +12,10 @@ use crate::integrations::mcp_transport::{
 use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::pipeline::IndexStore;
+#[cfg(test)]
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+#[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
@@ -128,13 +132,18 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         ]),
     );
     mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
+
+    // Codex Desktop and newer Codex CLI builds gate lifecycle hooks behind
+    // the stable `features.hooks` flag. Preserve all existing feature flags
+    // while enabling the hook runtime required by the installed hooks.json.
     let features = table
         .entry("features".to_string())
         .or_insert_with(|| TomlValue::Table(TomlMap::new()));
     let features = features
         .as_table_mut()
         .context("Codex config 'features' must be a table")?;
-    features.insert("mcp_2026_07_28".to_string(), TomlValue::Boolean(true));
+    features.insert("hooks".to_string(), TomlValue::Boolean(true));
+
     write_text_object(&config_path, &toml::to_string_pretty(&config)?)
         .context("failed to write Codex config")?;
     Ok(config_path)
@@ -426,6 +435,30 @@ impl CodexMcp {
                     error: None,
                 })
             }
+            "list_memories" => {
+                if let Some(name) = unknown_argument(&arguments, &["limit"]) {
+                    return Ok(error_response(
+                        id,
+                        -32602,
+                        &format!("unknown list_memories argument: {name}"),
+                    ));
+                }
+                let limit = arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(20)
+                    .clamp(1, 100) as usize;
+                let mut store = self.store()?;
+                let store = store.as_mut().expect("MCP store initialized");
+                mcp_index::sync_memory_documents(
+                    &self.root.join(".lint-ai").join("codex-memory"),
+                    &mut *store,
+                )?;
+                Ok(text_response(
+                    id,
+                    &serde_json::to_string_pretty(&mcp_tools::list_memories(store, limit))?,
+                ))
+            }
             "enable_lint_ai" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
@@ -564,6 +597,7 @@ impl CodexMcp {
                     "additionalProperties": false
                 }),
             },
+            mcp_tools::list_memories_tool_definition(),
             ToolDefinition {
                 name: "record_session".to_string(),
                 description: "Start, stop, or inspect opt-in local session recording. Recording is capture-only and does not inject memory.".to_string(),
@@ -622,6 +656,7 @@ pub fn run_status_line() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn segmented_store_options() -> PipelineOptions {
     PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
@@ -819,7 +854,7 @@ args = ["old"]
             parsed["mcp_servers"]["lint-ai"]["startup_timeout_sec"].as_integer(),
             Some(MCP_STARTUP_TIMEOUT_SECONDS)
         );
-        assert_eq!(parsed["features"]["mcp_2026_07_28"].as_bool(), Some(true));
+        assert_eq!(parsed["features"]["hooks"].as_bool(), Some(true));
         assert_eq!(
             parsed["mcp_servers"]["lint-ai"]["args"]
                 .as_array()
@@ -888,6 +923,7 @@ args = ["old"]
             vec![
                 "search".to_string(),
                 "info".to_string(),
+                "list_memories".to_string(),
                 "record_session".to_string(),
                 "enable_lint_ai".to_string(),
                 "disable_lint_ai".to_string(),

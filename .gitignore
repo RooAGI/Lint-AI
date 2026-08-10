@@ -54,6 +54,8 @@ build.log
 benchmark/*_results.json
 benchmark/codex_code/results/*
 !benchmark/codex_code/results/.gitkeep
+benchmark/agy/results/*
+!benchmark/agy/results/.gitkeep
 benchmark/data/longmemeval_s_raw.json
 benchmark/data/lintai_longmemeval_scoped_results*.json
 benchmark/data/python_lintai_longmemeval_scoped_results*.json

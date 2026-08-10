@@ -16,11 +16,14 @@ const MAX_STRING_BYTES: usize = 8 * 1024;
 const MAX_ARRAY_ITEMS: usize = 128;
 const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 const REPLAY_SESSION_ENV: &str = "LINT_AI_REPLAY_SESSION_ID";
+const INTERRUPTED_SESSION_STALE_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Copy)]
 pub enum RecordingProvider {
     Claude,
     Codex,
+    Gemini,
+    Agy,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -105,7 +108,17 @@ pub fn replay_recorded_session(
         archive_root.as_path(),
         &replay_session_id,
     )?;
-    let execution = command_result?;
+    let execution = match command_result {
+        Ok(execution) => execution,
+        Err(error) => {
+            let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+            manifest["ended_at"] = Value::String(timestamp());
+            manifest["status"] = Value::String("failed".to_string());
+            manifest["recording_error"] = Value::String(error.to_string());
+            write_manifest(&manifest_path, &manifest)?;
+            return Err(error);
+        }
+    };
     let recorded_event_count = provider_event_count(&replay_dir.join("events.jsonl"))?;
     let recording_complete = recorded_event_count > 0;
 
@@ -126,7 +139,7 @@ pub fn replay_recorded_session(
     let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
     manifest["ended_at"] = Value::String(timestamp());
     manifest["status"] = Value::String(if execution.success && recording_complete {
-        "complete".to_string()
+        "replayed".to_string()
     } else {
         "failed".to_string()
     });
@@ -157,11 +170,14 @@ struct ReplayWorkspace {
 
 impl ReplayWorkspace {
     fn create(source: &Path) -> Result<Self> {
-        let path = std::env::temp_dir().join(format!(
-            "lint-ai-replay-{}-{}",
-            std::process::id(),
-            timestamp_compact()
-        ));
+        let path = source
+            .join(".lint-ai")
+            .join("replay-workspaces")
+            .join(format!(
+                "replay-{}-{}",
+                std::process::id(),
+                timestamp_compact()
+            ));
         fs::create_dir_all(&path)?;
         copy_replay_tree(source, &path)?;
         Ok(Self { path })
@@ -213,7 +229,7 @@ fn sync_replay_archive(
     let source = session_root(provider, workspace_root).join(safe_component(session_id));
     let destination = archive_root.join(safe_component(session_id));
     fs::create_dir_all(&destination)?;
-    for name in ["recording.json", "manifest.json", "events.jsonl"] {
+    for name in ["recording.json", "events.jsonl"] {
         let source_path = source.join(name);
         if source_path.is_file() {
             fs::copy(source_path, destination.join(name))?;
@@ -323,6 +339,16 @@ fn run_provider_process(
                 })?;
                 let mut command = Command::new("codex");
                 command.args(["exec", "resume", session_id, prompt]);
+                command
+            }
+            RecordingProvider::Gemini => {
+                let mut command = Command::new("gemini");
+                command.args(["-p", prompt, "--output-format", "stream-json"]);
+                command
+            }
+            RecordingProvider::Agy => {
+                let mut command = Command::new("agy");
+                command.args(["-p", prompt, "--output-format", "stream-json"]);
                 command
             }
         };
@@ -581,10 +607,12 @@ fn memory_root(provider: RecordingProvider, project_root: &Path) -> PathBuf {
 }
 
 impl RecordingProvider {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini-cli",
+            Self::Agy => "agy",
         }
     }
 }
@@ -602,6 +630,10 @@ pub fn record_event(
     let session_dir = session_root.join(session_key);
     fs::create_dir_all(&session_dir)?;
     let lock = acquire_lock(&session_dir.join(".lock"))?;
+
+    if event_name.eq_ignore_ascii_case("SessionStart") {
+        mark_interrupted_sessions(session_root, project_root, session_id)?;
+    }
 
     let events_path = session_dir.join("events.jsonl");
     let manifest_path = session_dir.join("manifest.json");
@@ -670,17 +702,76 @@ pub fn record_event(
     file.write_all(b"\n")?;
     file.flush()?;
 
-    let terminal = event_name.eq_ignore_ascii_case("SessionEnd")
-        || event_name.eq_ignore_ascii_case("PostCompact");
+    let terminal = event_name.eq_ignore_ascii_case("SessionEnd");
     let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
     manifest["event_count"] = Value::from(sequence);
     manifest["last_event"] = Value::String(event_name.to_string());
+    manifest["last_event_at"] = Value::String(timestamp());
     if terminal {
         manifest["ended_at"] = Value::String(timestamp());
-        manifest["status"] = Value::String("complete".to_string());
+        manifest["status"] = Value::String("completed".to_string());
     }
     write_manifest(&manifest_path, &manifest)?;
     drop(lock);
+    Ok(())
+}
+
+fn mark_interrupted_sessions(
+    session_root: &Path,
+    project_root: &Path,
+    current_session_id: &str,
+) -> Result<()> {
+    let current_session_key = safe_component(current_session_id);
+    let entries = match fs::read_dir(session_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir()
+            || path.file_name().and_then(|name| name.to_str()) == Some(current_session_key.as_str())
+        {
+            continue;
+        }
+        let manifest_path = path.join("manifest.json");
+        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(mut manifest) = serde_json::from_str::<Value>(&contents) else {
+            continue;
+        };
+        let same_project = manifest
+            .get("project_root")
+            .and_then(Value::as_str)
+            .map(|value| value == project_root.to_string_lossy())
+            .unwrap_or(false);
+        let last_activity = manifest
+            .get("last_event_at")
+            .or_else(|| manifest.get("started_at"))
+            .and_then(Value::as_str)
+            .and_then(timestamp_seconds);
+        let stale = last_activity
+            .map(|seconds| {
+                current_timestamp_seconds().saturating_sub(seconds)
+                    >= INTERRUPTED_SESSION_STALE_SECONDS
+            })
+            .unwrap_or(false);
+        if !same_project
+            || manifest.get("status").and_then(Value::as_str) != Some("active")
+            || !stale
+        {
+            continue;
+        }
+        let ended_at = timestamp();
+        manifest["status"] = Value::String("interrupted".to_string());
+        manifest["ended_at"] = Value::String(ended_at.clone());
+        manifest["interrupted_at"] = Value::String(ended_at);
+        manifest["status_reason"] = Value::String(
+            "a later session started before this session emitted SessionEnd".to_string(),
+        );
+        write_manifest(&manifest_path, &manifest)?;
+    }
     Ok(())
 }
 
@@ -997,11 +1088,18 @@ fn acquire_lock(path: &Path) -> Result<RecordingLock> {
 }
 
 fn timestamp() -> String {
-    let seconds = SystemTime::now()
+    format!("unix:{}", current_timestamp_seconds())
+}
+
+fn current_timestamp_seconds() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format!("unix:{seconds}")
+        .unwrap_or_default()
+}
+
+fn timestamp_seconds(value: &str) -> Option<u64> {
+    value.strip_prefix("unix:")?.parse().ok()
 }
 
 fn timestamp_compact() -> u128 {
@@ -1067,6 +1165,122 @@ mod tests {
     }
 
     #[test]
+    fn tracks_completed_and_interrupted_session_statuses() {
+        let root = temp_root("session-status");
+        let project = Path::new("/tmp/project");
+        record_event(
+            RecordingProvider::Codex,
+            &root,
+            project,
+            "active-session",
+            "SessionStart",
+            serde_json::json!({}),
+        )
+        .unwrap();
+        record_event(
+            RecordingProvider::Codex,
+            &root,
+            project,
+            "new-session",
+            "SessionStart",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+        let still_active: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("active-session/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(still_active["status"], "active");
+
+        let stale_manifest_path = root.join("active-session/manifest.json");
+        let mut stale_manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&stale_manifest_path).unwrap()).unwrap();
+        stale_manifest["last_event_at"] = Value::String("unix:0".to_string());
+        write_manifest(&stale_manifest_path, &stale_manifest).unwrap();
+        record_event(
+            RecordingProvider::Codex,
+            &root,
+            project,
+            "recovery-session",
+            "SessionStart",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+        let interrupted: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("active-session/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(interrupted["status"], "interrupted");
+        assert!(interrupted["interrupted_at"].is_string());
+
+        record_event(
+            RecordingProvider::Codex,
+            &root,
+            project,
+            "new-session",
+            "SessionEnd",
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let completed: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("new-session/manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(completed["status"], "completed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replay_workspace_stays_under_the_project_root() {
+        let root = temp_root("replay-workspace");
+        let workspace = ReplayWorkspace::create(&root).unwrap();
+        assert!(workspace
+            .path()
+            .starts_with(root.join(".lint-ai/replay-workspaces")));
+        let path = workspace.path().to_path_buf();
+        drop(workspace);
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sync_replay_archive_preserves_replay_manifest() {
+        let workspace = temp_root("replay-sync-workspace");
+        let archive = temp_root("replay-sync-archive");
+        let session_id = "replay-1";
+        let source = session_root(RecordingProvider::Codex, &workspace).join(session_id);
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("events.jsonl"),
+            "{\"kind\":\"session_start\"}\n",
+        )
+        .unwrap();
+        fs::write(source.join("recording.json"), "{\"enabled\":true}\n").unwrap();
+        fs::write(source.join("manifest.json"), "{\"status\":\"completed\"}\n").unwrap();
+
+        let destination = archive.join(session_id);
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(
+            destination.join("manifest.json"),
+            "{\"run_type\":\"replay\",\"replay_of_session_id\":\"baseline\"}\n",
+        )
+        .unwrap();
+
+        sync_replay_archive(RecordingProvider::Codex, &workspace, &archive, session_id).unwrap();
+        let manifest: Value =
+            serde_json::from_str(&fs::read_to_string(destination.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["run_type"], "replay");
+        assert_eq!(manifest["replay_of_session_id"], "baseline");
+        assert!(destination.join("events.jsonl").is_file());
+        assert!(destination.join("recording.json").is_file());
+        fs::remove_dir_all(workspace).unwrap();
+        fs::remove_dir_all(archive).unwrap();
+    }
+
+    #[test]
     fn records_latest_transcript_usage_only_when_recording_is_enabled() {
         let root = temp_root("transcript-usage");
         let transcript = root.join("provider.jsonl");
@@ -1110,8 +1324,13 @@ mod tests {
     }
 
     #[test]
-    fn recording_and_memory_controls_round_trip_for_both_providers() {
-        for provider in [RecordingProvider::Claude, RecordingProvider::Codex] {
+    fn recording_and_memory_controls_round_trip_for_each_provider() {
+        for provider in [
+            RecordingProvider::Claude,
+            RecordingProvider::Codex,
+            RecordingProvider::Gemini,
+            RecordingProvider::Agy,
+        ] {
             let root = temp_root(provider.as_str());
             assert!(!recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
@@ -1137,7 +1356,12 @@ mod tests {
 
     #[test]
     fn recording_is_independent_from_memory_state() {
-        for provider in [RecordingProvider::Claude, RecordingProvider::Codex] {
+        for provider in [
+            RecordingProvider::Claude,
+            RecordingProvider::Codex,
+            RecordingProvider::Gemini,
+            RecordingProvider::Agy,
+        ] {
             let root = temp_root(provider.as_str());
             set_lint_ai_state(provider, &root, false).unwrap();
             record_event_if_enabled(

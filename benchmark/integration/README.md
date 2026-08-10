@@ -11,9 +11,45 @@ it is not an academic corpus benchmark. It measures the complete client path:
 - memory recall and forbidden-memory leakage; and
 - client-visible interaction latency.
 
-The suite currently supports Claude Code and Codex. Each client has a
+The suite currently supports Claude Code, Codex, and Antigravity CLI (AGY). Each client has a
 provider-specific launcher and scenario directory, while both use the shared
 orchestration in `benchmark/codex_code/src/runner.py`.
+
+## Shared metric contract
+
+Every setup and continuation phase is parsed into the same privacy-preserving
+record before report aggregation. The contract is:
+
+```json
+{
+  "schema_version": 1,
+  "provider": "claude|codex|agy",
+  "parent_tokens": {
+    "input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 0,
+    "total": 0
+  },
+  "all_model_tokens": { "...": "same token fields" },
+  "subagent_tokens": null,
+  "tool_calls": 0,
+  "repeated_tool_calls": 0,
+  "retrieved_documents": 0,
+  "hook_events": 0,
+  "hook_latency_ms": 0
+}
+```
+
+`input_tokens` includes uncached and cached input only in the report's
+provider-normalized accounting; the raw cache components remain available for
+inspection. `total` is populated only when all required components are known.
+The report's primary comparison values are continuation-turn input tokens,
+cached input tokens, output tokens, tool calls, recall, and continuation
+latency. Setup and validator time are diagnostics, not substitutes for token
+usage. Provider-specific parsers may accept alternate names such as AGY's
+`promptTokenCount`, `candidatesTokenCount`, and `totalTokenCount`, but they must
+leave unavailable telemetry as `null` rather than estimate it.
 
 ## Goals
 
@@ -57,6 +93,9 @@ benchmark/
     src/report.py             Report aggregation and comparisons
     tests/                    Runner, parser, scorer, and report tests
     results/                  Generated Codex reports
+  agy/
+    scripts/run_benchmark.py  AGY launcher
+    src/                      AGY output parser
 ```
 
 Client-specific details and command-line options remain in:

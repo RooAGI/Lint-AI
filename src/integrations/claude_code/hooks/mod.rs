@@ -224,13 +224,17 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<ClaudeHookOutp
     let mut seen = HashSet::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
     let current_branch = git_value(root, &["branch", "--show-current"]);
-    let mut context = String::from(
-        "Relevant Lint-AI memory:\nExact-revision memories are recorded project state. Re-check source only when the task needs details beyond the recorded memory.\n",
-    );
+    let mut context = String::new();
     for result in selected {
         let Some(record) = store.record_by_id(&result.doc_id) else {
             continue;
         };
+        // Assistant-environment memories are operational context, not user
+        // project memory. Keep them searchable for diagnostics, but never
+        // inject them into a live Claude turn.
+        if record.source.starts_with("claude://") || record.source.starts_with("codex://") {
+            continue;
+        }
         let normalized = relevant_excerpt(&record.content, query, &result.matched_terms);
         let normalized = normalized.trim();
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {

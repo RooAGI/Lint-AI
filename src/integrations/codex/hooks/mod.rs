@@ -236,9 +236,7 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<CodexHookOutpu
     let mut seen = HashSet::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
     let current_branch = git_value(root, &["branch", "--show-current"]);
-    let mut context = String::from(
-        "Relevant Lint-AI memory:\nExact-revision memories are recorded project state. Re-check source only when the task needs details beyond the recorded memory.\n",
-    );
+    let mut context = String::new();
     for result in selected {
         let Some(record) = store.record_by_id(&result.doc_id) else {
             continue;

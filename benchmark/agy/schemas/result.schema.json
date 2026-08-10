@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lint-ai.dev/schemas/agy-result.schema.json",
+  "title": "Lint-AI Antigravity CLI integration result",
+  "description": "AGY results use the shared normalized report contract.",
+  "$ref": "../../codex_code/schemas/result.schema.json"
+}

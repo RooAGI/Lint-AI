@@ -25,6 +25,8 @@ pub enum GraphLevel {
 pub enum SessionProvider {
     Claude,
     Codex,
+    Gemini,
+    Agy,
 }
 
 #[cfg(feature = "claude-code")]
@@ -57,6 +59,30 @@ pub enum CodexHook {
     SessionEnd,
     SubagentStart,
     SubagentStop,
+}
+
+#[cfg(feature = "gemini-cli")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum GeminiCliHook {
+    SessionStart,
+    BeforeAgent,
+    AfterAgent,
+    BeforeModel,
+    BeforeToolSelection,
+    BeforeTool,
+    AfterTool,
+    PreCompress,
+    SessionEnd,
+}
+
+#[cfg(feature = "agy")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AgyHook {
+    PreToolUse,
+    PostToolUse,
+    PreInvocation,
+    PostInvocation,
+    Stop,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -183,6 +209,46 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "codex")]
     pub codex_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_serve: bool,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_verify_mcp: bool,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    #[arg(long, value_enum)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_hook: Option<GeminiCliHook>,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_config: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_serve: bool,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_verify_mcp: bool,
+    #[arg(long, value_enum)]
+    #[cfg(feature = "agy")]
+    pub agy_hook: Option<AgyHook>,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_config: Option<String>,
     #[arg(long)]
     pub inspect_index: Option<String>,
     #[arg(long)]

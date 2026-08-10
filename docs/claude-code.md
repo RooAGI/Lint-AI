@@ -45,6 +45,10 @@ Claude session memory is persisted under:
 <project>/.lint-ai/claude-memory/
 ```
 
+Hook execution is fail-open: recording, indexing, or retrieval failures are
+reported diagnostically and do not block Claude Code from continuing its
+session.
+
 `SessionStart`, `UserPromptSubmit`, and `UserPromptExpansion` retrieve context.
 `PreCompact`, `Stop`, and `SessionEnd` capture bounded session memory. A new
 session segment is created lazily by the first capture hook, not by

@@ -44,6 +44,12 @@ default = ["heuristic-query-semantics"]
 heuristic-query-semantics = []
 claude-code = []
 python = ["dep:pyo3"]
+experimental = []
+
+[[bin]]
+name = "segment_scoped_benchmark"
+path = "src/bin/segment_scoped_benchmark.rs"
+required-features = ["experimental"]
 
 [dev-dependencies]
 lru = "0.16.3"

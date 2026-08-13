@@ -137,6 +137,20 @@ cargo run --release --bin haystack_scoped_benchmark -- \
 
 Scoped LongMemEval reporting includes both `recall@k` and `recall_any@k`. The any-hit metric matches the interpretation used by the current LongMemEval-S release notes and README.
 
+If you want segmented MemoryIndex experiment diagnostics, use the separate segmented benchmark. This keeps the existing scoped benchmark behavior unchanged:
+
+```bash
+cargo run --release --features experimental --bin segment_scoped_benchmark -- \
+  --longmemeval benchmark/data/longmemeval_s_raw.json \
+  --question-type multi-session \
+  --segment-compare \
+  --segment-top-n 5 \
+  --segment-router coverage-local \
+  --out benchmark/data/segment_scoped_multi_session_results.json
+```
+
+The segmented benchmark reports the same scoped retrieval metrics plus experimental segment variants, segment-specific enrichment diagnostics, and router-miss failure analysis.
+
 ## Report Metrics
 
 - `recall_at_k`: average recall at each configured K.

@@ -1,6 +1,13 @@
 # Benchmark Suite
 
-This directory holds the retrieval benchmarks for `lint-ai`, including haystack-style corpora and LongMemEval-S runs.
+This directory holds the retrieval benchmarks for `lint-ai`, including
+haystack-style corpora, LongMemEval-S runs, and agent integration performance
+scaffolds.
+
+Benchmark subdirectories:
+
+- `claude_code/`: Claude Code A/B scenarios and parser scaffold
+- `codex_code/`: Codex A/B scenarios and parser scaffold
 
 ## Benchmark Results
 

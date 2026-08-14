@@ -90,13 +90,32 @@ def _context_strings(attachment: dict[str, Any]) -> list[str]:
     return strings
 
 
+def _load_result(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    for line in reversed(text.splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            return event
+    return {}
+
+
 def parse_run(result_path: Path, transcript_path: Path) -> dict[str, Any]:
-    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result = _load_result(result_path)
     parent = _parent_tokens(result)
     all_model = _all_model_tokens(result)
 
     delegations: dict[str, dict[str, Any]] = {}
     tool_calls = 0
+    repeated_tool_calls = 0
+    seen_tool_fingerprints: set[str] = set()
     injected_context_bytes = 0
     retrieved_documents = 0
     exact_revision_memories = 0
@@ -117,6 +136,15 @@ def parse_run(result_path: Path, transcript_path: Path) -> dict[str, Any]:
             if block.get("type") != "tool_use":
                 continue
             tool_calls += 1
+            fingerprint = json.dumps(
+                {"name": block.get("name"), "input": block.get("input")},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if fingerprint in seen_tool_fingerprints:
+                repeated_tool_calls += 1
+            else:
+                seen_tool_fingerprints.add(fingerprint)
             if block.get("name") != "Agent":
                 continue
             tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
@@ -174,12 +202,14 @@ def parse_run(result_path: Path, transcript_path: Path) -> dict[str, Any]:
         "subagent_count": len(delegations),
         "delegations": list(delegations.values()),
         "tool_calls": tool_calls,
+        "repeated_tool_calls": repeated_tool_calls,
         "injected_context_bytes": injected_context_bytes,
         "retrieved_documents": retrieved_documents,
         "exact_revision_memories": exact_revision_memories,
         "hook_events": hook_events,
         "hook_latency_ms": hook_latency_ms,
         "unknown_events": unknown_events,
+        "selected_segments": 0,
     }
 
 

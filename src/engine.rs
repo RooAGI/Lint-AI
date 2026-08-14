@@ -4,11 +4,36 @@ use crate::config::{load_config, normalize_list, Config};
 use crate::filters::is_noise_concept;
 use crate::graph::{normalize_concept, Graph, Tier0Record};
 use crate::index::{DocRecord, MemoryIndex, SectionChunk, TemporalQueryContext, TemporalQueryHint};
+#[cfg(feature = "agy")]
+use crate::integrations::agy::hooks::{run_hook as run_agy_hook, AgyHookKind};
+#[cfg(feature = "agy")]
+use crate::integrations::agy::{
+    install_hook_settings as install_agy_hook_settings,
+    install_user_config as install_agy_user_config, run_server as run_agy_server, AgyServerOptions,
+};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::{
-    install_hook_settings, install_user_config, run_server, ClaudeCodeServerOptions,
+    install_hook_settings, install_memory_skill, install_user_config, run_server, run_status_line,
+    ClaudeCodeServerOptions,
+};
+#[cfg(feature = "codex")]
+use crate::integrations::codex::hooks::{run_hook as run_codex_hook, CodexHookKind};
+#[cfg(feature = "codex")]
+use crate::integrations::codex::{
+    install_hook_settings as install_codex_hook_settings,
+    install_user_config as install_codex_user_config, run_server as run_codex_server,
+    run_status_line as run_codex_status_line, CodexServerOptions,
+};
+#[cfg(feature = "gemini-cli")]
+use crate::integrations::gemini_cli::hooks::{run_hook as run_gemini_hook, GeminiHookKind};
+#[cfg(feature = "gemini-cli")]
+use crate::integrations::gemini_cli::install_hook_settings as install_gemini_hook_settings;
+#[cfg(feature = "gemini-cli")]
+use crate::integrations::gemini_cli::{
+    install_user_config as install_gemini_user_config, run_server as run_gemini_server,
+    GeminiCliServerOptions,
 };
 use crate::pipeline::{
     source_documents_to_tier1_inputs, ChunkStrategy, IndexStore, MemoryIndexLayout,
@@ -2001,17 +2026,165 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
 
+    if args.promote_session.is_some() {
+        #[cfg(any(
+            feature = "claude-code",
+            feature = "codex",
+            feature = "gemini-cli",
+            feature = "agy"
+        ))]
+        {
+            let session_id = args.promote_session.as_deref().expect("checked above");
+            let provider = match args.session_provider {
+                crate::cli::SessionProvider::Claude => {
+                    crate::integrations::session_recording::RecordingProvider::Claude
+                }
+                crate::cli::SessionProvider::Codex => {
+                    crate::integrations::session_recording::RecordingProvider::Codex
+                }
+                crate::cli::SessionProvider::Gemini => {
+                    crate::integrations::session_recording::RecordingProvider::Gemini
+                }
+                crate::cli::SessionProvider::Agy => {
+                    crate::integrations::session_recording::RecordingProvider::Agy
+                }
+            };
+            let report = crate::integrations::session_recording::promote_recorded_session(
+                provider,
+                Path::new(&args.path),
+                args.session_root.as_deref().map(Path::new),
+                session_id,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        #[cfg(not(any(
+            feature = "claude-code",
+            feature = "codex",
+            feature = "gemini-cli",
+            feature = "agy"
+        )))]
+        {
+            anyhow::bail!("session promotion requires the Claude Code or Codex feature");
+        }
+    }
+
+    if args.replay_session.is_some() {
+        #[cfg(any(
+            feature = "claude-code",
+            feature = "codex",
+            feature = "gemini-cli",
+            feature = "agy"
+        ))]
+        {
+            let session_id = args.replay_session.as_deref().expect("checked above");
+            let provider = match args.session_provider {
+                crate::cli::SessionProvider::Claude => {
+                    crate::integrations::session_recording::RecordingProvider::Claude
+                }
+                crate::cli::SessionProvider::Codex => {
+                    crate::integrations::session_recording::RecordingProvider::Codex
+                }
+                crate::cli::SessionProvider::Gemini => {
+                    crate::integrations::session_recording::RecordingProvider::Gemini
+                }
+                crate::cli::SessionProvider::Agy => {
+                    crate::integrations::session_recording::RecordingProvider::Agy
+                }
+            };
+            let report = crate::integrations::session_recording::replay_recorded_session(
+                provider,
+                Path::new(&args.path),
+                args.session_root.as_deref().map(Path::new),
+                session_id,
+                args.replay_enable_lint_ai,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        #[cfg(not(any(
+            feature = "claude-code",
+            feature = "codex",
+            feature = "gemini-cli",
+            feature = "agy"
+        )))]
+        {
+            anyhow::bail!("session replay requires the Claude Code or Codex feature");
+        }
+    }
+
+    #[cfg(feature = "claude-code")]
+    if args.claude_code_statusline {
+        return run_status_line();
+    }
+
     #[cfg(feature = "claude-code")]
     if let Some(hook) = args.claude_code_hook {
         let kind = match hook {
             crate::cli::ClaudeCodeHook::SessionStart => ClaudeHookKind::SessionStart,
             crate::cli::ClaudeCodeHook::UserPromptSubmit => ClaudeHookKind::UserPromptSubmit,
             crate::cli::ClaudeCodeHook::UserPromptExpansion => ClaudeHookKind::UserPromptExpansion,
+            crate::cli::ClaudeCodeHook::PreToolUse => ClaudeHookKind::PreToolUse,
+            crate::cli::ClaudeCodeHook::PostToolUse => ClaudeHookKind::PostToolUse,
             crate::cli::ClaudeCodeHook::PreCompact => ClaudeHookKind::PreCompact,
             crate::cli::ClaudeCodeHook::Stop => ClaudeHookKind::Stop,
             crate::cli::ClaudeCodeHook::SessionEnd => ClaudeHookKind::SessionEnd,
+            crate::cli::ClaudeCodeHook::SubagentStart => ClaudeHookKind::SubagentStart,
+            crate::cli::ClaudeCodeHook::SubagentStop => ClaudeHookKind::SubagentStop,
         };
         return run_hook(kind, Path::new(&args.path));
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_statusline {
+        return run_codex_status_line();
+    }
+
+    #[cfg(feature = "codex")]
+    if let Some(hook) = args.codex_hook {
+        let kind = match hook {
+            crate::cli::CodexHook::SessionStart => CodexHookKind::SessionStart,
+            crate::cli::CodexHook::UserPromptSubmit => CodexHookKind::UserPromptSubmit,
+            crate::cli::CodexHook::PreToolUse => CodexHookKind::PreToolUse,
+            crate::cli::CodexHook::PermissionRequest => CodexHookKind::PermissionRequest,
+            crate::cli::CodexHook::PostToolUse => CodexHookKind::PostToolUse,
+            crate::cli::CodexHook::UserPromptExpansion => CodexHookKind::UserPromptExpansion,
+            crate::cli::CodexHook::PreCompact => CodexHookKind::PreCompact,
+            crate::cli::CodexHook::PostCompact => CodexHookKind::PostCompact,
+            crate::cli::CodexHook::Stop => CodexHookKind::Stop,
+            crate::cli::CodexHook::SessionEnd => CodexHookKind::SessionEnd,
+            crate::cli::CodexHook::SubagentStart => CodexHookKind::SubagentStart,
+            crate::cli::CodexHook::SubagentStop => CodexHookKind::SubagentStop,
+        };
+        return run_codex_hook(kind, Path::new(&args.path));
+    }
+
+    #[cfg(feature = "gemini-cli")]
+    if let Some(hook) = args.gemini_cli_hook {
+        let kind = match hook {
+            crate::cli::GeminiCliHook::SessionStart => GeminiHookKind::SessionStart,
+            crate::cli::GeminiCliHook::BeforeAgent => GeminiHookKind::BeforeAgent,
+            crate::cli::GeminiCliHook::AfterAgent => GeminiHookKind::AfterAgent,
+            crate::cli::GeminiCliHook::BeforeModel => GeminiHookKind::BeforeModel,
+            crate::cli::GeminiCliHook::BeforeToolSelection => GeminiHookKind::BeforeToolSelection,
+            crate::cli::GeminiCliHook::BeforeTool => GeminiHookKind::BeforeTool,
+            crate::cli::GeminiCliHook::AfterTool => GeminiHookKind::AfterTool,
+            crate::cli::GeminiCliHook::PreCompress => GeminiHookKind::PreCompress,
+            crate::cli::GeminiCliHook::SessionEnd => GeminiHookKind::SessionEnd,
+        };
+        return run_gemini_hook(kind, Path::new(&args.path));
+    }
+
+    #[cfg(feature = "agy")]
+    if let Some(hook) = args.agy_hook {
+        let kind = match hook {
+            crate::cli::AgyHook::PreToolUse => AgyHookKind::PreToolUse,
+            crate::cli::AgyHook::PostToolUse => AgyHookKind::PostToolUse,
+            crate::cli::AgyHook::PreInvocation => AgyHookKind::PreInvocation,
+            crate::cli::AgyHook::PostInvocation => AgyHookKind::PostInvocation,
+            crate::cli::AgyHook::Stop => AgyHookKind::Stop,
+        };
+        return run_agy_hook(kind, Path::new(&args.path));
     }
 
     #[cfg(feature = "claude-code")]
@@ -2022,6 +2195,113 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let settings_path = args.claude_code_settings.as_deref().map(Path::new);
         let written = install_hook_settings(Path::new(&args.path), settings_path)?;
         println!("Wrote Claude Code hook settings to {}", written.display());
+        let written = install_memory_skill(Path::new(&args.path))?;
+        println!("Wrote Claude Code memory skill to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_install {
+        let config_path = args.codex_config.as_deref().map(Path::new);
+        let written = install_codex_user_config(Path::new(&args.path), config_path)?;
+        println!("Wrote Codex config to {}", written.display());
+        let settings_path = args.codex_settings.as_deref().map(Path::new);
+        let written = install_codex_hook_settings(Path::new(&args.path), settings_path)?;
+        println!("Wrote Codex hook settings to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "gemini-cli")]
+    if args.gemini_cli_install {
+        let written = install_gemini_user_config(
+            Path::new(&args.path),
+            args.gemini_cli_config.as_deref().map(Path::new),
+        )?;
+        println!("Wrote Gemini CLI config to {}", written.display());
+        let written = install_gemini_hook_settings(
+            Path::new(&args.path),
+            args.gemini_cli_settings.as_deref().map(Path::new),
+        )?;
+        println!("Wrote Gemini CLI hook settings to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "gemini-cli")]
+    if args.gemini_cli_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_gemini_server(
+            Path::new(&args.path),
+            GeminiCliServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "gemini-cli")]
+    if args.gemini_cli_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--gemini-cli-serve",
+            args.mcp_timeout_ms,
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "agy")]
+    if args.agy_install {
+        let written = install_agy_user_config(
+            Path::new(&args.path),
+            args.agy_config.as_deref().map(Path::new),
+        )?;
+        println!("Wrote AGY MCP config to {}", written.display());
+        let written = install_agy_hook_settings(
+            Path::new(&args.path),
+            args.agy_settings.as_deref().map(Path::new),
+        )?;
+        println!("Wrote AGY hook settings to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "agy")]
+    if args.agy_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_agy_server(
+            Path::new(&args.path),
+            AgyServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "agy")]
+    if args.agy_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--agy-serve",
+            args.mcp_timeout_ms,
+        )?;
         return Ok(());
     }
 
@@ -2043,6 +2323,16 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 max_total_bytes: args.max_total_bytes,
                 ignore_paths: &cfg.ignore_paths,
             },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "claude-code")]
+    if args.claude_code_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--claude-code-serve",
+            args.mcp_timeout_ms,
         )?;
         return Ok(());
     }
@@ -2253,6 +2543,38 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             graph.tier0_records.len(),
             written_path
         );
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_codex_server(
+            Path::new(&args.path),
+            CodexServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--codex-serve",
+            args.mcp_timeout_ms,
+        )?;
         return Ok(());
     }
     if args.show_concepts {

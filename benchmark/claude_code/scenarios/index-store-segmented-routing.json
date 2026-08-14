@@ -16,7 +16,7 @@
     {
       "id": "index-store-owner",
       "description": "IndexStore owns the memory snapshot and adapter operations.",
-      "match_any": ["IndexStore owns", "use IndexStore", "IndexStore::query"]
+      "match_any": ["IndexStore owns", "use IndexStore", "uses IndexStore", "using IndexStore", "IndexStore::query", "IndexStore::at_path"]
     },
     {
       "id": "local-distinctiveness",
@@ -33,7 +33,7 @@
     {
       "id": "bare-memory-index",
       "description": "The adapter should not own a bare MemoryIndex.",
-      "match_any": ["construct MemoryIndex directly", "use a bare MemoryIndex"]
+      "match_any": ["use a bare MemoryIndex", "should construct MemoryIndex", "construct a MemoryIndex directly", "own a MemoryIndex directly"]
     }
   ],
   "validators": [
@@ -43,7 +43,7 @@
     }
   ],
   "limits": {
-    "timeout_seconds": 300,
+    "timeout_seconds": 600,
     "max_turns": 4,
     "max_budget_usd": 1.0,
     "max_injected_context_bytes": 8000

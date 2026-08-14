@@ -1,16 +1,20 @@
 mod protocol;
 
 use super::document::{ClaudeCodeDocument, ClaudeCodeDocumentType};
+use crate::integrations::session_recording::{
+    lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
+    RecordingProvider,
+};
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use protocol::{ClaudeHookInput, ClaudeHookOutput};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_CONTEXT_BYTES: usize = 8_000;
@@ -19,15 +23,20 @@ const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CAPTURED_MESSAGES: usize = 6;
 const MAX_MEMORY_FIELD_BYTES: usize = 1_500;
 const MAX_EXCERPT_BYTES: usize = 800;
+const MIN_TOOL_QUERY_TERMS: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaudeHookKind {
     SessionStart,
     UserPromptSubmit,
     UserPromptExpansion,
+    PreToolUse,
+    PostToolUse,
     PreCompact,
     Stop,
     SessionEnd,
+    SubagentStart,
+    SubagentStop,
 }
 
 impl ClaudeHookKind {
@@ -36,16 +45,61 @@ impl ClaudeHookKind {
             Self::SessionStart => "SessionStart",
             Self::UserPromptSubmit => "UserPromptSubmit",
             Self::UserPromptExpansion => "UserPromptExpansion",
+            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
             Self::PreCompact => "PreCompact",
             Self::Stop => "Stop",
             Self::SessionEnd => "SessionEnd",
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
         }
     }
 }
 
 pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
-    let input: ClaudeHookInput = serde_json::from_reader(std::io::stdin().lock())
+    let raw: Value = serde_json::from_reader(std::io::stdin().lock())
         .context("failed to parse Claude hook input")?;
+    let input: ClaudeHookInput =
+        serde_json::from_value(raw).context("failed to decode Claude hook input")?;
+    let root = resolve_root(&input.cwd, fallback_root)?;
+    let payload = serde_json::json!({
+        "hook_event_name": input.hook_event_name,
+        "prompt": input.prompt,
+        "tool_name": input.tool_name,
+        "tool_input": input.tool_input,
+        "tool_response": input.tool_response,
+        "transcript_path": input.transcript_path,
+        "agent_id": input.agent_id,
+        "agent_type": input.agent_type,
+        "turn_id": input.turn_id,
+        "expansion_type": input.expansion_type,
+        "command_name": input.command_name,
+        "command_args": input.command_args,
+        "command_source": input.command_source,
+        "extra": input.extra,
+    });
+    if let Err(error) = record_event_if_enabled(
+        RecordingProvider::Claude,
+        &root,
+        &input.session_id,
+        kind.event_name(),
+        payload,
+    ) {
+        eprintln!("warning: Lint-AI session recording failed open: {error:#}");
+    }
+    if matches!(kind, ClaudeHookKind::Stop) && !input.stop_hook_active {
+        if let Err(error) = record_transcript_usage_if_available(
+            RecordingProvider::Claude,
+            &root,
+            &input.session_id,
+            input.transcript_path.as_deref(),
+            input.turn_id.as_deref(),
+            "claude-transcript",
+        ) {
+            eprintln!("warning: Claude transcript usage capture failed open: {error:#}");
+        }
+    }
+    let started = Instant::now();
     let output = match handle_hook(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
@@ -53,9 +107,46 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
             ClaudeHookOutput::default()
         }
     };
+    write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;
     Ok(())
+}
+
+fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHookOutput) {
+    let Ok(path) = std::env::var("LINT_AI_HOOK_TIMINGS_PATH") else {
+        return;
+    };
+    let operation = match kind {
+        ClaudeHookKind::SessionStart
+        | ClaudeHookKind::UserPromptSubmit
+        | ClaudeHookKind::UserPromptExpansion
+        | ClaudeHookKind::PreToolUse
+        | ClaudeHookKind::PostToolUse
+        | ClaudeHookKind::SubagentStart => "retrieve",
+        ClaudeHookKind::PreCompact
+        | ClaudeHookKind::Stop
+        | ClaudeHookKind::SessionEnd
+        | ClaudeHookKind::SubagentStop => "capture",
+    };
+    let context_bytes = output
+        .hook_specific_output
+        .as_ref()
+        .map(|value| value.additional_context.len())
+        .unwrap_or(0);
+    let record = serde_json::json!({
+        "event_name": kind.event_name(),
+        "operation": operation,
+        "elapsed_ms": elapsed_ms,
+        "context_bytes": context_bytes,
+    });
+    let Ok(encoded) = serde_json::to_vec(&record) else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(&encoded);
+        let _ = file.write_all(b"\n");
+    }
 }
 
 fn handle_hook(
@@ -71,6 +162,9 @@ fn handle_hook(
         );
     }
     let root = resolve_root(&input.cwd, fallback_root)?;
+    if !lint_ai_enabled(RecordingProvider::Claude, &root)? {
+        return Ok(ClaudeHookOutput::default());
+    }
     match kind {
         ClaudeHookKind::SessionStart => retrieve(
             &root,
@@ -96,10 +190,24 @@ fn handle_hook(
             .join(" ");
             retrieve(&root, kind.event_name(), &query)
         }
+        ClaudeHookKind::PostToolUse => {
+            let query = tool_query(&input);
+            if query_terms(&query).len() < MIN_TOOL_QUERY_TERMS {
+                return Ok(ClaudeHookOutput::default());
+            }
+            retrieve(&root, kind.event_name(), &query)
+        }
+        ClaudeHookKind::PreToolUse => retrieve(&root, kind.event_name(), &tool_query(&input)),
         ClaudeHookKind::PreCompact => capture(&root, input, ClaudeCodeDocumentType::Checkpoint),
         ClaudeHookKind::Stop if input.stop_hook_active => Ok(ClaudeHookOutput::default()),
         ClaudeHookKind::Stop => capture(&root, input, ClaudeCodeDocumentType::Outcome),
         ClaudeHookKind::SessionEnd => capture(&root, input, ClaudeCodeDocumentType::SessionSummary),
+        ClaudeHookKind::SubagentStart => retrieve(
+            &root,
+            kind.event_name(),
+            input.prompt.as_deref().unwrap_or_default(),
+        ),
+        ClaudeHookKind::SubagentStop => capture(&root, input, ClaudeCodeDocumentType::Outcome),
     }
 }
 
@@ -116,13 +224,17 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<ClaudeHookOutp
     let mut seen = HashSet::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
     let current_branch = git_value(root, &["branch", "--show-current"]);
-    let mut context = String::from(
-        "Relevant Lint-AI memory:\nExact-revision memories are recorded project state. Re-check source only when the task needs details beyond the recorded memory.\n",
-    );
+    let mut context = String::new();
     for result in selected {
         let Some(record) = store.record_by_id(&result.doc_id) else {
             continue;
         };
+        // Assistant-environment memories are operational context, not user
+        // project memory. Keep them searchable for diagnostics, but never
+        // inject them into a live Claude turn.
+        if record.source.starts_with("claude://") || record.source.starts_with("codex://") {
+            continue;
+        }
         let normalized = relevant_excerpt(&record.content, query, &result.matched_terms);
         let normalized = normalized.trim();
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {
@@ -339,17 +451,26 @@ fn memory_root(root: &Path) -> PathBuf {
 }
 
 fn resolve_root(cwd: &Path, fallback_root: &Path) -> Result<PathBuf> {
-    let candidate = if cwd.as_os_str().is_empty() {
-        fallback_root
-    } else {
-        cwd
-    };
-    candidate.canonicalize().with_context(|| {
+    let fallback = fallback_root.canonicalize().with_context(|| {
         format!(
-            "failed to resolve Claude project root {}",
-            candidate.display()
+            "failed to resolve Claude fallback project root {}",
+            fallback_root.display()
         )
-    })
+    })?;
+    let candidate = if cwd.as_os_str().is_empty() {
+        fallback.clone()
+    } else {
+        cwd.canonicalize()
+            .with_context(|| format!("failed to resolve Claude project root {}", cwd.display()))?
+    };
+    if !candidate.starts_with(&fallback) {
+        anyhow::bail!(
+            "Claude hook cwd {} is outside configured project root {}",
+            candidate.display(),
+            fallback.display()
+        );
+    }
+    Ok(candidate)
 }
 
 #[derive(Debug, Clone)]
@@ -556,6 +677,45 @@ fn affected_paths(extra: &serde_json::Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
+fn tool_query(input: &ClaudeHookInput) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = input
+        .turn_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .agent_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .agent_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input
+        .tool_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = input.tool_input.as_ref() {
+        parts.push(truncate_utf8(&value.to_string(), MAX_EXCERPT_BYTES));
+    }
+    if let Some(value) = input.tool_response.as_ref() {
+        parts.push(truncate_utf8(&value.to_string(), MAX_EXCERPT_BYTES));
+    }
+    parts.join(" ")
+}
+
 fn git_value(root: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -582,6 +742,7 @@ fn current_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrations::session_recording::set_lint_ai_state;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -631,6 +792,18 @@ mod tests {
         .unwrap();
         assert!(output.hook_specific_output.is_none());
         assert!(!memory_root(&root).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disabled_memory_skips_retrieval_without_affecting_hook_success() {
+        let root = temp_dir("memory-disabled");
+        set_lint_ai_state(RecordingProvider::Claude, &root, false).unwrap();
+        let mut prompt = input(&root, None, "UserPromptSubmit");
+        prompt.prompt = Some("retrieve prior routing decision".to_string());
+        let output = handle_hook(ClaudeHookKind::UserPromptSubmit, prompt, &root).unwrap();
+        assert!(output.hook_specific_output.is_none());
+        assert!(!memory_root(&root).join("index.json").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -830,6 +1003,102 @@ mod tests {
             .additional_context;
         assert_eq!(context.matches("- Source:").count(), 1);
         assert!(context.contains("Type: session-summary"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_tool_use_retrieves_relevant_memory_by_tool_name() {
+        let root = temp_dir("post-tool-use");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"Run the search tests"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Completed search index integration tests"}]}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        handle_hook(
+            ClaudeHookKind::Stop,
+            input(&root, Some(transcript), "Stop"),
+            &root,
+        )
+        .unwrap();
+
+        let mut post_tool = input(&root, None, "PostToolUse");
+        post_tool.tool_name = Some("Bash".to_string());
+        post_tool.tool_input = Some(serde_json::json!({"command": "cargo test search"}));
+        let output = handle_hook(ClaudeHookKind::PostToolUse, post_tool, &root).unwrap();
+        assert!(output.hook_specific_output.is_some());
+        let context = output.hook_specific_output.unwrap().additional_context;
+        assert!(context.contains("search"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn subagent_start_retrieves_memory_by_prompt() {
+        let root = temp_dir("subagent-start");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"Review the auth module"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Auth module uses JWT with RS256 signing"}]}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        handle_hook(
+            ClaudeHookKind::Stop,
+            input(&root, Some(transcript), "Stop"),
+            &root,
+        )
+        .unwrap();
+
+        let mut subagent = input(&root, None, "SubagentStart");
+        subagent.prompt = Some("auth module JWT signing".to_string());
+        let output = handle_hook(ClaudeHookKind::SubagentStart, subagent, &root).unwrap();
+        let context = output
+            .hook_specific_output
+            .expect("relevant memory should be retrieved")
+            .additional_context;
+        assert!(context.contains("JWT"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn subagent_stop_captures_outcome_and_is_idempotent() {
+        let root = temp_dir("subagent-stop");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"assistant","message":{"role":"assistant","content":"Delegated auth review complete"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let stop_input = input(&root, Some(transcript.clone()), "SubagentStop");
+        handle_hook(ClaudeHookKind::SubagentStop, stop_input.clone(), &root).unwrap();
+        handle_hook(ClaudeHookKind::SubagentStop, stop_input, &root).unwrap();
+
+        let store = open_store(&root).unwrap();
+        assert_eq!(
+            store.records().len(),
+            1,
+            "replayed subagent-stop must be idempotent"
+        );
+        let doc_type = store
+            .records()
+            .into_iter()
+            .find_map(|r| r.filters.get("document_type").cloned());
+        assert_eq!(doc_type.as_deref(), Some("outcome"));
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -8,10 +8,63 @@ session needs them. The expected benefit is less repeated repository
 exploration without reducing answer quality.
 
 This document reports the evidence collected so far and defines the benchmark
-required before making general performance claims. The current results are two
-single-run comparisons of one memory-recall scenario. They demonstrate that
-the integration works, but they do not establish statistically reliable
+required before making general performance claims. The latest result is a
+single-run, three-arm comparison of one memory-recall scenario. It demonstrates
+that the integration works, but does not establish statistically reliable
 improvements across projects or workloads.
+
+## Latest Validated Smoke Result
+
+The current three-arm orchestration was validated on the
+`index-store-segmented-routing` scenario with one repetition. Metrics below
+cover the continuation session only; setup is the memory-seeding phase.
+
+| Arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Claude native memory | 22.47 s | 123,536 | 123,526 | 1,239 | 4 | 2/3 | 0 ms |
+| Lint-AI only | 7.05 s | 15,914 | 15,912 | 376 | 0 | 3/3 | 1.40 s |
+| Both layers | 7.17 s | 15,914 | 15,912 | 271 | 0 | 3/3 | 1.36 s |
+
+The native-versus-combined comparison was `15.30 s` lower for the combined
+arm in this run. The Lint-AI-only arm disabled Claude auto-memory with
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; the native arm used an isolated
+auto-memory directory; and both Lint-AI arms excluded the MCP code-index
+server. These are smoke results, not statistically reliable product claims.
+
+Preserved reports:
+
+- `benchmark/claude_code/results/native-vs-both-fixed/comparison.json`
+- `benchmark/claude_code/results/lint-ai-only-fixed/comparison.json`
+
+## MCP-Only Validation Run
+
+The Claude MCP-only path was validated with the same
+`index-store-segmented-routing` scenario and one `claude-lint-ai` arm. Lint-AI
+lifecycle hooks were disabled; the MCP server remained enabled:
+
+| Arm | MCP status | Continuation | Input tokens | Cached input | Output tokens | All tool calls | Lint-AI MCP calls | Recall | Hook time |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Claude MCP-only | Connected | 47.09 s | 189,022 | 189,006 | 3,678 | 10 | 1 (`info`) | 3/3 | 0 ms |
+
+The MCP server completed initialization and Claude called the Lint-AI
+`info` tool. It did not call `search`; Claude selected local repository tools
+for the architecture question. The installed `lint-ai-memory` skill guides
+Claude to prefer `mcp__lint-ai__search`, but skills are model-invoked guidance
+and do not force a tool call. This validates MCP availability with hooks
+disabled, but is not a measurement of MCP search/retrieval performance.
+The run also reported the `bare-memory-index` forbidden-fact match, despite
+scoring all three expected facts; this should be treated as a scenario-quality
+issue rather than a successful clean recall result.
+
+A direct MCP-client check against the same server separately confirmed that
+the `search` implementation is functional: initialization and `tools/list`
+completed, `search` returned three results from 29 indexed documents, and the
+query completed in approximately 220 ms. Therefore, the missing search call in
+the Claude run is a model tool-selection outcome, not an MCP server failure.
+
+Preserved report:
+
+- `benchmark/claude_code/results/mcp-only/claude-lint-ai/report.json`
 
 ## Current Findings
 
@@ -132,6 +185,35 @@ benchmark. Release or README claims require the repeated randomized suite and
 release gates defined below.
 
 ## Benchmark Methodology
+
+## MCP Performance Track
+
+The current results intentionally exclude the Lint-AI MCP server so they
+measure lifecycle memory-hook behavior only. MCP should be measured separately
+because it adds repository code-search functionality and may build or load a
+repository index at startup.
+
+Use a separate full-integration matrix:
+
+| Arm | Claude memory | Lint-AI hooks | Lint-AI MCP |
+| --- | --- | --- | --- |
+| Native | Enabled | Disabled | Disabled |
+| Lint-AI hooks | Disabled | Enabled | Disabled |
+| Lint-AI full | Disabled | Enabled | Enabled |
+| Combined full | Enabled | Enabled | Enabled |
+
+Record these MCP-specific metrics independently from continuation latency:
+
+- cold MCP startup and index-build time
+- first MCP query latency
+- warm MCP query latency
+- MCP tool-call count and injected result bytes
+- continuation latency after MCP use
+- memory recall and repository code-search accuracy
+
+Report cold and warm runs separately. Do not combine MCP-enabled results with
+the hooks-only tables above, because MCP measures additional repository search
+capability rather than only memory-layer overhead.
 
 The benchmark is designed to answer four questions:
 

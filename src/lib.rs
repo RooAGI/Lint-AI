@@ -30,7 +30,12 @@ pub mod filters;
 pub mod graph;
 pub mod ids;
 pub mod index;
-#[cfg(feature = "claude-code")]
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy"
+))]
 pub mod integrations;
 pub mod ownership;
 pub mod pipeline;

@@ -21,15 +21,68 @@ pub enum GraphLevel {
     Entity,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SessionProvider {
+    Claude,
+    Codex,
+    Gemini,
+    Agy,
+}
+
 #[cfg(feature = "claude-code")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ClaudeCodeHook {
     SessionStart,
     UserPromptSubmit,
     UserPromptExpansion,
+    PreToolUse,
+    PostToolUse,
     PreCompact,
     Stop,
     SessionEnd,
+    SubagentStart,
+    SubagentStop,
+}
+
+#[cfg(feature = "codex")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CodexHook {
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
+    UserPromptExpansion,
+    PreCompact,
+    PostCompact,
+    Stop,
+    SessionEnd,
+    SubagentStart,
+    SubagentStop,
+}
+
+#[cfg(feature = "gemini-cli")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum GeminiCliHook {
+    SessionStart,
+    BeforeAgent,
+    AfterAgent,
+    BeforeModel,
+    BeforeToolSelection,
+    BeforeTool,
+    AfterTool,
+    PreCompress,
+    SessionEnd,
+}
+
+#[cfg(feature = "agy")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AgyHook {
+    PreToolUse,
+    PostToolUse,
+    PreInvocation,
+    PostInvocation,
+    Stop,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -115,11 +168,18 @@ pub struct Args {
     #[arg(long)]
     pub strict_config: bool,
     #[arg(long)]
+    pub mcp_timeout_ms: Option<u64>,
+    #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_install: bool,
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_serve: bool,
+    #[arg(long, hide = true)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_statusline: bool,
+    #[arg(long)]
+    pub claude_code_verify_mcp: bool,
     #[arg(long, value_enum)]
     #[cfg(feature = "claude-code")]
     pub claude_code_hook: Option<ClaudeCodeHook>,
@@ -130,7 +190,79 @@ pub struct Args {
     #[cfg(feature = "claude-code")]
     pub claude_code_settings: Option<String>,
     #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_serve: bool,
+    #[arg(long, hide = true)]
+    #[cfg(feature = "codex")]
+    pub codex_statusline: bool,
+    #[arg(long)]
+    pub codex_verify_mcp: bool,
+    #[arg(long, value_enum)]
+    #[cfg(feature = "codex")]
+    pub codex_hook: Option<CodexHook>,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_config: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "codex")]
+    pub codex_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_serve: bool,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_verify_mcp: bool,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    #[arg(long, value_enum)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_hook: Option<GeminiCliHook>,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "gemini-cli")]
+    pub gemini_cli_config: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_serve: bool,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_verify_mcp: bool,
+    #[arg(long, value_enum)]
+    #[cfg(feature = "agy")]
+    pub agy_hook: Option<AgyHook>,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_settings: Option<String>,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_config: Option<String>,
+    #[arg(long)]
     pub inspect_index: Option<String>,
+    #[arg(long)]
+    pub promote_session: Option<String>,
+    #[arg(long)]
+    pub replay_session: Option<String>,
+    #[arg(long)]
+    pub replay_enable_lint_ai: bool,
+    #[arg(long, conflicts_with = "replay_enable_lint_ai")]
+    pub replay_disable_lint_ai: bool,
+    #[arg(long, value_enum, default_value = "claude")]
+    pub session_provider: SessionProvider,
+    #[arg(long)]
+    pub session_root: Option<String>,
     #[arg(long, value_enum, default_value = "summary")]
     pub inspect_view: IndexInspectView,
     #[arg(long, default_value_t = 2_000_000)]

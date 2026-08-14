@@ -86,7 +86,9 @@
         "retrieved_documents": { "type": "integer", "minimum": 0 },
         "exact_revision_memories": { "type": "integer", "minimum": 0 },
         "selected_segments": { "type": "integer", "minimum": 0 },
-        "hook_latency_ms": { "type": ["number", "null"], "minimum": 0 }
+        "hook_latency_ms": { "type": ["number", "null"], "minimum": 0 },
+        "hook_events": { "type": "integer", "minimum": 0 },
+        "unknown_events": { "type": "integer", "minimum": 0 }
       }
     }
   },

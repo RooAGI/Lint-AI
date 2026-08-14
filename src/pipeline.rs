@@ -2011,7 +2011,8 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn sample_doc(id: &str, content: &str) -> SourceDocument {
         SourceDocument {
@@ -2041,7 +2042,25 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after unix epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("lint-ai-{prefix}-{nanos}"))
+        std::env::current_dir()
+            .expect("current directory should be available")
+            .join("target")
+            .join(format!("lint-ai-{prefix}-{nanos}"))
+    }
+
+    fn reopen_store_after_writer_drop(index_root: &Path, options: PipelineOptions) -> IndexStore {
+        let mut last_error = None;
+        for _ in 0..20 {
+            match IndexStore::at_path(index_root, options.clone()) {
+                Ok(store) => return store,
+                Err(error) => last_error = Some(error),
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "persistent index should reopen after its previous writer is dropped: {}",
+            last_error.expect("at least one reopen attempt should fail")
+        );
     }
 
     #[test]
@@ -2287,8 +2306,7 @@ mod tests {
         assert_eq!(first_results[0].doc_id, "doc-1");
         drop(first);
 
-        let mut second = IndexStore::at_path(&index_root, options)
-            .expect("explicit-path store should initialize");
+        let mut second = reopen_store_after_writer_drop(&index_root, options);
         second.upsert(sample_doc("doc-1", "persistent lexical search"));
         let second_results = second.query("persistent", 5).expect("query should succeed");
         assert!(!second_results.is_empty());
@@ -2365,8 +2383,10 @@ mod tests {
         assert!(semantic_dir.join("records.json").exists());
         assert!(semantic_dir.join("core.bin").exists());
 
-        let mut second = IndexStore::for_corpus(&corpus_root, PipelineOptions::default())
-            .expect("corpus-backed store should initialize");
+        let mut second = reopen_store_after_writer_drop(
+            &corpus_root.join(".lint-ai"),
+            PipelineOptions::default(),
+        );
         let second_results = second
             .query("persistence", 5)
             .expect("query should succeed");

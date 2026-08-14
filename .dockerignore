@@ -1,0 +1,17 @@
+.git
+.github
+.agents
+.claude
+.codex
+.history
+.lint-ai
+.lint-ai-cache
+target
+benchmark
+docs
+tests
+*.md
+!README.md
+.env
+.env.*
+!.env.example

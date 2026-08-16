@@ -348,7 +348,7 @@ fn build_query_analysis(
     };
 
     if rust_bert_model_signals {
-        spans.extend(noun_chunks.iter().cloned().map(|phrase| QuerySpan {
+        spans.extend(noun_chunks.iter().map(|phrase| QuerySpan {
             kind: QuerySpanKind::NounPhrase,
             text: phrase.text.clone(),
             normalized: normalize_for_index(&phrase.text),
@@ -366,17 +366,17 @@ fn build_query_analysis(
         //     source: "rust-bert-pos".to_string(),
         // }));
     } else {
-        spans.extend(noun_chunks.iter().cloned().map(|phrase| QuerySpan {
+        spans.extend(noun_chunks.iter().map(|phrase| QuerySpan {
             kind: QuerySpanKind::NounPhrase,
             text: phrase.text.clone(),
             normalized: normalize_for_index(&phrase.text),
             score: 0.4,
             source: "pos".to_string(),
         }));
-        spans.extend(verb_phrases.iter().cloned().map(|phrase| QuerySpan {
+        spans.extend(verb_phrases.iter().map(|phrase| QuerySpan {
             kind: QuerySpanKind::VerbPhrase,
             text: phrase.clone(),
-            normalized: normalize_for_index(&phrase),
+            normalized: normalize_for_index(phrase),
             score: 0.35,
             source: "pos".to_string(),
         }));
@@ -712,24 +712,22 @@ fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
             "VBG"
         } else if lower.ends_with("ed") && lower.len() > 3 {
             "VBD"
-        } else if lower.ends_with("ly") {
-            "RB"
-        } else if matches!(
-            lower.as_str(),
-            "currently" | "now" | "today" | "recently" | "already"
-        ) {
+        } else if lower.ends_with("ly")
+            || matches!(
+                lower.as_str(),
+                "currently" | "now" | "today" | "recently" | "already"
+            )
+        {
             "RB"
         } else if lower.chars().all(|c| c.is_ascii_digit()) {
             "CD"
         } else if word
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
-        {
-            "NNP"
-        } else if word
-            .chars()
-            .next()
-            .map_or(false, |c| c.is_ascii_uppercase())
+            || word
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
         {
             "NNP"
         } else if lower.ends_with('s') && lower.len() > 3 {
@@ -783,7 +781,7 @@ fn heuristic_entities(query: &str) -> Vec<QuerySpan> {
                 || token
                     .chars()
                     .next()
-                    .map_or(false, |c| c.is_ascii_uppercase()));
+                    .is_some_and(|c| c.is_ascii_uppercase()));
         if looks_like_entity {
             current.push(token.to_string());
         } else {
@@ -833,17 +831,15 @@ struct PhraseMatch {
 }
 
 fn extract_temporal(query: &str) -> Option<QueryTemporal> {
-    for match_ in temporal_candidates(query) {
-        let resolved_at = fuzzy_parse(match_.text.as_str())
-            .ok()
-            .map(|dt: NaiveDateTime| dt.to_string());
-        return Some(QueryTemporal {
-            phrase: match_.text,
-            resolved_at,
-            source: "fuzzydate".to_string(),
-        });
-    }
-    None
+    let match_ = temporal_candidates(query).into_iter().next()?;
+    let resolved_at = fuzzy_parse(match_.text.as_str())
+        .ok()
+        .map(|dt: NaiveDateTime| dt.to_string());
+    Some(QueryTemporal {
+        phrase: match_.text,
+        resolved_at,
+        source: "fuzzydate".to_string(),
+    })
 }
 
 fn temporal_candidates(query: &str) -> Vec<PhraseMatch> {
@@ -984,13 +980,13 @@ fn infer_subject_object(
     let first_verb = tags.iter().position(|tag| is_verbish(&tag.label));
     let subject = noun_phrases
         .iter()
-        .find(|phrase| first_verb.map_or(true, |verb_idx| phrase.end <= verb_idx))
+        .find(|phrase| first_verb.is_none_or(|verb_idx| phrase.end <= verb_idx))
         .and_then(|phrase| subject_head(&phrase.text))
         .or_else(|| entities.first().map(|entity| entity.text.clone()));
     let object = noun_phrases
         .iter()
         .rev()
-        .find(|phrase| first_verb.map_or(true, |verb_idx| phrase.start >= verb_idx))
+        .find(|phrase| first_verb.is_none_or(|verb_idx| phrase.start >= verb_idx))
         .and_then(|phrase| subject_head(&phrase.text))
         .or_else(|| {
             noun_phrases

@@ -294,9 +294,7 @@ fn resolve_temporal_target_with_temps(query: &str, base_date: NaiveDate) -> Opti
         }
     }
 
-    let Some((_, _, parsed_date, phrase)) = best else {
-        return None;
-    };
+    let (_, _, parsed_date, phrase) = best?;
 
     let delta_days = parsed_date.signed_duration_since(now_date).num_days();
     let target_date = base_date + Duration::days(delta_days);

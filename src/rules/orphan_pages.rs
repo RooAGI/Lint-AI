@@ -24,7 +24,7 @@ pub fn check_orphans(graph: &Graph, report: &mut Report) {
     }
 
     let mut index_nodes = Vec::new();
-    for (_concept, idx) in &graph.index {
+    for idx in graph.index.values() {
         if let Some(label) = graph.graph.node_weight(*idx) {
             if label.ends_with("index.md") {
                 index_nodes.push(*idx);

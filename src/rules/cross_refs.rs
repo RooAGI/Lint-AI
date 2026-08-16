@@ -45,9 +45,9 @@ fn surface_forms(raw: &str) -> Vec<String> {
     let mut forms: HashSet<String> = HashSet::new();
     let lowered = deunicode(&raw.nfc().collect::<String>().to_lowercase()).to_lowercase();
     forms.insert(lowered.clone());
-    let spaced = lowered.replace('_', " ").replace('-', " ");
+    let spaced = lowered.replace(['_', '-'], " ");
     forms.insert(spaced.clone());
-    forms.insert(lowered.replace('_', "").replace('-', ""));
+    forms.insert(lowered.replace(['_', '-'], ""));
     forms.insert(spaced.to_plural());
     forms.insert(spaced.to_singular());
     forms.into_iter().filter(|s| !s.is_empty()).collect()
@@ -126,6 +126,7 @@ pub fn check_cross_refs(graph: &Graph, report: &mut Report, cfg: &Config) {
         let mut current_heading = String::from("unscoped");
         let mut found: HashSet<String> = HashSet::new();
 
+        #[allow(clippy::too_many_arguments)]
         fn walk<'a>(
             node: &'a comrak::nodes::AstNode<'a>,
             in_code: bool,

@@ -178,8 +178,7 @@ fn build_sum_citations(index: &MemoryIndex, results: &[SearchResult]) -> Vec<Agg
 }
 
 fn aggregate_text(doc: &crate::index::DocRecord) -> String {
-    let mut parts = Vec::new();
-    parts.push(doc.headings.join(" "));
+    let mut parts = vec![doc.headings.join(" ")];
     parts.push(doc.probable_topic.clone().unwrap_or_default());
     parts.push(doc.doc_type_guess.clone().unwrap_or_default());
     parts.push(doc.temporal_terms.join(" "));

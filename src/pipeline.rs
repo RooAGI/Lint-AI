@@ -61,19 +61,14 @@ pub enum IndexLocation {
     Explicit(PathBuf),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum MemoryIndexLayout {
+    #[default]
     Single,
     Segmented {
         query_top_n: usize,
         routing_strategy: SegmentRoutingStrategy,
     },
-}
-
-impl Default for MemoryIndexLayout {
-    fn default() -> Self {
-        Self::Single
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1348,14 +1343,14 @@ fn source_document_from_record(record: &DocRecord) -> SourceDocument {
     }
 }
 
-fn load_semantic_state(
-    store_paths: &StorePaths,
-) -> Result<(
+type SemanticState = (
     HashMap<String, SourceDocument>,
     HashMap<String, DocRecord>,
     HashMap<String, ChunkLifecycleMeta>,
     Option<MemoryIndex>,
-)> {
+);
+
+fn load_semantic_state(store_paths: &StorePaths) -> Result<SemanticState> {
     let Some(records_path) = semantic_records_path(store_paths) else {
         return Ok((HashMap::new(), HashMap::new(), HashMap::new(), None));
     };
@@ -1966,6 +1961,7 @@ pub fn build_query_snapshot(
     build_query_snapshot_from_records(&records, options)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_query_snapshot_from_source_documents(
     source_docs: &[SourceDocument],
     provider: &Tier1NerProvider,

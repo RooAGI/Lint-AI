@@ -1349,9 +1349,8 @@ impl MemoryIndex {
         let (temporal_start, temporal_end) =
             normalize_temporal_bounds(temporal.starts_from, temporal.ends_at);
         let relative_anchor = temporal_start
-            .map(|_| temporal.starts_from)
-            .flatten()
-            .or(temporal_end.map(|_| temporal.ends_at).flatten())
+            .and(temporal.starts_from)
+            .or(temporal_end.and(temporal.ends_at))
             .or(temporal.starts_from)
             .or(temporal.ends_at);
         let target = resolve_temporal_target(query, relative_anchor);
@@ -2151,7 +2150,8 @@ impl MemoryIndex {
         }
         let group_build_ms = group_build_start.elapsed().as_secs_f64() * 1000.0;
 
-        let mut ranked_groups: Vec<(String, f32, Vec<(usize, f32)>)> = grouped_ranked_docs
+        type RankedGroup = (String, f32, Vec<(usize, f32)>);
+        let mut ranked_groups: Vec<RankedGroup> = grouped_ranked_docs
             .into_iter()
             .map(|(group_key, mut items)| {
                 items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -2824,11 +2824,11 @@ fn build_doc_rerank_cache(doc: &DocRecord) -> (String, Vec<String>) {
     (normalized, tokens)
 }
 
-fn cached_doc_rerank_text<'a>(index: &'a MemoryIndex, doc_u32: usize) -> Option<&'a str> {
+fn cached_doc_rerank_text(index: &MemoryIndex, doc_u32: usize) -> Option<&str> {
     index.doc_rerank_texts.get(doc_u32).map(|s| s.as_str())
 }
 
-fn cached_doc_rerank_tokens<'a>(index: &'a MemoryIndex, doc_u32: usize) -> Option<&'a [String]> {
+fn cached_doc_rerank_tokens(index: &MemoryIndex, doc_u32: usize) -> Option<&[String]> {
     index
         .doc_rerank_tokens
         .get(doc_u32)
@@ -2988,8 +2988,8 @@ impl MemoryIndex {
         }
         let has_date = doc_temporal_date(doc).is_some();
         let has_temporal_terms = !doc.temporal_terms.is_empty();
-        let predicate_signal = has_predicate_signal(&normalized, intent);
-        let distractor_penalty = routing_distractor_penalty(&normalized, intent);
+        let predicate_signal = has_predicate_signal(normalized, intent);
+        let distractor_penalty = routing_distractor_penalty(normalized, intent);
 
         let mut score = matched_terms.min(6) as f32 * 0.18;
         if predicate_signal {
@@ -3034,6 +3034,7 @@ impl MemoryIndex {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn group_evidence_boost(
     intent: QueryRoutingIntent,
     supporting_docs: usize,
@@ -3374,7 +3375,7 @@ fn build_ngrams(tokens: &[String], n: usize) -> Vec<Vec<String>> {
     }
     tokens
         .windows(n)
-        .map(|win| win.iter().cloned().collect::<Vec<_>>())
+        .map(|win| win.to_vec())
         .collect()
 }
 

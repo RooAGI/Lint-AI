@@ -909,6 +909,7 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn query_top_segments_with_corpus_stats_and_strategy(
     query: &str,
     top_k: usize,
@@ -1418,6 +1419,7 @@ fn query_top_segments_with_missing_coverage_recovery_segment_enrichment_and_stra
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn query_top_segments_with_adaptive_segment_enrichment_and_strategy(
     query: &str,
     top_k: usize,
@@ -1475,6 +1477,7 @@ fn query_top_segments_with_adaptive_segment_enrichment_and_strategy(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn query_top_segments_with_adaptive_route_aware_segment_enrichment_and_strategy(
     query: &str,
     top_k: usize,
@@ -1854,6 +1857,7 @@ fn route_score_is_close(candidate_score: f32, cutoff_score: f32) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn query_selected_segments_with_enrichment(
     query: &str,
     top_k: usize,
@@ -2113,6 +2117,7 @@ struct RouteAwareCandidate {
 }
 
 impl RouteAwareCandidate {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         mut result: SearchResult,
         segment: &MemoryIndexSegment,

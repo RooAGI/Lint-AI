@@ -43,6 +43,9 @@ Cargo.lock
 
 # Local Python environments and caches
 .venv/
+
+# Local secrets
+.env
 __pycache__/
 *.py[cod]
 

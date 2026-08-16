@@ -37,6 +37,7 @@ pub mod index;
     feature = "agy"
 ))]
 pub mod integrations;
+pub mod memory_api;
 pub mod ownership;
 pub mod pipeline;
 pub mod query_expansion;

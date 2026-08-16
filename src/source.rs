@@ -24,6 +24,7 @@ pub struct SourceDocument {
 }
 
 impl SourceDocument {
+    #[allow(clippy::too_many_arguments)]
     pub fn with_stable_doc_id_from_source(
         source: String,
         content: String,

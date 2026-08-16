@@ -106,8 +106,10 @@ fn ignore_related_section_for_crossrefs() {
         MAX_TOTAL_BYTES,
     )
     .unwrap();
-    let mut cfg = Config::default();
-    cfg.ignore_crossref_sections = vec!["related".to_string()];
+    let cfg = Config {
+        ignore_crossref_sections: vec!["related".to_string()],
+        ..Default::default()
+    };
     let mut report = Report::new();
 
     check_cross_refs(&graph, &mut report, &cfg);
@@ -127,8 +129,10 @@ fn allowlist_limits_crossrefs() {
         MAX_TOTAL_BYTES,
     )
     .unwrap();
-    let mut cfg = Config::default();
-    cfg.allowlist_concepts = vec!["gamma".to_string()];
+    let cfg = Config {
+        allowlist_concepts: vec!["gamma".to_string()],
+        ..Default::default()
+    };
     let mut report = Report::new();
 
     check_cross_refs(&graph, &mut report, &cfg);

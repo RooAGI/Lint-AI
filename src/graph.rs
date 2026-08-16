@@ -106,8 +106,7 @@ pub(crate) fn normalize_concept(s: &str) -> String {
         .collect::<String>()
         .trim()
         .to_lowercase()
-        .replace('_', " ")
-        .replace('-', " ");
+        .replace(['_', '-'], " ");
     deunicode(&normalized).to_lowercase()
 }
 

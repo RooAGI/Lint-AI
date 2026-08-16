@@ -411,7 +411,7 @@ fn tokenize_words(content: &str) -> Vec<String> {
 
 fn sentence_count(content: &str) -> usize {
     let count = content
-        .split(|c: char| c == '.' || c == '!' || c == '?')
+        .split(['.', '!', '?'])
         .filter(|s| !s.trim().is_empty())
         .count();
     count.max(1)
@@ -448,7 +448,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
         }
         for sent in doc
             .content
-            .split(|c: char| c == '.' || c == '!' || c == '?')
+            .split(['.', '!', '?'])
         {
             let s_tokens = tokenize_words(sent);
             let unique: HashSet<String> = s_tokens.into_iter().collect();

@@ -1,3 +1,6 @@
+use std::fmt;
+
+#[derive(Default)]
 pub struct Report {
     issues: Vec<String>,
 }
@@ -24,18 +27,20 @@ impl Report {
             }
         }
     }
+}
 
+impl fmt::Display for Report {
     /// Render issues as a single string.
-    pub fn to_string(&self) -> String {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.issues.is_empty() {
-            "No issues found".to_string()
+            f.write_str("No issues found")
         } else {
             let mut out = String::from("Issues:");
             for i in &self.issues {
                 out.push_str("\n- ");
                 out.push_str(i);
             }
-            out
+            f.write_str(&out)
         }
     }
 }

@@ -150,7 +150,7 @@ impl TemporalFactStore {
             for claim in &record.top_claims {
                 store.ingest_claim(
                     record,
-                    &claim,
+                    claim,
                     source_chunk_id.as_deref(),
                     source_chunk_version,
                     chunk_timestamp.as_deref(),
@@ -564,10 +564,10 @@ mod tests {
         let timeline = built.timeline("alice");
         assert_eq!(timeline.len(), 2);
         assert_eq!(timeline[0].object.as_deref(), Some("Acme"));
-        assert_eq!(timeline[0].is_latest, false);
+        assert!(!timeline[0].is_latest);
         assert_eq!(timeline[0].valid_to.as_deref(), Some("2024-02-01"));
         assert_eq!(timeline[1].object.as_deref(), Some("Beta"));
-        assert_eq!(timeline[1].is_latest, true);
+        assert!(timeline[1].is_latest);
 
         store.ingest_claim(
             &record1,

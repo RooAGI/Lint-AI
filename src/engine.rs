@@ -138,9 +138,9 @@ fn surface_forms(raw: &str) -> Vec<String> {
     let mut forms: HashSet<String> = HashSet::new();
     let lowered = deunicode(&raw.nfc().collect::<String>().to_lowercase()).to_lowercase();
     forms.insert(lowered.clone());
-    let spaced = lowered.replace('_', " ").replace('-', " ");
+    let spaced = lowered.replace(['_', '-'], " ");
     forms.insert(spaced.clone());
-    forms.insert(lowered.replace('_', "").replace('-', ""));
+    forms.insert(lowered.replace(['_', '-'], ""));
     forms.insert(spaced.to_plural());
     forms.insert(spaced.to_singular());
     forms.into_iter().filter(|s| !s.is_empty()).collect()
@@ -218,6 +218,7 @@ fn collect_section_concepts(
     sections.push((current.clone(), HashSet::new()));
     section_index.insert(current.clone(), idx);
 
+    #[allow(clippy::too_many_arguments)]
     fn walk<'a>(
         node: &'a AstNode<'a>,
         in_code: bool,
@@ -526,10 +527,11 @@ pub fn analyze_for_tests(graph: &Graph, cfg: &Config) -> String {
 
     let mut suggested_ignore_sections = Vec::new();
     for (section, count) in &section_list {
-        if page_count > 0 && (*count as f64 / page_count as f64) >= 0.3 {
-            if section == "related" || section == "unscoped" {
-                suggested_ignore_sections.push(section.clone());
-            }
+        if page_count > 0
+            && (*count as f64 / page_count as f64) >= 0.3
+            && (section == "related" || section == "unscoped")
+        {
+            suggested_ignore_sections.push(section.clone());
         }
     }
 
@@ -644,6 +646,7 @@ fn show_tier1_terms(graph: &Graph, ranker_kind: &Tier1TermRankerKind) -> Result<
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_memory_index(
     graph: &Graph,
     provider: &Tier1NerProvider,

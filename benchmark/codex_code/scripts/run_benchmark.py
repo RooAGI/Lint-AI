@@ -285,9 +285,25 @@ def main() -> None:
                 "set -euo pipefail\n"
                 # The disposable CODEX_HOME isolates persisted transcripts while allowing
                 # Stop and SessionEnd to capture setup memory for the continuation.
-                "codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox "
+                # Multi-turn phases resume the prior turn's thread instead of
+                # starting fresh: the runner passes back the thread id it
+                # found in that turn's output as an explicit --resume
+                # argument (never through the environment or a file this
+                # wrapper has to poll for).
+                "resume_id=\"\"\n"
+                "if [ \"${1:-}\" = \"--resume\" ]; then\n"
+                "  resume_id=\"$2\"\n"
+                "  shift 2\n"
+                "fi\n"
+                "if [ -n \"$resume_id\" ]; then\n"
+                "  codex_args=(exec resume \"$resume_id\" --json --dangerously-bypass-approvals-and-sandbox "
+                "--dangerously-bypass-hook-trust "
+                "--output-last-message \"$LINT_AI_BENCHMARK_RUN_DIR/${LINT_AI_BENCHMARK_PHASE}.last\" -)\n"
+                "else\n"
+                "  codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox "
                 "--dangerously-bypass-hook-trust --cd \"$LINT_AI_BENCHMARK_WORKTREE\" "
                 "--output-last-message \"$LINT_AI_BENCHMARK_RUN_DIR/${LINT_AI_BENCHMARK_PHASE}.last\" -)\n"
+                "fi\n"
                 "if [[ \"${LINT_AI_CODEX_ENABLE_MCP_FEATURE:-0}\" == \"1\" ]]; then\n"
                 "  codex_args=(--enable mcp_2026_07_28 \"${codex_args[@]}\")\n"
                 "fi\n"

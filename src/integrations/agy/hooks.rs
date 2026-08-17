@@ -1,6 +1,8 @@
 //! Antigravity lifecycle-hook adapter.
 
-use crate::integrations::session_recording::{lint_ai_enabled, record_event_if_enabled, RecordingProvider};
+use crate::integrations::session_recording::{
+    lint_ai_enabled, record_event_if_enabled, RecordingProvider,
+};
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
@@ -10,28 +12,44 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgyHookKind { PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop }
+pub enum AgyHookKind {
+    PreToolUse,
+    PostToolUse,
+    PreInvocation,
+    PostInvocation,
+    Stop,
+}
 
 impl AgyHookKind {
-    pub fn event_name(self) -> &'static str { match self {
-        Self::PreToolUse => "PreToolUse", Self::PostToolUse => "PostToolUse",
-        Self::PreInvocation => "PreInvocation", Self::PostInvocation => "PostInvocation",
-        Self::Stop => "Stop",
-    }}
+    pub fn event_name(self) -> &'static str {
+        match self {
+            Self::PreToolUse => "PreToolUse",
+            Self::PostToolUse => "PostToolUse",
+            Self::PreInvocation => "PreInvocation",
+            Self::PostInvocation => "PostInvocation",
+            Self::Stop => "Stop",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct AgyHookInput {
-    #[serde(default, rename = "conversationId")] conversation_id: String,
-    #[serde(default, rename = "workspacePaths")] workspace_paths: Vec<PathBuf>,
-    #[serde(default)] tool_call: Option<Value>,
-    #[serde(flatten)] extra: Map<String, Value>,
+    #[serde(default, rename = "conversationId")]
+    conversation_id: String,
+    #[serde(default, rename = "workspacePaths")]
+    workspace_paths: Vec<PathBuf>,
+    #[serde(default, rename = "transcriptPath", alias = "transcript_path")]
+    transcript_path: Option<PathBuf>,
+    #[serde(default)]
+    tool_call: Option<Value>,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 struct AgyHookOutput {
     #[serde(rename = "injectSteps", skip_serializing_if = "Option::is_none")]
-    inject_steps: Option<Vec<String>>,
+    inject_steps: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     decision: Option<String>,
 }
@@ -39,17 +57,33 @@ struct AgyHookOutput {
 pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
     let raw: Value = serde_json::from_reader(std::io::stdin().lock())
         .context("failed to parse AGY hook input")?;
-    let input: AgyHookInput = serde_json::from_value(raw.clone())
-        .context("failed to decode AGY hook input")?;
+    let input: AgyHookInput =
+        serde_json::from_value(raw.clone()).context("failed to decode AGY hook input")?;
     let root = resolve_root(&input, fallback_root)?;
-    let session_id = if input.conversation_id.is_empty() { "unknown" } else { &input.conversation_id };
-    if let Err(error) = record_event_if_enabled(RecordingProvider::Agy, &root, session_id, kind.event_name(), raw) {
+    let session_id = if input.conversation_id.is_empty() {
+        "unknown"
+    } else {
+        &input.conversation_id
+    };
+    if let Err(error) = record_event_if_enabled(
+        RecordingProvider::Agy,
+        &root,
+        session_id,
+        kind.event_name(),
+        raw,
+    ) {
         eprintln!("warning: Lint-AI AGY session recording failed open: {error:#}");
     }
-    let output = handle_hook(kind, &input, &root).unwrap_or_else(|error| {
+    let mut output = handle_hook(kind, &input, &root).unwrap_or_else(|error| {
         eprintln!("warning: Lint-AI AGY hook failed open: {error:#}");
         AgyHookOutput::default()
     });
+    if kind == AgyHookKind::PreToolUse {
+        // AGY's PreToolUse contract requires a `decision`; Lint-AI never
+        // gates tool execution, so always allow explicitly rather than
+        // omitting the field (which AGY would otherwise treat as a deny).
+        output.decision = Some("allow".to_string());
+    }
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, &output)?;
     stdout.write_all(b"\n")?;
@@ -57,47 +91,223 @@ pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
 }
 
 fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<AgyHookOutput> {
-    if !lint_ai_enabled(RecordingProvider::Agy, root)? { return Ok(AgyHookOutput::default()); }
-    if matches!(kind, AgyHookKind::PostToolUse | AgyHookKind::PostInvocation | AgyHookKind::Stop) {
+    if !lint_ai_enabled(RecordingProvider::Agy, root)? {
         return Ok(AgyHookOutput::default());
     }
-    let query = input.extra.get("prompt").and_then(Value::as_str)
+    if kind == AgyHookKind::Stop {
+        if let Some(ref path) = input.transcript_path {
+            let session_id = if input.conversation_id.is_empty() {
+                "unknown"
+            } else {
+                &input.conversation_id
+            };
+            let _ = capture_transcript(root, session_id, path);
+        }
+        return Ok(AgyHookOutput::default());
+    }
+    if matches!(
+        kind,
+        AgyHookKind::PostToolUse | AgyHookKind::PostInvocation
+    ) {
+        return Ok(AgyHookOutput::default());
+    }
+    let query_from_extra = input
+        .extra
+        .get("prompt")
+        .and_then(Value::as_str)
         .or_else(|| input.extra.get("userPrompt").and_then(Value::as_str))
-        .or_else(|| input.tool_call.as_ref().and_then(|v| v.get("name")).and_then(Value::as_str))
-        .unwrap_or("");
-    if query.trim().is_empty() { return Ok(AgyHookOutput::default()); }
+        .or_else(|| {
+            input
+                .tool_call
+                .as_ref()
+                .and_then(|v| v.get("name"))
+                .and_then(Value::as_str)
+        })
+        .map(|s| s.to_string());
+
+    let query = query_from_extra
+        .or_else(|| {
+            input
+                .transcript_path
+                .as_ref()
+                .and_then(|p| extract_latest_user_prompt(p))
+        })
+        .unwrap_or_default();
+
+    if query.trim().is_empty() {
+        return Ok(AgyHookOutput::default());
+    }
     let memory = root.join(".lint-ai/agy-memory");
-    if !memory.exists() { return Ok(AgyHookOutput::default()); }
-    let mut store = IndexStore::at_path(&memory, PipelineOptions {
-        memory_index_layout: MemoryIndexLayout::Segmented { query_top_n: 3, routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness },
-        ..PipelineOptions::default()
-    })?;
-    if store.is_empty() { return Ok(AgyHookOutput::default()); }
+    if !memory.exists() {
+        return Ok(AgyHookOutput::default());
+    }
+    let mut store = IndexStore::at_path(
+        &memory,
+        PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 3,
+                routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
+            },
+            ..PipelineOptions::default()
+        },
+    )?;
+    if store.is_empty() {
+        return Ok(AgyHookOutput::default());
+    }
     let mut context = String::new();
-    for result in store.query(query, 5)? {
+    for result in store.query(&query, 5)? {
         if let Some(record) = store.record_by_id(&result.doc_id) {
-            let excerpt = record.content.lines().take(8).collect::<Vec<_>>().join("\n");
-            if !excerpt.trim().is_empty() { context.push_str(&format!("\n- Source: {}\n  {}\n", record.source, excerpt)); }
-            if context.len() > 8_000 { break; }
+            let excerpt = record
+                .content
+                .lines()
+                .take(8)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !excerpt.trim().is_empty() {
+                context.push_str(&format!("\n- Source: {}\n  {}\n", record.source, excerpt));
+            }
+            if context.len() > 8_000 {
+                break;
+            }
         }
     }
-    if context.is_empty() { return Ok(AgyHookOutput::default()); }
-    Ok(AgyHookOutput { inject_steps: Some(vec![format!("Relevant Lint-AI memory:\n{context}")]), decision: None })
+    if context.is_empty() {
+        return Ok(AgyHookOutput::default());
+    }
+    Ok(AgyHookOutput {
+        inject_steps: Some(vec![serde_json::json!({
+            "ephemeralMessage": format!("Relevant Lint-AI memory:\n{context}")
+        })]),
+        decision: None,
+    })
+}
+
+fn clean_user_prompt(text: &str) -> String {
+    let text = if let Some(start) = text.find("<USER_REQUEST>") {
+        let after = &text[start + "<USER_REQUEST>".len()..];
+        if let Some(end) = after.find("</USER_REQUEST>") {
+            &after[..end]
+        } else {
+            after
+        }
+    } else {
+        text
+    };
+    let prefix = "Benchmark instruction: answer the user directly from the conversation context. Do not call tools, inspect files, inspect configuration, or access MCP servers.";
+    let text = text.strip_prefix(prefix).unwrap_or(text);
+    text.trim().to_string()
+}
+
+fn extract_latest_user_prompt(transcript_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(transcript_path).ok()?;
+    for line in content.lines().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            let step_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+            if step_type == "USER_INPUT" {
+                if let Some(text) = value.get("content").and_then(Value::as_str) {
+                    let cleaned = clean_user_prompt(text);
+                    if !cleaned.is_empty() {
+                        return Some(cleaned);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(transcript_path)?;
+    let mut messages = Vec::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            let step_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+            if step_type == "USER_INPUT" {
+                if let Some(text) = value.get("content").and_then(Value::as_str) {
+                    let cleaned = clean_user_prompt(text);
+                    if !cleaned.is_empty() {
+                        messages.push(format!("User: {cleaned}"));
+                    }
+                }
+            } else if let Some(resp) = value.get("content").and_then(Value::as_str) {
+                if !resp.trim().is_empty() && step_type != "CHECKPOINT" {
+                    messages.push(format!("Assistant: {}", resp.trim()));
+                }
+            }
+        }
+    }
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let body = messages.join("\n\n");
+    let source = format!("agy://{session_id}/session-summary");
+    let mut filters = std::collections::BTreeMap::new();
+    filters.insert("integration".to_string(), "agy".to_string());
+    filters.insert("session_id".to_string(), session_id.to_string());
+    filters.insert("document_type".to_string(), "session-summary".to_string());
+    filters.insert("source_type".to_string(), "session-memory".to_string());
+
+    let document = crate::source::SourceDocument {
+        doc_id: crate::ids::stable_doc_id_from_source(&source),
+        source,
+        content: format!("agy session-summary\n{body}"),
+        concept: "session-summary".to_string(),
+        group_id: Some(format!("agy-session:{session_id}")),
+        headings: vec!["session-summary".to_string()],
+        links: vec![],
+        timestamp: None,
+        doc_length: body.len(),
+        author_agent: Some("agy".to_string()),
+        filters,
+    };
+    let options = PipelineOptions {
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: 3,
+            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
+        },
+        ..PipelineOptions::default()
+    };
+    let mut store = IndexStore::at_path(&root.join(".lint-ai/agy-memory"), options)?;
+    store.upsert(document);
+    store.refresh()?;
+    Ok(())
 }
 
 fn resolve_root(input: &AgyHookInput, fallback: &Path) -> Result<PathBuf> {
-    let fallback = fallback.canonicalize().with_context(|| format!("failed to resolve AGY project root {}", fallback.display()))?;
-    let candidate = input.workspace_paths.first().map(PathBuf::from).unwrap_or_else(|| fallback.clone()).canonicalize()?;
-    if !candidate.starts_with(&fallback) { anyhow::bail!("AGY workspace path is outside configured project root") }
+    let fallback = fallback
+        .canonicalize()
+        .with_context(|| format!("failed to resolve AGY project root {}", fallback.display()))?;
+    let candidate = input
+        .workspace_paths
+        .first()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| fallback.clone())
+        .canonicalize()?;
+    if !candidate.starts_with(&fallback) {
+        anyhow::bail!("AGY workspace path is outside configured project root")
+    }
     Ok(candidate)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn uses_current_agy_event_names() {
         assert_eq!(AgyHookKind::PreToolUse.event_name(), "PreToolUse");
         assert_eq!(AgyHookKind::Stop.event_name(), "Stop");
+    }
+
+    #[test]
+    fn clean_user_prompt_extracts_user_request() {
+        let raw = "<USER_REQUEST>\nhello world\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\n...</ADDITIONAL_METADATA>";
+        assert_eq!(clean_user_prompt(raw), "hello world");
     }
 }

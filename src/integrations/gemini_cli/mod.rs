@@ -378,7 +378,11 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {
         return Ok(Map::new());
     }
-    let value: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    let contents = fs::read_to_string(path)?;
+    if contents.trim().is_empty() {
+        return Ok(Map::new());
+    }
+    let value: Value = serde_json::from_str(&contents)?;
     value
         .as_object()
         .cloned()

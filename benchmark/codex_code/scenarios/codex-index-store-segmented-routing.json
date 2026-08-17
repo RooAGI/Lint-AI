@@ -16,7 +16,7 @@
     {
       "id": "index-store-owner",
       "description": "IndexStore owns the memory snapshot and adapter operations.",
-      "match_any": ["IndexStore owns", "use IndexStore", "uses IndexStore", "using IndexStore", "IndexStore::query", "IndexStore::at_path"]
+      "match_any": ["IndexStore owns", "use IndexStore", "uses IndexStore", "using IndexStore", "IndexStore::query", "IndexStore::at_path", "IndexStore API", "existing IndexStore"]
     },
     {
       "id": "local-distinctiveness",

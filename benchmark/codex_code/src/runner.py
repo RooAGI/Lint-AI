@@ -30,6 +30,10 @@ from pathlib import Path
 from typing import Any
 
 
+UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"
+)
+
 REQUIRED_SCENARIO_KEYS = {
     "schema_version",
     "id",
@@ -189,8 +193,7 @@ def dirty_diff_digest(repo_root: Path) -> str:
 
 def prepare_worktree(repo_root: Path, revision: str, run_root: Path) -> Path:
     worktree_path = run_root / "worktree"
-    if worktree_path.exists():
-        shutil.rmtree(worktree_path)
+    cleanup_worktree(repo_root, worktree_path)
     subprocess.run(
         ["git", "-C", str(repo_root), "worktree", "add", "--detach", str(worktree_path), revision],
         check=True,
@@ -201,6 +204,7 @@ def prepare_worktree(repo_root: Path, revision: str, run_root: Path) -> Path:
 
 
 def cleanup_worktree(repo_root: Path, worktree_path: Path) -> None:
+    """Remove a worktree left over from a prior (uncleaned) run of the same rep dir."""
     subprocess.run(
         ["git", "-C", str(repo_root), "worktree", "remove", "--force", str(worktree_path)],
         check=False,
@@ -229,6 +233,30 @@ def load_peer_module(filename: str, module_name: str, base_dir: Path | None = No
     return module
 
 
+def extract_claude_last_message(stdout_text: str) -> str | None:
+    """Return the text of the final assistant message from Claude's
+    stream-json output, so scoring sees only the model's own final answer
+    instead of the full transcript (which includes tool-result content that
+    can quote scenario/scoring text verbatim and contaminate fact matching).
+    """
+    last_text: str | None = None
+    for line in stdout_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("type") != "assistant":
+            continue
+        content = record.get("message", {}).get("content", [])
+        text_blocks = [block.get("text", "") for block in content if block.get("type") == "text"]
+        if text_blocks:
+            last_text = "".join(text_blocks)
+    return last_text
+
+
 def run_command(
     command: list[str],
     cwd: Path,
@@ -240,6 +268,7 @@ def run_command(
 ) -> PhaseResult:
     stdout_path = output_dir / f"{phase}.stdout.log"
     stderr_path = output_dir / f"{phase}.stderr.log"
+    last_path = output_dir / f"{phase}.last"
     started = time.monotonic()
     completed = subprocess.run(
         command,
@@ -254,13 +283,20 @@ def run_command(
     elapsed_ms = (time.monotonic() - started) * 1000.0
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")
+    if not last_path.exists():
+        # The wrapped CLI didn't write its own final-message file (only Codex's
+        # --output-last-message does); extract it from stream-json output so
+        # scoring never falls back to the raw tool-call transcript.
+        last_message = extract_claude_last_message(completed.stdout)
+        if last_message is not None:
+            last_path.write_text(last_message, encoding="utf-8")
     return PhaseResult(
         phase=phase,
         command=command,
         returncode=completed.returncode,
         stdout_path=str(stdout_path),
         stderr_path=str(stderr_path),
-        last_path=str(output_dir / f"{phase}.last"),
+        last_path=str(last_path),
         metrics_path=None,
         hook_timings_path=str(output_dir / f"{phase}.hook-timings.jsonl"),
         elapsed_ms=elapsed_ms,
@@ -328,7 +364,12 @@ def run_pty_command(
             # Some AGY versions keep the interactive shell alive after EOT.
             # Once the response has had time to flush, interrupt only that
             # shell; the captured transcript remains valid for scoring.
-            if process.poll() is None and time.monotonic() - started > min(20.0, timeout_seconds):
+            # AGY's lifecycle hooks (and the model turn itself) may not
+            # complete within a short fixed window, so give the loop most of
+            # the phase timeout budget rather than a small hardcoded floor,
+            # leaving a margin before the hard deadline kills the process.
+            interrupt_after = max(20.0, timeout_seconds - 15.0)
+            if process.poll() is None and time.monotonic() - started > min(interrupt_after, timeout_seconds):
                 try:
                     os.killpg(process.pid, signal.SIGINT)
                 except ProcessLookupError:
@@ -447,6 +488,164 @@ def build_phase_env(
     return env
 
 
+def build_turn_prompt(messages: list[dict[str, Any]]) -> tuple[str, bool]:
+    """Build a phase's stdin payload from one or more turn messages.
+
+    A single message is sent as plain text (unchanged legacy behavior). More
+    than one message is delivered as sequential stream-json user-turn lines
+    into one live session (see run_command's --multiturn contract), so
+    scenarios that need multiple turns within a single phase get a real
+    multi-turn conversation instead of one flattened prompt.
+    """
+    if len(messages) > 1:
+        prompt = "".join(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": message["prompt"]}],
+                    },
+                }
+            )
+            + "\n"
+            for message in messages
+        )
+        return prompt, True
+    return "\n\n".join(message["prompt"] for message in messages), False
+
+
+# Providers whose CLI can accept a stream of turn messages on one process's
+# stdin (Claude's --input-format stream-json) and therefore never need more
+# than one process for a multi-turn phase. Everything else (Codex, AGY) has
+# no such mode -- multi-turn there means one process per turn, chained by
+# passing the resume/session id back in as an explicit --resume argument.
+STREAM_MULTITURN_PROVIDERS = {"claude"}
+
+
+def run_turn_phase(
+    *,
+    phase_runner: Any,
+    agent_command: list[str],
+    messages: list[dict[str, Any]],
+    metrics_mode: str,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+    output_dir: Path,
+    phase: str,
+    scenario_id: str,
+    repetition: int,
+) -> PhaseResult:
+    """Run one phase (setup or continuation) as its own process/session.
+
+    Setup and continuation differ only in which messages they carry and
+    which phase_env/output paths apply -- the actual "run this turn (or
+    sequence of turns) as one session" logic is identical, so both call
+    sites share this one function instead of duplicating it. A single
+    message is always one plain-text call, regardless of provider. More
+    than one message goes through whichever multi-turn strategy the
+    provider actually supports (see STREAM_MULTITURN_PROVIDERS).
+    """
+    if len(messages) > 1 and metrics_mode not in STREAM_MULTITURN_PROVIDERS:
+        return run_resume_chain_phase(
+            phase_runner=phase_runner,
+            agent_command=agent_command,
+            messages=messages,
+            cwd=cwd,
+            env=env,
+            timeout_seconds=timeout_seconds,
+            output_dir=output_dir,
+            phase=phase,
+            scenario_id=scenario_id,
+            repetition=repetition,
+        )
+    stdin_text, multiturn = build_turn_prompt(messages)
+    command = agent_command + (["--multiturn"] if multiturn else [])
+    log(
+        f"scenario {scenario_id} repetition {repetition}: running {phase} "
+        f"phase with timeout={timeout_seconds}s"
+    )
+    result = phase_runner(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin_text=stdin_text,
+        timeout_seconds=timeout_seconds,
+        output_dir=output_dir,
+        phase=phase,
+    )
+    log(
+        f"scenario {scenario_id} repetition {repetition}: {phase} returned "
+        f"{result.returncode} in {result.elapsed_ms:.1f} ms"
+    )
+    return result
+
+
+def run_resume_chain_phase(
+    *,
+    phase_runner: Any,
+    agent_command: list[str],
+    messages: list[dict[str, Any]],
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+    output_dir: Path,
+    phase: str,
+    scenario_id: str,
+    repetition: int,
+) -> PhaseResult:
+    """Multi-turn via a resume id chained between separate processes.
+
+    Used by CLIs (Codex, AGY) with no way to stream several turns into one
+    live process. Each message is its own process; the session/thread id
+    that process reports is passed to the next one as an explicit
+    "--resume <id>" argument -- never through the environment or a file the
+    wrapper has to poll for. Intermediate turns get their own phase name
+    (e.g. "setup-turn-1") for diagnostics; the final turn's result is
+    returned relabeled as `phase` so callers see the same PhaseResult shape
+    a single-turn phase would have produced.
+    """
+    resume_id: str | None = None
+    result: PhaseResult | None = None
+    for index, message in enumerate(messages, start=1):
+        command = list(agent_command)
+        if resume_id:
+            command += ["--resume", resume_id]
+        turn_phase = phase if index == len(messages) else f"{phase}-turn-{index}"
+        log(
+            f"scenario {scenario_id} repetition {repetition}: running {turn_phase} "
+            f"phase with timeout={timeout_seconds}s"
+        )
+        result = phase_runner(
+            command,
+            cwd=cwd,
+            env=env,
+            stdin_text=message["prompt"],
+            timeout_seconds=timeout_seconds,
+            output_dir=output_dir,
+            phase=turn_phase,
+        )
+        log(
+            f"scenario {scenario_id} repetition {repetition}: {turn_phase} returned "
+            f"{result.returncode} in {result.elapsed_ms:.1f} ms"
+        )
+        if result.returncode != 0 or index == len(messages):
+            break
+        turn_output = Path(result.stdout_path).read_text(encoding="utf-8", errors="replace")
+        ids = UUID_RE.findall(turn_output)
+        if not ids:
+            log(
+                f"scenario {scenario_id} repetition {repetition}: {turn_phase} did not "
+                "report a resumable session id; remaining turns will start fresh"
+            )
+            resume_id = None
+            continue
+        resume_id = ids[-1]
+    assert result is not None
+    return replace(result, phase=phase)
+
+
 def execute_scenario(
     scenario: dict[str, Any],
     scenario_path: Path,
@@ -466,8 +665,19 @@ def execute_scenario(
     revision = resolve_revision(repo_root, str(scenario["repository"]["revision"]))
     dirty_digest = dirty_diff_digest(repo_root)
     outputs: list[ScenarioRunRecord] = []
-    setup_prompt = "\n\n".join(message["prompt"] for message in scenario["setup_messages"])
-    continuation_prompt = str(scenario["continuation_prompt"])
+    setup_messages = list(scenario["setup_messages"])
+    # continuation_messages is an optional array (mirroring setup_messages)
+    # for scenarios that need continuation itself to span several turns. It
+    # always starts a session of its own, separate from setup's session --
+    # only turns *within* continuation share state, never turns from setup.
+    # Scenarios without this field keep the single continuation_prompt they
+    # already have, wrapped as a one-message list so run_turn_phase sees the
+    # same shape either way.
+    continuation_messages_field = scenario.get("continuation_messages")
+    if continuation_messages_field:
+        continuation_messages = list(continuation_messages_field)
+    else:
+        continuation_messages = [{"prompt": str(scenario["continuation_prompt"])}]
     timeout_seconds = int(scenario["limits"]["timeout_seconds"])
     timeout_seconds = max(1, int(timeout_seconds * timeout_scale))
 
@@ -499,23 +709,19 @@ def execute_scenario(
                 dirty_digest=dirty_digest,
                 phase="setup",
             )
-            log(
-                f"scenario {scenario['id']} repetition {repetition}: running setup "
-                f"phase with timeout={timeout_seconds}s"
-            )
             phase_runner = run_pty_command if execution_mode == "pty" else run_command
-            setup = phase_runner(
-                agent_command,
+            setup = run_turn_phase(
+                phase_runner=phase_runner,
+                agent_command=agent_command,
+                messages=setup_messages,
+                metrics_mode=metrics_mode,
                 cwd=worktree_path,
                 env=phase_env,
-                stdin_text=setup_prompt,
                 timeout_seconds=timeout_seconds,
                 output_dir=run_dir,
                 phase="setup",
-            )
-            log(
-                f"scenario {scenario['id']} repetition {repetition}: setup returned "
-                f"{setup.returncode} in {setup.elapsed_ms:.1f} ms"
+                scenario_id=str(scenario["id"]),
+                repetition=repetition,
             )
             continuation = None
             invalid_reason = None
@@ -523,14 +729,10 @@ def execute_scenario(
             if setup.returncode != 0:
                 invalid_reason = f"setup command exited {setup.returncode}"
             else:
-                if execution_mode == "pty":
-                    setup_output = Path(setup.stdout_path).read_text(encoding="utf-8", errors="replace")
-                    conversation_ids = re.findall(
-                        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}",
-                        setup_output,
-                    )
-                    if conversation_ids:
-                        (run_dir / "conversation.id").write_text(conversation_ids[-1] + "\n", encoding="utf-8")
+                setup_output = Path(setup.stdout_path).read_text(encoding="utf-8", errors="replace")
+                conversation_ids = UUID_RE.findall(setup_output)
+                if conversation_ids:
+                    (run_dir / "conversation.id").write_text(conversation_ids[-1] + "\n", encoding="utf-8")
                 phase_env = build_phase_env(
                     base_env,
                     benchmark_root=benchmark_root,
@@ -542,22 +744,18 @@ def execute_scenario(
                     dirty_digest=dirty_digest,
                     phase="continuation",
                 )
-                log(
-                    f"scenario {scenario['id']} repetition {repetition}: running "
-                    f"continuation phase with timeout={timeout_seconds}s"
-                )
-                continuation = phase_runner(
-                    agent_command,
+                continuation = run_turn_phase(
+                    phase_runner=phase_runner,
+                    agent_command=agent_command,
+                    messages=continuation_messages,
+                    metrics_mode=metrics_mode,
                     cwd=worktree_path,
                     env=phase_env,
-                    stdin_text=continuation_prompt,
                     timeout_seconds=timeout_seconds,
                     output_dir=run_dir,
                     phase="continuation",
-                )
-                log(
-                    f"scenario {scenario['id']} repetition {repetition}: continuation "
-                    f"returned {continuation.returncode} in {continuation.elapsed_ms:.1f} ms"
+                    scenario_id=str(scenario["id"]),
+                    repetition=repetition,
                 )
                 if continuation.returncode != 0:
                     invalid_reason = f"continuation command exited {continuation.returncode}"
@@ -639,8 +837,10 @@ def execute_scenario(
             log(f"scenario {scenario['id']} repetition {repetition}: wrote run record")
             outputs.append(record)
         finally:
-            log(f"scenario {scenario['id']} repetition {repetition}: cleaning worktree")
-            cleanup_worktree(repo_root, worktree_path)
+            log(
+                f"scenario {scenario['id']} repetition {repetition}: leaving worktree "
+                f"in place at {worktree_path} for inspection (removed automatically on next run)"
+            )
     return outputs
 
 

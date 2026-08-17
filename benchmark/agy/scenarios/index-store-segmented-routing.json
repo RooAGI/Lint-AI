@@ -13,7 +13,7 @@
   ],
   "continuation_prompt": "Without asking me to repeat our previous architecture discussion, explain which existing Lint-AI API the agent adapter should use for memory, which routing strategy we selected, and why a global index is still retained.",
   "expected_facts": [
-    { "id": "index-store-owner", "description": "IndexStore owns the memory snapshot and adapter operations.", "match_any": ["IndexStore owns", "use IndexStore", "uses IndexStore", "using IndexStore", "IndexStore::query", "IndexStore::at_path"] },
+    { "id": "index-store-owner", "description": "IndexStore owns the memory snapshot and adapter operations.", "match_any": ["IndexStore owns", "use IndexStore", "uses IndexStore", "using IndexStore", "IndexStore::query", "IndexStore::at_path", "IndexStore API", "existing IndexStore"] },
     { "id": "local-distinctiveness", "description": "Agent memory uses segmented LocalDistinctiveness routing.", "match_any": ["LocalDistinctiveness", "local distinctiveness"] },
     { "id": "global-fallback", "description": "The global index supports persistence and compatible fallback query paths.", "match_any": ["global fallback", "global index", "persistence"] }
   ],

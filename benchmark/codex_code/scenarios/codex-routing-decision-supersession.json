@@ -10,20 +10,20 @@
   },
   "setup_messages": [
     {
-      "prompt": "Initial proposal: use SegmentRoutingStrategy::SparseOverlap for Claude session memory.",
+      "prompt": "Initial proposal: use SegmentRoutingStrategy::SparseOverlap for Codex session memory.",
       "establishes_fact_ids": [
         "old-sparse-proposal"
       ]
     },
     {
-      "prompt": "Decision update: supersede the SparseOverlap proposal. Claude session memory must use SegmentRoutingStrategy::LocalDistinctiveness with query_top_n set to 3. Treat this as the current decision.",
+      "prompt": "Decision update: supersede the SparseOverlap proposal. Codex session memory must use SegmentRoutingStrategy::LocalDistinctiveness with query_top_n set to 3. Treat this as the current decision.",
       "establishes_fact_ids": [
         "current-local-routing",
         "query-top-three"
       ]
     }
   ],
-  "continuation_prompt": "What is the current routing configuration for Claude session memory? Distinguish it from the superseded proposal.",
+  "continuation_prompt": "What is the current routing configuration for Codex session memory? Distinguish it from the superseded proposal.",
   "expected_facts": [
     {
       "id": "current-local-routing",
@@ -67,16 +67,16 @@
   ],
   "validators": [
     {
-      "name": "claude-routing-configuration",
+      "name": "codex-routing-configuration",
       "command": [
         "rg",
         "routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness",
-        "src/integrations/claude_code"
+        "src/integrations/codex"
       ]
     }
   ],
   "limits": {
-    "timeout_seconds": 240,
+    "timeout_seconds": 300,
     "max_turns": 3,
     "max_budget_usd": 0.75,
     "max_injected_context_bytes": 8000

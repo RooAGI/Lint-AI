@@ -35,7 +35,8 @@ primary signal is whether Lint-AI avoids injecting unrelated context.
 
 ## Current Scenarios
 
-- `codex-index-store-segmented-routing.json`: architectural decision recall.
+- `codex-index-store-segmented-routing.json`: architectural decision recall (single-turn).
+- `codex-routing-decision-supersession.json`: temporal correction over a superseded proposal (multi-turn setup).
 - `codex-tool-use-retrieval.json`: Codex tool-use hook retrieval.
 - `codex-oversized-transcript-recovery.json`: transcript parsing failure and fix recall.
 
@@ -131,6 +132,97 @@ Each executed continuation writes `continuation.metrics.json`. The report
 consumes this normalized artifact, whose token, delegation, tool, hook, and
 retrieval fields match the Claude parser. Codex cached input is converted to
 separate uncached-input and cache-read fields so totals do not double-count it.
+
+Each scenario/arm/repetition worktree persists after the run instead of being
+deleted, so its `.lint-ai/codex-memory` store stays inspectable. A worktree
+left over from a prior run of the same scenario/arm/repetition is removed
+automatically right before the next run of it starts. Inspect a run's
+captured memory with:
+
+```bash
+target/release/lint-ai \
+  --inspect-index benchmark/codex_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/codex-memory \
+  --inspect-view source-documents
+```
+
+`--inspect-view` also accepts `summary`, `records`, and `segments`.
+
+## Single-Turn vs. Multi-Turn Setup
+
+A scenario's `setup_messages` array controls this: one message runs as a
+single request/response (single-turn); more than one message chains
+sequential turns into the same Codex session by threading `codex exec resume
+<thread_id>` between per-message processes (multi-turn) — see
+`run_resume_chain_phase` in `benchmark/codex_code/src/runner.py`. The same
+applies to the optional `continuation_messages` array. This dispatch is
+shared across all three provider harnesses (Claude, Codex, AGY); Claude uses
+a single live `--input-format stream-json` process instead of resume-chaining
+since it supports that natively, but the scenario-authoring contract
+(message-array length) is identical.
+
+`codex-index-store-segmented-routing.json` currently defines a single setup
+message, so the results below are single-turn. A multi-turn variant has not
+yet been added as a real scenario with scored facts.
+
+### Latest single-scenario result (`index-store-segmented-routing`, single-turn)
+
+One repetition each, `hooks-only`-equivalent restricted hook configuration
+(see above), run 2026-08-16 after fixing the `UUID_RE` regex (previously
+rejected Codex's UUIDv7 thread IDs) and loosening the `index-store-owner`
+`match_any` patterns (previously too brittle to match either arm's phrasing):
+
+| Metric | codex-native | lint-ai | lint-ai-with-codex-memory |
+|---|---|---|---|
+| Success | true | true | true |
+| Recall | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) |
+| Setup time | 10.2 s | 14.6 s | 16.9 s |
+| Continuation time | 19.8 s | 12.0 s | 10.4 s |
+| Input tokens (cached) | 63,451 (45,312) | 13,990 (11,008) | 14,515 (11,008) |
+| Output tokens | 593 | 99 | 117 |
+| Tool calls | 2 | 0 | 0 |
+
+All three arms recalled all 3 expected facts with identical accuracy.
+`lint-ai` and `lint-ai-with-codex-memory` both answered directly with 0 tool
+calls versus native's 2, using roughly a fifth of native's input tokens and
+noticeably lower continuation latency. Unlike Claude, where enabling both
+memory layers together (`claude-both`) beat every other arm on every metric,
+Codex's combined arm only marginally improved continuation latency over
+plain `lint-ai` and was slightly worse on setup time and tokens — within the
+noise of a single repetition, not a clear win. This is a
+single-repetition, single-scenario result, not a release benchmark — treat
+it as directional pending a multi-scenario, multi-repetition run.
+
+### Latest multi-turn result (`routing-decision-supersession`, multi-turn)
+
+One repetition each, run 2026-08-16. `setup_messages` has 2 entries (initial
+proposal, then a superseding decision), so setup runs as two chained turns
+via `codex exec resume <thread_id>` (see "Single-Turn vs. Multi-Turn Setup"
+above). This scenario also required loosening the `query-top-three` and
+`old-sparse-superseded` `match_any` patterns for the same reason as the
+single-turn fix: models phrase facts (e.g. `query_top_n: 3` with a colon)
+differently than the original literal-substring patterns expected.
+
+| Metric | codex-native | lint-ai | lint-ai-with-codex-memory |
+|---|---|---|---|
+| Success | true | true | true |
+| Recall | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) |
+| Setup time | 8.5 s | 7.8 s | 6.9 s |
+| Continuation time | 43.7 s | 6.9 s | 7.0 s |
+| Input tokens (cached) | 216,750 (179,200) | 14,376 (11,008) | 14,411 (11,008) |
+| Output tokens | 1,507 | 52 | 54 |
+| Tool calls | 6 | 0 | 0 |
+
+All three arms recalled all 3 expected facts, but the gap between native and
+Lint-AI is far larger here than in the single-turn scenario: to correctly
+distinguish the current decision from the superseded one, `codex-native`
+needed 6 tool calls and 216k input tokens re-deriving the temporal history
+from source, versus 0 tool calls and ~14k tokens for either `lint-ai` arm
+answering directly from injected memory — roughly 15x fewer input tokens and
+6x lower continuation latency. Temporal-correction/multi-turn scenarios
+expose Lint-AI's advantage far more sharply than simple single-turn recall.
+This is a single-repetition, single-scenario result, not a release
+benchmark — treat it as directional pending a multi-scenario,
+multi-repetition run.
 
 ## Generated Data
 

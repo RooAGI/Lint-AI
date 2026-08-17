@@ -152,30 +152,96 @@ the provider launcher.
 
 ## Comparison Arms
 
-The standard hooks-only comparison uses three arms.
+The standard hooks-only comparison uses three logical roles per client:
+**Native** (the client's own built-in memory, no Lint-AI at all), **Lint-AI
+only** (Lint-AI hooks, client-native memory explicitly disabled where the
+client has one), and **Both** (client-native memory and Lint-AI hooks
+enabled together). Each client maps these roles onto its own `--arms` names:
 
-| Arm | Native client memory | Lint-AI hooks | Lint-AI MCP | Purpose |
-| --- | --- | --- | --- | --- |
-| Native | Enabled | Disabled | Disabled | Client-native memory baseline |
-| Lint-AI only | Disabled | Enabled | Disabled | Lint-AI lifecycle memory |
-| Both | Enabled | Enabled | Disabled | Interaction between memory layers |
+| Role | Claude arm | Codex arm | AGY arm | Native client memory | Lint-AI hooks | Lint-AI MCP |
+| --- | --- | --- | --- | --- | --- | --- |
+| Native | `claude-native` | `codex-native` | `agy-native` | Enabled (Claude auto-memory / Codex Memories) | Disabled | Disabled |
+| Lint-AI only | `claude-lint-ai` | `lint-ai` | `agy-lint-ai` | Disabled | Enabled | Disabled |
+| Both | `claude-both` | `lint-ai-with-codex-memory` | n/a | Enabled | Enabled | Disabled |
+| Matched-install disabled control | n/a | n/a | `agy-lint-ai-disabled` | Disabled | Installed but off (`disable_lint_ai`) | Disabled |
+| MCP-only track | (`--profile mcp-only`) | n/a | `agy-mcp-only` | Disabled | Disabled (hooks removed) | Enabled |
 
-The MCP server is disabled for this table intentionally. MCP adds workspace
-code indexing and explicit code-search capability, which is a different
-measurement from lifecycle memory overhead and can dominate startup latency.
+AGY has no built-in "native memory" feature of its own to combine with
+Lint-AI, so it has no `Both` arm; `agy-native` is Lint-AI-absent entirely
+(`--agy-install` is not even run), and `agy-lint-ai-disabled` is a stricter
+control than `agy-native` — Lint-AI is installed identically to `agy-lint-ai`
+but toggled off via `disable_lint_ai`, isolating "installed but inactive"
+from "never installed."
 
-The Claude and Codex launchers configure these arms as follows:
+The MCP server is disabled for the hooks-only table intentionally. MCP adds
+workspace code indexing and explicit code-search capability, which is a
+different measurement from lifecycle memory overhead and can dominate
+startup latency; it is measured separately by the MCP-only track (see "MCP
+Test Track" below).
 
-- `claude-native`: Claude auto-memory enabled, no Lint-AI configuration.
-- `claude-lint-ai`: Claude auto-memory disabled, Lint-AI hooks enabled.
-- `claude-both`: Claude auto-memory and Lint-AI hooks enabled.
-- `codex-native`: Codex Memories enabled, no Lint-AI configuration.
-- `lint-ai`: Codex Memories disabled, Lint-AI hooks enabled.
-- `lint-ai-with-codex-memory`: Both memory layers enabled.
+Concretely, each launcher configures its arms as follows:
+
+- `claude-native`: Claude auto-memory enabled, no Lint-AI configuration at all.
+- `claude-lint-ai`: Claude auto-memory disabled, Lint-AI hooks enabled, MCP excluded from `hooks-only` profile.
+- `claude-both`: Claude auto-memory enabled *and* Lint-AI hooks enabled together.
+- `codex-native`: `memories = true` in Codex's own `config.toml`, no Lint-AI hook installation (`--codex-install` is skipped entirely).
+- `lint-ai`: `memories = false`, Lint-AI hooks installed and restricted to the Claude-equivalent lifecycle (see below).
+- `lint-ai-with-codex-memory`: `memories = true` *and* Lint-AI hooks installed — the Codex analogue of `claude-both`.
+- `agy-native`: no `--agy-install` step at all; pure AGY with nothing Lint-AI-related present.
+- `agy-lint-ai`: Lint-AI installed and explicitly enabled (`enable_lint_ai`), MCP server config emptied so only hooks are active.
+- `agy-lint-ai-disabled`: Lint-AI installed identically to `agy-lint-ai` but explicitly disabled (`disable_lint_ai`) — a matched-installation control.
+- `agy-mcp-only`: Lint-AI installed with hook settings emptied (no hooks fire) and the MCP server config left in place — isolates the MCP path.
 
 For the fair cross-client comparison, Lint-AI uses the Claude-equivalent
-lifecycle events. Codex-only tool and subagent events are excluded from that
-comparison so they do not create extra retrieval opportunities.
+lifecycle events on Codex (`SessionStart`, `UserPromptSubmit`,
+`UserPromptExpansion`, `PreCompact`, `Stop`, `SessionEnd`). Codex-only tool
+and subagent hook events are excluded from that comparison so they do not
+create extra retrieval opportunities that Claude structurally cannot have.
+
+## Single-Turn vs. Multi-Turn Setup
+
+A scenario's `setup_messages` array controls this, and the same rule applies
+identically across Claude, Codex, and AGY:
+
+- **One entry** → single-turn setup: one request/response establishes all
+  facts before the continuation phase.
+- **More than one entry** → multi-turn setup: the messages run as sequential
+  turns inside the *same* session, one after another, before the
+  continuation phase starts as its own fresh, separate session.
+
+The optional `continuation_messages` array follows the identical rule for
+the continuation phase (not currently used by any real scenario; only
+exercised by a throwaway mechanism-verification scenario during development).
+
+The delivery mechanism differs by client because their CLIs differ, but the
+scenario-authoring contract is identical — a scenario author never needs to
+know which mechanism a client uses:
+
+- **Claude**: a single live process fed multiple JSON user-turn lines via
+  `--input-format stream-json`, so all turns share one real `session_id`.
+- **Codex**: no equivalent streaming-input mode exists, so each turn is a
+  separate `codex exec` invocation, threaded together by extracting the
+  prior turn's `thread_id` and passing `codex exec resume <thread_id>` to
+  the next one. See `run_resume_chain_phase` in
+  `benchmark/codex_code/src/runner.py`.
+- **AGY**: interactive mode (`agy -i`) run through a PTY; multi-turn is not
+  yet exercised by a real AGY scenario.
+
+Both dispatch strategies live in the same shared `run_turn_phase` function in
+`benchmark/codex_code/src/runner.py`, which every provider's launcher calls
+for both the setup and continuation phases — the choice between them is
+purely `metrics_mode` (provider) plus message-count, not separate code paths
+per scenario.
+
+Current real (non-throwaway) multi-turn scenarios:
+
+- `routing-decision-supersession` (Claude and Codex): 2 setup messages
+  (initial proposal, then a superseding decision) — see "Current Scenarios"
+  below.
+
+All other current scenarios (`index-store-segmented-routing`,
+`oversized-transcript-recovery`, `unrelated-query-negative-control`,
+`codex-tool-use-retrieval`) are single-turn setup.
 
 ## Hooks Versus MCP
 
@@ -341,9 +407,10 @@ answer. They are not run against the developer's checkout.
 
 ## Current Scenarios
 
-### `index-store-segmented-routing`
+### `index-store-segmented-routing` (Claude and Codex)
 
-Category: `decision-recall`.
+Category: `decision-recall`. **Single-turn setup** (1 `setup_messages`
+entry).
 
 Setup establishes that adapters use `IndexStore`, segmented memory uses
 `SegmentRoutingStrategy::LocalDistinctiveness`, and a global fallback index is
@@ -381,14 +448,16 @@ Forbidden fact: ingesting the entire transcript without a bound.
 This scenario tests whether memory captures remain bounded while still
 recovering useful conversation context.
 
-### `routing-decision-supersession` (Claude)
+### `routing-decision-supersession` (Claude and Codex)
 
-Category: `temporal-correction`.
+Category: `temporal-correction`. **Multi-turn setup** (2 sequential
+`setup_messages`) — see "Single-Turn vs. Multi-Turn Setup" above.
 
-Setup first establishes `SparseOverlap`, then supersedes it with
-`LocalDistinctiveness` and `query_top_n = 3`. The continuation asks for the
-current configuration and requires the answer to distinguish the old proposal
-from the current decision.
+Setup first establishes `SparseOverlap` in one turn, then supersedes it with
+`LocalDistinctiveness` and `query_top_n = 3` in a second, sequential turn
+within the same setup session. The continuation asks for the current
+configuration and requires the answer to distinguish the old proposal from
+the current decision.
 
 Expected facts:
 
@@ -397,6 +466,9 @@ Expected facts:
 - `SparseOverlap` is explicitly superseded.
 
 Forbidden fact: presenting `SparseOverlap` as the current strategy.
+
+Files: `benchmark/claude_code/scenarios/routing-decision-supersession.json`,
+`benchmark/codex_code/scenarios/codex-routing-decision-supersession.json`.
 
 This scenario tests recency, revision, and conflict handling rather than
 simple keyword recall.

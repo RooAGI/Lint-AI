@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -136,6 +137,15 @@ def main() -> None:
             mcp_config_path = arm_root / "mcp.json"
             auto_memory_dir = arm_root / "auto-memory"
             claude_config_dir.mkdir(parents=True, exist_ok=True)
+            # CLAUDE_CONFIG_DIR below isolates each arm from the user's real
+            # config dir, which also isolates it from the OAuth credentials
+            # that live there. Copy the local session's credentials in so
+            # isolated arms can still authenticate.
+            user_credentials_path = Path.home() / ".claude" / ".credentials.json"
+            if user_credentials_path.exists():
+                arm_credentials_path = claude_config_dir / ".credentials.json"
+                shutil.copy2(user_credentials_path, arm_credentials_path)
+                arm_credentials_path.chmod(0o600)
             write_json(claude_config, {})
             arm_settings = {
                 **(
@@ -158,11 +168,17 @@ def main() -> None:
                 "LINT_AI_CLAUDE_SETTINGS": str(settings_path),
                 "LINT_AI_CLAUDE_MODEL": args.model,
                 "LINT_AI_CLAUDE_MCP_CONFIG": str(mcp_config_path),
-                "LINT_AI_BENCHMARK_SKILL_PATH": str(
-                    repo_root / "src" / "integrations" / "claude_code" / "skill.md"
-                ),
                 "PATH": f"{repo_root / 'target' / 'debug'}:{base_path}",
             })
+            # The skill instructs the model to call mcp__lint-ai__search, which only
+            # exists when MCP is wired in; hooks-only strips MCP out of claude.json, so
+            # installing the skill there just confuses the model with a tool that isn't there.
+            if args.profile != "hooks-only":
+                env["LINT_AI_BENCHMARK_SKILL_PATH"] = str(
+                    repo_root / "src" / "integrations" / "claude_code" / "skill.md"
+                )
+            else:
+                env.pop("LINT_AI_BENCHMARK_SKILL_PATH", None)
             env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
             env.pop("CLAUDE_CODE_SHELL_PREFIX", None)  # Apple sandbox wrapper causes sandbox_apply failure
             if arm == "claude-lint-ai":
@@ -203,12 +219,24 @@ def main() -> None:
             wrapper.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                f"exec claude --print --verbose --output-format stream-json --include-hook-events "
+                "# Multi-turn setup phases feed multiple JSON user-turn lines into one\n"
+                "# live session via --input-format stream-json; this keeps setup messages\n"
+                "# in a single real session instead of spawning one process per message.\n"
+                "# The runner appends --multiturn as an argv flag for that call only.\n"
+                "multiturn=0\n"
+                "if [ \"${1:-}\" = \"--multiturn\" ]; then\n"
+                "  multiturn=1\n"
+                "  shift\n"
+                "fi\n"
+                "set -- --print --verbose --output-format stream-json --include-hook-events "
                 "--model \"$LINT_AI_CLAUDE_MODEL\" "
                 "--dangerously-skip-permissions "
                 "--permission-mode bypassPermissions "
-                f"--strict-mcp-config --mcp-config {shlex.quote(str(mcp_config_path))} "
-                "-- -\n",
+                f"--strict-mcp-config --mcp-config {shlex.quote(str(mcp_config_path))}\n"
+                "if [ \"$multiturn\" = \"1\" ]; then\n"
+                "  set -- \"$@\" --input-format stream-json\n"
+                "fi\n"
+                "exec claude \"$@\" -- -\n",
                 encoding="utf-8",
             )
             wrapper.chmod(0o755)

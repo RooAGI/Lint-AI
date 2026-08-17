@@ -3,9 +3,20 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Strips Markdown emphasis/code markers so a pattern like "query_top_n: 3"
+# matches model output formatted as "`query_top_n`: `3`" or "**query_top_n:** 3".
+_MARKDOWN_MARKERS_RE = re.compile(r"[`*_]+")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_for_matching(text: str) -> str:
+    text = _MARKDOWN_MARKERS_RE.sub("", text.lower())
+    return _WHITESPACE_RE.sub(" ", text)
 
 
 @dataclass(frozen=True)
@@ -21,15 +32,14 @@ class ScenarioScore:
 
 
 def _match_fact_ids(facts: list[dict[str, Any]], text: str) -> list[str]:
-    # Strip Markdown code backticks so patterns like "use IndexStore" match "uses `IndexStore`"
-    text_lower = text.lower().replace("`", "")
+    text_normalized = _normalize_for_matching(text)
     matched: list[str] = []
     for fact in facts:
         fact_id = str(fact.get("id", ""))
         match_any = fact.get("match_any", [])
         if not fact_id or not isinstance(match_any, list):
             continue
-        if any(str(pattern).lower().replace("`", "") in text_lower for pattern in match_any):
+        if any(_normalize_for_matching(str(pattern)) in text_normalized for pattern in match_any):
             matched.append(fact_id)
     return matched
 

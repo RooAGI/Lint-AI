@@ -42,7 +42,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     let path = settings_path
         .map(Path::to_path_buf)
         .unwrap_or(default_settings_path()?);
-    root.canonicalize()?;
+    let root = root.canonicalize()?;
     let executable = env::current_exe()?;
     let mut settings = read_json_object(&path)?;
     let hooks = settings.entry("lint-ai").or_insert_with(|| json!({}));
@@ -65,11 +65,11 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
                 .unwrap_or_default()
                 .contains(HOOK_MARKER)
         });
-        let command = json!({"type":"command", "command": format!("{} {HOOK_MARKER} {name}", shell_quote(&executable.to_string_lossy()))});
+        let command = json!({"type":"command", "command": format!("{} {HOOK_MARKER} {name} {}", shell_quote(&executable.to_string_lossy()), shell_quote(&root.to_string_lossy()))});
         if matches!(event, "PreToolUse" | "PostToolUse") {
             entries.push(json!({"matcher":".*", "hooks":[command]}));
         } else {
-            entries.push(json!({"hooks":[command]}));
+            entries.push(command);
         }
     }
     write_json_object(&path, &settings)?;
@@ -103,7 +103,11 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {
         return Ok(Map::new());
     }
-    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
+    let contents = fs::read_to_string(path)?;
+    if contents.trim().is_empty() {
+        return Ok(Map::new());
+    }
+    Ok(serde_json::from_str(&contents)?)
 }
 fn write_json_object(path: &Path, value: &Map<String, Value>) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -174,10 +178,7 @@ mod tests {
         let settings: Value =
             serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(settings["theme"], "dark");
-        assert_eq!(
-            settings["lint-ai"]["Stop"].as_array().unwrap().len(),
-            1
-        );
+        assert_eq!(settings["lint-ai"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(
             settings["lint-ai"]["PreToolUse"].as_array().unwrap().len(),
             1

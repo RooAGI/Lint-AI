@@ -311,6 +311,7 @@ fn redact_capture_text(value: &str) -> String {
             if ["api_key", "authorization", "password", "secret", "token"]
                 .iter()
                 .any(|marker| lower.contains(marker))
+                || crate::integrations::session_recording::contains_credential_material(line)
             {
                 Some("[REDACTED]".to_string())
             } else {

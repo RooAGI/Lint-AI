@@ -595,12 +595,21 @@ fn looks_like_tool_trace(value: &str) -> bool {
     value.starts_with("**Tool:") || value.starts_with("<tool-")
 }
 
+/// Object ids are passed to `git` as positional arguments, so anything that is
+/// not a plain hexadecimal id (a leading `-` above all) must never get through.
+fn is_object_id(value: &str) -> bool {
+    (4..=64).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn revision_status(root: &Path, captured: Option<&str>, current: Option<&str>) -> &'static str {
     let (Some(captured), Some(current)) = (captured, current) else {
         return "unknown";
     };
     if captured == current {
         return "exact-match";
+    }
+    if !is_object_id(captured) || !is_object_id(current) {
+        return "unknown";
     }
     let status = std::process::Command::new("git")
         .args(["merge-base", "--is-ancestor", captured, current])

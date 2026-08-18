@@ -984,16 +984,64 @@ fn is_sensitive_key(key: &str) -> bool {
 }
 
 fn looks_sensitive(value: &str) -> bool {
-    let trimmed = value.trim();
-    value.contains("-----BEGIN ")
-        || value.contains("Bearer ")
-        || trimmed.starts_with("sk-")
-        || trimmed.starts_with("xoxb-")
-        || trimmed.starts_with("ghp_")
-        || trimmed.starts_with("github_pat_")
-        || trimmed.starts_with("AKIA")
-        || trimmed.starts_with("npm_")
-        || (trimmed.split('.').count() == 3 && trimmed.len() >= 40)
+    contains_credential_material(value)
+}
+
+/// Credential shapes that carry no surrounding key name, so the key-name checks
+/// in the provider redactors miss them when they appear in free text.
+pub(crate) fn contains_credential_material(value: &str) -> bool {
+    const PREFIXES: [&str; 17] = [
+        "sk-",
+        "sk_live_",
+        "rk_live_",
+        "xox",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "github_pat_",
+        "glpat-",
+        "AKIA",
+        "ASIA",
+        "AIza",
+        "ya29.",
+        "hf_",
+        "npm_",
+    ];
+    if value.contains("-----BEGIN ") || value.contains("Bearer ") {
+        return true;
+    }
+    value
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | ',' | ';' | '=' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+                )
+        })
+        .any(|token| {
+            PREFIXES
+                .iter()
+                .any(|prefix| token.starts_with(prefix) && token.len() >= prefix.len() + 8)
+                || looks_like_jwt(token)
+        })
+}
+
+fn looks_like_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(header), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    token.len() >= 40
+        && [header, payload, signature].iter().all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        })
 }
 
 fn truncate(value: &str, max_bytes: usize) -> String {

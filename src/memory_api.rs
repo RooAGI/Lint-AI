@@ -143,9 +143,19 @@ impl MemoryService {
     }
 }
 
+/// Identifiers reach the index as filter values and as `memory://` source URIs,
+/// so they must stay short, single-line, and free of control characters.
+const MAX_IDENTIFIER_BYTES: usize = 256;
+
 fn validate_identifier(value: &str, name: &str) -> anyhow::Result<()> {
     if value.trim().is_empty() {
         anyhow::bail!("{name} must not be empty");
+    }
+    if value.len() > MAX_IDENTIFIER_BYTES {
+        anyhow::bail!("{name} must be at most {MAX_IDENTIFIER_BYTES} bytes");
+    }
+    if value.chars().any(|character| character.is_control()) {
+        anyhow::bail!("{name} must not contain control characters");
     }
     Ok(())
 }

@@ -21,6 +21,11 @@ The server token accepts `X-Api-Key`, `Authorization: Bearer <token>`, or
 `Authorization: Token <token>`. It can also be supplied through
 `SERVER_TOKEN`.
 
+If no token is configured, the server refuses to start on any non-loopback
+bind address (anything other than `127.0.0.1`/`::1`). Pass
+`--allow-unauthenticated` to override this for closed networks; every request
+is then accepted without a token.
+
 ## Local contract smoke test
 
 ```bash

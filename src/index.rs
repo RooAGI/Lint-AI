@@ -16,7 +16,6 @@ use std::time::{Instant, SystemTime};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::document::TantivyDocument;
-use tantivy::schema::Value;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
 use tantivy::{doc, Index, IndexReader};
 
@@ -1320,6 +1319,9 @@ impl MemoryIndex {
         for (score, addr) in top_docs {
             let retrieved: TantivyDocument = searcher.doc(addr)?;
             if let Some(v) = retrieved.get_first(lex.doc_id_f) {
+                // Scoped locally: this trait's blanket impls shadow `String::as_str`
+                // if imported at file scope.
+                use tantivy::schema::Value as _;
                 if let Some(doc_id) = v.as_str() {
                     out.insert(doc_id.to_string(), score);
                 }

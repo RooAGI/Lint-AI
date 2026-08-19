@@ -41,6 +41,7 @@ pub mod memory_api;
 pub mod ownership;
 pub mod pipeline;
 pub mod query_expansion;
+pub mod query_plan;
 pub mod query_semantics;
 pub mod report;
 pub mod review;

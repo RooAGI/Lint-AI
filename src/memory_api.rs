@@ -1,5 +1,6 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
+use crate::query_plan::PreparedQuery;
 use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -125,7 +126,10 @@ impl MemoryService {
         let top_k = request.top_k.min(100);
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id);
-        let results = self.store.query_filtered(&request.query, top_k, &filters)?;
+        // Same query treatment as the CLI: intent inference and augmentation,
+        // scoped to this user's documents.
+        let prepared = PreparedQuery::new(&request.query);
+        let results = self.store.query_prepared(&prepared, top_k, &filters)?;
         let data = results
             .into_iter()
             .filter_map(|result| {

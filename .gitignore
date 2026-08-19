@@ -59,8 +59,9 @@ benchmark/codex_code/results/*
 !benchmark/codex_code/results/.gitkeep
 benchmark/agy/results/*
 !benchmark/agy/results/.gitkeep
-benchmark/data/longmemeval_s_raw.json
-benchmark/data/lintai_longmemeval_scoped_results*.json
-benchmark/data/python_lintai_longmemeval_scoped_results*.json
+# Benchmark corpora and generated results are local-only. Ignore the directory
+# rather than individual filenames: untracked files here are picked up by
+# `cargo package` and would otherwise ship inside the published crate.
+benchmark/data/
 benchmark/claude_code/results/*
 !benchmark/claude_code/results/.gitkeep

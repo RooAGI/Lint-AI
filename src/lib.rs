@@ -51,6 +51,7 @@ pub mod symbols;
 pub mod temporal;
 pub mod temporal_fact;
 pub mod tier1;
+pub mod tokenizer;
 pub mod usage;
 
 pub use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor, ExtractedClaims};

@@ -2,6 +2,7 @@ use crate::ids::stable_chunk_id;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
 use crate::query_semantics::QueryRoutingIntent;
 use crate::temporal::{parse_temporal_date, resolve_temporal_target};
+use crate::tokenizer::{self, TokenizerMode};
 use crate::tier1::{RankedTerm, Tier1Entity};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -2720,13 +2721,7 @@ impl SemanticAggregate {
 }
 
 fn tokenize_query_terms(input: &str) -> Vec<String> {
-    static TOKEN_RE: OnceLock<Regex> = OnceLock::new();
-    let token_re =
-        TOKEN_RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"));
-    token_re
-        .find_iter(input)
-        .map(|m| m.as_str().to_lowercase())
-        .collect()
+    tokenizer::tokenize(input, TokenizerMode::Unstemmed)
 }
 
 fn claim_tokens(claim: &Claim) -> Vec<String> {
@@ -3075,73 +3070,15 @@ fn group_evidence_boost(
 }
 
 fn routing_content_terms(q_terms: &[String]) -> Vec<String> {
-    let stop = routing_stopwords();
     let mut seen = HashSet::new();
     q_terms
         .iter()
         .filter(|term| term.len() >= 3)
-        .filter(|term| !stop.contains(term.as_str()))
+        .filter(|term| !tokenizer::is_stopword(term, TokenizerMode::Unstemmed))
         .filter(|term| seen.insert((*term).clone()))
         .take(16)
         .cloned()
         .collect()
-}
-
-fn routing_stopwords() -> &'static HashSet<&'static str> {
-    static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    STOP.get_or_init(|| {
-        [
-            "how",
-            "many",
-            "much",
-            "what",
-            "which",
-            "who",
-            "when",
-            "where",
-            "why",
-            "did",
-            "does",
-            "have",
-            "has",
-            "had",
-            "been",
-            "being",
-            "was",
-            "were",
-            "are",
-            "the",
-            "and",
-            "or",
-            "for",
-            "from",
-            "with",
-            "that",
-            "this",
-            "these",
-            "those",
-            "currently",
-            "recently",
-            "past",
-            "last",
-            "next",
-            "into",
-            "onto",
-            "about",
-            "after",
-            "before",
-            "over",
-            "under",
-            "between",
-            "during",
-            "i",
-            "you",
-            "we",
-            "they",
-        ]
-        .into_iter()
-        .collect()
-    })
 }
 
 fn routing_unit_terms(query: &[String]) -> Vec<String> {

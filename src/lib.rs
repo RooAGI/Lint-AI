@@ -41,6 +41,7 @@ pub mod memory_api;
 pub mod ownership;
 pub mod pipeline;
 pub mod query_expansion;
+pub mod query_plan;
 pub mod query_semantics;
 pub mod report;
 pub mod review;
@@ -51,6 +52,7 @@ pub mod symbols;
 pub mod temporal;
 pub mod temporal_fact;
 pub mod tier1;
+pub mod tokenizer;
 pub mod usage;
 
 pub use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor, ExtractedClaims};

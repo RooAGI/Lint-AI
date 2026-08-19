@@ -1,5 +1,6 @@
 use crate::index::{DocRecord, MemoryIndex, SearchResult, TemporalQueryContext, TemporalQueryHint};
 use crate::query_expansion::normalize_for_index;
+use crate::tokenizer::{self, TokenizerMode};
 use chrono::NaiveDate;
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -3496,10 +3497,8 @@ impl SegmentCorpusStats {
 }
 
 fn query_tokens(query: &str) -> HashSet<String> {
-    query
-        .split(|ch: char| !ch.is_alphanumeric())
-        .map(normalize_for_index)
-        .filter(|token| token.len() > 1)
+    tokenizer::tokenize(query, TokenizerMode::Stemmed)
+        .into_iter()
         .filter(|token| !is_routing_stopword(token))
         .collect()
 }
@@ -3863,45 +3862,7 @@ fn route_has_signal(
 }
 
 fn is_routing_stopword(token: &str) -> bool {
-    matches!(
-        token,
-        "a" | "an"
-            | "and"
-            | "are"
-            | "can"
-            | "did"
-            | "do"
-            | "doe"
-            | "for"
-            | "from"
-            | "had"
-            | "have"
-            | "how"
-            | "i"
-            | "in"
-            | "is"
-            | "it"
-            | "many"
-            | "mani"
-            | "me"
-            | "my"
-            | "of"
-            | "on"
-            | "or"
-            | "that"
-            | "the"
-            | "thi"
-            | "this"
-            | "to"
-            | "wa"
-            | "what"
-            | "when"
-            | "where"
-            | "which"
-            | "who"
-            | "with"
-            | "you"
-    )
+    tokenizer::is_stopword(token, TokenizerMode::Stemmed)
 }
 
 #[cfg(test)]

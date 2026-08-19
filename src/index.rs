@@ -2,6 +2,7 @@ use crate::ids::stable_chunk_id;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
 use crate::query_semantics::QueryRoutingIntent;
 use crate::temporal::{parse_temporal_date, resolve_temporal_target};
+use crate::tokenizer::{self, TokenizerMode};
 use crate::tier1::{RankedTerm, Tier1Entity};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -1472,6 +1473,11 @@ impl MemoryIndex {
         (rescored, timings, diagnostics)
     }
 
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `query_with_temporal_context`, which also carries query intent; \
+                scheduled for removal in 0.2.0"
+    )]
     pub fn query_timed(
         &self,
         query: &str,
@@ -1513,6 +1519,11 @@ impl MemoryIndex {
         (results, timings, diagnostics)
     }
 
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `query_with_temporal_context`; externally supplied lexical hits are \
+                no longer needed now that the index scores its own. Scheduled for removal in 0.2.0"
+    )]
     pub fn query_with_lexical_hits(
         &self,
         query: &str,
@@ -1525,6 +1536,12 @@ impl MemoryIndex {
 
     /// Query with exact-match field filtering. All supplied filter key-value pairs must match
     /// a document's `filters` map for it to be included in results.
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `query_with_temporal_context` with `TemporalQueryContext::allowed_doc_ids` \
+                built from `doc_ids_matching_filters`; scheduled for removal in 0.2.0"
+    )]
+    #[allow(deprecated)] // delegates to another deprecated helper; both go in 0.2.0
     pub fn query_with_filters(
         &self,
         query: &str,
@@ -1534,6 +1551,37 @@ impl MemoryIndex {
         self.query_with_filters_and_lexical(query, top_k, filters, None)
     }
 
+    /// Doc ids whose `filters` map matches every supplied key-value pair.
+    ///
+    /// Returns `None` when `filters` is empty, meaning "no scoping" rather
+    /// than "nothing matched" — callers pass this straight to
+    /// `TemporalQueryContext::allowed_doc_ids`.
+    pub fn doc_ids_matching_filters(
+        &self,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Option<HashSet<String>> {
+        if filters.is_empty() {
+            return None;
+        }
+        Some(
+            self.docs
+                .iter()
+                .filter(|(_, doc)| {
+                    filters
+                        .iter()
+                        .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
+                })
+                .map(|(doc_id, _)| doc_id.clone())
+                .collect(),
+        )
+    }
+
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `query_with_temporal_context` with `TemporalQueryContext::allowed_doc_ids` \
+                built from `doc_ids_matching_filters`; scheduled for removal in 0.2.0"
+    )]
+    #[allow(deprecated)] // delegates to another deprecated helper; both go in 0.2.0
     pub fn query_with_filters_and_lexical(
         &self,
         query: &str,
@@ -1541,19 +1589,9 @@ impl MemoryIndex {
         filters: &std::collections::BTreeMap<String, String>,
         lexical_hits: Option<&HashMap<String, f32>>,
     ) -> Vec<SearchResult> {
-        if filters.is_empty() {
+        let Some(allowed) = self.doc_ids_matching_filters(filters) else {
             return self.query_with_lexical_hits(query, top_k, lexical_hits);
-        }
-        let allowed: HashSet<String> = self
-            .docs
-            .iter()
-            .filter(|(_, doc)| {
-                filters
-                    .iter()
-                    .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
-            })
-            .map(|(doc_id, _)| doc_id.clone())
-            .collect();
+        };
         self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, Some(&allowed))
             .0
     }
@@ -1561,6 +1599,12 @@ impl MemoryIndex {
     /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores each
     /// query against it. At scale (thousands of docs) this avoids rescanning docs N times.
     /// Returns one `Vec<SearchResult>` per input query, in the same order.
+    #[deprecated(
+        since = "0.1.9",
+        note = "use `query_with_temporal_context` with `TemporalQueryContext::allowed_doc_ids` \
+                built once from `doc_ids_matching_filters` and reused across queries; \
+                scheduled for removal in 0.2.0"
+    )]
     pub fn query_with_filters_multi(
         &self,
         queries: &[&str],
@@ -2720,13 +2764,7 @@ impl SemanticAggregate {
 }
 
 fn tokenize_query_terms(input: &str) -> Vec<String> {
-    static TOKEN_RE: OnceLock<Regex> = OnceLock::new();
-    let token_re =
-        TOKEN_RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"));
-    token_re
-        .find_iter(input)
-        .map(|m| m.as_str().to_lowercase())
-        .collect()
+    tokenizer::tokenize(input, TokenizerMode::Unstemmed)
 }
 
 fn claim_tokens(claim: &Claim) -> Vec<String> {
@@ -3075,73 +3113,15 @@ fn group_evidence_boost(
 }
 
 fn routing_content_terms(q_terms: &[String]) -> Vec<String> {
-    let stop = routing_stopwords();
     let mut seen = HashSet::new();
     q_terms
         .iter()
         .filter(|term| term.len() >= 3)
-        .filter(|term| !stop.contains(term.as_str()))
+        .filter(|term| !tokenizer::is_stopword(term, TokenizerMode::Unstemmed))
         .filter(|term| seen.insert((*term).clone()))
         .take(16)
         .cloned()
         .collect()
-}
-
-fn routing_stopwords() -> &'static HashSet<&'static str> {
-    static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    STOP.get_or_init(|| {
-        [
-            "how",
-            "many",
-            "much",
-            "what",
-            "which",
-            "who",
-            "when",
-            "where",
-            "why",
-            "did",
-            "does",
-            "have",
-            "has",
-            "had",
-            "been",
-            "being",
-            "was",
-            "were",
-            "are",
-            "the",
-            "and",
-            "or",
-            "for",
-            "from",
-            "with",
-            "that",
-            "this",
-            "these",
-            "those",
-            "currently",
-            "recently",
-            "past",
-            "last",
-            "next",
-            "into",
-            "onto",
-            "about",
-            "after",
-            "before",
-            "over",
-            "under",
-            "between",
-            "during",
-            "i",
-            "you",
-            "we",
-            "they",
-        ]
-        .into_iter()
-        .collect()
-    })
 }
 
 fn routing_unit_terms(query: &[String]) -> Vec<String> {

@@ -3,7 +3,7 @@ use crate::cli::{GraphExportFormat, GraphLevel, IndexInspectView, LlmChunkStrate
 use crate::config::{load_config, normalize_list, Config};
 use crate::filters::is_noise_concept;
 use crate::graph::{normalize_concept, Graph, Tier0Record};
-use crate::index::{DocRecord, MemoryIndex, SectionChunk, TemporalQueryContext, TemporalQueryHint};
+use crate::index::{DocRecord, MemoryIndex, SectionChunk};
 #[cfg(feature = "agy")]
 use crate::integrations::agy::hooks::{run_hook as run_agy_hook, AgyHookKind};
 #[cfg(feature = "agy")]
@@ -39,7 +39,8 @@ use crate::pipeline::{
     source_documents_to_tier1_inputs, ChunkStrategy, IndexStore, MemoryIndexLayout,
     PipelineOptions, Tier1NerProvider, Tier1TermRankerKind,
 };
-use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
+use crate::query_plan::PreparedQuery;
+use crate::query_semantics::QueryAnalysis;
 use crate::report::Report;
 use crate::rules::cross_refs::check_cross_refs;
 use crate::rules::orphan_pages::check_orphans;
@@ -101,33 +102,6 @@ fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
             }
         })
         .collect()
-}
-
-fn query_temporal_context(analysis: &QueryAnalysis) -> TemporalQueryContext<'_> {
-    TemporalQueryContext {
-        starts_from: None,
-        ends_at: None,
-        window_days: match analysis.time_hint {
-            Some(QueryTimeHint::Past) => 365,
-            Some(QueryTimeHint::Present) => 30,
-            Some(QueryTimeHint::Ongoing) => 14,
-            Some(QueryTimeHint::Mixed) => 30,
-            None => 7,
-        },
-        hard_filter: false,
-        time_hint: analysis
-            .time_hint
-            .map(|hint| match hint {
-                QueryTimeHint::Past => TemporalQueryHint::Past,
-                QueryTimeHint::Present => TemporalQueryHint::Present,
-                QueryTimeHint::Ongoing => TemporalQueryHint::Ongoing,
-                QueryTimeHint::Mixed => TemporalQueryHint::Mixed,
-            })
-            .filter(|_| analysis.temporal.is_some()),
-        query_routing_intent: analysis.query_routing_intent,
-        has_explicit_temporal: analysis.temporal.is_some(),
-        allowed_doc_ids: None,
-    }
 }
 
 fn surface_forms(raw: &str) -> Vec<String> {
@@ -2409,9 +2383,10 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let query_value = args.llm_context.as_deref().or(args.query.as_deref());
         if let Some(query) = query_value {
             let started = Instant::now();
-            let analysis = analyze_query(query);
-            let search_query = analysis.augmented_query.clone();
-            let temporal_context = query_temporal_context(&analysis);
+            let prepared = PreparedQuery::new(query);
+            let analysis = prepared.analysis().clone();
+            let search_query = prepared.search_query().to_string();
+            let temporal_context = prepared.temporal_context();
             if args.llm_context.is_some() {
                 let requested = args.result_count.clamp(1, MAX_RESULT_COUNT);
                 let candidate_top_k = requested.max(LLM_CONTEXT_CANDIDATE_TOP_K);

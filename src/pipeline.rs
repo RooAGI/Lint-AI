@@ -6,6 +6,7 @@ use crate::index::{
     build_semantic_doc_state, DocRecord, MemoryIndex, Provenance, QueryDiagnostics, QueryTimings,
     SearchResult, SemanticAggregate, SemanticDocState,
 };
+use crate::query_plan::PreparedQuery;
 use crate::segments::{SegmentRoutingStrategy, SegmentedMemoryIndex};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
@@ -877,6 +878,8 @@ impl IndexStore {
     }
 
     #[allow(dead_code)]
+    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
+    #[allow(deprecated)]
     fn query_latest(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         self.poll_background_refresh()?;
         if self.snapshot.is_none() {
@@ -895,6 +898,8 @@ impl IndexStore {
             .query_with_lexical_hits(query, top_k, Some(&lexical_hits)))
     }
 
+    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
+    #[allow(deprecated)]
     fn query_fresh(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         self.refresh()?;
         let lexical_hits = self
@@ -935,6 +940,8 @@ impl IndexStore {
         })
     }
 
+    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
+    #[allow(deprecated)]
     pub fn query_timed(
         &mut self,
         query: &str,
@@ -954,6 +961,34 @@ impl IndexStore {
         Ok((results, timings, diagnostics))
     }
 
+    /// Searches with the full query treatment the CLI gets — intent inference
+    /// and query augmentation via [`PreparedQuery`] — optionally scoped to the
+    /// documents matching `filters`.
+    ///
+    /// Prefer this over [`IndexStore::query_filtered`] for any caller handling
+    /// a raw user query, so the analysis stays identical across entry points.
+    pub fn query_prepared(
+        &mut self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<SearchResult>> {
+        self.refresh()?;
+        let index = self
+            .snapshot
+            .as_ref()
+            .expect("snapshot should exist after refresh")
+            .global_index();
+        let allowed = index.doc_ids_matching_filters(filters);
+        let mut context = prepared.temporal_context();
+        context.allowed_doc_ids = allowed.as_ref();
+        Ok(index
+            .query_with_temporal_context(prepared.search_query(), top_k, context)
+            .0)
+    }
+
+    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
+    #[allow(deprecated)]
     pub fn query_filtered(
         &mut self,
         query: &str,
@@ -976,6 +1011,8 @@ impl IndexStore {
     /// query. BM25 (tantivy) is still called once per term — that can't be collapsed — but the
     /// filter scan over all docs happens only once regardless of how many queries are given.
     /// Returns one `Vec<SearchResult>` per input query, in the same order.
+    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
+    #[allow(deprecated)]
     pub fn query_filtered_multi(
         &mut self,
         queries: &[&str],

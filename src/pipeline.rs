@@ -17,6 +17,7 @@ use crate::tier1::{
     TextRankStyleTermRanker, Tier1DocInput, YakeStyleTermRanker,
 };
 use anyhow::Result;
+use std::time::Duration;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1601,9 +1602,17 @@ fn save_binary_core_atomic(snapshot: &MemoryIndex, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How long to wait for another session to finish writing before giving up.
+const WRITER_LOCK_WAIT: Duration = Duration::from_secs(10);
+const WRITER_LOCK_RETRY: Duration = Duration::from_millis(150);
+
 struct LexicalState {
     index: Index,
-    writer: IndexWriter,
+    /// Created on first write. Tantivy's writer lock is exclusive across
+    /// processes, so constructing one eagerly means a second agent session
+    /// searching the same project dies with LockBusy before it can read
+    /// anything. Readers need no lock, and many can share one index.
+    writer: Option<IndexWriter>,
     reader: IndexReader,
     doc_id_f: Field,
     content_f: Field,
@@ -1626,7 +1635,7 @@ impl LexicalState {
             Some(dir) => Self::open_or_create_on_disk(dir, &schema)?,
             None => Index::create_in_ram(schema),
         };
-        let writer = index.writer(50_000_000)?;
+        let writer = None;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -1690,26 +1699,76 @@ impl LexicalState {
             .collect::<Vec<_>>()
             .join("\n");
 
-        self.writer
-            .delete_term(Term::from_field_text(self.doc_id_f, &record.doc_id));
-        self.writer.add_document(doc!(
-            self.doc_id_f => record.doc_id.clone(),
-            self.content_f => content_text,
-            self.headings_f => headings_text,
-            self.terms_f => terms_text,
-            self.entities_f => entities_text
+        // Field handles are Copy, so they are taken before the writer borrow.
+        let (doc_id_f, content_f, headings_f, terms_f, entities_f) = (
+            self.doc_id_f,
+            self.content_f,
+            self.headings_f,
+            self.terms_f,
+            self.entities_f,
+        );
+        let doc_id = record.doc_id.clone();
+        let writer = self.writer()?;
+        writer.delete_term(Term::from_field_text(doc_id_f, &doc_id));
+        writer.add_document(doc!(
+            doc_id_f => doc_id,
+            content_f => content_text,
+            headings_f => headings_text,
+            terms_f => terms_text,
+            entities_f => entities_text
         ))?;
         Ok(())
     }
 
     fn remove_doc(&mut self, doc_id: &str) -> Result<()> {
-        self.writer
-            .delete_term(Term::from_field_text(self.doc_id_f, doc_id));
+        let doc_id_f = self.doc_id_f;
+        self.writer()?
+            .delete_term(Term::from_field_text(doc_id_f, doc_id));
         Ok(())
     }
 
+    /// Takes the index lock, waiting briefly if another process is mid-write.
+    ///
+    /// Tantivy's writer lock is exclusive across processes, so two agent sessions
+    /// working in the same project contend for it. Holding one for the life of the
+    /// process makes that fatal for whichever starts second; taking it per write
+    /// and waiting a moment makes them take turns.
+    fn writer(&mut self) -> Result<&mut IndexWriter> {
+        if self.writer.is_none() {
+            let mut waited = Duration::ZERO;
+            loop {
+                match self.index.writer(50_000_000) {
+                    Ok(writer) => {
+                        self.writer = Some(writer);
+                        break;
+                    }
+                    Err(error) if waited < WRITER_LOCK_WAIT => {
+                        std::thread::sleep(WRITER_LOCK_RETRY);
+                        waited += WRITER_LOCK_RETRY;
+                        let _ = error;
+                    }
+                    Err(error) => {
+                        return Err(anyhow::anyhow!(
+                            "another session is writing this project's index: {error}"
+                        ))
+                    }
+                }
+            }
+        }
+        self.writer
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("index writer missing immediately after creation"))
+    }
+
     fn commit_reload(&mut self) -> Result<()> {
-        self.writer.commit()?;
+        // Nothing was written, so there is nothing to commit and no reason to
+        // have taken the lock.
+        if let Some(writer) = self.writer.as_mut() {
+            writer.commit()?;
+        }
+        // Dropping the writer releases the lock. Keeping it would hold the index
+        // against every other session in this project for as long as we run.
+        self.writer = None;
         self.reader.reload()?;
         Ok(())
     }

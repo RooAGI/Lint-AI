@@ -140,6 +140,15 @@ cargo build --release --features claude-code,codex
 ./lint-ai --codex-install /path/to/project
 ```
 
+Each installer writes lifecycle hooks and an MCP server entry into that agent's
+own configuration, which is global, and a memory policy into the named project:
+a skill for Claude Code, a delimited block in `AGENTS.md` for Codex. The MCP
+entry carries no project root — the server resolves the project it is launched
+in — so installing for a second project does not repoint the first.
+
+```bash
+```
+
 Provider memory remains isolated:
 
 ```text

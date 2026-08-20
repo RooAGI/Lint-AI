@@ -90,7 +90,8 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         Some(path) => path.to_path_buf(),
         None => default_codex_config_path()?,
     };
-    let root = root
+    // Still canonicalized, to reject a path that does not exist before writing.
+    let _root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
@@ -124,12 +125,11 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         "startup_timeout_sec".to_string(),
         TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
     );
+    // Global config, so an absolute root here pins every project to whichever was
+    // installed last. The serve path defaults to the working directory.
     entry.insert(
         "args".to_string(),
-        TomlValue::Array(vec![
-            TomlValue::String("--codex-serve".to_string()),
-            TomlValue::String(root.to_string_lossy().into_owned()),
-        ]),
+        TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
     );
     mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
 
@@ -147,6 +147,56 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     write_text_object(&config_path, &toml::to_string_pretty(&config)?)
         .context("failed to write Codex config")?;
     Ok(config_path)
+}
+
+/// Delimiters so the block can be found and replaced without touching the rest of
+/// a file the user also writes in.
+const POLICY_START: &str = "<!-- lint-ai:memory-policy:start -->";
+const POLICY_END: &str = "<!-- lint-ai:memory-policy:end -->";
+
+/// Writes the memory policy into the project's `AGENTS.md`, which is what Codex
+/// reads for standing instructions — the counterpart to the skill file the Claude
+/// installer writes. Without it the hooks record a project the agent is never told
+/// to consult.
+///
+/// `AGENTS.md` belongs to the user, so the block is delimited and replaced in
+/// place; everything outside it is left exactly as it was, and an existing file
+/// is never clobbered.
+pub fn install_memory_policy(root: &Path) -> Result<PathBuf> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+    let path = root.join("AGENTS.md");
+    let block = include_str!("agents_md.md").trim_end();
+
+    let next = match fs::read_to_string(&path) {
+        Ok(existing) => match (existing.find(POLICY_START), existing.find(POLICY_END)) {
+            (Some(start), Some(end)) if end > start => {
+                let mut updated = String::with_capacity(existing.len());
+                updated.push_str(&existing[..start]);
+                updated.push_str(block);
+                updated.push_str(&existing[end + POLICY_END.len()..]);
+                updated
+            }
+            _ => {
+                let mut updated = existing.trim_end().to_string();
+                if !updated.is_empty() {
+                    updated.push_str("\n\n");
+                }
+                updated.push_str(block);
+                updated.push('\n');
+                updated
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => format!("{block}\n"),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()))
+        }
+    };
+
+    write_text_object(&path, &next)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
 }
 
 pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Result<PathBuf> {
@@ -817,6 +867,27 @@ mod tests {
     }
 
     #[test]
+    fn install_memory_policy_preserves_user_text_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("lint-ai-agents-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("AGENTS.md");
+        fs::write(&path, "# Mine\n\nMy own standing instructions.\n").unwrap();
+
+        install_memory_policy(&dir).unwrap();
+        let once = fs::read_to_string(&path).unwrap();
+        assert!(once.contains("My own standing instructions."));
+        assert_eq!(once.matches(POLICY_START).count(), 1);
+
+        install_memory_policy(&dir).unwrap();
+        let twice = fs::read_to_string(&path).unwrap();
+        // A second install replaces the block rather than appending another.
+        assert_eq!(twice.matches(POLICY_START).count(), 1);
+        assert!(twice.contains("My own standing instructions."));
+        assert_eq!(once, twice);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn install_user_config_merges_existing_servers() {
         let config_path = temp_path("claude-config");
         fs::write(
@@ -863,7 +934,8 @@ args = ["old"]
                 .map(TomlValue::as_str)
                 .collect::<Option<Vec<_>>>()
                 .unwrap(),
-            vec!["--codex-serve", root.to_string_lossy().as_ref()]
+            // Global entry: see install_user_config.
+            vec!["--codex-serve"]
         );
     }
 

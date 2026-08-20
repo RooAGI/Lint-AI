@@ -77,7 +77,8 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         Some(path) => path.to_path_buf(),
         None => default_claude_config_path()?,
     };
-    let root = root
+    // Still canonicalized, to reject a path that does not exist before writing.
+    let _root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
@@ -93,15 +94,19 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         .as_object_mut()
         .context("Claude MCP server entry must be a JSON object")?;
     entry.insert("command".to_string(), json!(executable));
-    entry.insert(
-        "args".to_string(),
-        json!(["--claude-code-serve", root.to_string_lossy().into_owned()]),
-    );
+    // The MCP entry lives in the user's global config, so pinning an absolute
+    // project root here means installing for a second project silently repoints
+    // the first: the skill still tells that agent to consult memory, and it gets
+    // another project's corpus. The serve path defaults to the working directory,
+    // which the agent sets to the project it is running in.
+    entry.insert("args".to_string(), json!(["--claude-code-serve"]));
     write_claude_config(&config_path, &config)?;
     Ok(config_path)
 }
 
 pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
+    // Canonicalized, and used below: the skill must land at the real path, not
+    // through a symlink.
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
@@ -852,7 +857,24 @@ mod tests {
                 .map(Value::as_str)
                 .collect::<Option<Vec<_>>>()
                 .unwrap(),
-            vec!["--claude-code-serve", root.to_string_lossy().as_ref()]
+            // No project root: the entry is global, so pinning one here would
+            // repoint every other project at whichever was installed last.
+            vec!["--claude-code-serve"]
+        );
+    }
+
+    #[test]
+    fn install_user_config_does_not_pin_a_project_root() {
+        let first = temp_path("claude-config-multi");
+        let root_a = env::current_dir().unwrap();
+        install_user_config(&root_a, Some(&first)).unwrap();
+        let after_a = read_claude_config(&first).unwrap();
+        install_user_config(&root_a.join("src"), Some(&first)).unwrap();
+        let after_b = read_claude_config(&first).unwrap();
+        // Installing for a second project must leave the first one's entry alone.
+        assert_eq!(
+            after_a.mcp_servers["lint-ai"]["args"],
+            after_b.mcp_servers["lint-ai"]["args"]
         );
     }
 

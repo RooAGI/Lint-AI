@@ -23,6 +23,7 @@ use crate::integrations::codex::hooks::{run_hook as run_codex_hook, CodexHookKin
 #[cfg(feature = "codex")]
 use crate::integrations::codex::{
     install_hook_settings as install_codex_hook_settings,
+    install_memory_policy as install_codex_memory_policy,
     install_user_config as install_codex_user_config, run_server as run_codex_server,
     run_status_line as run_codex_status_line, CodexServerOptions,
 };
@@ -2185,6 +2186,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let settings_path = args.codex_settings.as_deref().map(Path::new);
         let written = install_codex_hook_settings(Path::new(&args.path), settings_path)?;
         println!("Wrote Codex hook settings to {}", written.display());
+        let written = install_codex_memory_policy(Path::new(&args.path))?;
+        println!("Wrote Codex memory policy to {}", written.display());
         return Ok(());
     }
 

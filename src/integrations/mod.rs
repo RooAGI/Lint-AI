@@ -10,4 +10,5 @@ pub mod mcp_health;
 pub mod mcp_index;
 pub mod mcp_tools;
 pub mod mcp_transport;
+pub mod recall;
 pub mod session_recording;

@@ -1,8 +1,9 @@
 pub mod document;
 pub mod hooks;
 
-use crate::config::normalize_list;
-use crate::graph::{Graph, Tier0Record};
+use crate::adapters::{
+    apply_ignore_paths, build_project_graph, graph_to_source_documents, AdapterInput,
+};
 use crate::integrations::mcp_index;
 use crate::integrations::mcp_tools;
 use crate::integrations::mcp_transport;
@@ -17,11 +18,9 @@ use crate::pipeline::IndexStore;
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 #[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
-use crate::source::SourceDocument;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufReader, Read};
@@ -226,79 +225,6 @@ pub fn run_server(root: &Path, options: ClaudeCodeServerOptions<'_>) -> Result<(
     mcp.serve()
 }
 
-fn build_graph(
-    root: &Path,
-    max_bytes: usize,
-    max_files: usize,
-    max_depth: usize,
-    max_total_bytes: usize,
-) -> Result<Graph> {
-    Graph::build(
-        &root.to_string_lossy(),
-        max_bytes,
-        max_files,
-        max_depth,
-        max_total_bytes,
-    )
-}
-
-fn apply_ignores(mut graph: Graph, ignore_paths: &[String]) -> Graph {
-    if ignore_paths.is_empty() {
-        return graph;
-    }
-    let ignore = normalize_list(ignore_paths);
-    graph.pages.retain(|p| {
-        let rel = p.rel_path.to_lowercase();
-        !ignore.iter().any(|pat| rel.contains(pat))
-    });
-    let retained: std::collections::HashSet<String> =
-        graph.pages.iter().map(|p| p.rel_path.clone()).collect();
-    graph.tier0_records.retain(|r| retained.contains(&r.source));
-    graph
-}
-
-fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
-    let mut tier0_by_source = HashMap::<String, &Tier0Record>::new();
-    for record in &graph.tier0_records {
-        if tier0_by_source
-            .insert(record.source.clone(), record)
-            .is_some()
-        {
-            debug_assert!(false, "duplicate Tier0 source: {}", record.source);
-        }
-    }
-    let concept_to_rel: HashMap<String, String> = graph
-        .pages
-        .iter()
-        .map(|p| (p.concept.clone(), p.rel_path.clone()))
-        .collect();
-
-    graph
-        .pages
-        .iter()
-        .map(|p| {
-            let t0 = tier0_by_source.get(&p.rel_path).copied();
-            SourceDocument {
-                doc_id: p.rel_path.clone(),
-                source: p.rel_path.clone(),
-                content: p.content.clone(),
-                concept: p.raw_concept.clone(),
-                group_id: None,
-                filters: std::collections::BTreeMap::new(),
-                headings: p.headings.clone(),
-                links: p
-                    .links
-                    .iter()
-                    .filter_map(|c| concept_to_rel.get(c).cloned())
-                    .collect(),
-                timestamp: t0.and_then(|r| r.timestamp.clone()),
-                doc_length: t0.map(|r| r.doc_length).unwrap_or(p.content.len()),
-                author_agent: t0.and_then(|r| r.author_agent.clone()),
-            }
-        })
-        .collect()
-}
-
 impl ClaudeMcp {
     fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<IndexStore>>> {
         let mut store = self
@@ -306,20 +232,21 @@ impl ClaudeMcp {
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
         if store.is_none() {
-            let graph = build_graph(
-                &self.root,
-                self.max_bytes,
-                self.max_files,
-                self.max_depth,
-                self.max_total_bytes,
-            )?;
-            let graph = apply_ignores(graph, &self.ignore_paths);
+            let graph = build_project_graph(&AdapterInput {
+                root: &self.root,
+                max_bytes: self.max_bytes,
+                max_files: self.max_files,
+                max_depth: self.max_depth,
+                max_total_bytes: self.max_total_bytes,
+            })?;
+            let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
             let root = self.root.clone();
             *store = Some(mcp_index::open_persistent_store(
                 &root,
                 "claude-mcp-index",
                 "claude-memory",
+                &self.ignore_paths,
                 || Ok(documents),
             )?);
         }
@@ -769,6 +696,7 @@ fn default_claude_settings_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::SourceDocument;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 

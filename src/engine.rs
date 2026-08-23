@@ -2004,6 +2004,58 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
 
+    if args.recall.is_some() {
+        #[cfg(any(
+            feature = "claude-code",
+            feature = "codex",
+            feature = "gemini-cli",
+            feature = "agy"
+        ))]
+        {
+            let query = args.recall.as_deref().expect("checked above");
+            // Without the configured ignores the top hit of a project root is a
+            // vendored node_modules README rather than anything the caller asked
+            // about, so the config is loaded even though nothing is linted here.
+            let cfg = load_config(
+                args.config.as_deref(),
+                &args.path,
+                args.strict_config,
+                args.max_config_bytes,
+            )
+            .map_err(|err| anyhow::anyhow!(err))?;
+            let (index_name, memory_name) = match args.session_provider {
+                crate::cli::SessionProvider::Claude => ("claude-mcp-index", "claude-memory"),
+                crate::cli::SessionProvider::Codex => ("codex-mcp-index", "codex-memory"),
+                crate::cli::SessionProvider::Gemini => ("gemini-mcp-index", "gemini-cli-memory"),
+                crate::cli::SessionProvider::Agy => ("agy-mcp-index", "agy-memory"),
+            };
+            let output =
+                crate::integrations::recall::recall(&crate::integrations::recall::RecallOptions {
+                    root: Path::new(&args.path),
+                    query,
+                    result_count: args.result_count.clamp(1, MAX_RESULT_COUNT),
+                    ignore_paths: &cfg.ignore_paths,
+                    max_bytes: args.max_bytes,
+                    max_files: args.max_files,
+                    max_depth: args.max_depth,
+                    max_total_bytes: args.max_total_bytes,
+                    index_name,
+                    memory_name,
+                })?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            return Ok(());
+        }
+        #[cfg(not(any(
+            feature = "claude-code",
+            feature = "codex",
+            feature = "gemini-cli",
+            feature = "agy"
+        )))]
+        {
+            anyhow::bail!("recall requires the Claude Code or Codex feature");
+        }
+    }
+
     if args.promote_session.is_some() {
         #[cfg(any(
             feature = "claude-code",

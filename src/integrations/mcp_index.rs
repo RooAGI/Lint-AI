@@ -27,15 +27,20 @@ pub fn trace_event(event: &str) {
     }
 }
 
+/// Open the project index, rebuilding it only when the workspace it describes
+/// has moved on. `ignore_paths` is part of that description: the documents the
+/// caller hands over depend on it, so an index built under different ignores is
+/// as stale as one built at a different revision.
 pub fn open_persistent_store(
     root: &Path,
     index_name: &str,
     memory_name: &str,
+    ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<IndexStore> {
     let index_root = root.join(".lint-ai").join(index_name);
     let mut store = IndexStore::at_path(&index_root, segmented_store_options())?;
-    let state = workspace_state(root);
+    let state = workspace_state(root, ignore_paths);
     if store.is_empty() || !index_is_current(&index_root, state.as_ref()) {
         for doc_id in store
             .source_documents()
@@ -81,7 +86,7 @@ pub fn sync_memory_documents(memory_root: &Path, target: &mut IndexStore) -> Res
     Ok(())
 }
 
-fn workspace_state(root: &Path) -> Option<Value> {
+fn workspace_state(root: &Path, ignore_paths: &[String]) -> Option<Value> {
     let revision = git_output(root, &["rev-parse", "HEAD"])?;
     let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
     let status = status
@@ -89,7 +94,9 @@ fn workspace_state(root: &Path) -> Option<Value> {
         .filter(|line| !line.contains(".lint-ai/"))
         .collect::<Vec<_>>()
         .join("\n");
-    Some(json!({ "revision": revision, "status": status }))
+    let mut ignore_paths = ignore_paths.to_vec();
+    ignore_paths.sort();
+    Some(json!({ "revision": revision, "status": status, "ignore_paths": ignore_paths }))
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {

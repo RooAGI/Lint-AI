@@ -17,7 +17,6 @@ pub fn segmented_store_options() -> PipelineOptions {
         ..PipelineOptions::default()
     }
 }
-
 pub fn trace_event(event: &str) {
     let Some(path) = std::env::var_os("LINT_AI_MCP_TRACE_PATH") else {
         return;

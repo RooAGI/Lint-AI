@@ -71,7 +71,6 @@ use walkdir::WalkDir;
 fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
     crate::adapters::graph_to_source_documents(graph)
 }
-
 fn surface_forms(raw: &str) -> Vec<String> {
     let raw = raw.trim();
     if raw.is_empty() {

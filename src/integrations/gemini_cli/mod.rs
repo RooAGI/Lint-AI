@@ -153,6 +153,9 @@ impl GeminiMcp {
                 &self.root,
                 self.index_name,
                 self.memory_dir,
+                // This server indexes memories only, so no ignore path can
+                // change the corpus it builds.
+                &[],
                 || Ok(Vec::new()),
             )?);
         }

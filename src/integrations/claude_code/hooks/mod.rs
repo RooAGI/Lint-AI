@@ -1,6 +1,7 @@
 mod protocol;
 
 use super::document::{ClaudeCodeDocument, ClaudeCodeDocumentType};
+use crate::integrations::recall::{query_terms, relevant_excerpt, truncate_utf8};
 use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
@@ -235,7 +236,12 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<ClaudeHookOutp
         if record.source.starts_with("claude://") || record.source.starts_with("codex://") {
             continue;
         }
-        let normalized = relevant_excerpt(&record.content, query, &result.matched_terms);
+        let normalized = relevant_excerpt(
+            &record.content,
+            query,
+            &result.matched_terms,
+            MAX_EXCERPT_BYTES,
+        );
         let normalized = normalized.trim();
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {
             continue;
@@ -335,66 +341,6 @@ fn document_type_priority(document_type: &str) -> u8 {
         "checkpoint" => 1,
         _ => 0,
     }
-}
-
-fn relevant_excerpt(content: &str, query: &str, matched_terms: &[String]) -> String {
-    let mut terms = query_terms(query);
-    terms.extend(matched_terms.iter().flat_map(|term| query_terms(term)));
-    let mut lines = content
-        .lines()
-        .enumerate()
-        .map(|(index, line)| {
-            let lower = line.to_ascii_lowercase();
-            let score = terms.iter().filter(|term| lower.contains(*term)).count();
-            (index, score, line.trim())
-        })
-        .filter(|(_, _, line)| !line.is_empty())
-        .collect::<Vec<_>>();
-    lines.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
-
-    let mut selected = lines
-        .iter()
-        .filter(|(_, score, _)| *score > 0)
-        .take(3)
-        .cloned()
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        selected.extend(lines.into_iter().take(2));
-    }
-    selected.sort_by_key(|(index, _, _)| *index);
-    truncate_utf8(
-        &selected
-            .into_iter()
-            .map(|(_, _, line)| line)
-            .collect::<Vec<_>>()
-            .join("\n"),
-        MAX_EXCERPT_BYTES,
-    )
-}
-
-fn query_terms(value: &str) -> HashSet<String> {
-    const STOP_WORDS: &[&str] = &[
-        "about", "after", "again", "also", "and", "are", "before", "from", "have", "into", "our",
-        "that", "the", "their", "this", "was", "what", "when", "which", "with", "without",
-    ];
-    value
-        .split(|character: char| {
-            !character.is_alphanumeric() && character != '-' && character != '_'
-        })
-        .map(str::to_ascii_lowercase)
-        .filter(|term| term.len() >= 3 && !STOP_WORDS.contains(&term.as_str()))
-        .collect()
-}
-
-fn truncate_utf8(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_string();
-    }
-    let mut end = max_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", value[..end].trim_end())
 }
 
 fn capture(
@@ -961,7 +907,7 @@ mod tests {
             "Implemented LocalDistinctiveness routing for IndexStore",
             "x".repeat(2_000)
         );
-        let excerpt = relevant_excerpt(&content, "IndexStore routing", &[]);
+        let excerpt = relevant_excerpt(&content, "IndexStore routing", &[], MAX_EXCERPT_BYTES);
         assert!(excerpt.contains("LocalDistinctiveness routing"));
         assert!(!excerpt.contains("unrelated documentation"));
         assert!(excerpt.len() <= MAX_EXCERPT_BYTES + 3);

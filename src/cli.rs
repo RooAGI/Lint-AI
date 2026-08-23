@@ -249,6 +249,10 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "agy")]
     pub agy_config: Option<String>,
+    /// Query the unified store (project documents and recorded memories) once
+    /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
+    #[arg(long)]
+    pub recall: Option<String>,
     #[arg(long)]
     pub inspect_index: Option<String>,
     #[arg(long)]
@@ -279,6 +283,21 @@ pub fn parse() -> Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_recall_query_and_result_count() {
+        let args = Args::try_parse_from([
+            "lint-ai",
+            "--recall",
+            "why did we drop embeddings",
+            "--result-count",
+            "8",
+        ])
+        .unwrap();
+
+        assert_eq!(args.recall.as_deref(), Some("why did we drop embeddings"));
+        assert_eq!(args.result_count, 8);
+    }
 
     #[test]
     fn parses_index_inspection_view() {

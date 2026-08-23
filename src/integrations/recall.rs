@@ -9,12 +9,16 @@ use crate::adapters::{
     apply_ignore_paths, build_project_graph, graph_to_source_documents, AdapterInput,
 };
 use crate::index::{DocRecord, SearchResult, SectionChunk};
+use crate::integrations::mcp_index::open_persistent_store;
 use crate::integrations::mcp_index;
+use crate::pipeline::IndexStore;
 use anyhow::{Context, Result};
-use serde::Serialize;
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::time::Instant;
+use walkdir::WalkDir;
 
 /// The project index is shared with the MCP servers rather than kept under a
 /// name of its own. Both paths build it from the same graph with the same
@@ -173,6 +177,115 @@ pub fn recall(options: &RecallOptions<'_>) -> Result<RecallOutput> {
         elapsed_ms: started.elapsed().as_millis(),
         results: hits,
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct RecallServerRequest {
+    query: String,
+    #[serde(default = "default_result_count")]
+    result_count: usize,
+    #[serde(default = "default_source", alias = "session_provider")]
+    source: String,
+}
+
+fn default_result_count() -> usize { 20 }
+fn default_source() -> String { "documents".to_string() }
+
+/// Open each provider memory index where it already lives. These stores remain
+/// project-scoped; the desktop worker never creates a consolidated copy.
+fn open_memory_stores(root: &Path, provider: &str) -> Result<Vec<IndexStore>> {
+    let memory_name = format!("{provider}-memory");
+    let mut stores = Vec::new();
+    for entry in WalkDir::new(root)
+        .max_depth(5)
+        .into_iter()
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            !matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | "build" | "vendor")
+        })
+        .filter_map(|entry| entry.ok())
+    {
+        if !entry.file_type().is_dir() || entry.file_name().to_string_lossy() != memory_name {
+            continue;
+        }
+        stores.push(IndexStore::at_path(entry.path(), mcp_index::segmented_store_options())?);
+    }
+    Ok(stores)
+}
+
+/// Long-lived project recall. The expensive persistent stores are opened once;
+/// each subsequent request only runs the in-memory query and response mapping.
+pub fn run_recall_server(
+    root: &Path,
+    ignore_paths: &[String],
+    max_bytes: usize,
+    max_files: usize,
+    max_depth: usize,
+    max_total_bytes: usize,
+) -> Result<()> {
+    // Documents are needed by the sidebar immediately. Provider memory stores
+    // are deliberately lazy: opening them here used to delay every first boot,
+    // even when the user only searched the configured folder's files.
+    let document_store = {
+        let input = AdapterInput { root, max_bytes, max_files, max_depth, max_total_bytes };
+        let ignores = ignore_paths.to_vec();
+        open_persistent_store(root, "desktop-document-index", "desktop-empty-memory", &ignores, || {
+            let graph = build_project_graph(&input)?;
+            let graph = apply_ignore_paths(graph, &ignores);
+            Ok(graph_to_source_documents(&graph))
+        })?
+    };
+    let mut document_store = document_store;
+    let mut memory_stores: HashMap<String, Option<Vec<IndexStore>>> = HashMap::from([
+        ("claude".to_string(), None),
+        ("codex".to_string(), None),
+    ]);
+
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    writeln!(output, "{{\"ready\":true}}")?;
+    output.flush()?;
+
+    for line in io::stdin().lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() { continue; }
+        let request: RecallServerRequest = serde_json::from_str(&line)?;
+        let source = match request.source.as_str() {
+            "claude" => "claude",
+            "codex" => "codex",
+            _ => "documents",
+        };
+        let started = Instant::now();
+        let mut hits = Vec::new();
+        if source == "documents" {
+            let results = document_store.query(&request.query, request.result_count)?;
+            hits.extend(results.iter().filter_map(|result| {
+                document_store.record_by_id(&result.doc_id).map(|record| hit_from(result, record, &request.query))
+            }));
+        } else {
+            let stores = memory_stores.get_mut(source).context("recall source store is unavailable")?;
+            if stores.is_none() {
+                *stores = Some(open_memory_stores(root, source)?);
+            }
+            for store in stores.as_mut().unwrap() {
+                let results = store.query(&request.query, request.result_count)?;
+                hits.extend(results.iter().filter_map(|result| {
+                    store.record_by_id(&result.doc_id).map(|record| hit_from(result, record, &request.query))
+                }));
+            }
+        }
+        hits.sort_by(|left, right| right.score.total_cmp(&left.score));
+        hits.truncate(request.result_count);
+        let response = RecallOutput {
+            query: request.query,
+            root: root.to_string_lossy().to_string(),
+            elapsed_ms: started.elapsed().as_millis(),
+            results: hits,
+        };
+        writeln!(output, "{}", serde_json::to_string(&response)?)?;
+        output.flush()?;
+    }
+    Ok(())
 }
 
 fn hit_from(result: &SearchResult, record: &DocRecord, query: &str) -> RecallHit {

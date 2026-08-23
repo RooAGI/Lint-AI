@@ -56,16 +56,18 @@ pub fn open_persistent_store(
         store.refresh()?;
         write_index_state(&index_root, state.as_ref())?;
     }
-    sync_memory_documents(&root.join(".lint-ai").join(memory_name), &mut store)?;
-    store.refresh()?;
+    if sync_memory_documents(&root.join(".lint-ai").join(memory_name), &mut store)? {
+        store.refresh()?;
+    }
     Ok(store)
 }
 
-pub fn sync_memory_documents(memory_root: &Path, target: &mut IndexStore) -> Result<()> {
+pub fn sync_memory_documents(memory_root: &Path, target: &mut IndexStore) -> Result<bool> {
     if !memory_root.exists() {
-        return Ok(());
+        return Ok(false);
     }
     let memory = IndexStore::at_path(memory_root, segmented_store_options())?;
+    let mut changed = false;
     for document in memory.source_documents() {
         let unchanged = target
             .source_document_by_id(&document.doc_id)
@@ -81,21 +83,29 @@ pub fn sync_memory_documents(memory_root: &Path, target: &mut IndexStore) -> Res
             .unwrap_or(false);
         if !unchanged {
             target.upsert(document.clone());
+            changed = true;
         }
     }
-    Ok(())
+    Ok(changed)
 }
 
 fn workspace_state(root: &Path, ignore_paths: &[String]) -> Option<Value> {
-    let revision = git_output(root, &["rev-parse", "HEAD"])?;
-    let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
-    let status = status
-        .lines()
-        .filter(|line| !line.contains(".lint-ai/"))
-        .collect::<Vec<_>>()
-        .join("\n");
     let mut ignore_paths = ignore_paths.to_vec();
     ignore_paths.sort();
+    let revision = git_output(root, &["rev-parse", "HEAD"]);
+    let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])
+        .map(|status| {
+            status
+                .lines()
+                .filter(|line| !line.contains(".lint-ai/"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+
+    // A configured search root may be a plain directory containing several
+    // repositories (for example ~/sources). It still needs a stable index state;
+    // treating a missing Git revision as "unknown" caused a full rebuild on every
+    // query. Non-Git roots are refreshed explicitly by setup/reindex instead.
     Some(json!({ "revision": revision, "status": status, "ignore_paths": ignore_paths }))
 }
 

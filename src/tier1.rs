@@ -446,10 +446,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
             *freq.entry(t.clone()).or_insert(0) += 1;
             first_pos.entry(t.clone()).or_insert(i);
         }
-        for sent in doc
-            .content
-            .split(['.', '!', '?'])
-        {
+        for sent in doc.content.split(['.', '!', '?']) {
             let s_tokens = tokenize_words(sent);
             let unique: HashSet<String> = s_tokens.into_iter().collect();
             for t in unique {

@@ -253,6 +253,9 @@ pub struct Args {
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
     #[arg(long)]
     pub recall: Option<String>,
+    /// Keep the project recall indexes open and answer newline-delimited JSON requests.
+    #[arg(long)]
+    pub recall_server: Option<String>,
     #[arg(long)]
     pub inspect_index: Option<String>,
     #[arg(long)]

@@ -2004,6 +2004,30 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
 
+    if let Some(root) = args.recall_server.as_deref() {
+        #[cfg(any(feature = "claude-code", feature = "codex"))]
+        {
+            let cfg = load_config(
+                args.config.as_deref(),
+                root,
+                args.strict_config,
+                args.max_config_bytes,
+            ).map_err(|err| anyhow::anyhow!(err))?;
+            return crate::integrations::recall::run_recall_server(
+                Path::new(root),
+                &cfg.ignore_paths,
+                args.max_bytes,
+                args.max_files,
+                args.max_depth,
+                args.max_total_bytes,
+            );
+        }
+        #[cfg(not(any(feature = "claude-code", feature = "codex")))]
+        {
+            anyhow::bail!("recall server requires the Claude Code or Codex feature");
+        }
+    }
+
     if args.recall.is_some() {
         #[cfg(any(
             feature = "claude-code",

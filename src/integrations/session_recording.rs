@@ -1017,7 +1017,19 @@ pub(crate) fn contains_credential_material(value: &str) -> bool {
             character.is_whitespace()
                 || matches!(
                     character,
-                    '"' | '\'' | ',' | ';' | '=' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>'
+                    '"' | '\''
+                        | ','
+                        | ';'
+                        | '='
+                        | ':'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '<'
+                        | '>'
                 )
         })
         .any(|token| {

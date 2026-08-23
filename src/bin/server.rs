@@ -48,7 +48,9 @@ fn main() -> Result<()> {
             .map(|token| token.trim().to_string())
             .filter(|token| !token.is_empty());
     }
-    if args.server_token.is_none() && !args.allow_unauthenticated && binds_beyond_loopback(&args.bind)?
+    if args.server_token.is_none()
+        && !args.allow_unauthenticated
+        && binds_beyond_loopback(&args.bind)?
     {
         anyhow::bail!(
             "refusing to serve {} without a token: pass --server-token, set SERVER_TOKEN, \

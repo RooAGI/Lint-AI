@@ -2,8 +2,8 @@ use crate::ids::stable_chunk_id;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
 use crate::query_semantics::QueryRoutingIntent;
 use crate::temporal::{parse_temporal_date, resolve_temporal_target};
-use crate::tokenizer::{self, TokenizerMode};
 use crate::tier1::{RankedTerm, Tier1Entity};
+use crate::tokenizer::{self, TokenizerMode};
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use deunicode::deunicode;
@@ -3355,10 +3355,7 @@ fn build_ngrams(tokens: &[String], n: usize) -> Vec<Vec<String>> {
     if n == 0 || tokens.len() < n {
         return Vec::new();
     }
-    tokens
-        .windows(n)
-        .map(|win| win.to_vec())
-        .collect()
+    tokens.windows(n).map(|win| win.to_vec()).collect()
 }
 
 fn lcs_ratio(query_tokens: &[String], candidate_tokens: &[String]) -> f32 {

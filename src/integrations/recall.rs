@@ -460,7 +460,11 @@ pub(crate) fn relevant_excerpt(
 mod tests {
     use super::*;
     use crate::index::{Provenance, ScoreBreakdown};
+    use crate::pipeline::{IndexStore, PipelineOptions};
+    use crate::source::SourceDocument;
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn provenance() -> Provenance {
         Provenance {
@@ -536,6 +540,87 @@ mod tests {
             ("revision".to_string(), "d4d78b7".to_string()),
             ("document_type".to_string(), "outcome".to_string()),
         ])
+    }
+
+    #[test]
+    fn project_recall_uses_each_provider_store() {
+        let providers = [
+            ("claude-code", "claude-mcp-index", "claude-memory"),
+            ("codex", "codex-mcp-index", "codex-memory"),
+            ("gemini-cli", "gemini-mcp-index", "gemini-cli-memory"),
+            ("agy", "agy-mcp-index", "agy-memory"),
+        ];
+
+        for (provider, index_name, memory_name) in providers {
+            let root = std::env::temp_dir().join(format!(
+                "lint-ai-recall-{provider}-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(root.join("docs")).unwrap();
+            fs::write(
+                root.join("docs").join("architecture.md"),
+                "# Architecture\nThe project architecture uses provider-aware recall.",
+            )
+            .unwrap();
+
+            let memory_root = root.join(".lint-ai").join(memory_name);
+            let mut memory = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
+            memory.upsert(SourceDocument {
+                doc_id: format!("{provider}-session-1"),
+                source: format!("{provider}://project/session-1/outcome"),
+                content: "The provider-aware recall decision was recorded in this session."
+                    .to_string(),
+                concept: "outcome".to_string(),
+                group_id: Some(format!("{provider}-session:session-1")),
+                filters: memory_filters(),
+                headings: vec!["Outcome".to_string()],
+                links: vec![],
+                timestamp: Some("2026-08-22T00:00:00Z".to_string()),
+                doc_length: 0,
+                author_agent: Some(provider.to_string()),
+            });
+            memory.refresh().unwrap();
+            drop(memory);
+
+            let options = RecallOptions {
+                root: &root,
+                query: "provider-aware recall",
+                result_count: 10,
+                ignore_paths: &[],
+                max_bytes: 5_000_000,
+                max_files: 50_000,
+                max_depth: 20,
+                max_total_bytes: 100_000_000,
+                index_name,
+                memory_name,
+            };
+            let output = recall(&options).unwrap();
+
+            assert!(
+                output
+                    .results
+                    .iter()
+                    .any(|hit| hit.kind == RecallKind::Document
+                        && hit.source == "docs/architecture.md"),
+                "{provider} recall did not return the project document: {:?}",
+                output.results
+            );
+            assert!(
+                output.results.iter().any(|hit| {
+                    hit.kind == RecallKind::Memory
+                        && hit.doc_id == format!(".lint-ai/{memory_name}")
+                        && hit.origin.as_deref()
+                            == Some(&format!("{provider}://project/session-1/outcome"))
+                }),
+                "{provider} recall did not return its memory corpus: {:?}",
+                output.results
+            );
+
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

@@ -9,8 +9,8 @@ use crate::adapters::{
     apply_ignore_paths, build_project_graph, graph_to_source_documents, AdapterInput,
 };
 use crate::index::{DocRecord, SearchResult, SectionChunk};
-use crate::integrations::mcp_index::open_persistent_store;
 use crate::integrations::mcp_index;
+use crate::integrations::mcp_index::open_persistent_store;
 use crate::pipeline::IndexStore;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -188,8 +188,12 @@ struct RecallServerRequest {
     source: String,
 }
 
-fn default_result_count() -> usize { 20 }
-fn default_source() -> String { "documents".to_string() }
+fn default_result_count() -> usize {
+    20
+}
+fn default_source() -> String {
+    "documents".to_string()
+}
 
 /// Open each provider memory index where it already lives. These stores remain
 /// project-scoped; the desktop worker never creates a consolidated copy.
@@ -201,14 +205,20 @@ fn open_memory_stores(root: &Path, provider: &str) -> Result<Vec<IndexStore>> {
         .into_iter()
         .filter_entry(|entry| {
             let name = entry.file_name().to_string_lossy();
-            !matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | "build" | "vendor")
+            !matches!(
+                name.as_ref(),
+                ".git" | "node_modules" | "target" | "dist" | "build" | "vendor"
+            )
         })
         .filter_map(|entry| entry.ok())
     {
         if !entry.file_type().is_dir() || entry.file_name().to_string_lossy() != memory_name {
             continue;
         }
-        stores.push(IndexStore::at_path(entry.path(), mcp_index::segmented_store_options())?);
+        stores.push(IndexStore::at_path(
+            entry.path(),
+            mcp_index::segmented_store_options(),
+        )?);
     }
     Ok(stores)
 }
@@ -227,19 +237,29 @@ pub fn run_recall_server(
     // are deliberately lazy: opening them here used to delay every first boot,
     // even when the user only searched the configured folder's files.
     let document_store = {
-        let input = AdapterInput { root, max_bytes, max_files, max_depth, max_total_bytes };
+        let input = AdapterInput {
+            root,
+            max_bytes,
+            max_files,
+            max_depth,
+            max_total_bytes,
+        };
         let ignores = ignore_paths.to_vec();
-        open_persistent_store(root, "desktop-document-index", "desktop-empty-memory", &ignores, || {
-            let graph = build_project_graph(&input)?;
-            let graph = apply_ignore_paths(graph, &ignores);
-            Ok(graph_to_source_documents(&graph))
-        })?
+        open_persistent_store(
+            root,
+            "desktop-document-index",
+            "desktop-empty-memory",
+            &ignores,
+            || {
+                let graph = build_project_graph(&input)?;
+                let graph = apply_ignore_paths(graph, &ignores);
+                Ok(graph_to_source_documents(&graph))
+            },
+        )?
     };
     let mut document_store = document_store;
-    let mut memory_stores: HashMap<String, Option<Vec<IndexStore>>> = HashMap::from([
-        ("claude".to_string(), None),
-        ("codex".to_string(), None),
-    ]);
+    let mut memory_stores: HashMap<String, Option<Vec<IndexStore>>> =
+        HashMap::from([("claude".to_string(), None), ("codex".to_string(), None)]);
 
     let stdout = io::stdout();
     let mut output = stdout.lock();
@@ -248,7 +268,9 @@ pub fn run_recall_server(
 
     for line in io::stdin().lock().lines() {
         let line = line?;
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let request: RecallServerRequest = serde_json::from_str(&line)?;
         let source = match request.source.as_str() {
             "claude" => "claude",
@@ -260,17 +282,23 @@ pub fn run_recall_server(
         if source == "documents" {
             let results = document_store.query(&request.query, request.result_count)?;
             hits.extend(results.iter().filter_map(|result| {
-                document_store.record_by_id(&result.doc_id).map(|record| hit_from(result, record, &request.query))
+                document_store
+                    .record_by_id(&result.doc_id)
+                    .map(|record| hit_from(result, record, &request.query))
             }));
         } else {
-            let stores = memory_stores.get_mut(source).context("recall source store is unavailable")?;
+            let stores = memory_stores
+                .get_mut(source)
+                .context("recall source store is unavailable")?;
             if stores.is_none() {
                 *stores = Some(open_memory_stores(root, source)?);
             }
             for store in stores.as_mut().unwrap() {
                 let results = store.query(&request.query, request.result_count)?;
                 hits.extend(results.iter().filter_map(|result| {
-                    store.record_by_id(&result.doc_id).map(|record| hit_from(result, record, &request.query))
+                    store
+                        .record_by_id(&result.doc_id)
+                        .map(|record| hit_from(result, record, &request.query))
                 }));
             }
         }
@@ -665,7 +693,10 @@ mod tests {
         ];
 
         for (provider, index_name, memory_name) in providers {
-            let root = std::env::temp_dir().join(format!(
+            let temp_base = std::env::temp_dir()
+                .canonicalize()
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let root = temp_base.join(format!(
                 "lint-ai-recall-{provider}-{}",
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)

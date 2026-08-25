@@ -26,7 +26,8 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 128;
 #[derive(Debug, Parser)]
 #[command(
     name = "lint-ai-server",
-    about = "Memory Add/Search server backed by Lint-AI"
+    about = "Memory Add/Search server backed by Lint-AI",
+    version = env!("CARGO_PKG_VERSION")
 )]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:8080")]
@@ -209,7 +210,11 @@ fn handle_connection(
         }
     }
     if method == "GET" && path == "/health" {
-        return write_json(&mut stream, 200, &serde_json::json!({"status": "ok"}));
+        return write_json(
+            &mut stream,
+            200,
+            &serde_json::json!({"status": "ok", "version": env!("CARGO_PKG_VERSION")}),
+        );
     }
     if let Some(expected) = server_token {
         let supplied = authorization.as_deref().unwrap_or("");

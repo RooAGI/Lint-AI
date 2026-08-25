@@ -3,6 +3,12 @@
 This directory contains the Claude Code and Codex integrations, plus the
 shared MCP infrastructure used by both clients.
 
+The provider-neutral vocabulary used throughout this documentation is defined
+in [the integration glossary](../../docs/integration-glossary.md). In
+particular, `memory`, `context`, `session`, `message`, `event`, and `recall`
+are distinct concepts; recording a session does not automatically create
+durable memory.
+
 Lint-AI has two complementary integration paths:
 
 1. **Lifecycle hooks** retrieve and capture session memory automatically.

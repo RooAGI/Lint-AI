@@ -2004,6 +2004,31 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
 
+    if let Some(root) = args.recall_server.as_deref() {
+        #[cfg(any(feature = "claude-code", feature = "codex"))]
+        {
+            let cfg = load_config(
+                args.config.as_deref(),
+                root,
+                args.strict_config,
+                args.max_config_bytes,
+            )
+            .map_err(|err| anyhow::anyhow!(err))?;
+            return crate::integrations::recall::run_recall_server(
+                Path::new(root),
+                &cfg.ignore_paths,
+                args.max_bytes,
+                args.max_files,
+                args.max_depth,
+                args.max_total_bytes,
+            );
+        }
+        #[cfg(not(any(feature = "claude-code", feature = "codex")))]
+        {
+            anyhow::bail!("recall server requires the Claude Code or Codex feature");
+        }
+    }
+
     if args.recall.is_some() {
         #[cfg(any(
             feature = "claude-code",
@@ -2707,6 +2732,51 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         );
         return Ok(());
     }
+
+    // The default invocation and --review share the same project review flow.
+    // The graph above remains the source of truth for the existing lint rules;
+    // preparing the query index here makes the same corpus immediately
+    // available to review consumers without changing the report semantics.
+    let cache_settings = CacheSettings {
+        root_path: &args.path,
+        ner_provider: &args.tier1_ner_provider,
+        term_ranker: &args.tier1_term_ranker,
+        spacy_model: &args.spacy_model,
+        chunk_strategy: &args.chunk_strategy,
+        chunk_lines: args.chunk_lines,
+        chunk_overlap: args.chunk_overlap,
+        chunk_target_tokens: args.chunk_target_tokens,
+        chunk_max_tokens: args.chunk_max_tokens,
+    };
+    let corpus_fingerprint = compute_corpus_fingerprint(
+        &args.path,
+        args.max_files,
+        args.max_depth,
+        args.max_total_bytes,
+    );
+    let lexical_dir = query_cache_lexical_dir(&cache_settings);
+    let _review_index = if let Some(cached) =
+        load_cached_query_index(&cache_settings, &corpus_fingerprint)
+    {
+        cached
+    } else {
+        let built = build_memory_index(
+            &graph,
+            &args.tier1_ner_provider,
+            &args.spacy_model,
+            &args.tier1_term_ranker,
+            &args.chunk_strategy,
+            args.chunk_lines,
+            args.chunk_overlap,
+            args.chunk_target_tokens,
+            args.chunk_max_tokens,
+            Some(&lexical_dir),
+        )?;
+        if let Err(err) = save_cached_query_index(&cache_settings, &corpus_fingerprint, &built) {
+            eprintln!("warning: unable to persist review search index: {}", err);
+        }
+        built
+    };
     let mut report = Report::new();
 
     check_orphans(&graph, &mut report);

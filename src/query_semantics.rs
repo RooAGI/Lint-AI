@@ -724,10 +724,7 @@ fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
         } else if word
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
-            || word
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_uppercase())
+            || word.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         {
             "NNP"
         } else if lower.ends_with('s') && lower.len() > 3 {
@@ -778,10 +775,7 @@ fn heuristic_entities(query: &str) -> Vec<QuerySpan> {
             && (token
                 .chars()
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
-                || token
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_uppercase()));
+                || token.chars().next().is_some_and(|c| c.is_ascii_uppercase()));
         if looks_like_entity {
             current.push(token.to_string());
         } else {

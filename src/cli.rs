@@ -94,7 +94,7 @@ pub enum IndexInspectView {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "lint-ai")]
+#[command(name = "lint-ai", version = env!("CARGO_PKG_VERSION"))]
 /// CLI arguments for the lint-ai binary.
 pub struct Args {
     #[arg(default_value = ".")]
@@ -159,6 +159,10 @@ pub struct Args {
     pub config: Option<String>,
     #[arg(long)]
     pub analyze: bool,
+    /// Run the default lint checks with the project search index prepared.
+    /// The no-option invocation uses this same review flow by default.
+    #[arg(long)]
+    pub review: bool,
     #[arg(long, default_value_t = 5_000_000)]
     pub max_bytes: usize,
     #[arg(long, default_value_t = 50_000)]
@@ -253,6 +257,9 @@ pub struct Args {
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
     #[arg(long)]
     pub recall: Option<String>,
+    /// Keep the project recall indexes open and answer newline-delimited JSON requests.
+    #[arg(long)]
+    pub recall_server: Option<String>,
     #[arg(long)]
     pub inspect_index: Option<String>,
     #[arg(long)]
@@ -318,5 +325,13 @@ mod tests {
             args.inspect_view,
             IndexInspectView::SourceDocuments
         ));
+    }
+
+    #[test]
+    fn parses_review_flag() {
+        let args = Args::try_parse_from(["lint-ai", "--review", "docs"]).unwrap();
+
+        assert!(args.review);
+        assert_eq!(args.path, "docs");
     }
 }

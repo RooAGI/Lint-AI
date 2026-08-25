@@ -83,3 +83,29 @@ or when Lint-AI is disabled.
 The adapter is intentionally fail-open: an unavailable Lint-AI hook does not
 interrupt an AGY session. AGY authentication and model usage remain managed by
 AGY itself.
+
+## Permission troubleshooting
+
+The normal installation does not require broad command permissions. If a
+particular AGY version refuses to execute configured lifecycle hooks, these
+options can be used temporarily while diagnosing that installation:
+
+```json
+{
+  "permissions": {
+    "allow": ["command(*)"]
+  }
+}
+```
+
+Run the CLI with:
+
+```bash
+agy --dangerously-skip-permissions ...
+```
+
+`command(*)` allows every command and `--dangerously-skip-permissions` bypasses
+AGY permission checks. They are intentionally not part of the normal AGY
+benchmark or recommended default configuration. Use them only for a short,
+isolated diagnostic run, do not use AGY concurrently, and restore the original
+settings afterward.

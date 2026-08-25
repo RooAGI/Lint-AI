@@ -1,10 +1,27 @@
-# Antigravity CLI integration benchmark
+# Antigravity CLI Integration Benchmark
 
-This benchmark is the AGY counterpart to the Claude and Codex integration
-benchmarks. It uses the shared integration metric contract and measures the
-local MCP server, AGY hook latency, memory retrieval, durable session
-recording, and—when AGY emits structured usage telemetry—continuation-turn
-token usage.
+This directory contains test-only A/B scenarios for measuring Lint-AI as an
+Antigravity (AGY) memory layer. The methodology and release gates follow the
+cross-client integration benchmark contract defined in
+[`benchmark/integration/README.md`](../integration/README.md).
+
+---
+
+## Layout
+
+```text
+benchmark/agy/
+  scenarios/       Versioned workload definitions
+  schemas/         JSON schemas for scenarios and results
+  fixtures/        Fixture setup metadata and scripts
+  src/             Run parser and AGY-specific metrics normalizer
+  scripts/         Local orchestration entry point
+  results/         Generated results; ignored except for .gitkeep
+```
+
+---
+
+## Quick Start
 
 Run the shared-harness AGY arms with:
 
@@ -17,27 +34,127 @@ python3 benchmark/agy/scripts/run_benchmark.py \
   --results-dir benchmark/agy/results/shared
 ```
 
-The launcher reuses the scenarios, validators, scoring, and report schema from
-the shared runner in `benchmark/codex_code/src/runner.py`. AGY owns its scenario,
-fixture, schema, parser, test, and result directories; AGY-specific parsing
-lives in `benchmark/agy/src`.
-The shared runner's PTY mode preserves the interactive AGY lifecycle and saves
-the conversation ID between setup and continuation.
+To run a multi-turn temporal-correction scenario:
 
-Available arms:
+```bash
+python3 benchmark/agy/scripts/run_benchmark.py \
+  --arms agy-native agy-lint-ai \
+  --scenario routing-decision-supersession \
+  --repetitions 1 \
+  --timeout-scale 0.5 \
+  --results-dir benchmark/agy/results/multi-turn
+```
 
-- `agy-native`: no Lint-AI installation.
-- `agy-lint-ai`: Lint-AI memory, hooks, and recording enabled.
-- `agy-lint-ai-disabled`: integration and recording enabled, memory injection disabled.
-- `agy-mcp-only`: Lint-AI MCP installed with lifecycle hooks removed.
+### Available Arms
 
-## Local protocol benchmark result
+* **`agy-native`**: Baseline AGY without Lint-AI hooks or MCP configuration.
+* **`agy-lint-ai`**: Full integration with Lint-AI memory injection, lifecycle hooks, and durable recording.
+* **`agy-lint-ai-disabled`**: Hooks and session recording active, but memory injection toggled off via `disable_lint_ai` (isolates hook execution overhead).
+* **`agy-mcp-only`**: Lint-AI MCP server registered with lifecycle hooks removed (isolates tool discovery/calling overhead).
 
-The local MCP and hook smoke track completed successfully on 2026-08-09 with
-AGY 1.1.11 and the authenticated local installation:
+---
+
+## Model & Environment Configuration
+
+* **Model**: **Gemini 3.7 Flash** (managed via the authenticated AGY host profile / keychain).
+* **CLI Runtime**: **Antigravity CLI (`agy`)** using `--output-format stream-json` and `--disable-slash-commands`.
+* **Provider Token Accounting**: Token counts are parsed directly from stream-JSON `usage` / `usageMetadata` records (`input_tokens`, `output_tokens`, `total_tokens`, `thinking_tokens`, `cache_read_tokens`) via [`src/parse_run.py`](src/parse_run.py).
+
+### AGY configuration isolation
+
+The launcher intentionally uses the authenticated host AGY profile and
+keychain, because a fresh AGY profile does not provide the same runtime
+behavior. It temporarily replaces the host AGY configuration files used by
+the benchmark:
+
+* `~/.gemini/config/hooks.json`; and
+* `~/.gemini/config/mcp_config.json`.
+
+The files are restored when the launcher exits, including normal failures.
+Run the benchmark without using AGY concurrently, and do not force-kill the
+launcher; a hard process kill can prevent restoration. The launcher resets the
+temporary hook and MCP configuration before every arm, so stale Lint-AI
+configuration cannot contaminate `agy-native` or another arm.
+
+The benchmark does not modify AGY permissions or bypass permission checks.
+This keeps the run representative of a normal AGY installation and avoids
+granting host-wide command permission solely for benchmarking.
+
+---
+
+## Single-Turn vs. Multi-Turn Setup
+
+A scenario's `setup_messages` array controls the continuous chat lifecycle:
+
+* **Single-Turn Setup**: One message runs as a single request/response.
+* **Multi-Turn Setup**: More than one message chains sequential turns into the same interactive AGY session by passing the reported conversation ID via `--conversation <conversation_id>` between per-message processes (handled by `run_resume_chain_phase` in `benchmark/codex_code/src/runner.py`).
+
+### Cross-Session Continuation Boundary
+To strictly measure cross-session memory retrieval (matching Claude Code and Codex harness methodology):
+* **Setup Phase**: Runs the setup message sequence (single-turn or multi-turn). When setup terminates, Lint-AI's `Stop` hook extracts and indexes the full conversation transcript into `.lint-ai/agy-memory`.
+* **Continuation Phase (Fresh Session)**: Continuation always executes as a **brand new session** with **no prior conversation history** passed in its prompt context.
+  * In `agy-native`, the model receives only the continuation prompt without conversation history, requiring it to answer from pre-training or hallucinate.
+  * In `agy-lint-ai`, the `PreInvocation` hook intercepts the continuation turn, queries `.lint-ai/agy-memory`, and injects the indexed setup decision as an `EPHEMERAL_MESSAGE`.
+
+---
+
+## Benchmark Results
+
+### 1. Single-Scenario Result (`index-store-segmented-routing`, Single-Turn)
+
+One repetition each on AGY with Gemini 3.7 Flash:
+
+| Metric | `agy-native` | `agy-lint-ai` | Impact / Advantage |
+| :--- | :---: | :---: | :--- |
+| **Success** | true | true | Both passed validators |
+| **Recall** | 1/3 (33.3%) | **3/3 (100.0%)** | **+66.7% Recall Improvement** |
+| **Setup Time** | 6.7 s | 6.0 s | Comparable |
+| **Continuation Time** | 7.4 s | **6.4 s** | **~1.0 s faster** |
+| **Continuation Input Tokens** | 14,596 | **13,965** | **-631 input tokens** |
+| **Continuation Output Tokens** | 351 | **100** | **-71.5% output tokens (concise & factual)** |
+
+**Analysis**: Lacking prior conversation history in a fresh session, `agy-native` hallucinated memory APIs (`record_session`, `list_memories`) and routing architectures (`hierarchical, domain-partitioned routing`), only matching `global fallback` by coincidence. `agy-lint-ai` successfully injected the stored `IndexStore` and `SegmentRoutingStrategy::LocalDistinctiveness` decisions via `PreInvocation`, achieving 100% recall.
+
+---
+
+### 2. Multi-Turn Result (`routing-decision-supersession`, Multi-Turn)
+
+One repetition each on AGY with Gemini 3.7 Flash. `setup_messages` has 2 entries (initial `SparseOverlap` proposal, then a superseding `LocalDistinctiveness` decision with `query_top_n = 3`), running as two chained turns via `--conversation <id>`:
+
+| Metric | `agy-native` | `agy-lint-ai` | Impact / Advantage |
+| :--- | :---: | :---: | :--- |
+| **Success** | true | true | Both passed validators |
+| **Recall** | 1/3 (33.3%) | **3/3 (100.0%)** | **+66.7% Recall Improvement** |
+| **Forbidden Facts Triggered** | none (0) | none (0) | Clean boundary |
+| **Setup Time** | 5.5 s | 6.0 s | Full 2-turn execution |
+| **Continuation Time** | 8.5 s | **5.9 s** | **~2.6 s faster** |
+| **Continuation Input Tokens** | 14,583 | 14,601 | Normalized usage |
+| **Continuation Output Tokens** | 990 | **99** | **-90.0% output tokens** |
+
+**Analysis**: In multi-turn continuous chat, `agy-lint-ai` accurately distinguished the active `LocalDistinctiveness` strategy and `query_top_n = 3` parameter from the superseded `SparseOverlap` proposal using only 99 output tokens, whereas `agy-native` required 990 output tokens and could not identify the current routing parameters across the session boundary.
+
+---
+
+## Memory Store Inspection
+
+Each scenario/arm worktree persists after the run so its `.lint-ai/agy-memory` store remains inspectable. Inspect a run's captured memory with:
+
+```bash
+target/debug/lint-ai \
+  --inspect-index benchmark/agy/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/agy-memory \
+  --inspect-view source-documents
+```
+
+`--inspect-view` also accepts `summary`, `records`, and `segments`.
+
+---
+
+## Local Protocol Latency Track
+
+Measures raw overhead of the local MCP and hook execution paths:
 
 | Measurement | Result |
-| --- | ---: |
+| :--- | ---: |
 | MCP requests / responses | 6 / 6 |
 | MCP roundtrip | 1,013.2 ms |
 | `PreInvocation` hook | 16.6 ms |
@@ -46,66 +163,16 @@ AGY 1.1.11 and the authenticated local installation:
 | `Stop` hook | 6.0 ms |
 | Recorded lifecycle events | 4 |
 
-These numbers measure the Lint-AI MCP and hook path only. They do not measure
-model quality, token savings, or AGY tool-selection behavior.
+---
 
-## Shared scenario benchmark result
+## Current Scenarios
 
-The four-arm scenario run completed successfully on 2026-08-09 with AGY 1.1.11,
-one repetition, and the `index-store-segmented-routing` scenario. Each arm
-completed setup, continuation, and the segmented-index validator.
+* **`index-store-segmented-routing.json`**: Architectural decision recall (single-turn setup).
+* **`routing-decision-supersession.json`**: Temporal correction over a superseded proposal (multi-turn setup).
 
-| Arm | Success | Recall | Setup | Continuation | Validator |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `agy-native` | 1/1 | 1/3 (33.3%) | 16,367.0 ms | 16,077.3 ms | 68,189.9 ms |
-| `agy-lint-ai` | 1/1 | 1/3 (33.3%) | 16,365.9 ms | 16,070.6 ms | 54,880.0 ms |
-| `agy-lint-ai-disabled` | 1/1 | 1/3 (33.3%) | 16,382.7 ms | 16,074.0 ms | 85,712.6 ms |
-| `agy-mcp-only` | 1/1 | 1/3 (33.3%) | 16,313.3 ms | 16,087.9 ms | 75,354.1 ms |
+---
 
-This particular interactive AGY run did not emit structured token-usage data,
-so token columns are reported as unavailable and must not be replaced with
-elapsed time. The recall score is
-the shared validator score, not a model-quality score: this run found one of
-the three expected facts in each arm. The native arm means AGY without a
-Lint-AI installation; it is not evidence that AGY provides a separate native
-memory implementation.
+## Troubleshooting & Quota Handling
 
-AGY token accounting is accepted when the provider emits `usageMetadata` or
-stream-JSON usage fields (`promptTokenCount`, `cachedContentTokenCount`,
-`candidatesTokenCount`, and `totalTokenCount`). The AGY parser maps those into
-the shared `parent_tokens`/`all_model_tokens` contract. The interactive terminal
-renderer used for this run emitted neither, so this result is a lifecycle and
-recall validation—not a token A/B result.
-
-Detailed JSON reports are written below the selected results directory, one
-`report.json` per arm, plus `comparison.json`.
-
-The authenticated interactive track should use the same scenario prompts and
-fresh AGY conversations as the Claude/Codex runners. AGY lifecycle hooks require
-the interactive execution loop; `agy --print` usage is useful for token
-accounting but is not, by itself, evidence that hooks ran.
-
-## Authentication and quota troubleshooting
-
-The benchmark reuses the authenticated AGY profile from the host account. It
-temporarily writes the AGY settings, hook, and MCP configuration needed by each
-arm, then restores all three files in a `finally` cleanup path. The hook and
-recording A/B arms intentionally clear MCP configuration so MCP discovery does
-not change their behavior; MCP is measured separately by `agy-mcp-only`.
-
-The benchmark also passes `--disable-slash-commands` and prefixes each scenario
-prompt with a no-tools instruction. This prevents AGY skills, filesystem
-inspection, or MCP calls from turning a memory-recall benchmark into an
-uncontrolled tool-use benchmark.
-
-AGY account quota is an external prerequisite. When AGY returns `Individual
-quota reached`, every arm can fail before producing usage telemetry, including
-`agy-native`. Such a run is recorded as unavailable rather than as a Lint-AI
-failure; retry after the account quota resets or use an account with available
-quota. The result files remain useful for diagnosing the provider response, but
-must not be published as a token A/B result.
-
-For issue #32, this documents the supported AGY integration boundary and the
-fail-open benchmark setup. For issue #33, the same shared harness and token
-parser are used for Gemini CLI; provider-specific authentication or quota
-failures are kept separate from Lint-AI retrieval and hook measurements.
+* **Authentication**: AGY authenticates through the user's host profile. The benchmark preserves user credentials while isolating configuration files.
+* **Quota Exhaustion**: If AGY returns `Individual quota reached`, runs will exit before emitting telemetry. These runs are recorded as unavailable rather than integration failures. Retry once account quota resets.

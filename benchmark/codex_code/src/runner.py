@@ -34,6 +34,28 @@ UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"
 )
 
+
+def extract_session_id(output_text: str) -> str | None:
+    """Extract a resumable session/conversation ID from JSON lines or text."""
+    for line in reversed(output_text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{") or not line.endswith("}"):
+            continue
+        try:
+            payload = json.loads(line)
+            if isinstance(payload, dict):
+                if "conversation_id" in payload and isinstance(payload["conversation_id"], str):
+                    return payload["conversation_id"]
+                if "result" in payload and isinstance(payload["result"], dict) and "conversation_id" in payload["result"]:
+                    return str(payload["result"]["conversation_id"])
+                for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id", "conversationId"):
+                    if key in payload and isinstance(payload[key], str):
+                        return payload[key]
+        except json.JSONDecodeError:
+            continue
+    ids = UUID_RE.findall(output_text)
+    return ids[-1] if ids else None
+
 REQUIRED_SCENARIO_KEYS = {
     "schema_version",
     "id",
@@ -633,15 +655,14 @@ def run_resume_chain_phase(
         if result.returncode != 0 or index == len(messages):
             break
         turn_output = Path(result.stdout_path).read_text(encoding="utf-8", errors="replace")
-        ids = UUID_RE.findall(turn_output)
-        if not ids:
+        resume_id = extract_session_id(turn_output)
+        if not resume_id:
             log(
                 f"scenario {scenario_id} repetition {repetition}: {turn_phase} did not "
                 "report a resumable session id; remaining turns will start fresh"
             )
             resume_id = None
             continue
-        resume_id = ids[-1]
     assert result is not None
     return replace(result, phase=phase)
 
@@ -730,9 +751,9 @@ def execute_scenario(
                 invalid_reason = f"setup command exited {setup.returncode}"
             else:
                 setup_output = Path(setup.stdout_path).read_text(encoding="utf-8", errors="replace")
-                conversation_ids = UUID_RE.findall(setup_output)
-                if conversation_ids:
-                    (run_dir / "conversation.id").write_text(conversation_ids[-1] + "\n", encoding="utf-8")
+                conversation_id = extract_session_id(setup_output)
+                if conversation_id:
+                    (run_dir / "conversation.id").write_text(conversation_id + "\n", encoding="utf-8")
                 phase_env = build_phase_env(
                     base_env,
                     benchmark_root=benchmark_root,

@@ -94,14 +94,19 @@ benchmark/
     tests/                    Runner, parser, scorer, and report tests
     results/                  Generated Codex reports
   agy/
+    scenarios/                AGY scenario definitions
+    schemas/                  Scenario and result schemas
     scripts/run_benchmark.py  AGY launcher
-    src/                      AGY output parser
+    src/parse_run.py          AGY stream-JSON metrics parser
+    tests/                    Parser tests
+    results/                  Generated AGY reports
 ```
 
 Client-specific details and command-line options remain in:
 
 - [`benchmark/claude_code/README.md`](../claude_code/README.md)
 - [`benchmark/codex_code/README.md`](../codex_code/README.md)
+- [`benchmark/agy/README.md`](../agy/README.md)
 - [`docs/claude-code-performance-tests.md`](../../docs/claude-code-performance-tests.md)
 - [`docs/codex-performance-tests.md`](../../docs/codex-performance-tests.md)
 
@@ -149,6 +154,13 @@ The host checkout is not used as the test worktree. Host sessions, caches,
 Memories, plugins, and unrelated configuration must not leak into a run.
 Authentication may be copied into the isolated client home when required by
 the provider launcher.
+
+AGY is the exception: its documented launcher must reuse the authenticated host
+profile/keychain because a fresh AGY profile does not provide the same runtime
+behavior. The AGY launcher temporarily replaces the host AGY settings, hooks,
+and MCP configuration, resets them before each arm, and restores the originals
+on exit. AGY benchmark runs therefore require exclusive use of AGY, and the
+launcher must not be force-killed before cleanup.
 
 ## Comparison Arms
 
@@ -224,8 +236,9 @@ know which mechanism a client uses:
   prior turn's `thread_id` and passing `codex exec resume <thread_id>` to
   the next one. See `run_resume_chain_phase` in
   `benchmark/codex_code/src/runner.py`.
-- **AGY**: interactive mode (`agy -i`) run through a PTY; multi-turn is not
-  yet exercised by a real AGY scenario.
+- **AGY**: sequential turns executed via `agy` CLI in stream-JSON mode, chained
+  together by passing the emitted conversation ID via `--conversation <id>` to
+  subsequent turns in `run_resume_chain_phase`.
 
 Both dispatch strategies live in the same shared `run_turn_phase` function in
 `benchmark/codex_code/src/runner.py`, which every provider's launcher calls
@@ -235,7 +248,7 @@ per scenario.
 
 Current real (non-throwaway) multi-turn scenarios:
 
-- `routing-decision-supersession` (Claude and Codex): 2 setup messages
+- `routing-decision-supersession` (Claude, Codex, and AGY): 2 setup messages
   (initial proposal, then a superseding decision) — see "Current Scenarios"
   below.
 
@@ -407,7 +420,7 @@ answer. They are not run against the developer's checkout.
 
 ## Current Scenarios
 
-### `index-store-segmented-routing` (Claude and Codex)
+### `index-store-segmented-routing` (Claude, Codex, and AGY)
 
 Category: `decision-recall`. **Single-turn setup** (1 `setup_messages`
 entry).
@@ -424,6 +437,10 @@ Expected facts:
 - The global index supports persistence and fallback query paths.
 
 Forbidden fact: the adapter should construct or own a bare `MemoryIndex`.
+
+Files: `benchmark/claude_code/scenarios/index-store-segmented-routing.json`,
+`benchmark/codex_code/scenarios/codex-index-store-segmented-routing.json`,
+`benchmark/agy/scenarios/index-store-segmented-routing.json`.
 
 This is the primary scenario for comparing memory recall, continuation
 latency, and token use across clients.
@@ -448,7 +465,7 @@ Forbidden fact: ingesting the entire transcript without a bound.
 This scenario tests whether memory captures remain bounded while still
 recovering useful conversation context.
 
-### `routing-decision-supersession` (Claude and Codex)
+### `routing-decision-supersession` (Claude, Codex, and AGY)
 
 Category: `temporal-correction`. **Multi-turn setup** (2 sequential
 `setup_messages`) — see "Single-Turn vs. Multi-Turn Setup" above.
@@ -468,7 +485,8 @@ Expected facts:
 Forbidden fact: presenting `SparseOverlap` as the current strategy.
 
 Files: `benchmark/claude_code/scenarios/routing-decision-supersession.json`,
-`benchmark/codex_code/scenarios/codex-routing-decision-supersession.json`.
+`benchmark/codex_code/scenarios/codex-routing-decision-supersession.json`,
+`benchmark/agy/scenarios/routing-decision-supersession.json`.
 
 This scenario tests recency, revision, and conflict handling rather than
 simple keyword recall.
@@ -554,6 +572,7 @@ Validate scenario schemas and runner behavior before launching a live client:
 ```bash
 python3 -m unittest discover -s benchmark/claude_code/tests -p 'test_*.py'
 python3 -m unittest discover -s benchmark/codex_code/tests -p 'test_*.py'
+python3 -m unittest discover -s benchmark/agy/tests -p 'test_*.py'
 python3 benchmark/codex_code/src/runner.py \
   --root benchmark/codex_code \
   --validate-only \
@@ -577,6 +596,16 @@ python3 benchmark/codex_code/scripts/run_benchmark.py \
   --scenario codex-index-store-segmented-routing \
   --repetitions 1 \
   --results-dir benchmark/codex_code/results/smoke
+```
+
+Run an AGY hooks-only smoke comparison:
+
+```bash
+python3 benchmark/agy/scripts/run_benchmark.py \
+  --arms agy-native agy-lint-ai \
+  --scenario index-store-segmented-routing \
+  --repetitions 1 \
+  --results-dir benchmark/agy/results/smoke
 ```
 
 For performance claims, use at least five repetitions per scenario and arm;

@@ -51,27 +51,23 @@ def main() -> None:
     temp = Path(tempfile.mkdtemp(prefix="lint-ai-agy-perf."))
     binary = repo / "target" / "debug" / "lint-ai"
     host_gemini = Path.home() / ".gemini"
-    host_settings = host_gemini / "antigravity-cli" / "settings.json"
     host_hooks = host_gemini / "config" / "hooks.json"
     host_mcp = host_gemini / "config" / "mcp_config.json"
     saved_host_files = {
         path: path.read_bytes() if path.exists() else None
-        for path in (host_settings, host_hooks, host_mcp)
+        for path in (host_hooks, host_mcp)
     }
-    host_settings.parent.mkdir(parents=True, exist_ok=True)
-    settings = {}
-    if saved_host_files[host_settings]:
-        settings = json.loads(saved_host_files[host_settings].decode("utf-8"))
-    permissions = settings.setdefault("permissions", {})
-    allow = permissions.setdefault("allow", [])
-    if "command(*)" not in allow:
-        allow.append("command(*)")
-    host_settings.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     runner = repo / "benchmark" / "codex_code" / "src" / "runner.py"
     try:
         subprocess.run(["cargo", "+stable", "build", "--features", "agy", "--quiet"], cwd=repo, check=True)
         reports = {}
         for arm in args.arms:
+            # AGY does not currently provide a supported per-run config home.
+            # Keep the authenticated host profile, but make the configuration
+            # used by each arm deterministic and free of stale Lint-AI state.
+            # The original files are restored in the outer finally block.
+            host_hooks.write_text("{}\n", encoding="utf-8")
+            host_mcp.write_text(json.dumps({"mcpServers": {}}, indent=2) + "\n", encoding="utf-8")
             arm_root = temp / arm
             worktree = arm_root / "worktree"
             worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +82,6 @@ def main() -> None:
             if arm != "agy-native":
                 subprocess.run([str(binary), "--agy-install", str(worktree)], cwd=repo, env=arm_env, check=True)
                 if arm == "agy-mcp-only":
-                    host_hooks.parent.mkdir(parents=True, exist_ok=True)
                     host_hooks.write_text("{}\n", encoding="utf-8")
                 else:
                     # Keep the hook/recording A/B arms focused on lifecycle
@@ -98,7 +93,6 @@ def main() -> None:
                 "set -eu\n"
                 "prompt=$(cat)\n"
                 "prompt=\"Benchmark instruction: answer the user directly from the conversation context. Do not call tools, inspect files, inspect configuration, or access MCP servers. $prompt\"\n"
-                "conversation_file=\"${LINT_AI_BENCHMARK_RUN_DIR}/conversation.id\"\n"
                 "resume_arg=\"\"\n"
                 "while [ $# -gt 0 ]; do\n"
                 "  if [ \"$1\" = \"--resume\" ] && [ $# -ge 2 ]; then\n"
@@ -109,12 +103,9 @@ def main() -> None:
                 "  fi\n"
                 "  shift\n"
                 "done\n"
-                "set -- --print \"$prompt\" --disable-slash-commands --output-format stream-json --dangerously-skip-permissions\n"
+                "set -- --print \"$prompt\" --disable-slash-commands --output-format stream-json\n"
                 "if [ -n \"$resume_arg\" ]; then\n"
                 "  set -- \"$@\" --conversation \"$resume_arg\"\n"
-                "elif [ -s \"$conversation_file\" ]; then\n"
-                "  conversation=$(tr -d '\\n' < \"$conversation_file\")\n"
-                "  set -- \"$@\" --conversation \"$conversation\"\n"
                 "fi\n"
                 "exec agy \"$@\"\n",
                 encoding="utf-8",

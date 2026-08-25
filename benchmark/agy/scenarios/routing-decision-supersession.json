@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "id": "routing-decision-supersession",
+  "category": "temporal-correction",
+  "description": "Prefer the latest routing decision over a superseded sparse-routing proposal.",
+  "negative_control": false,
+  "repository": {
+    "path": ".",
+    "revision": "HEAD"
+  },
+  "setup_messages": [
+    {
+      "prompt": "Initial proposal: use SegmentRoutingStrategy::SparseOverlap for Antigravity (AGY) session memory.",
+      "establishes_fact_ids": [
+        "old-sparse-proposal"
+      ]
+    },
+    {
+      "prompt": "Decision update: supersede the SparseOverlap proposal. Antigravity (AGY) session memory must use SegmentRoutingStrategy::LocalDistinctiveness with query_top_n set to 3. Treat this as the current decision.",
+      "establishes_fact_ids": [
+        "current-local-routing",
+        "query-top-three"
+      ]
+    }
+  ],
+  "continuation_prompt": "What is the current routing configuration for Antigravity (AGY) session memory? Distinguish it from the superseded proposal.",
+  "expected_facts": [
+    {
+      "id": "current-local-routing",
+      "description": "The current strategy is LocalDistinctiveness.",
+      "match_any": [
+        "LocalDistinctiveness",
+        "local distinctiveness"
+      ]
+    },
+    {
+      "id": "query-top-three",
+      "description": "The current segment fanout is three.",
+      "match_any": [
+        "query_top_n = 3",
+        "query_top_n set to 3",
+        "query_top_n: 3",
+        "query_top_n` is set to",
+        "query_top_n is set to",
+        "top_n is set to 3",
+        "top 3"
+      ]
+    },
+    {
+      "id": "old-sparse-superseded",
+      "description": "SparseOverlap is explicitly identified as superseded.",
+      "match_any": [
+        "SparseOverlap was superseded",
+        "superseded SparseOverlap",
+        "not SparseOverlap",
+        "no longer",
+        "superseded"
+      ]
+    }
+  ],
+  "forbidden_facts": [
+    {
+      "id": "sparse-is-current",
+      "description": "SparseOverlap must not be presented as current.",
+      "match_any": [
+        "current strategy is SparseOverlap",
+        "use SparseOverlap now"
+      ]
+    }
+  ],
+  "validators": [
+    {
+      "name": "agy-routing-configuration",
+      "command": [
+        "grep",
+        "-r",
+        "routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness",
+        "src/integrations/agy"
+      ]
+    }
+  ],
+  "limits": {
+    "timeout_seconds": 300,
+    "max_turns": 3,
+    "max_budget_usd": 0.75,
+    "max_injected_context_bytes": 8000
+  }
+}

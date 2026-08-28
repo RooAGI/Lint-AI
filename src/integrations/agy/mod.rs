@@ -16,6 +16,28 @@ const HOOK_MARKER: &str = "--agy-hook";
 
 pub type AgyServerOptions<'a> = GeminiCliServerOptions<'a>;
 
+pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
+    let root = root.canonicalize()?;
+    let skill_path = root.join(".agents/skills/lint-ai-memory/SKILL.md");
+    if let Some(parent) = skill_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let generated = include_str!("skill.md");
+    if let Ok(existing) = fs::read_to_string(&skill_path) {
+        if !force && existing != generated {
+            anyhow::bail!(
+                "refusing to overwrite existing AGY skill {}; it appears user-modified; use --agy-force-skill to replace it",
+                skill_path.display()
+            );
+        }
+        if existing == generated {
+            return Ok(skill_path);
+        }
+    }
+    fs::write(&skill_path, generated)?;
+    Ok(skill_path)
+}
+
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
     let path = config_path
         .map(Path::to_path_buf)
@@ -154,6 +176,32 @@ mod tests {
             .contains("mcp_config.json"));
         assert_eq!(HOOK_MARKER, "--agy-hook");
         let _ = root;
+    }
+
+    #[test]
+    fn memory_skill_preserves_user_edits_without_force() {
+        let root = temp_root();
+        let path = root.join(".agents/skills/lint-ai-memory/SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "custom").unwrap();
+
+        let error = install_memory_skill(&root, false).unwrap_err().to_string();
+        assert!(error.contains("--agy-force-skill"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "custom");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_skill_force_replaces_user_edits_and_is_idempotent() {
+        let root = temp_root();
+
+        install_memory_skill(&root, true).unwrap();
+        let path = root.join(".agents/skills/lint-ai-memory/SKILL.md");
+        let installed = fs::read_to_string(&path).unwrap();
+        assert!(installed.contains("<!-- lint-ai-managed-skill -->"));
+        install_memory_skill(&root, false).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), installed);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

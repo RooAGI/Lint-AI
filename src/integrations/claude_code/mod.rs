@@ -103,7 +103,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     Ok(config_path)
 }
 
-pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
+pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
     // Canonicalized, and used below: the skill must land at the real path, not
     // through a symlink.
     let root = root
@@ -120,13 +120,21 @@ pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
     if skill_path.exists() {
         let existing = fs::read_to_string(&skill_path)
             .with_context(|| format!("failed to read existing skill {}", skill_path.display()))?;
-        if existing != include_str!("skill.md") {
+        let known_generated = existing == include_str!("skill.md")
+            || // Recognize the pre-marker skill shipped by earlier Lint-AI versions
+               // so normal upgrades do not require a replacement flag.
+               (existing.starts_with("---\nname: lint-ai-memory\n")
+                   && existing.contains("mcp__lint-ai__search")
+                   && existing.contains("## Lint-AI Memory"));
+        if !force && !known_generated {
             anyhow::bail!(
-                "refusing to overwrite existing Claude skill {}; remove it or back it up first",
+                "refusing to overwrite existing Claude skill {}; it appears user-modified; use --claude-code-force-skill to replace it",
                 skill_path.display()
             );
         }
-        return Ok(skill_path);
+        if existing == include_str!("skill.md") {
+            return Ok(skill_path);
+        }
     }
     fs::write(&skill_path, include_str!("skill.md"))?;
     Ok(skill_path)
@@ -721,6 +729,41 @@ mod tests {
         let path = temp_path(name).with_extension("");
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn install_memory_skill_preserves_user_edits_without_force() {
+        let root = temp_dir("claude-skill-preserve");
+        let skill_path = root.join(".claude/skills/lint-ai-memory/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_path,
+            "---\nname: lint-ai-memory\n---\n\nMy custom instructions\n",
+        )
+        .unwrap();
+
+        let error = install_memory_skill(&root, false).unwrap_err().to_string();
+        assert!(error.contains("--claude-code-force-skill"));
+        assert_eq!(
+            fs::read_to_string(&skill_path).unwrap(),
+            "---\nname: lint-ai-memory\n---\n\nMy custom instructions\n"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn install_memory_skill_force_replaces_user_edits() {
+        let root = temp_dir("claude-skill-force");
+        let skill_path = root.join(".claude/skills/lint-ai-memory/SKILL.md");
+        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+        fs::write(&skill_path, "custom").unwrap();
+
+        install_memory_skill(&root, true).unwrap();
+
+        let installed = fs::read_to_string(&skill_path).unwrap();
+        assert!(installed.contains("<!-- lint-ai-managed-skill -->"));
+        assert!(!installed.contains("custom"));
+        let _ = fs::remove_dir_all(root);
     }
 
     fn test_mcp(root: PathBuf, documents: Vec<SourceDocument>) -> ClaudeMcp {

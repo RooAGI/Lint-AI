@@ -9,6 +9,7 @@ use crate::integrations::agy::hooks::{run_hook as run_agy_hook, AgyHookKind};
 #[cfg(feature = "agy")]
 use crate::integrations::agy::{
     install_hook_settings as install_agy_hook_settings,
+    install_memory_skill as install_agy_memory_skill,
     install_user_config as install_agy_user_config, run_server as run_agy_server, AgyServerOptions,
 };
 #[cfg(feature = "claude-code")]
@@ -2244,14 +2245,15 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "claude-code")]
     if args.claude_code_install {
+        let written =
+            install_memory_skill(Path::new(&args.path), args.claude_code_force_skill)?;
+        println!("Wrote Claude Code memory skill to {}", written.display());
         let config_path = args.claude_code_config.as_deref().map(Path::new);
         let written = install_user_config(Path::new(&args.path), config_path)?;
         println!("Wrote Claude Code config to {}", written.display());
         let settings_path = args.claude_code_settings.as_deref().map(Path::new);
         let written = install_hook_settings(Path::new(&args.path), settings_path)?;
         println!("Wrote Claude Code hook settings to {}", written.display());
-        let written = install_memory_skill(Path::new(&args.path))?;
-        println!("Wrote Claude Code memory skill to {}", written.display());
         return Ok(());
     }
 
@@ -2317,6 +2319,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "agy")]
     if args.agy_install {
+        let written = install_agy_memory_skill(Path::new(&args.path), args.agy_force_skill)?;
+        println!("Wrote AGY memory skill to {}", written.display());
         let written = install_agy_user_config(
             Path::new(&args.path),
             args.agy_config.as_deref().map(Path::new),

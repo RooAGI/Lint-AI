@@ -4,6 +4,33 @@ This directory holds the retrieval benchmarks for `lint-ai`, including
 haystack-style corpora, LongMemEval-S runs, and agent integration performance
 scaffolds.
 
+## Conversation Recency Benchmark
+
+Run the controlled end-to-end freshness evaluation with:
+
+```bash
+cargo run --release --bin recency_benchmark
+```
+
+The benchmark creates identical fresh (0–30 days), warm (31–90 days), and
+cold (91+ days) conversation memories for five topics. It reports whether the
+fresh memory is ranked first or within the top three, its mean rank, the
+recency score contribution, and the freshness distribution of top-1 results.
+This is intended as a deterministic regression check for ranking behavior and
+does not require external datasets or model downloads.
+
+To evaluate the real persisted Lint-AI project memory corpus instead:
+
+```bash
+cargo run --bin project_memory_recency_benchmark -- \
+  --records .lint-ai/codex-memory/semantic/records.json
+```
+
+This reports the corpus freshness distribution and the freshness distribution
+of the top-1 and top-5 results for representative project-memory queries. The
+real corpus has no gold answer labels, so this measures freshness behavior and
+does not claim semantic answer accuracy.
+
 Benchmark subdirectories:
 
 - `claude_code/`: Claude Code A/B scenarios and parser scaffold

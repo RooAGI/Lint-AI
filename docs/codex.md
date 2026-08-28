@@ -29,6 +29,8 @@ By default this should:
   feature flags
 - merge Lint-AI commands into `~/.codex/hooks.json` for the supported Codex
   lifecycle events
+- merge the Lint-AI memory policy into the project's `AGENTS.md`, which Codex
+  uses for standing project instructions
 - preserve unrelated MCP servers, hooks, and settings
 
 Codex's built-in TUI status line currently accepts only Codex-defined item

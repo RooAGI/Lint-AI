@@ -39,6 +39,11 @@ By default this:
   `mcp__lint-ai__search` for prior project context
 - preserves unrelated MCP servers, hooks, and settings
 
+The installer validates the skill before changing global Claude settings. It
+updates a Lint-AI-managed skill during upgrades, but preserves a user-modified
+skill and reports an error. Use `--claude-code-force-skill` only when you
+intentionally want to replace that file.
+
 Claude session memory is persisted under:
 
 ```text

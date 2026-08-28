@@ -13,6 +13,10 @@ lint-ai --agy-install /path/to/project
 The installer writes the MCP server to `~/.gemini/config/mcp_config.json` and
 the hook commands to `~/.gemini/config/hooks.json`. Explicit files
 can be supplied with `--agy-config` and `--agy-settings`.
+The installer also adds the project-scoped `lint-ai-memory` skill under
+`.agents/skills/lint-ai-memory/SKILL.md`, which AGY loads as a workspace skill.
+User-modified skills are preserved; use `--agy-force-skill` to replace one
+intentionally.
 
 AGY receives the same `search`, `info`, `record_session`, `enable_lint_ai`,
 `disable_lint_ai`, and `lint_ai_status` MCP tools as the other integrations.

@@ -176,6 +176,10 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_install: bool,
+    /// Replace a user-modified Lint-AI Claude skill explicitly.
+    #[arg(long)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_force_skill: bool,
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_serve: bool,
@@ -238,6 +242,9 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "agy")]
     pub agy_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "agy")]
+    pub agy_force_skill: bool,
     #[arg(long)]
     #[cfg(feature = "agy")]
     pub agy_serve: bool,

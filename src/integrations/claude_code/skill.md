@@ -3,6 +3,8 @@ name: lint-ai-memory
 description: Use the Lint-AI MCP server as the first source for project memory, prior decisions, and earlier work before inspecting the repository.
 ---
 
+<!-- lint-ai-managed-skill -->
+
 # Lint-AI Memory
 
 ## MCP-first memory policy

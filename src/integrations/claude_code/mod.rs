@@ -159,7 +159,13 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         let entries = entries
             .as_array_mut()
             .with_context(|| format!("Claude hook event '{event_name}' must be an array"))?;
-        entries.retain(|entry| !contains_lint_ai_hook(entry));
+        // Claude validates every hook group and rejects empty objects because
+        // they have no `hooks` array. Some Claude versions leave these
+        // placeholders behind while migrating settings, so remove only those
+        // malformed empty groups while preserving all actual user hooks.
+        entries.retain(|entry| {
+            !entry.as_object().is_some_and(Map::is_empty) && !contains_lint_ai_hook(entry)
+        });
         entries.push(json!({
             "hooks": [{
                 "type": "command",
@@ -811,7 +817,7 @@ mod tests {
         let settings_path = temp_path("claude-settings");
         fs::write(
             &settings_path,
-            r#"{"hooks":{"Stop":[{"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}]},"theme":"dark"}"#,
+            r#"{"hooks":{"Stop":[{},{},{"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}]},"theme":"dark"}"#,
         )
         .unwrap();
         let root = env::current_dir().unwrap();
@@ -841,6 +847,32 @@ mod tests {
                 .len(),
             1
         );
+        let _ = fs::remove_file(settings_path);
+    }
+
+    #[test]
+    fn install_hook_settings_removes_empty_groups_for_every_event() {
+        let settings_path = temp_path("claude-settings-empty-groups");
+        let mut existing_hooks = Map::new();
+        for (event_name, _) in HOOK_EVENTS {
+            existing_hooks.insert((*event_name).to_string(), json!([{}, {}, {}]));
+        }
+        fs::write(
+            &settings_path,
+            serde_json::to_string(&json!({"hooks": existing_hooks})).unwrap(),
+        )
+        .unwrap();
+        let root = env::current_dir().unwrap();
+
+        install_hook_settings(&root, Some(&settings_path)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        for (event_name, _) in HOOK_EVENTS {
+            let entries = settings["hooks"][*event_name].as_array().unwrap();
+            assert_eq!(entries.len(), 1, "unexpected groups for {event_name}");
+            assert!(entries[0]["hooks"].is_array());
+        }
         let _ = fs::remove_file(settings_path);
     }
 

@@ -1,7 +1,10 @@
 use crate::ids::stable_chunk_id;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
 use crate::query_semantics::QueryRoutingIntent;
-use crate::temporal::{parse_temporal_date, resolve_temporal_target};
+use crate::temporal::{
+    parse_temporal_date, recency_boost, resolve_temporal_target, DEFAULT_RECENCY_HALF_LIFE_DAYS,
+    DEFAULT_RECENCY_MAX_BOOST,
+};
 use crate::tier1::{RankedTerm, Tier1Entity};
 use crate::tokenizer::{self, TokenizerMode};
 use anyhow::Result;
@@ -34,7 +37,6 @@ const EXPANDED_ENTITY_WEIGHT: f32 = 0.45;
 const EXPANDED_TERM_WEIGHT: f32 = 0.35;
 const TOPIC_OVERLAP_WEIGHT: f32 = 0.35;
 const DOC_TYPE_OVERLAP_WEIGHT: f32 = 0.25;
-const TIMESTAMP_PRESENCE_WEIGHT: f32 = 0.05;
 const DOC_LINK_GRAPH_WEIGHT: f32 = 0.22;
 const GRAPH_MAX_BOOST: f32 = 0.6;
 const ENTITY_GRAPH_WEIGHT: f32 = 0.08;
@@ -1347,8 +1349,6 @@ impl MemoryIndex {
             None => top_k.saturating_mul(5).max(20),
         };
         let total_start = Instant::now();
-        let (mut results, mut timings, diagnostics) =
-            self.query_timed_with_context(query, search_k, temporal);
         let (temporal_start, temporal_end) =
             normalize_temporal_bounds(temporal.starts_from, temporal.ends_at);
         let relative_anchor = temporal_start
@@ -1357,6 +1357,13 @@ impl MemoryIndex {
             .or(temporal.starts_from)
             .or(temporal.ends_at);
         let target = resolve_temporal_target(query, relative_anchor);
+        let apply_recency = !temporal.has_explicit_temporal
+            && target.is_none()
+            && temporal_start.is_none()
+            && temporal_end.is_none()
+            && temporal.time_hint.is_none();
+        let (mut results, mut timings, diagnostics) =
+            self.query_timed_with_context(query, search_k, temporal, apply_recency);
         if target.is_none()
             && temporal_start.is_none()
             && temporal_end.is_none()
@@ -1483,7 +1490,7 @@ impl MemoryIndex {
         query: &str,
         top_k: usize,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
-        self.query_timed_with_context(query, top_k, TemporalQueryContext::default())
+        self.query_timed_with_context(query, top_k, TemporalQueryContext::default(), true)
     }
 
     fn query_timed_with_context(
@@ -1491,6 +1498,7 @@ impl MemoryIndex {
         query: &str,
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
+        apply_recency: bool,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let total_start = Instant::now();
         let lexical_start = Instant::now();
@@ -1510,6 +1518,7 @@ impl MemoryIndex {
             temporal.query_routing_intent,
             temporal.has_explicit_temporal,
             temporal.allowed_doc_ids,
+            apply_recency,
         );
         let snapshot_query_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
         let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -1530,7 +1539,7 @@ impl MemoryIndex {
         top_k: usize,
         lexical_hits: Option<&HashMap<String, f32>>,
     ) -> Vec<SearchResult> {
-        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None)
+        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None, true)
             .0
     }
 
@@ -1592,8 +1601,16 @@ impl MemoryIndex {
         let Some(allowed) = self.doc_ids_matching_filters(filters) else {
             return self.query_with_lexical_hits(query, top_k, lexical_hits);
         };
-        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, Some(&allowed))
-            .0
+        self.query_with_lexical_hits_timed(
+            query,
+            top_k,
+            lexical_hits,
+            None,
+            false,
+            Some(&allowed),
+            true,
+        )
+        .0
     }
 
     /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores each
@@ -1638,6 +1655,7 @@ impl MemoryIndex {
                     None,
                     false,
                     allowed_opt.as_ref(),
+                    true,
                 )
                 .0
             })
@@ -1652,6 +1670,7 @@ impl MemoryIndex {
         query_routing_intent: Option<QueryRoutingIntent>,
         has_explicit_temporal: bool,
         allowed_doc_ids: Option<&HashSet<String>>,
+        apply_recency: bool,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         const MAX_QUERY_CHARS: usize = 4096;
         const MAX_QUERY_TOKENS: usize = 128;
@@ -1985,10 +2004,21 @@ impl MemoryIndex {
                     entry.breakdown.claim_score += best_claim_delta;
                 }
             }
-            if doc_has_timestamped_chunk(doc) || doc.timestamp.is_some() {
-                let delta = TIMESTAMP_PRESENCE_WEIGHT;
-                entry.score += delta;
-                entry.breakdown.recency_score += delta;
+            if apply_recency {
+                let delta = recency_boost(
+                    doc.section_chunks
+                        .iter()
+                        .find_map(|chunk| chunk.timestamp.as_deref())
+                        .or(doc.timestamp.as_deref()),
+                    DateTime::<Utc>::from(SystemTime::now()),
+                    DEFAULT_RECENCY_HALF_LIFE_DAYS,
+                    DEFAULT_RECENCY_MAX_BOOST,
+                )
+                .unwrap_or(0.0);
+                if delta > 0.0 {
+                    entry.score += delta;
+                    entry.breakdown.recency_score += delta;
+                }
             }
         }
         let candidate_accumulation_ms =

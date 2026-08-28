@@ -54,3 +54,11 @@ experimental = []
 name = "segment_scoped_benchmark"
 path = "src/bin/segment_scoped_benchmark.rs"
 required-features = ["experimental"]
+
+[[bin]]
+name = "recency_benchmark"
+path = "src/bin/recency_benchmark.rs"
+
+[[bin]]
+name = "project_memory_recency_benchmark"
+path = "src/bin/project_memory_recency_benchmark.rs"

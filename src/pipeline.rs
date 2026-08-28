@@ -2166,6 +2166,33 @@ mod tests {
     }
 
     #[test]
+    fn query_prefers_latest_equally_relevant_conversation_memory() {
+        let today = chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).date_naive();
+        let mut latest = sample_doc(
+            "conversation-latest",
+            "Conversation memory: the project Aurora rollout decision was to ship in phases.",
+        );
+        latest.timestamp = Some(format!("{today}T12:00:00Z"));
+        let mut old = sample_doc(
+            "conversation-old",
+            "Conversation memory: the project Aurora rollout decision was to ship in phases.",
+        );
+        old.timestamp = Some(format!("{}T12:00:00Z", today - chrono::Duration::days(180)));
+
+        let index = build_query_snapshot(&[old, latest], &PipelineOptions::default())
+            .expect("conversation memories should build");
+        let results = index.query("Aurora rollout decision", 2);
+
+        assert_eq!(
+            results.first().map(|result| result.doc_id.as_str()),
+            Some("conversation-latest")
+        );
+        assert!(
+            results[0].score_breakdown.recency_score > results[1].score_breakdown.recency_score
+        );
+    }
+
+    #[test]
     fn chunk_ids_are_stable_for_same_input() {
         let content = "# Intro\nDocker install on linux\n# Usage\nRun docker info";
         let first = crate::chunking::chunk_document_sections(content, "doc-1");

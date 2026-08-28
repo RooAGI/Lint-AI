@@ -11,6 +11,27 @@ pub struct TemporalTarget {
     pub window_days: i64,
 }
 
+pub const DEFAULT_RECENCY_HALF_LIFE_DAYS: f32 = 30.0;
+pub const DEFAULT_RECENCY_MAX_BOOST: f32 = 0.25;
+
+pub fn recency_boost(
+    timestamp: Option<&str>,
+    now: DateTime<Utc>,
+    half_life_days: f32,
+    max_boost: f32,
+) -> Option<f32> {
+    if half_life_days <= 0.0 || !half_life_days.is_finite() || max_boost <= 0.0 {
+        return None;
+    }
+    let timestamp_date = parse_date(timestamp)?;
+    let age_days = now
+        .date_naive()
+        .signed_duration_since(timestamp_date)
+        .num_days()
+        .max(0) as f32;
+    Some((max_boost * 2.0f32.powf(-age_days / half_life_days)).min(max_boost))
+}
+
 pub fn augment_query_with_temporal_context(query: &str, question_date: Option<&str>) -> String {
     let Some(base_date) = parse_date(question_date) else {
         return query.to_string();
@@ -556,6 +577,11 @@ fn parse_date(input: Option<&str>) -> Option<NaiveDate> {
     }
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .ok()
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|date| date.date_naive())
+        })
         .or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
         .or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f").ok())
 }
@@ -763,5 +789,28 @@ mod tests {
             "expected ~14 days before anchor, got delta={delta}"
         );
         assert!(target.window_days > 0);
+    }
+
+    #[test]
+    fn reveals_bug_rfc3339_timestamp_with_timezone_is_not_parsed() {
+        assert_eq!(
+            parse_temporal_date(Some("2024-05-10T14:30:00+00:00")),
+            Some(NaiveDate::from_ymd_opt(2024, 5, 10).unwrap())
+        );
+    }
+
+    #[test]
+    fn reveals_bug_recency_decay_does_not_prioritize_recent_memory() {
+        let now = DateTime::parse_from_rfc3339("2024-07-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let boost = recency_boost(
+            Some("2024-06-01T12:00:00Z"),
+            now,
+            DEFAULT_RECENCY_HALF_LIFE_DAYS,
+            DEFAULT_RECENCY_MAX_BOOST,
+        )
+        .expect("timestamp should receive a recency boost");
+        assert!((boost - 0.125).abs() < 0.001, "boost={boost}");
     }
 }

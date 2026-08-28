@@ -61,9 +61,10 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
             .as_array_mut()
             .ok_or_else(|| anyhow::anyhow!("AGY hook {event} must be an array"))?;
         entries.retain(|entry| {
-            !serde_json::to_string(entry)
-                .unwrap_or_default()
-                .contains(HOOK_MARKER)
+            !entry.as_object().is_some_and(Map::is_empty)
+                && !serde_json::to_string(entry)
+                    .unwrap_or_default()
+                    .contains(HOOK_MARKER)
         });
         let command = json!({"type":"command", "command": format!("{} {HOOK_MARKER} {name} {}", shell_quote(&executable.to_string_lossy()), shell_quote(&root.to_string_lossy()))});
         if matches!(event, "PreToolUse" | "PostToolUse") {
@@ -163,7 +164,7 @@ mod tests {
         fs::write(&config, r#"{"mcpServers":{"other":{"command":"other"}}}"#).unwrap();
         fs::write(
             &settings,
-            r#"{"theme":"dark","hooks":{"BeforeAgent":[{"hooks":[{"type":"command","command":"user-hook"}]}]}}"#,
+            r#"{"theme":"dark","hooks":{"BeforeAgent":[{}, {"hooks":[{"type":"command","command":"user-hook"}]}]}}"#,
         )
         .unwrap();
 

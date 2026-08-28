@@ -226,7 +226,9 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         let entries = entries
             .as_array_mut()
             .with_context(|| format!("Codex hook event '{event_name}' must be an array"))?;
-        entries.retain(|entry| !contains_lint_ai_hook(entry));
+        entries.retain(|entry| {
+            !entry.as_object().is_some_and(Map::is_empty) && !contains_lint_ai_hook(entry)
+        });
         entries.push(json!({
             "hooks": [{
                 "type": "command",
@@ -873,7 +875,7 @@ args = ["old"]
         let settings_path = temp_path("claude-settings");
         fs::write(
             &settings_path,
-            r#"{"hooks":{"Stop":[{"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}]},"theme":"dark"}"#,
+            r#"{"hooks":{"Stop":[{}, {"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}]},"theme":"dark"}"#,
         )
         .unwrap();
         let root = env::current_dir().unwrap();

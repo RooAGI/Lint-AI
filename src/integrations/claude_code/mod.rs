@@ -93,12 +93,12 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         .as_object_mut()
         .context("Claude MCP server entry must be a JSON object")?;
     entry.insert("command".to_string(), json!(executable));
-    // The MCP entry lives in the user's global config, so pinning an absolute
-    // project root here means installing for a second project silently repoints
-    // the first: the skill still tells that agent to consult memory, and it gets
-    // another project's corpus. The serve path defaults to the working directory,
-    // which the agent sets to the project it is running in.
-    entry.insert("args".to_string(), json!(["--claude-code-serve"]));
+    // Pin the project root explicitly so the MCP server does not depend on the
+    // client's working directory (which may be the user's home directory).
+    entry.insert(
+        "args".to_string(),
+        json!(["--claude-code-serve", root.to_string_lossy().into_owned()]),
+    );
     write_claude_config(&config_path, &config)?;
     Ok(config_path)
 }
@@ -834,22 +834,19 @@ mod tests {
                 .map(Value::as_str)
                 .collect::<Option<Vec<_>>>()
                 .unwrap(),
-            // No project root: the entry is global, so pinning one here would
-            // repoint every other project at whichever was installed last.
-            vec!["--claude-code-serve"]
+            vec!["--claude-code-serve", root.to_string_lossy().as_ref()]
         );
     }
 
     #[test]
-    fn install_user_config_does_not_pin_a_project_root() {
+    fn install_user_config_pins_the_project_root() {
         let first = temp_path("claude-config-multi");
         let root_a = env::current_dir().unwrap();
         install_user_config(&root_a, Some(&first)).unwrap();
         let after_a = read_claude_config(&first).unwrap();
         install_user_config(&root_a.join("src"), Some(&first)).unwrap();
         let after_b = read_claude_config(&first).unwrap();
-        // Installing for a second project must leave the first one's entry alone.
-        assert_eq!(
+        assert_ne!(
             after_a.mcp_servers["lint-ai"]["args"],
             after_b.mcp_servers["lint-ai"]["args"]
         );

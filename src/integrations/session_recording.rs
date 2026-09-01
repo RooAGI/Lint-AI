@@ -120,7 +120,8 @@ pub fn replay_recorded_session(
         }
     };
     let recorded_event_count = provider_event_count(&replay_dir.join("events.jsonl"))?;
-    let recording_complete = recorded_event_count > 0;
+    let recording_complete =
+        replay_recording_complete(&replay_dir.join("events.jsonl"), prompts.len())?;
 
     record_event(
         provider,
@@ -258,6 +259,20 @@ fn provider_event_count(events_path: &Path) -> Result<usize> {
                     .is_some())
         })
         .count())
+}
+
+fn replay_recording_complete(events_path: &Path, prompt_count: usize) -> Result<bool> {
+    if provider_event_count(events_path)? == 0 {
+        return Ok(false);
+    }
+    if prompt_count == 0 {
+        return Ok(true);
+    }
+    let content = fs::read_to_string(events_path)?;
+    Ok(content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|event| event.get("kind").and_then(Value::as_str) == Some("user_prompt")))
 }
 
 #[derive(Debug, Default)]
@@ -1550,6 +1565,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(provider_event_count(&events).unwrap(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replay_with_prompts_requires_a_replayed_user_prompt_event() {
+        let root = temp_root("incomplete-prompt-replay");
+        let events = root.join("events.jsonl");
+        fs::write(
+            &events,
+            "{\"kind\":\"provider_event\",\"payload\":{\"event\":\"stop\"}}\n",
+        )
+        .unwrap();
+        assert!(!replay_recording_complete(&events, 1).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::memory_api::{AddRequest, MemoryService, SearchRequest};
+use lint_ai::memory_api::{
+    AddRequest, DeleteRequest, MemoryService, SearchRequest, SupersedeRequest,
+};
 use lint_ai::{IndexStore, PipelineOptions};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -227,7 +229,12 @@ fn handle_connection(
         }
     }
 
-    if method != "POST" || (path != "/add" && path != "/search") {
+    if method != "POST"
+        || !matches!(
+            path,
+            "/add" | "/search" | "/delete" | "/supersede" | "/expire"
+        )
+    {
         return write_json(
             &mut stream,
             404,
@@ -290,6 +297,49 @@ fn handle_connection(
                 )
             }
         },
+        "/delete" => match serde_json::from_value::<DeleteRequest>(value)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .and_then(|request| service.delete(&request.user_id, &request.doc_id))
+        {
+            Ok(affected) => serde_json::json!({"success": true, "affected": affected as usize}),
+            Err(error) => {
+                return write_json(
+                    &mut stream,
+                    422,
+                    &serde_json::json!({"detail": error.to_string()}),
+                )
+            }
+        },
+        "/supersede" => match serde_json::from_value::<SupersedeRequest>(value)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .and_then(|request| {
+                service.supersede(&request.user_id, &request.replacement_id, &request.old_id)
+            }) {
+            Ok(affected) => serde_json::json!({"success": true, "affected": affected as usize}),
+            Err(error) => {
+                return write_json(
+                    &mut stream,
+                    422,
+                    &serde_json::json!({"detail": error.to_string()}),
+                )
+            }
+        },
+        "/expire" => {
+            let user_id = value
+                .get("user_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match service.expire(user_id) {
+                Ok(affected) => serde_json::json!({"success": true, "affected": affected}),
+                Err(error) => {
+                    return write_json(
+                        &mut stream,
+                        422,
+                        &serde_json::json!({"detail": error.to_string()}),
+                    )
+                }
+            }
+        }
         _ => unreachable!(),
     };
     write_json(&mut stream, 200, &response)

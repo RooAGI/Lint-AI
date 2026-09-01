@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TOP_K: usize = 5;
@@ -25,6 +26,7 @@ const MAX_CAPTURED_MESSAGES: usize = 6;
 const MAX_MEMORY_FIELD_BYTES: usize = 1_500;
 const MAX_EXCERPT_BYTES: usize = 800;
 const MIN_TOOL_QUERY_TERMS: usize = 5;
+const DEFAULT_HOOK_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaudeHookKind {
@@ -101,7 +103,7 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
         }
     }
     let started = Instant::now();
-    let output = match handle_hook(kind, input, fallback_root) {
+    let output = match run_with_budget(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("warning: Lint-AI Claude hook failed open: {error:#}");
@@ -112,6 +114,40 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;
     Ok(())
+}
+
+fn hook_timeout_ms() -> u64 {
+    std::env::var("LINT_AI_HOOK_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS)
+        .clamp(100, 30_000)
+}
+
+fn run_with_budget(
+    kind: ClaudeHookKind,
+    input: ClaudeHookInput,
+    fallback_root: &Path,
+) -> Result<ClaudeHookOutput> {
+    let fallback_root = fallback_root.to_path_buf();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(handle_hook(kind, input, &fallback_root));
+    });
+    match receiver.recv_timeout(std::time::Duration::from_millis(hook_timeout_ms())) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => anyhow::bail!(
+            "Lint-AI {event} hook exceeded {timeout}ms budget",
+            event = kind.event_name(),
+            timeout = hook_timeout_ms()
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            anyhow::bail!(
+                "Lint-AI {event} hook worker disconnected",
+                event = kind.event_name()
+            )
+        }
+    }
 }
 
 fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHookOutput) {

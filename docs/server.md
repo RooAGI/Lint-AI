@@ -15,7 +15,23 @@ cargo run --release --bin server -- \
   --server-token "$SERVER_TOKEN"
 ```
 
-The server exposes `GET /health`, `POST /add`, and `POST /search`.
+The server exposes `GET /health`, `POST /add`, `POST /search`, `POST /delete`,
+`POST /supersede`, and `POST /expire`.
+
+Memory lifecycle fields are optional on each `/add` message. Set
+`expires_at_ms` to hide a memory after a Unix-millisecond deadline. Set
+`supersedes_id` to mark an older memory as replaced. Lifecycle operations are
+scoped by `user_id`:
+
+```json
+{"user_id":"user-0","doc_id":"memory-id"}
+{"user_id":"user-0","replacement_id":"new-id","old_id":"old-id"}
+{"user_id":"user-0"}
+```
+
+These are the request bodies for `/delete`, `/supersede`, and `/expire`,
+respectively. Delete is idempotent; expire removes all expired memories for
+the user. Search omits expired and superseded memories.
 
 The server token accepts `X-Api-Key`, `Authorization: Bearer <token>`, or
 `Authorization: Token <token>`. It can also be supplied through

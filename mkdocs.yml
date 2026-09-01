@@ -1,0 +1,136 @@
+site_name: Lint-AI
+site_description: Evidence-aware memory and semantic review for AI agents.
+site_url: https://rooagi.github.io/Lint-AI/
+repo_url: https://github.com/RooAGI/Lint-AI
+repo_name: RooAGI/Lint-AI
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  language: en
+  favicon: assets/rooagi-logo.png
+  logo: assets/rooagi-logo.png
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - HTTP server: server.md
+      - MCP interface: mcp.md
+  - Agents:
+      - Agent integrations: agents.md
+      - Session recording: session-recording-design.md
+      - Codex: codex.md
+      - Claude Code: claude-code.md
+      - Gemini CLI: gemini-cli.md
+      - Antigravity CLI: agy.md
+      - Other agent frameworks: agent-frameworks.md
+  - Architecture:
+      - Ingestion architecture: ingestion-architecture.md
+      - How indexing works: tier0-ingestion.md
+      - Search and retrieval: tier1-indexing-and-search.md
+      - Hybrid indexing and retrieval: tier1-hybrid-indexing-and-retrieval.md
+      - Light understanding: tier1-light-understanding.md
+      - Filtered search: filtered-search.md
+      - Artifact indexing: artifact-indexing.md
+      - Corpus graph: build-corpus-graph.md
+      - Integration glossary: integration-glossary.md
+      - Chunk strategy: chunk-strategy.md
+      - Query context and ranking: query-context-and-ranking-consolidation.md
+      - Index concurrency: index-concurrency.md
+      - Lexical expansion data: lexical-data.md
+      - Claude Code hooks design: claude-code-hooks-design.md
+      - C++ code adapter design: cpp-code-adapter-design.md
+      - Integration testing: integration-test-strategy.md
+  - Benchmarks:
+      - Overview: benchmark.md
+      - Comparison: comparison.md
+      - Integration benchmark README: benchmark-integration.md
+      - Codex performance: codex-performance-tests.md
+      - Claude Code performance: claude-code-performance-tests.md
+      - Antigravity (AGY) performance: agy-performance-tests.md
+  - Releases:
+      - 0.1.9: releases/0.1.9.md
+      - 0.1.8: releases/0.1.8.md
+      - 0.1.7: releases/0.1.7.md
+      - 0.1.6: releases/0.1.6.md
+      - 0.1.5: releases/0.1.5.md
+      - 0.1.4: releases/0.1.4.md
+      - 0.1.3: releases/0.1.3.md
+      - 0.1.2: releases/0.1.2.md
+  - Contact: contact.md
+
+exclude_docs: |
+  benchmark-results.md
+  show-concepts.md
+  show-headings.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
+  - javascripts/mermaid.js
+
+extra:
+  generator: false
+  analytics_id: !ENV [GOOGLE_ANALYTICS_ID, ""]
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/RooAGI/Lint-AI
+      name: Lint-AI on GitHub
+
+copyright: Apache-2.0 licensed · Built by <a href="https://www.rooagi.com">RooAGI</a>

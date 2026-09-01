@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::memory_api::{AddRequest, MemoryService, SearchRequest};
+use lint_ai::memory_api::{
+    AddRequest, DeleteRequest, MemoryService, SearchRequest, SupersedeRequest,
+};
 use lint_ai::{IndexStore, PipelineOptions};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 /// Largest request body accepted, after which the server answers 413.
@@ -66,7 +68,7 @@ fn main() -> Result<()> {
         Some(path) => IndexStore::at_path(path, PipelineOptions::default())?,
         None => IndexStore::in_memory(PipelineOptions::default()),
     };
-    let service = Arc::new(Mutex::new(MemoryService::new(store)));
+    let service = Arc::new(RwLock::new(MemoryService::new(store)));
     let listener = TcpListener::bind(&args.bind)?;
     let active = Arc::new(AtomicUsize::new(0));
     eprintln!("Lint-AI server listening on {}", args.bind);
@@ -163,7 +165,7 @@ fn read_limited_line(reader: &mut impl BufRead, budget: &mut usize) -> Result<St
 
 fn handle_connection(
     mut stream: TcpStream,
-    service: Arc<Mutex<MemoryService>>,
+    service: Arc<RwLock<MemoryService>>,
     server_token: Option<&str>,
 ) -> Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -227,7 +229,12 @@ fn handle_connection(
         }
     }
 
-    if method != "POST" || (path != "/add" && path != "/search") {
+    if method != "POST"
+        || !matches!(
+            path,
+            "/add" | "/search" | "/delete" | "/supersede" | "/expire"
+        )
+    {
         return write_json(
             &mut stream,
             404,
@@ -260,13 +267,15 @@ fn handle_connection(
             )
         }
     };
-    let mut service = service
-        .lock()
-        .map_err(|_| anyhow::anyhow!("service lock poisoned"))?;
     let response = match path {
         "/add" => match serde_json::from_value::<AddRequest>(value)
             .map_err(|error| anyhow::anyhow!(error.to_string()))
-            .and_then(|request| service.add(request))
+            .and_then(|request| {
+                service
+                    .write()
+                    .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
+                    .add(request)
+            })
         {
             Ok(response) => serde_json::to_value(response)?,
             Err(error) => {
@@ -279,7 +288,12 @@ fn handle_connection(
         },
         "/search" => match serde_json::from_value::<SearchRequest>(value)
             .map_err(|error| anyhow::anyhow!(error.to_string()))
-            .and_then(|request| service.search(request))
+            .and_then(|request| {
+                service
+                    .read()
+                    .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
+                    .search_cached(request)
+            })
         {
             Ok(response) => serde_json::to_value(response)?,
             Err(error) => {
@@ -290,6 +304,61 @@ fn handle_connection(
                 )
             }
         },
+        "/delete" => match serde_json::from_value::<DeleteRequest>(value)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .and_then(|request| {
+                service
+                    .write()
+                    .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
+                    .delete(&request.user_id, &request.doc_id)
+            })
+        {
+            Ok(affected) => serde_json::json!({"success": true, "affected": affected as usize}),
+            Err(error) => {
+                return write_json(
+                    &mut stream,
+                    422,
+                    &serde_json::json!({"detail": error.to_string()}),
+                )
+            }
+        },
+        "/supersede" => match serde_json::from_value::<SupersedeRequest>(value)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .and_then(|request| {
+                service
+                    .write()
+                    .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
+                    .supersede(&request.user_id, &request.replacement_id, &request.old_id)
+            }) {
+            Ok(affected) => serde_json::json!({"success": true, "affected": affected as usize}),
+            Err(error) => {
+                return write_json(
+                    &mut stream,
+                    422,
+                    &serde_json::json!({"detail": error.to_string()}),
+                )
+            }
+        },
+        "/expire" => {
+            let user_id = value
+                .get("user_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match service
+                .write()
+                .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
+                .expire(user_id)
+            {
+                Ok(affected) => serde_json::json!({"success": true, "affected": affected}),
+                Err(error) => {
+                    return write_json(
+                        &mut stream,
+                        422,
+                        &serde_json::json!({"detail": error.to_string()}),
+                    )
+                }
+            }
+        }
         _ => unreachable!(),
     };
     write_json(&mut stream, 200, &response)

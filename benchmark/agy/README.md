@@ -3,7 +3,7 @@
 This directory contains test-only A/B scenarios for measuring Lint-AI as an
 Antigravity (AGY) memory layer. The methodology and release gates follow the
 cross-client integration benchmark contract defined in
-[`benchmark/integration/README.md`](../integration/README.md).
+[`docs/benchmark-integration.md`](../../docs/benchmark-integration.md).
 
 ---
 

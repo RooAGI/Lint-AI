@@ -4,7 +4,7 @@ This directory contains test-only A/B scenarios for measuring Lint-AI as a
 Claude Code memory layer. The methodology and release gates are defined in
 [`docs/claude-code-performance-tests.md`](../../docs/claude-code-performance-tests.md).
 The cross-client integration benchmark methodology is defined in
-[`benchmark/integration/README.md`](../integration/README.md).
+[`docs/benchmark-integration.md`](../../docs/benchmark-integration.md).
 
 ## Layout
 
@@ -113,7 +113,7 @@ One repetition each, `hooks-only` profile, run 2026-08-16. `setup_messages`
 has 2 entries (initial proposal, then a superseding decision), so setup runs
 as two sequential turns inside one live `claude --input-format stream-json`
 process (see "Single-Turn vs. Multi-Turn Setup" in
-[`benchmark/integration/README.md`](../integration/README.md)).
+[`docs/benchmark-integration.md`](../../docs/benchmark-integration.md)).
 
 Getting a clean result here required fixing two shared scoring bugs (both in
 `benchmark/codex_code/src/scorer.py` and `src/runner.py`, so they apply to

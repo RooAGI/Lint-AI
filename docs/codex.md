@@ -62,6 +62,10 @@ capture hook, not by `SessionStart`.
 
 Supported Codex hooks:
 
+Hook execution is fail-open and bounded by a 2-second budget by default. Set
+`LINT_AI_HOOK_TIMEOUT_MS` to tune it; values are clamped to 100–30,000 ms.
+Timeouts are reported on stderr while the provider receives valid fallback JSON.
+
 - `SessionStart`
 - `UserPromptSubmit`
 - `PreToolUse`

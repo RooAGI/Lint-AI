@@ -1,0 +1,13 @@
+{
+  "date": "2026-09-01",
+  "records": 23366,
+  "requests_per_cell": 100,
+  "query": "deployment configuration system decision",
+  "mode": "keyword/BM25; AgentMemory keyless (no embeddings)",
+  "results": [
+    {"system":"Lint-AI","endpoint":"POST /search","concurrency":1,"p50_ms":6.958,"p90_ms":7.648,"p99_ms":28.168,"throughput_per_s":139.52},
+    {"system":"AgentMemory","endpoint":"POST /agentmemory/smart-search","concurrency":1,"p50_ms":7.042,"p90_ms":10.525,"p99_ms":16.936,"throughput_per_s":130.34},
+    {"system":"Lint-AI","endpoint":"POST /search","concurrency":10,"p50_ms":10.23,"p90_ms":11.868,"p99_ms":12.524,"throughput_per_s":952.07},
+    {"system":"AgentMemory","endpoint":"POST /agentmemory/smart-search","concurrency":10,"p50_ms":58.814,"p90_ms":60.352,"p99_ms":61.333,"throughput_per_s":171.26}
+  ]
+}

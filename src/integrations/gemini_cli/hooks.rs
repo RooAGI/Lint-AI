@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeminiHookKind {
@@ -238,7 +239,7 @@ fn capture(
         )),
         headings: vec![document_type.to_string()],
         links: vec![],
-        timestamp: None,
+        timestamp: Some(current_timestamp()),
         doc_length: content.len(),
         author_agent: Some(provider.as_str().to_string()),
         filters,
@@ -254,6 +255,16 @@ fn capture(
     store.upsert(document);
     store.refresh()?;
     Ok(GeminiHookOutput::default())
+}
+
+fn current_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string())
 }
 
 fn capture_content(input: &GeminiHookInput) -> Result<String> {
@@ -421,6 +432,12 @@ mod tests {
             assert_eq!(store.records().len(), 1, "capture must be idempotent");
             assert!(store.records()[0].content.contains("[REDACTED]"));
             assert!(!store.records()[0].content.contains("do-not-store"));
+            let timestamp = store.records()[0]
+                .timestamp
+                .as_deref()
+                .expect("captured memory must have a timestamp");
+            chrono::DateTime::parse_from_rfc3339(timestamp)
+                .expect("captured memory timestamp must be RFC3339");
             drop(store);
 
             let input = GeminiHookInput {

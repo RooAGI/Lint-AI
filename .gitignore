@@ -52,6 +52,7 @@ __pycache__/
 # Local macOS/log artifacts
 .DS_Store
 build.log
+site/
 
 # Generated benchmark smoke outputs
 benchmark/*_results.json

@@ -104,11 +104,11 @@ benchmark/
 
 Client-specific details and command-line options remain in:
 
-- [`benchmark/claude_code/README.md`](../claude_code/README.md)
-- [`benchmark/codex_code/README.md`](../codex_code/README.md)
-- [`benchmark/agy/README.md`](../agy/README.md)
-- [`docs/claude-code-performance-tests.md`](../../docs/claude-code-performance-tests.md)
-- [`docs/codex-performance-tests.md`](../../docs/codex-performance-tests.md)
+- [`benchmark/claude_code/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/claude_code/README.md)
+- [`benchmark/codex_code/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/codex_code/README.md)
+- [`benchmark/agy/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/agy/README.md)
+- [`docs/claude-code-performance-tests.md`](claude-code-performance-tests.md)
+- [`docs/codex-performance-tests.md`](codex-performance-tests.md)
 
 ## Test Model
 

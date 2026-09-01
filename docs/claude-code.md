@@ -59,6 +59,10 @@ session.
 session segment is created lazily by the first capture hook, not by
 `SessionStart`.
 
+Hook execution is fail-open and bounded by a 2-second budget by default. Set
+`LINT_AI_HOOK_TIMEOUT_MS` to tune it; values are clamped to 100–30,000 ms.
+Timeouts are reported on stderr while Claude Code receives valid fallback JSON.
+
 Durable captures are compact structured records rather than raw conversation
 transcripts. Retrieved records include capture/current Git revisions and an
 exact, ancestor, diverged, or unknown revision status.

@@ -40,13 +40,13 @@ flowchart TD
 
 ## File ownership map
 
-- [`src/graph.rs`](/home/louis/sources/Lint-AI/src/graph.rs): corpus traversal, page discovery, Tier 0 record generation
-- [`src/source.rs`](/home/louis/sources/Lint-AI/src/source.rs): canonical source document shape
-- [`src/chunking.rs`](/home/louis/sources/Lint-AI/src/chunking.rs): chunk boundaries and chunk enrichment
-- [`src/tier1.rs`](/home/louis/sources/Lint-AI/src/tier1.rs): entity and important-term extraction
-- [`src/pipeline.rs`](/home/louis/sources/Lint-AI/src/pipeline.rs): ingestion-to-index pipeline and store assembly
-- [`src/index.rs`](/home/louis/sources/Lint-AI/src/index.rs): persistent query structures and retrieval state
-- [`src/engine.rs`](/home/louis/sources/Lint-AI/src/engine.rs): CLI orchestration, cache handling, query flow
+- [`src/graph.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/graph.rs): corpus traversal, page discovery, Tier 0 record generation
+- [`src/source.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/source.rs): canonical source document shape
+- [`src/chunking.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/chunking.rs): chunk boundaries and chunk enrichment
+- [`src/tier1.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/tier1.rs): entity and important-term extraction
+- [`src/pipeline.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/pipeline.rs): ingestion-to-index pipeline and store assembly
+- [`src/index.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/index.rs): persistent query structures and retrieval state
+- [`src/engine.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/engine.rs): CLI orchestration, cache handling, query flow
 
 ## Adapter design
 

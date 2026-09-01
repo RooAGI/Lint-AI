@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgyHookKind {
@@ -289,7 +290,7 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         group_id: Some(format!("agy-session:{session_id}")),
         headings: vec!["session-summary".to_string()],
         links: vec![],
-        timestamp: None,
+        timestamp: Some(current_timestamp()),
         doc_length: body.len(),
         author_agent: Some("agy".to_string()),
         filters,
@@ -305,6 +306,16 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
     store.upsert(document);
     store.refresh()?;
     Ok(())
+}
+
+fn current_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string())
 }
 
 fn resolve_root(input: &AgyHookInput, fallback: &Path) -> Result<PathBuf> {
@@ -369,8 +380,7 @@ mod tests {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
-            ;
+            .as_nanos();
         format!("{}-{timestamp}", std::process::id())
     }
 

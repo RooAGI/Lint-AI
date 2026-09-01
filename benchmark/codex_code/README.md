@@ -4,7 +4,7 @@ This directory contains test-only A/B scenarios for measuring Lint-AI as a
 Codex memory layer. The methodology and release gates are defined in
 [`docs/codex-performance-tests.md`](../../docs/codex-performance-tests.md).
 The cross-client integration benchmark methodology is defined in
-[`benchmark/integration/README.md`](../integration/README.md).
+[`docs/benchmark-integration.md`](../../docs/benchmark-integration.md).
 
 ## Layout
 

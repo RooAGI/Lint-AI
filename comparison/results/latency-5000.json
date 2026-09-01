@@ -1,0 +1,11 @@
+{
+  "date": "2026-09-01",
+  "records": 5000,
+  "requests_per_cell": 100,
+  "query": "deployment configuration system decision",
+  "system": "Lint-AI",
+  "results": [
+    {"concurrency":1,"p50_ms":2.06,"p90_ms":2.375,"p99_ms":18.141,"throughput_per_s":446.81},
+    {"concurrency":10,"p50_ms":3.79,"p90_ms":5.206,"p99_ms":5.986,"throughput_per_s":2458.59}
+  ]
+}

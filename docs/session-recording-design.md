@@ -2,10 +2,12 @@
 
 ## Status
 
-Proposed.
+Implemented as a provider-neutral, opt-in recording path for the supported
+agent adapters. The design below documents the current behavior and the
+remaining provider-specific constraints.
 
-This document defines an explicit, opt-in session recorder for Claude Code and
-Codex integrations. It is intentionally separate from Lint-AI memory
+This document defines an explicit, opt-in session recorder for Claude Code,
+Codex, Gemini CLI, and Antigravity CLI integrations. It is intentionally separate from Lint-AI memory
 retrieval: a user can record a session without allowing Lint-AI to inject
 context into that session.
 
@@ -17,7 +19,7 @@ of what happened during a session.
 
 Users need a safe way to:
 
-- record one Claude or Codex session;
+- record one session from any supported agent;
 - inspect or export what was recorded;
 - run a clean A/B comparison against native memory;
 - collect a session for debugging or evaluation without changing agent
@@ -26,7 +28,7 @@ Users need a safe way to:
 
 ## Goals
 
-- Support Claude Code and Codex through one provider-neutral recording model.
+- Support all adapters through one provider-neutral recording model.
 - Make recording project-scoped, defaulting on when the user explicitly enables
   Lint-AI while preserving an independent recording override.
 - Preserve ordered session events as append-only JSONL.
@@ -81,7 +83,7 @@ and goes to the agent context.
 ```mermaid
 flowchart LR
     U[User enables record-session] --> C[Choose provider, mode, and scope]
-    C --> S[Claude or Codex session]
+    C --> S[Supported agent session]
     S --> H[Provider lifecycle hooks]
     H --> R[Normalize, redact, and bound]
     R --> A[(Session archive)]
@@ -110,7 +112,7 @@ Redaction      Default policy
 ```
 
 During the session, the interface should show a quiet, non-blocking indicator
-such as `Recording: Claude · capture-only`. It should not display every event
+such as `Recording: active agent · capture-only`. It should not display every event
 or interrupt the agent. A detailed event stream belongs in the inspection
 view.
 
@@ -129,7 +131,7 @@ After the session, show one compact result with clear next actions:
 ```text
 Session recorded
 
-Claude · capture-only · 12m 08s
+Agent · capture-only · 12m 08s
 47 events · 38.2 KB · 6 redactions · complete
 Saved to .lint-ai/claude-sessions/claude-abc123/
 
@@ -299,7 +301,7 @@ lint-ai --scenario-from-session abc123 \
   --scenario-out benchmark/claude_code/scenarios/review-session-abc123.json
 ```
 
-### Activation inside Claude or Codex
+### Activation inside a supported agent
 
 After the provider integration is installed, recording remains dormant until
 the user explicitly enables Lint-AI or starts it from the active provider
@@ -390,7 +392,7 @@ sessions with similar prompts or repository paths.
 
 ### 3. Normalize the provider event
 
-Each Claude or Codex hook adapter maps its payload into one normalized event.
+Each provider hook adapter maps its payload into one normalized event.
 The adapter must preserve provider identifiers such as session, thread, turn,
 rollout, tool, and agent IDs when available.
 
@@ -778,7 +780,7 @@ developer's global Claude or Codex configuration.
 ## Acceptance criteria
 
 - Recording is off unless explicitly enabled.
-- A user can record one Claude or Codex session without memory injection.
+- A user can record one supported-agent session without memory injection.
 - A replay always creates a fresh provider session ID and records it.
 - A replay manifest links back to its immutable baseline session.
 - Claude and Codex events use the same normalized event schema.

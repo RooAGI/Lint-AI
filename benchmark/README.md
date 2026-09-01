@@ -4,6 +4,10 @@ This directory holds the retrieval benchmarks for `lint-ai`, including
 haystack-style corpora, LongMemEval-S runs, and agent integration performance
 scaffolds.
 
+For the reproducible Lint-AI versus AgentMemory service comparison—including
+latency scripts, seeders, recorded JSON results, and methodology—see
+[`comparison/`](../comparison/).
+
 ## Conversation Recency Benchmark
 
 Run the controlled end-to-end freshness evaluation with:
@@ -36,7 +40,35 @@ Benchmark subdirectories:
 - `claude_code/`: Claude Code A/B scenarios and parser scaffold
 - `codex_code/`: Codex A/B scenarios and parser scaffold
 
+## Corpus-scale benchmark
+
+Measure how build and retrieval behavior changes as the indexed corpus grows:
+
+```bash
+cargo run --release --bin corpus_scale_benchmark -- \
+  --longmemeval benchmark/data/longmemeval_s_raw.json \
+  --sizes 1000,5000,10000,25000 --queries 100
+```
+
+The output is CSV with unique session count, eligible labeled queries, index
+build time, p50/p95 query latency, and top-k any-hit recall. Queries use the
+dataset's candidate-session IDs as a filter against the global index, matching
+the scoped retrieval contract while measuring a single large index. A query is eligible
+only when all of its labeled answer sessions are present in the corpus slice;
+this avoids penalizing smaller slices for missing gold records. This is a global
+corpus stress test, not the question-scoped retrieval benchmark reported above,
+and it does not claim production capacity. Rerun it on the target machine when
+comparing hardware or revisions.
+
 ## Benchmark Results
+
+The rust-bert POS/NER branch is retained as a separate experimental quality
+run and should not be mixed into the homepage headline. The current
+revalidation is recorded in
+[`comparison/results/retrieval-longmemeval-current.json`](../comparison/results/retrieval-longmemeval-current.json);
+the historical tables below are retained for comparison. Service-load
+measurements (including concurrency) are documented in
+[`comparison/`](../comparison/).
 
 Evaluated on **LongMemEval-S** (500 questions), a public benchmark for long-context agent memory retrieval over multi-session conversation corpora. The scoped variant is used: each query searches only the sessions attached to that question, matching the realistic setting where a system knows which sessions are candidates for a given user. No embedding vectors are used anywhere in the pipeline.
 
@@ -72,25 +104,30 @@ The section below shows both the rust-bert POS/NER branch result and the default
 
 Results file: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
 
-### Heuristic Release Backend
+### Heuristic Release Backend (current revalidation)
 
 **Aggregate (n=500):**
 
 | metric | value |
 |---|---|
-| recall@5 | 83.7% |
-| recall@10 | 89.6% |
+| recall@5 | 83.5% |
+| recall@10 | 89.5% |
 | recall@20 | 91.1% |
 | recall_any@5 | 92.4% |
 | recall_any@10 | 95.6% |
 | recall_any@20 | 97.0% |
-| MRR | 84.3% |
-| NDCG@10 | 81.9% |
-| avg query latency | 6.1 ms |
+| MRR | 84.0% |
+| NDCG@10 | 81.8% |
+| avg query latency | 1.9 ms |
 
 `recall@k` is fractional recall over all gold sessions. `recall_any@k` counts 1.0 if any gold session appears in the top k. Latency is measured on a single CPU core with no GPU.
 
 **By question type:**
+
+This breakdown is retained from the earlier heuristic run; reproduce the
+current aggregate above with the command in the Reproduce section. The
+published cross-system comparison uses the any-hit aggregate and the shared
+scorer, not this historical per-type table.
 
 | question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
@@ -170,6 +207,20 @@ cargo run --release --bin haystack_scoped_benchmark -- \
 ```
 
 Scoped LongMemEval reporting includes both `recall@k` and `recall_any@k`. The any-hit metric matches the interpretation used by the current LongMemEval-S release notes and README.
+
+To reproduce the published Home/benchmark/comparison headline, use the three
+cutoffs above and score both per-question outputs with the shared evaluator:
+
+```bash
+python3 benchmark/score_retrieval.py \
+  --dataset benchmark/data/longmemeval_s_raw.json \
+  --lintai benchmark/data/lintai_longmemeval_scoped_results.json \
+  --agentmemory /path/to/agentmemory/benchmark/data/longmemeval_results_bm25.json
+```
+
+The comparison repository records the exact Lint-AI and AgentMemory artifacts
+and reports the resulting any-hit Recall@5/10/20, MRR, and NDCG@10. Do not
+compare a run that only requested top-10 with the top-20 headline.
 
 If you want segmented MemoryIndex experiment diagnostics, use the separate segmented benchmark. This keeps the existing scoped benchmark behavior unchanged:
 

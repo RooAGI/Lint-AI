@@ -1,0 +1,11 @@
+{
+  "date": "2026-09-01",
+  "system": "Lint-AI",
+  "corpus_sessions": 19829,
+  "queries": 500,
+  "build_ms": 15710.31,
+  "query_p50_ms": 1.65,
+  "query_p95_ms": 3.421,
+  "recall_any_at_10": 0.85,
+  "mode": "in-process corpus_scale_benchmark; not directly comparable to HTTP measurements"
+}

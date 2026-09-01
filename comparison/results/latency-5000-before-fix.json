@@ -1,0 +1,15 @@
+{
+  "date": "2026-09-01",
+  "records": 5000,
+  "requests_per_cell": 50,
+  "query": "deployment configuration system decision",
+  "note": "Baseline before removing the per-search full-corpus supersession scan; server was partially seeded.",
+  "Lint-AI": {
+    "concurrency_1": {"p50_ms":1.83,"p90_ms":9.87,"p99_ms":11.82,"throughput_per_s":247.01},
+    "concurrency_10": {"p50_ms":32.11,"p90_ms":51.91,"p99_ms":55.59,"throughput_per_s":297.68}
+  },
+  "AgentMemory": {
+    "concurrency_1": {"p50_ms":3.592,"p90_ms":5.163,"p99_ms":6.954},
+    "concurrency_10": {"p50_ms":27.745,"p90_ms":29.534,"p99_ms":54.674}
+  }
+}

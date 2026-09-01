@@ -74,11 +74,25 @@ pub struct SearchMemory {
 
 pub struct MemoryService {
     store: IndexStore,
+    superseded_ids: HashSet<(String, String)>,
 }
 
 impl MemoryService {
     pub fn new(store: IndexStore) -> Self {
-        Self { store }
+        let superseded_ids = store
+            .source_documents()
+            .into_iter()
+            .filter_map(|doc| {
+                Some((
+                    doc.filters.get(USER_FILTER)?.clone(),
+                    doc.filters.get("supersedes_id")?.clone(),
+                ))
+            })
+            .collect();
+        Self {
+            store,
+            superseded_ids,
+        }
     }
 
     pub fn add(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
@@ -108,6 +122,8 @@ impl MemoryService {
             }
             if let Some(supersedes_id) = &message.supersedes_id {
                 validate_identifier(supersedes_id, "supersedes_id")?;
+                self.superseded_ids
+                    .insert((request.user_id.clone(), supersedes_id.clone()));
                 filters.insert("supersedes_id".to_string(), supersedes_id.clone());
             }
             let timestamp = message.timestamp.and_then(|millis| {
@@ -149,32 +165,58 @@ impl MemoryService {
             return Ok(SearchResponse { data: vec![] });
         }
         let top_k = request.top_k.min(100);
+        let results = self.query_results(&request, top_k)?;
+        Ok(self.format_search_response(results))
+    }
+
+    /// Search the last refreshed snapshot without taking a mutable service lock.
+    /// Writers refresh the snapshot before releasing their lock.
+    pub fn search_cached(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
+        validate_identifier(&request.user_id, "user_id")?;
+        if request.query.trim().is_empty() {
+            return Ok(SearchResponse { data: vec![] });
+        }
+        let top_k = request.top_k.min(100);
+        let results = self.query_results_cached(&request, top_k)?;
+        Ok(self.format_search_response(results))
+    }
+
+    fn query_results(
+        &mut self,
+        request: &SearchRequest,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
-        // Same query treatment as the CLI: intent inference and augmentation,
-        // scoped to this user's documents.
         let prepared = PreparedQuery::new(&request.query);
+        self.store.query_prepared(&prepared, top_k, &filters)
+    }
+
+    fn query_results_cached(
+        &self,
+        request: &SearchRequest,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), request.user_id.clone());
+        let prepared = PreparedQuery::new(&request.query);
+        self.store
+            .query_prepared_cached(&prepared, top_k, &filters)
+    }
+
+    fn format_search_response(&self, results: Vec<crate::SearchResult>) -> SearchResponse {
         let now_ms = unix_time_ms();
-        let superseded = self
-            .store
-            .source_documents()
-            .into_iter()
-            .filter_map(|doc| {
-                let same_user = doc.filters.get(USER_FILTER).map(String::as_str)
-                    == Some(request.user_id.as_str());
-                same_user
-                    .then(|| doc.filters.get("supersedes_id"))
-                    .flatten()
-                    .cloned()
-            })
-            .collect::<HashSet<_>>();
-        let results = self.store.query_prepared(&prepared, top_k, &filters)?;
         let data = results
             .into_iter()
             .filter_map(|result| {
                 self.store
                     .source_document_by_id(&result.doc_id)
-                    .filter(|doc| !superseded.contains(&doc.doc_id))
+                    .filter(|doc| {
+                        doc.filters
+                            .get(USER_FILTER)
+                            .map(|user| (user.clone(), doc.doc_id.clone()))
+                            .is_none_or(|key| !self.superseded_ids.contains(&key))
+                    })
                     .filter(|doc| {
                         doc.filters
                             .get("expires_at_ms")
@@ -189,7 +231,7 @@ impl MemoryService {
                     })
             })
             .collect();
-        Ok(SearchResponse { data })
+        SearchResponse { data }
     }
 
     /// Delete one memory, returning false for an already absent or foreign id.
@@ -228,6 +270,8 @@ impl MemoryService {
         replacement
             .filters
             .insert("supersedes_id".to_string(), old_id.to_string());
+        self.superseded_ids
+            .insert((user_id.to_string(), old_id.to_string()));
         self.store.upsert(replacement);
         self.store.refresh()?;
         Ok(true)
@@ -421,5 +465,50 @@ mod tests {
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("new deployment"));
+    }
+
+    #[test]
+    fn supersession_is_scoped_to_the_requesting_user() {
+        let mut service = service();
+        let old_id = crate::stable_doc_id_from_source("old:0");
+        service
+            .add(AddRequest {
+                request_id: "old".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "shared deployment decision".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap();
+        service
+            .add(AddRequest {
+                request_id: "replacement".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "replacement from another user".into(),
+                    expires_at_ms: None,
+                    supersedes_id: Some(old_id),
+                }],
+                user_id: "user-b".into(),
+                session_id: "session-b".into(),
+            })
+            .unwrap();
+
+        let response = service
+            .search(SearchRequest {
+                query: "shared deployment decision".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].content.contains("shared deployment"));
     }
 }

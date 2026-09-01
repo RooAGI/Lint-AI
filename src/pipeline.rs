@@ -26,6 +26,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tantivy::collector::TopDocs;
@@ -366,7 +367,7 @@ pub struct IndexStore {
 
 struct BackgroundRefresh {
     target_revision: u64,
-    receiver: Receiver<Result<MemoryIndexSnapshot>>,
+    receiver: Mutex<Receiver<Result<MemoryIndexSnapshot>>>,
 }
 
 fn build_memory_index_snapshot(
@@ -873,7 +874,7 @@ impl IndexStore {
         });
         self.background_refresh = Some(BackgroundRefresh {
             target_revision,
-            receiver,
+            receiver: Mutex::new(receiver),
         });
         Ok(())
     }
@@ -988,6 +989,27 @@ impl IndexStore {
             .0)
     }
 
+    /// Query the current immutable snapshot without attempting a refresh.
+    /// Callers may use this from concurrent read paths after writes have
+    /// refreshed the store. An empty store has no snapshot and returns no hits.
+    pub fn query_prepared_cached(
+        &self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<SearchResult>> {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let index = snapshot.global_index();
+        let allowed = index.doc_ids_matching_filters(filters);
+        let mut context = prepared.temporal_context();
+        context.allowed_doc_ids = allowed.as_ref();
+        Ok(index
+            .query_with_temporal_context(prepared.search_query(), top_k, context)
+            .0)
+    }
+
     // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
     #[allow(deprecated)]
     pub fn query_filtered(
@@ -1086,7 +1108,12 @@ impl IndexStore {
         let Some(background) = self.background_refresh.as_ref() else {
             return Ok(());
         };
-        match background.receiver.try_recv() {
+        let result = background
+            .receiver
+            .lock()
+            .map_err(|_| anyhow::anyhow!("background refresh lock poisoned"))?
+            .try_recv();
+        match result {
             Ok(result) => {
                 let target_revision = background.target_revision;
                 self.background_refresh = None;

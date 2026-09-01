@@ -62,3 +62,7 @@ path = "src/bin/recency_benchmark.rs"
 [[bin]]
 name = "project_memory_recency_benchmark"
 path = "src/bin/project_memory_recency_benchmark.rs"
+
+[[bin]]
+name = "corpus_scale_benchmark"
+path = "src/bin/corpus_scale_benchmark.rs"

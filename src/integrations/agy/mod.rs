@@ -224,6 +224,10 @@ mod tests {
         let config: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(config["mcpServers"]["other"]["command"], "other");
         assert_eq!(config["mcpServers"]["lint-ai"]["args"][0], "--agy-serve");
+        assert_eq!(
+            config["mcpServers"]["lint-ai"]["args"][1],
+            root.to_string_lossy().as_ref()
+        );
         let settings: Value =
             serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(settings["theme"], "dark");

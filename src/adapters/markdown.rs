@@ -100,7 +100,9 @@ pub fn build_markdown_corpus(
     let mut total_bytes = 0usize;
 
     for entry in WalkDir::new(base_walk).max_depth(max_depth) {
-        let entry = entry?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         if !entry.file_type().is_file() {
             continue;
         }
@@ -124,7 +126,9 @@ pub fn build_markdown_corpus(
             break;
         }
 
-        let metadata = entry.metadata()?;
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         if metadata.len() as usize > max_bytes {
             continue;
         }
@@ -133,7 +137,9 @@ pub fn build_markdown_corpus(
             break;
         }
 
-        let content = fs::read_to_string(entry.path())?;
+        let Ok(content) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
         let raw_concept = entry
             .path()
             .file_stem()
@@ -280,4 +286,41 @@ pub(crate) fn parse_frontmatter_kv(content: &str) -> HashMap<String, String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_markdown_corpus;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_markdown_paths_do_not_abort_corpus_build() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let root = std::env::temp_dir().join(format!("lint-ai-markdown-permissions-{suffix}"));
+        fs::create_dir_all(&root)?;
+        let readable = root.join("readable.md");
+        let unreadable = root.join("unreadable.md");
+        let blocked_dir = root.join("blocked");
+        let blocked_file = blocked_dir.join("nested.md");
+        fs::write(&readable, "# Readable\n")?;
+        fs::write(&unreadable, "# Should be skipped\n")?;
+        fs::create_dir(&blocked_dir)?;
+        fs::write(&blocked_file, "# Should also be skipped\n")?;
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))?;
+        fs::set_permissions(&blocked_dir, fs::Permissions::from_mode(0o000))?;
+
+        let result = build_markdown_corpus(&root, 1024, 10, 10, 4096);
+
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644))?;
+        fs::set_permissions(&blocked_dir, fs::Permissions::from_mode(0o755))?;
+        fs::remove_dir_all(&root)?;
+
+        let corpus = result?;
+        assert!(corpus.pages.iter().any(|page| page.rel_path == "readable.md"));
+        Ok(())
+    }
 }

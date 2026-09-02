@@ -3929,6 +3929,10 @@ mod tests {
             matched_terms: Vec::new(),
             probable_topic: None,
             doc_type_guess: None,
+            semantic_status: None,
+            superseded_by: None,
+            relation_confidence: None,
+            relation_evidence: vec![],
         }
     }
 

@@ -4,8 +4,8 @@ This directory holds the retrieval benchmarks for `lint-ai`, including
 haystack-style corpora, LongMemEval-S runs, and agent integration performance
 scaffolds.
 
-For the reproducible Lint-AI versus AgentMemory service comparison—including
-latency scripts, seeders, recorded JSON results, and methodology—see
+For the reproducible Lint-AI versus AgentMemory service comparison, including
+latency scripts, seeders, recorded JSON results, and methodology, see
 [`comparison/`](../comparison/).
 
 ## Conversation Recency Benchmark
@@ -34,6 +34,12 @@ This reports the corpus freshness distribution and the freshness distribution
 of the top-1 and top-5 results for representative project-memory queries. The
 real corpus has no gold answer labels, so this measures freshness behavior and
 does not claim semantic answer accuracy.
+
+The pipeline also includes a regression case for Markdown-like project guidance
+whose wording changes between revisions. It asks a natural-language ownership
+question and verifies that newer guidance outranks older, still-relevant wording
+while retaining the temporal score signal. This guards the current-state use case
+independently of the LongMemEval conversation benchmark.
 
 Benchmark subdirectories:
 

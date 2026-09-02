@@ -3,7 +3,7 @@
 //! Turning a raw user query into "what we actually search for" has two parts:
 //! analyzing the query (intent, temporal hints, augmentation) and turning that
 //! analysis into a [`TemporalQueryContext`]. Every caller that accepts a raw
-//! query from a user — the CLI, the memory server — should go through here, so
+//! query from a user. The CLI and memory server should go through here, so
 //! the two cannot drift apart.
 //!
 //! Callers that have already built a context, or that deliberately want the

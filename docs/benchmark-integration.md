@@ -181,7 +181,7 @@ enabled together). Each client maps these roles onto its own `--arms` names:
 AGY has no built-in "native memory" feature of its own to combine with
 Lint-AI, so it has no `Both` arm; `agy-native` is Lint-AI-absent entirely
 (`--agy-install` is not even run), and `agy-lint-ai-disabled` is a stricter
-control than `agy-native` — Lint-AI is installed identically to `agy-lint-ai`
+control than `agy-native`. Lint-AI is installed identically to `agy-lint-ai`
 but toggled off via `disable_lint_ai`, isolating "installed but inactive"
 from "never installed."
 
@@ -198,11 +198,11 @@ Concretely, each launcher configures its arms as follows:
 - `claude-both`: Claude auto-memory enabled *and* Lint-AI hooks enabled together.
 - `codex-native`: `memories = true` in Codex's own `config.toml`, no Lint-AI hook installation (`--codex-install` is skipped entirely).
 - `lint-ai`: `memories = false`, Lint-AI hooks installed and restricted to the Claude-equivalent lifecycle (see below).
-- `lint-ai-with-codex-memory`: `memories = true` *and* Lint-AI hooks installed — the Codex analogue of `claude-both`.
+- `lint-ai-with-codex-memory`: `memories = true` *and* Lint-AI hooks installed. This is the Codex analogue of `claude-both`.
 - `agy-native`: no `--agy-install` step at all; pure AGY with nothing Lint-AI-related present.
 - `agy-lint-ai`: Lint-AI installed and explicitly enabled (`enable_lint_ai`), MCP server config emptied so only hooks are active.
-- `agy-lint-ai-disabled`: Lint-AI installed identically to `agy-lint-ai` but explicitly disabled (`disable_lint_ai`) — a matched-installation control.
-- `agy-mcp-only`: Lint-AI installed with hook settings emptied (no hooks fire) and the MCP server config left in place — isolates the MCP path.
+- `agy-lint-ai-disabled`: Lint-AI installed identically to `agy-lint-ai` but explicitly disabled (`disable_lint_ai`). This is a matched-installation control.
+- `agy-mcp-only`: Lint-AI installed with hook settings emptied (no hooks fire) and the MCP server config left in place. This isolates the MCP path.
 
 For the fair cross-client comparison, Lint-AI uses the Claude-equivalent
 lifecycle events on Codex (`SessionStart`, `UserPromptSubmit`,
@@ -226,7 +226,7 @@ the continuation phase (not currently used by any real scenario; only
 exercised by a throwaway mechanism-verification scenario during development).
 
 The delivery mechanism differs by client because their CLIs differ, but the
-scenario-authoring contract is identical — a scenario author never needs to
+scenario-authoring contract is identical. A scenario author never needs to
 know which mechanism a client uses:
 
 - **Claude**: a single live process fed multiple JSON user-turn lines via
@@ -242,14 +242,14 @@ know which mechanism a client uses:
 
 Both dispatch strategies live in the same shared `run_turn_phase` function in
 `benchmark/codex_code/src/runner.py`, which every provider's launcher calls
-for both the setup and continuation phases — the choice between them is
+for both the setup and continuation phases. The choice between them is
 purely `metrics_mode` (provider) plus message-count, not separate code paths
 per scenario.
 
 Current real (non-throwaway) multi-turn scenarios:
 
 - `routing-decision-supersession` (Claude, Codex, and AGY): 2 setup messages
-  (initial proposal, then a superseding decision) — see "Current Scenarios"
+  (initial proposal, then a superseding decision). See "Current Scenarios"
   below.
 
 All other current scenarios (`index-store-segmented-routing`,
@@ -468,7 +468,7 @@ recovering useful conversation context.
 ### `routing-decision-supersession` (Claude, Codex, and AGY)
 
 Category: `temporal-correction`. **Multi-turn setup** (2 sequential
-`setup_messages`) — see "Single-Turn vs. Multi-Turn Setup" above.
+`setup_messages`). See "Single-Turn vs. Multi-Turn Setup" above.
 
 Setup first establishes `SparseOverlap` in one turn, then supersedes it with
 `LocalDistinctiveness` and `query_top_n = 3` in a second, sequential turn

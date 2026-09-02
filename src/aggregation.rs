@@ -301,6 +301,10 @@ mod tests {
                 matched_terms: vec![],
                 probable_topic: Some("hiking".to_string()),
                 doc_type_guess: Some("note".to_string()),
+                semantic_status: None,
+                superseded_by: None,
+                relation_confidence: None,
+                relation_evidence: vec![],
             },
             SearchResult {
                 doc_id: "d2".to_string(),
@@ -312,6 +316,10 @@ mod tests {
                 matched_terms: vec![],
                 probable_topic: Some("hiking".to_string()),
                 doc_type_guess: Some("note".to_string()),
+                semantic_status: None,
+                superseded_by: None,
+                relation_confidence: None,
+                relation_evidence: vec![],
             },
         ];
         let agg = build_aggregate_output(&index, "How many miles did I walk?", &results, 5)

@@ -43,14 +43,23 @@ fn concurrent_codex_mcp_clients_initialize_and_open_shared_index() {
     let mut clients: Vec<(Child, ChildStdin, BufReader<_>)> = (0..4)
         .map(|_| {
             let mut child = Command::new(executable)
-                .args(["--codex-serve", root.to_str().expect("root should be UTF-8")])
+                .args([
+                    "--codex-serve",
+                    root.to_str().expect("root should be UTF-8"),
+                ])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
                 .expect("Codex MCP server should start");
-            let stdin = child.stdin.take().expect("server stdin should be available");
-            let stdout = child.stdout.take().expect("server stdout should be available");
+            let stdin = child
+                .stdin
+                .take()
+                .expect("server stdin should be available");
+            let stdout = child
+                .stdout
+                .take()
+                .expect("server stdout should be available");
             (child, stdin, BufReader::new(stdout))
         })
         .collect();
@@ -77,7 +86,10 @@ fn concurrent_codex_mcp_clients_initialize_and_open_shared_index() {
     }
 
     for (_, stdin, _) in &mut clients {
-        send_request(stdin, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+        send_request(
+            stdin,
+            &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        );
     }
     for (_, _, reader) in &mut clients {
         let response = read_response(reader);
@@ -156,7 +168,11 @@ fn concurrent_codex_lifecycle_hooks_record_all_events() {
     assert_eq!(events.lines().count(), 8);
     let sequences: Vec<u64> = events
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap()["sequence"].as_u64().unwrap())
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["sequence"]
+                .as_u64()
+                .unwrap()
+        })
         .collect();
     assert_eq!(sequences, (1..=8).collect::<Vec<_>>());
     fs::remove_dir_all(root).expect("temporary project should be removed");

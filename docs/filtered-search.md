@@ -6,7 +6,7 @@ design rationale.
 
 ## Problem
 
-A single `IndexStore` can hold documents from many logical scopes — different
+A single `IndexStore` can hold documents from many logical scopes, different
 runs, workspaces, graphs, or artifact types. Without a way to restrict a query
 to a subset of documents, callers must post-filter results or maintain separate
 `IndexStore` instances per scope.
@@ -77,7 +77,7 @@ All filter predicates use **exact-match AND** semantics:
 - every key-value pair in the supplied filter map must match the document's
   `filters` map
 - a document that is missing a required key does not match
-- an empty filter map means no restriction — all documents are candidates
+- an empty filter map means no restriction, so all documents are candidates
 
 This is intentionally simple. Range queries, OR conditions, and prefix matches
 are not supported.
@@ -96,7 +96,7 @@ pub fn query_filtered(
 ```
 
 1. Calls `self.refresh()` to ensure the snapshot is current.
-2. Runs `self.lexical.search(query, candidate_k)` — BM25 via Tantivy — to get
+2. Runs `self.lexical.search(query, candidate_k)`, using BM25 via Tantivy, to get
    a set of lexical hit scores keyed by `doc_id`.
 3. Passes lexical hits and `filters` to `MemoryIndex::query_with_filters_and_lexical`.
 4. `MemoryIndex` builds the allowed set, then scores candidates that are in
@@ -164,10 +164,10 @@ public for callers that manage their own BM25 pipeline.
 ### Why BM25 before filter
 
 BM25 runs first and produces a candidate set. The filter then restricts that
-set. This order avoids scoring documents that would be excluded anyway — Tantivy
+set. This order avoids scoring documents that would be excluded anyway. Tantivy
 already narrows the field to lexically relevant documents before the filter scan.
 
-An alternative — filter first, then BM25 — would require a Tantivy reader that
+An alternative, filtering first and then running BM25, would require a Tantivy reader that
 restricts to a doc-id allowlist. Tantivy supports this via `BitSetDocSet` but it
 requires building a Tantivy `DocId` bitset, which needs a mapping from our
 string `doc_id` to internal Tantivy row ids. That mapping is not currently
@@ -214,7 +214,7 @@ for (i, text) in texts.iter().enumerate() {
 let scope = BTreeMap::from([("run_id".into(), "run-abc".into())]);
 let results = store.query_filtered("NVDA earnings", 5, &scope)?;
 
-// Multi-term filtered query — filter scan happens once
+// Multi-term filtered query. The filter scan happens once.
 let terms = &["NVDA", "TSLA", "AMD"];
 let per_term = store.query_filtered_multi(terms, 5, &scope)?;
 // per_term[0] = results for "NVDA"

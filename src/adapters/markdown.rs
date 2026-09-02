@@ -223,6 +223,12 @@ pub fn build_markdown_corpus(
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs().to_string());
         let frontmatter = parse_frontmatter_kv(&page.content);
+        if let Some(supersedes) = frontmatter
+            .get("supersedes")
+            .or_else(|| frontmatter.get("supersedes_id"))
+        {
+            basic_metadata.insert("supersedes_id".to_string(), supersedes.clone());
+        }
         let author_agent = frontmatter
             .get("author")
             .cloned()
@@ -320,7 +326,10 @@ mod tests {
         fs::remove_dir_all(&root)?;
 
         let corpus = result?;
-        assert!(corpus.pages.iter().any(|page| page.rel_path == "readable.md"));
+        assert!(corpus
+            .pages
+            .iter()
+            .any(|page| page.rel_path == "readable.md"));
         Ok(())
     }
 }

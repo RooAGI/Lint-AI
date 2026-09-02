@@ -64,15 +64,15 @@ Results file: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
 
 | metric | value |
 |---|---|
-| recall@5 | 83.7% |
-| recall@10 | 89.6% |
+| recall@5 | 83.5% |
+| recall@10 | 89.5% |
 | recall@20 | 91.1% |
 | recall_any@5 | 92.4% |
 | recall_any@10 | 95.6% |
 | recall_any@20 | 97.0% |
-| MRR | 84.3% |
-| NDCG@10 | 81.9% |
-| avg query latency | 6.1 ms |
+| MRR | 84.0% |
+| NDCG@10 | 81.8% |
+| avg query latency | 1.9 ms |
 
 `recall@k` is fractional recall over all gold sessions. `recall_any@k` counts 1.0 if any gold session appears in the top k. Latency is measured on a single CPU core with no GPU.
 
@@ -143,8 +143,8 @@ cargo build --release --features claude-code,codex
 Each installer writes lifecycle hooks and an MCP server entry into that agent's
 own configuration, which is global, and a memory policy into the named project:
 a project skill for Claude Code and AGY, plus a delimited block in `AGENTS.md` for Codex. The MCP
-entry carries no project root — the server resolves the project it is launched
-in — so installing for a second project does not repoint the first.
+entry carries no project root. The server resolves the project it is launched
+in, so installing for a second project does not repoint the first.
 
 ```bash
 ```

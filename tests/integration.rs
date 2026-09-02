@@ -208,6 +208,201 @@ fn query_baseline_still_works_without_semantic_match() {
 }
 
 #[test]
+fn markdown_supersession_metadata_hides_replaced_guidance_from_default_search() {
+    let root = std::env::temp_dir().join(format!(
+        "lint_ai_temporal_markdown_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join("legacy.md"),
+        "# Legacy ownership\nThe old team owns the control surface.\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("current.md"),
+        "---\nsupersedes: legacy.md\n---\n# Current ownership\nThe new team is responsible for the control surface.\n",
+    )
+    .unwrap();
+
+    let graph = Graph::build(
+        root.to_str().unwrap(),
+        MAX_BYTES,
+        MAX_FILES,
+        MAX_DEPTH,
+        MAX_TOTAL_BYTES,
+    )
+    .unwrap();
+    let documents = lint_ai::adapters::graph_to_source_documents(&graph);
+    let current = documents
+        .iter()
+        .find(|doc| doc.doc_id == "current.md")
+        .expect("current Markdown document should be indexed");
+    assert_eq!(
+        current.filters.get("supersedes_id").map(String::as_str),
+        Some("legacy.md")
+    );
+
+    let mut index =
+        lint_ai::IndexStore::with_documents(lint_ai::PipelineOptions::default(), documents);
+    let results = index
+        .query("who is responsible for the control surface", 5)
+        .unwrap();
+    assert!(
+        results.iter().all(|result| result.doc_id != "legacy.md"),
+        "replaced Markdown guidance should not be returned by default: {results:?}"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn semantic_policy_hides_automatically_superseded_documents_and_exposes_history() {
+    let documents = vec![
+        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+            "decisions/legacy.md".to_string(),
+            "The platform team owns the control surface.".to_string(),
+            "ownership decision".to_string(),
+            None,
+            vec![],
+            vec![],
+            Some("2026-01-01".to_string()),
+            None,
+        ),
+        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+            "decisions/current.md".to_string(),
+            "The reliability team owns the control surface.".to_string(),
+            "ownership decision".to_string(),
+            None,
+            vec![],
+            vec![],
+            Some("2026-02-01".to_string()),
+            None,
+        ),
+    ];
+    let mut index =
+        lint_ai::IndexStore::with_documents(lint_ai::PipelineOptions::default(), documents);
+
+    let current = index.query("who owns the control surface", 10).unwrap();
+    assert!(current
+        .iter()
+        .any(|result| result.source == "decisions/current.md"));
+    assert!(current
+        .iter()
+        .all(|result| result.source != "decisions/legacy.md"));
+
+    let history = index
+        .query("what changed about who owns the control surface", 10)
+        .unwrap();
+    let legacy = history
+        .iter()
+        .find(|result| result.source == "decisions/legacy.md")
+        .expect("historical query should retain the superseded source");
+    assert_eq!(
+        legacy.semantic_status,
+        Some(lint_ai::SemanticStatus::Historical)
+    );
+}
+
+#[test]
+fn reveals_bug_superseded_claim_hides_unrelated_current_content() {
+    let documents = vec![
+        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+            "decisions/architecture.md".to_string(),
+            concat!(
+                "The platform team owns the control surface.\n",
+                "The deployment strategy uses blue-green releases."
+            )
+            .to_string(),
+            "architecture decisions".to_string(),
+            None,
+            vec![],
+            vec![],
+            Some("2026-01-01".to_string()),
+            None,
+        ),
+        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+            "decisions/ownership-update.md".to_string(),
+            "The reliability team owns the control surface.".to_string(),
+            "ownership decision".to_string(),
+            None,
+            vec![],
+            vec![],
+            Some("2026-02-01".to_string()),
+            None,
+        ),
+    ];
+    let mut index =
+        lint_ai::IndexStore::with_documents(lint_ai::PipelineOptions::default(), documents);
+
+    let results = index.query("blue-green deployment strategy", 10).unwrap();
+
+    let architecture = results
+        .iter()
+        .find(|result| result.source == "decisions/architecture.md")
+        .unwrap_or_else(|| {
+            panic!(
+                "replacing the ownership claim must not hide the still-current deployment guidance: {results:?}"
+            )
+        });
+    assert_eq!(
+        architecture.semantic_status,
+        Some(lint_ai::SemanticStatus::Conflicted),
+        "partial inferred supersession should remain visible as a conflict"
+    );
+}
+
+#[test]
+fn reveals_bug_operational_before_query_exposes_superseded_guidance() {
+    let old = lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+        "runbooks/legacy-deployment.md".to_string(),
+        "Before deployment, operators must run the legacy smoke tests.".to_string(),
+        "legacy deployment procedure".to_string(),
+        None,
+        vec![],
+        vec![],
+        Some("2026-01-01".to_string()),
+        None,
+    );
+    let mut current = lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+        "runbooks/current-deployment.md".to_string(),
+        "Before deployment, operators must run the current safety checks.".to_string(),
+        "current deployment procedure".to_string(),
+        None,
+        vec![],
+        vec![],
+        Some("2026-02-01".to_string()),
+        None,
+    );
+    current
+        .filters
+        .insert("supersedes_id".to_string(), old.doc_id.clone());
+    let legacy_id = old.doc_id.clone();
+    let current_id = current.doc_id.clone();
+    let mut index = lint_ai::IndexStore::with_documents(
+        lint_ai::PipelineOptions::default(),
+        vec![old, current],
+    );
+
+    let results = index
+        .query("what must happen before deployment", 10)
+        .unwrap();
+
+    assert!(
+        results.iter().any(|result| result.doc_id == current_id),
+        "current deployment guidance should be returned: {results:?}"
+    );
+    assert!(
+        results.iter().all(|result| result.doc_id != legacy_id),
+        "an operational use of 'before' must not expose superseded guidance: {results:?}"
+    );
+}
+
+#[test]
 fn semantic_expansion_improves_recall_for_synonyms() {
     let index = MemoryIndex::from_records(vec![DocRecord {
         doc_id: "d2".to_string(),

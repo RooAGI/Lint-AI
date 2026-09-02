@@ -68,7 +68,7 @@ The proposed behavior is:
 | Segmented convenience APIs (`query_top_segment`, `query_top_segments`, `query_all_segments`; not the internal `_with_strategy`/`_with_corpus_stats` variants) | Build the same automatic default context. |
 | `query_with_temporal_context` APIs | Preserve caller-provided context and values. |
 | High-level engine (`engine.rs`'s `--query`/`--llm-context` handling) | Continue passing its already analyzed, richer context (intent **and** query augmentation) without re-analysis. |
-| `MemoryService::search` (memory server `/search`) | Should be treated like the high-level engine, not like a low-level convenience API — see "Application-level entry points" below. |
+| `MemoryService::search` (memory server `/search`) | Should be treated like the high-level engine, not like a low-level convenience API. See "Application-level entry points" below. |
 
 The automatic helper should initially infer only `query_routing_intent` and
 preserve the existing raw query text. Query augmentation and explicit temporal
@@ -113,7 +113,7 @@ See `src/memory_api.rs:120` and `src/pipeline.rs:957`.
 This is the actual `/search` production path (the memory server introduced in
 commit `1f2d8d7`, "Add AML-compatible memory server", 2026-08-13). It does not
 go through `engine.rs::query_temporal_context` or `analyze_query` at all today
-— it has no query-intent awareness and no query augmentation. The underlying
+It has no query-intent awareness and no query augmentation. The underlying
 `query_filtered`/`query_with_filters_and_lexical` plumbing itself is older
 (introduced 2026-06-13, commit `7240333`, part of the last tagged release,
 `v0.1.8`); the gap is that the August server work exposed it over HTTP without
@@ -143,7 +143,7 @@ the lighter default meant for low-level convenience callers:
 3. `temporal_context = query_temporal_context(&analysis)`
 4. Build `allowed_doc_ids` from the `memory_user_id` filter (the same shape
    `query_with_filters_and_lexical` already builds internally from its
-   `filters` map — `MemoryService` only ever filters on that one key)
+   `filters` map. `MemoryService` only ever filters on that one key)
 5. Set `temporal_context.allowed_doc_ids = Some(&allowed)`
 6. Call `index.query_with_temporal_context(&search_query, top_k, temporal_context)`
 
@@ -159,7 +159,7 @@ uses. The filter-derived `allowed` set the latter builds today
 (`src/index.rs:1548-1557`) maps onto that field directly. Once
 `MemoryService::search` is aligned as above, `query_with_filters_and_lexical`
 and `query_with_filters_multi` as distinct code paths are not technically
-necessary — `filters` → `allowed_doc_ids` and intent are both already covered
+necessary. `filters` → `allowed_doc_ids` and intent are both already covered
 by `query_with_temporal_context`.
 
 The one thing this does not fold in for free: `query_with_filters_and_lexical`
@@ -168,20 +168,20 @@ accepts a caller-supplied, pre-computed `lexical_hits` map, while
 lexical hits itself against `MemoryIndex`'s own internal `self.lexical:
 Option<LexicalIndex>` (`src/index.rs:329`). The pre-computed-hits parameter
 exists to let `IndexStore` (`src/pipeline.rs`) supply hits from its own,
-separate tantivy index — `self.lexical: LexicalState` (`src/pipeline.rs:357`)
-— which is otherwise unused: its only four call sites are
+separate tantivy index, `self.lexical: LexicalState` (`src/pipeline.rs:357`),
+which is otherwise unused: its only four call sites are
 `query_with_lexical_hits` (for `query_latest`/`query_fresh`) and
 `query_with_filters_and_lexical`/`query_with_filters_multi`
 (`src/pipeline.rs:895,908,972,996`). Because all four of those callers call
-`self.refresh()` first, which rebuilds `MemoryIndex` — and therefore its own
-internal lexical index — from scratch whenever the store is dirty
+`self.refresh()` first, which rebuilds `MemoryIndex`, and therefore its own
+internal lexical index, from scratch whenever the store is dirty
 (`src/pipeline.rs:801-833`), `MemoryIndex`'s internal index is already exactly
 as fresh as `IndexStore`'s separate one by the time any of them run.
 
 Consequently, folding these callers onto `query_with_temporal_context` makes
-`IndexStore`'s separate `LexicalState` — its schema, writer, reader, and the
+`IndexStore`'s separate `LexicalState`, including its schema, writer, reader, and the
 `upsert_record`/`remove_doc`/`commit_reload` maintenance that runs on every
-mutation — removable, not just the four call sites that use it. This is a
+mutation, removable, not just the four call sites that use it. This is a
 larger change than the aggregation-formula consolidation and should be scoped
 and reviewed as its own step, not folded silently into it.
 

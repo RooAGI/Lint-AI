@@ -200,8 +200,7 @@ impl MemoryService {
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
         let prepared = PreparedQuery::new(&request.query);
-        self.store
-            .query_prepared_cached(&prepared, top_k, &filters)
+        self.store.query_prepared_cached(&prepared, top_k, &filters)
     }
 
     fn format_search_response(&self, results: Vec<crate::SearchResult>) -> SearchResponse {

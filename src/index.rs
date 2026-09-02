@@ -421,6 +421,14 @@ pub struct SearchResult {
     pub matched_terms: Vec<String>,
     pub probable_topic: Option<String>,
     pub doc_type_guess: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_status: Option<crate::semantic_relations::SemanticStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation_confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relation_evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1563,7 +1571,7 @@ impl MemoryIndex {
     /// Doc ids whose `filters` map matches every supplied key-value pair.
     ///
     /// Returns `None` when `filters` is empty, meaning "no scoping" rather
-    /// than "nothing matched" — callers pass this straight to
+    /// than "nothing matched". Callers pass this straight to
     /// `TemporalQueryContext::allowed_doc_ids`.
     pub fn doc_ids_matching_filters(
         &self,
@@ -2411,6 +2419,10 @@ impl MemoryIndex {
                         .unwrap_or_default(),
                     probable_topic: doc.probable_topic.clone(),
                     doc_type_guess: doc.doc_type_guess.clone(),
+                    semantic_status: None,
+                    superseded_by: None,
+                    relation_confidence: None,
+                    relation_evidence: Vec::new(),
                 });
             }
             if results.len() >= top_k.min(self.doc_u32_to_id.len()) {

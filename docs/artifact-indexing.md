@@ -441,6 +441,23 @@ What this is not:
 - it is not a replacement for `DocRecord`
 - it is not a reason to store `tcommit`-style graph jargon in the public API
 
+## Markdown supersession
+
+When a Markdown document replaces an earlier document whose wording or
+timestamp is not enough to establish the relationship, declare the relationship
+in frontmatter:
+
+```yaml
+---
+supersedes: decisions/legacy-routing.md
+---
+```
+
+The referenced document remains in the indexed corpus for historical inspection,
+but default project searches omit it and return the replacement instead. This
+explicit relationship is intentionally preferred over guessing semantic
+replacement between unrelated passages.
+
 Implementation direction:
 
 - store facts in the existing memory store as a dedicated collection or

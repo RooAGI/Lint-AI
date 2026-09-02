@@ -1,7 +1,33 @@
+use crate::index::SearchResult;
 use crate::integrations::mcp_transport::ToolDefinition;
 use crate::pipeline::IndexStore;
 use crate::source::SourceDocument;
 use serde_json::{json, Value};
+
+/// Format retrieval hits for an agent. Keep this separate from the internal
+/// ranking representation: diagnostics and score components are useful while
+/// tuning the index, but distract an agent from the memory itself.
+pub(crate) fn search_results(store: &IndexStore, results: Vec<SearchResult>) -> Value {
+    let results = results
+        .into_iter()
+        .filter_map(|result| {
+            let document = store.source_document_by_id(&result.doc_id)?;
+            Some(json!({
+                "id": result.doc_id,
+                "source": result.source,
+                "content": document.content.chars().take(4_000).collect::<String>(),
+                "score": result.score,
+                "matched_terms": result.matched_terms,
+                "matched_entities": result.matched_entities,
+                "semantic_status": result.semantic_status,
+                "superseded_by": result.superseded_by,
+                "relation_confidence": result.relation_confidence,
+                "relation_evidence": result.relation_evidence,
+            }))
+        })
+        .collect::<Vec<_>>();
+    json!({"results": results})
+}
 
 /// Return a bounded, provider-neutral view of the indexed memories.
 pub(crate) fn list_memories(store: &IndexStore, limit: usize) -> Value {

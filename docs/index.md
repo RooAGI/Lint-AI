@@ -6,27 +6,27 @@ hide:
 
 <div class="hero-stack">
 <section class="hero">
-  <div class="hero__eyebrow">RELIABLE PROJECT MEMORY FOR AI AGENTS</div>
-  <h1>Project memory<br><span>that knows what changed.</span></h1>
-  <p class="hero__lede">Lint-AI captures decisions across agent sessions, recognizes when newer evidence supersedes older guidance, and retrieves current, source-backed context for Codex, Claude Code, Gemini CLI, and AGY.</p>
+  <div class="hero__eyebrow">CURRENT CONTEXT FOR AI AGENTS</div>
+  <h1>Relevant context<br><span>is not always true.</span></h1>
+  <p class="hero__lede">Lint-AI turns scattered project history, including sessions, documents, decisions, and traces, into current, evidence-backed context at the moment an agent needs it.</p>
 </section>
 
 <section class="scenario" aria-label="Example of an agent retrieving a superseded decision">
   <div class="scenario__timeline">
     <article class="scenario-card scenario-card--complete">
-      <div><span>OLDER MEMORY</span><time>INITIAL RECOMMENDATION</time></div>
+      <div><span>OLDER EVIDENCE</span><time>ONCE RELEVANT</time></div>
       <p>“Increase retries to recover from the intermittent timeout.”</p>
-      <small>Still searchable · no longer current</small>
+      <small>Topically relevant · no longer current</small>
     </article>
     <div class="scenario__connector"><span>SUPERSEDED</span></div>
     <article class="scenario-card scenario-card--empty">
-      <div><span>LATEST DECISION</span><time>SUPPORTED BY EVIDENCE</time></div>
+      <div><span>CURRENT STATE</span><time>SUPPORTED BY NEWER EVIDENCE</time></div>
       <p>“Retries amplify load. Cap attempts and fix the token clock skew.”</p>
-      <small>Newer evidence · source-linked · current</small>
+      <small>Source-linked · time-aware · current</small>
     </article>
   </div>
   <div class="failure-points" aria-label="Signals needed to retrieve the right memory">
-    <span>Finding memory is not enough.</span>
+    <span>Finding a relevant passage is not enough.</span>
     <ol>
       <li><b>01</b> Relevance</li>
       <li><b>02</b> Recency</li>
@@ -36,19 +36,19 @@ hide:
   </div>
   <div class="scenario__outcome">
     <span>WITHOUT LINT-AI</span>
-    <p>The stale recommendation can surface as truth—sending the agent toward a fix already proven harmful.</p>
+    <p>Ordinary retrieval can surface an old recommendation as current because it is still topically relevant.</p>
   </div>
   <div class="scenario__outcome scenario__outcome--good">
     <span>WITH LINT-AI</span>
-    <p>The current decision ranks first. Superseded guidance stays out of retrieval, while timestamps and source evidence keep the answer inspectable.</p>
+    <p>The current state ranks first. Older guidance remains useful as history without quietly becoming today’s answer.</p>
   </div>
 </section>
 </div>
 
 <section class="solution-intro">
-  <div class="hero__eyebrow">HOW LINT-AI HELPS</div>
-  <h2>Give agents the right past—not all of it.</h2>
-  <p>Lint-AI turns project history into ranked, current, evidence-backed context. It combines lifecycle capture, temporal reasoning, explicit supersession, and source-aware retrieval across Codex, Claude Code, Gemini CLI, and AGY—so agents can act on what is true now and teams can inspect why.</p>
+  <div class="hero__eyebrow">THE MISSING LAYER</div>
+  <h2>Move from relevant retrieval to current understanding.</h2>
+  <p>Search can find the right topic. Lint-AI helps agents distinguish what is relevant from what is still true, while preserving the sources, timestamps, and history behind each answer.</p>
   <div class="hero__actions">
     <a class="md-button md-button--primary" href="quickstart/">Start building</a>
     <a class="md-button" href="https://github.com/RooAGI/Lint-AI">View on GitHub</a>
@@ -78,31 +78,31 @@ identical retrieval semantics.
 
 [View the comparison methodology and results](comparison.md)
 
-## Memory that understands change {.landing-heading}
+## Prevent confident staleness {.landing-heading}
 
 Agent context is not a pile of text. Decisions supersede older decisions. Terms drift. Ownership changes. The right answer often depends on *when* something was true and *where* the evidence came from.
 
 <div class="feature-grid">
   <article>
     <span class="feature-number">01</span>
-    <h3>Retrieve the right past</h3>
-    <p>Search sessions, notes, docs, and code with lexical, entity, temporal, and graph signals working together.</p>
+    <h3>Know what is current</h3>
+    <p>Rank current evidence ahead of older guidance and preserve historical answers when a question depends on the past.</p>
   </article>
   <article>
     <span class="feature-number">02</span>
-    <h3>Keep answers grounded</h3>
-    <p>Return LLM-ready context with source evidence instead of opaque similarity matches or raw text blobs.</p>
+    <h3>Show why it is current</h3>
+    <p>Return source, time, and relationship signals with the context so an agent or reviewer can inspect the basis for an answer.</p>
   </article>
   <article>
     <span class="feature-number">03</span>
-    <h3>Catch corpus drift</h3>
-    <p>Surface contradictions, stale claims, terminology drift, orphan pages, and missing cross-references.</p>
+    <h3>Make drift visible</h3>
+    <p>Surface contradictions, stale claims, terminology drift, orphan pages, and missing links before they become confident answers.</p>
   </article>
 </div>
 
-## One memory layer. Your agent of choice. {.landing-heading}
+## Keep your sources. Add a current-state layer. {.landing-heading}
 
-Lint-AI integrates with the tools your team already uses. Each provider gets isolated, project-scoped memory, lifecycle capture, and shared MCP controls.
+Lint-AI does not ask you to discard your existing project knowledge. It indexes the sessions, notes, documents, and decisions you already have, then makes their relationships and history usable at retrieval time. Each provider gets isolated, project-scoped memory, lifecycle capture, and shared MCP controls.
 
 <div class="integration-grid">
   <a href="codex/"><strong>Codex</strong><span>Hooks, MCP, replay, project memory →</span></a>

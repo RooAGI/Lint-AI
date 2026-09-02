@@ -89,7 +89,6 @@ controls.
 - Assign a stable `user_id`; do not use a process-wide default for all users.
 - Use a unique `request_id` for each add operation so retries are safe.
 - Bound injected context by tokens or characters before passing it to the model.
-- Add only durable facts, decisions, and outcomes—not every transient tool log.
+- Add only durable facts, decisions, and outcomes, not every transient tool log.
 - Treat retrieval failure as non-fatal so the agent can continue without memory.
 - Keep memory controls and deletion flows visible to the application owner.
-

@@ -1,4 +1,4 @@
-//! Lint AI — semantic linting for Markdown documentation and related semantic graphs.
+//! Lint AI: semantic linting for Markdown documentation and related semantic graphs.
 //!
 //! This crate provides the core pipeline for building a concept inventory from
 //! a Markdown corpus, matching mentions, building symbol and ownership graphs,
@@ -47,6 +47,7 @@ pub mod report;
 pub mod review;
 pub mod rules;
 pub mod segments;
+pub mod semantic_relations;
 pub mod source;
 pub mod symbols;
 pub mod temporal;
@@ -75,6 +76,10 @@ pub use crate::review::{
     DocumentSummary, OwnershipSummary, ReviewCategory, ReviewContext, ReviewDiff,
     ReviewDiffSummary, ReviewEvidence, ReviewFileChange, ReviewFinding, ReviewHunk, ReviewPacket,
     ReviewRepoRef, ReviewSeverity, ReviewUsageSummary, SymbolSummary,
+};
+pub use crate::semantic_relations::{
+    DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
+    SemanticRelationStore, SemanticStatus, SupersessionOptions,
 };
 pub use crate::source::SourceDocument;
 pub use crate::symbols::{

@@ -157,7 +157,7 @@ const POLICY_START: &str = "<!-- lint-ai:memory-policy:start -->";
 const POLICY_END: &str = "<!-- lint-ai:memory-policy:end -->";
 
 /// Writes the memory policy into the project's `AGENTS.md`, which is what Codex
-/// reads for standing instructions — the counterpart to the skill file the Claude
+/// reads for standing instructions, the counterpart to the skill file the Claude
 /// installer writes. Without it the hooks record a project the agent is never told
 /// to consult.
 ///

@@ -648,6 +648,7 @@ fn build_memory_index(
         text_rerank_ngram: false,
         text_rerank_lcs: false,
         claim_extraction: false,
+        supersession: crate::semantic_relations::SupersessionOptions::default(),
         index_location: lexical_dir
             .map(|path| crate::pipeline::IndexLocation::Explicit(path.to_path_buf()))
             .unwrap_or(crate::pipeline::IndexLocation::InMemory),
@@ -2245,8 +2246,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "claude-code")]
     if args.claude_code_install {
-        let written =
-            install_memory_skill(Path::new(&args.path), args.claude_code_force_skill)?;
+        let written = install_memory_skill(Path::new(&args.path), args.claude_code_force_skill)?;
         println!("Wrote Claude Code memory skill to {}", written.display());
         let config_path = args.claude_code_config.as_deref().map(Path::new);
         let written = install_user_config(Path::new(&args.path), config_path)?;

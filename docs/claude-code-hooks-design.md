@@ -486,7 +486,7 @@ response to stdout.
 ## Remaining Work
 
 1. Add benchmark coverage for retrieval quality, hook latency, and injected
-   token usage — including the three new hooks added in this release.
+   token usage, including the three new hooks added in this release.
 2. Replace deterministic bounded transcript extraction with optional structured
    summarization after its quality and cost are measured.
 3. Add configurable context budgets, routing thresholds, and retention.

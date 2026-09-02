@@ -76,13 +76,18 @@ pub fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
         .iter()
         .map(|p| {
             let t0 = tier0_by_source.get(&p.rel_path).copied();
+            let mut filters = BTreeMap::new();
+            if let Some(supersedes_id) = t0.and_then(|record| record.metadata.get("supersedes_id"))
+            {
+                filters.insert("supersedes_id".to_string(), supersedes_id.clone());
+            }
             SourceDocument {
                 doc_id: p.rel_path.clone(),
                 source: p.rel_path.clone(),
                 content: p.content.clone(),
                 concept: p.raw_concept.clone(),
                 group_id: None,
-                filters: BTreeMap::new(),
+                filters,
                 headings: p.headings.clone(),
                 links: p
                     .links

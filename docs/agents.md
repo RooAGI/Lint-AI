@@ -162,7 +162,7 @@ At a capture event, the adapter reads the transcript, extracts structured
 memory, calls `IndexStore::upsert`, and then calls `refresh`. This makes the
 document available in the index when the hook completes successfully, but it
 does not inject the new document back into the conversation that just ended.
-The document is returned on a later retrieval event—typically the next prompt
+The document is returned on a later retrieval event, typically the next prompt
 or next session. If the transcript is missing or produces no meaningful
 content, the event completes without adding a document.
 

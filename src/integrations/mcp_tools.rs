@@ -19,6 +19,10 @@ pub(crate) fn search_results(store: &IndexStore, results: Vec<SearchResult>) -> 
                 "score": result.score,
                 "matched_terms": result.matched_terms,
                 "matched_entities": result.matched_entities,
+                "semantic_status": result.semantic_status,
+                "superseded_by": result.superseded_by,
+                "relation_confidence": result.relation_confidence,
+                "relation_evidence": result.relation_evidence,
             }))
         })
         .collect::<Vec<_>>();

@@ -4,10 +4,13 @@ use crate::chunking::{
 use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor};
 use crate::index::{
     build_semantic_doc_state, DocRecord, MemoryIndex, Provenance, QueryDiagnostics, QueryTimings,
-    SearchResult, SemanticAggregate, SemanticDocState,
+    SearchResult, SemanticAggregate, SemanticDocState, TemporalQueryContext,
 };
 use crate::query_plan::PreparedQuery;
 use crate::segments::{SegmentRoutingStrategy, SegmentedMemoryIndex};
+use crate::semantic_relations::{
+    is_historical_query, SemanticRelationStore, SemanticStatus, SupersessionOptions,
+};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
 use crate::temporal_fact::TemporalFactStore;
@@ -17,7 +20,6 @@ use crate::tier1::{
     TextRankStyleTermRanker, Tier1DocInput, YakeStyleTermRanker,
 };
 use anyhow::Result;
-use std::time::Duration;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -28,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Mutex;
 use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
@@ -87,6 +90,7 @@ pub struct PipelineOptions {
     pub text_rerank_ngram: bool,
     pub text_rerank_lcs: bool,
     pub claim_extraction: bool,
+    pub supersession: SupersessionOptions,
     pub index_location: IndexLocation,
     pub memory_index_layout: MemoryIndexLayout,
 }
@@ -105,6 +109,7 @@ impl Default for PipelineOptions {
             text_rerank_ngram: false,
             text_rerank_lcs: false,
             claim_extraction: false,
+            supersession: SupersessionOptions::default(),
             index_location: IndexLocation::InMemory,
             memory_index_layout: MemoryIndexLayout::Single,
         }
@@ -335,7 +340,7 @@ pub fn resolve_store_paths(
 /// Opaque byte buffers produced by `IndexStore::dump()` and consumed by
 /// `IndexStore::load_from_dump()`. Intended for storage in an external system
 /// (e.g. Postgres `BYTEA` / `JSONB` columns). Callers should treat the contents
-/// as opaque — the schema version embedded in `records_json` guards against
+/// as opaque. The schema version embedded in `records_json` guards against
 /// version mismatches on restore.
 #[derive(Debug, Clone)]
 pub struct IndexDump {
@@ -355,6 +360,7 @@ pub struct IndexStore {
     chunk_lifecycle: HashMap<String, ChunkLifecycleMeta>,
     chunk_latest_by_lineage: HashMap<String, String>,
     temporal_facts: TemporalFactStore,
+    semantic_relations: SemanticRelationStore,
     dirty_docs: HashSet<String>,
     tombstones: HashSet<String>,
     lexical: LexicalState,
@@ -454,6 +460,8 @@ impl IndexStore {
         let mut semantic_aggregate = SemanticAggregate::default();
         let mut chunk_latest_by_lineage = HashMap::new();
         let temporal_facts = TemporalFactStore::from_records(records.values(), &chunk_lifecycle);
+        let semantic_relations =
+            SemanticRelationStore::try_from_documents(source_docs.values(), options.supersession)?;
         for record in records.values() {
             let state = build_semantic_doc_state(record, options.claim_extraction);
             semantic_aggregate.insert_doc_state(&state);
@@ -477,6 +485,7 @@ impl IndexStore {
             chunk_lifecycle,
             chunk_latest_by_lineage,
             temporal_facts,
+            semantic_relations,
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
             lexical,
@@ -590,6 +599,8 @@ impl IndexStore {
             .map(|m| (m.lineage_key.clone(), m.chunk_id.clone()))
             .collect();
         let temporal_facts = TemporalFactStore::from_records(records.values(), &chunk_lifecycle);
+        let semantic_relations =
+            SemanticRelationStore::try_from_documents(source_docs.values(), options.supersession)?;
         let mut semantic_docs = HashMap::new();
         let mut semantic_aggregate = SemanticAggregate::default();
         for record in records.values() {
@@ -618,6 +629,7 @@ impl IndexStore {
             chunk_lifecycle,
             chunk_latest_by_lineage,
             temporal_facts,
+            semantic_relations,
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
             lexical,
@@ -763,6 +775,14 @@ impl IndexStore {
 
     pub fn temporal_facts(&self) -> Vec<&crate::temporal_fact::TemporalFact> {
         self.temporal_facts.facts().iter().collect::<Vec<_>>()
+    }
+
+    pub fn semantic_claims(&self) -> &[crate::semantic_relations::SemanticClaim] {
+        self.semantic_relations.claims()
+    }
+
+    pub fn semantic_relations(&self) -> &[crate::semantic_relations::SemanticRelation] {
+        self.semantic_relations.relations()
     }
 
     pub fn temporal_facts_as_of(&self, date: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
@@ -917,11 +937,16 @@ impl IndexStore {
 
     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         self.refresh()?;
+        let allowed = self.semantic_allowed_doc_ids(query);
+        let context = TemporalQueryContext {
+            allowed_doc_ids: allowed.as_ref(),
+            ..TemporalQueryContext::default()
+        };
         let snapshot = self
             .snapshot
             .as_ref()
             .expect("snapshot should exist after refresh");
-        Ok(match (snapshot, &self.options.memory_index_layout) {
+        let results = match (snapshot, &self.options.memory_index_layout) {
             (
                 MemoryIndexSnapshot::Segmented(index),
                 MemoryIndexLayout::Segmented {
@@ -930,16 +955,23 @@ impl IndexStore {
                 },
             ) => {
                 index
-                    .query_with_diagnostics_and_strategy(
+                    .query_with_temporal_context_and_diagnostics_and_strategy(
                         query,
                         top_k,
                         (*query_top_n).max(1),
                         *routing_strategy,
+                        context,
                     )
                     .results
             }
-            _ => self.query_fresh(query, top_k)?,
-        })
+            _ => {
+                snapshot
+                    .global_index()
+                    .query_with_temporal_context(query, top_k, context)
+                    .0
+            }
+        };
+        Ok(self.annotate_semantic_results(query, results, top_k))
     }
 
     // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
@@ -952,19 +984,29 @@ impl IndexStore {
         let refresh_start = std::time::Instant::now();
         self.refresh()?;
         let refresh_ms = refresh_start.elapsed().as_secs_f64() * 1000.0;
-        let (results, mut timings, diagnostics) = self
+        let index = self
             .snapshot
             .as_ref()
             .expect("snapshot should exist after refresh")
-            .global_index()
-            .query_timed(query, top_k);
+            .global_index();
+        let allowed = self.semantic_allowed_doc_ids(query);
+        let context = TemporalQueryContext {
+            allowed_doc_ids: allowed.as_ref(),
+            ..TemporalQueryContext::default()
+        };
+        let (results, mut timings, diagnostics) =
+            index.query_with_temporal_context(query, top_k, context);
         timings.refresh_ms = refresh_ms;
         timings.total_ms += refresh_ms;
-        Ok((results, timings, diagnostics))
+        Ok((
+            self.annotate_semantic_results(query, results, top_k),
+            timings,
+            diagnostics,
+        ))
     }
 
-    /// Searches with the full query treatment the CLI gets — intent inference
-    /// and query augmentation via [`PreparedQuery`] — optionally scoped to the
+    /// Searches with the full query treatment the CLI gets, including intent inference
+    /// and query augmentation via [`PreparedQuery`], optionally scoped to the
     /// documents matching `filters`.
     ///
     /// Prefer this over [`IndexStore::query_filtered`] for any caller handling
@@ -981,12 +1023,16 @@ impl IndexStore {
             .as_ref()
             .expect("snapshot should exist after refresh")
             .global_index();
-        let allowed = index.doc_ids_matching_filters(filters);
+        let allowed = intersect_doc_id_filters(
+            index.doc_ids_matching_filters(filters),
+            self.semantic_allowed_doc_ids(prepared.search_query()),
+        );
         let mut context = prepared.temporal_context();
         context.allowed_doc_ids = allowed.as_ref();
-        Ok(index
+        let results = index
             .query_with_temporal_context(prepared.search_query(), top_k, context)
-            .0)
+            .0;
+        Ok(self.annotate_semantic_results(prepared.search_query(), results, top_k))
     }
 
     /// Query the current immutable snapshot without attempting a refresh.
@@ -1002,12 +1048,16 @@ impl IndexStore {
             return Ok(Vec::new());
         };
         let index = snapshot.global_index();
-        let allowed = index.doc_ids_matching_filters(filters);
+        let allowed = intersect_doc_id_filters(
+            index.doc_ids_matching_filters(filters),
+            self.semantic_allowed_doc_ids(prepared.search_query()),
+        );
         let mut context = prepared.temporal_context();
         context.allowed_doc_ids = allowed.as_ref();
-        Ok(index
+        let results = index
             .query_with_temporal_context(prepared.search_query(), top_k, context)
-            .0)
+            .0;
+        Ok(self.annotate_semantic_results(prepared.search_query(), results, top_k))
     }
 
     // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
@@ -1019,19 +1069,72 @@ impl IndexStore {
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<SearchResult>> {
         self.refresh()?;
-        let lexical_hits = self
-            .lexical
-            .search(query, top_k.saturating_mul(5).max(20))?;
-        Ok(self
+        let index = self
             .snapshot
             .as_ref()
             .expect("snapshot should exist after refresh")
-            .global_index()
-            .query_with_filters_and_lexical(query, top_k, filters, Some(&lexical_hits)))
+            .global_index();
+        let allowed = intersect_doc_id_filters(
+            index.doc_ids_matching_filters(filters),
+            self.semantic_allowed_doc_ids(query),
+        );
+        let context = TemporalQueryContext {
+            allowed_doc_ids: allowed.as_ref(),
+            ..TemporalQueryContext::default()
+        };
+        let results = index.query_with_temporal_context(query, top_k, context).0;
+        Ok(self.annotate_semantic_results(query, results, top_k))
+    }
+
+    fn semantic_allowed_doc_ids(&self, query: &str) -> Option<HashSet<String>> {
+        if is_historical_query(query) {
+            return None;
+        }
+
+        let has_superseded = self.source_docs.keys().any(|doc_id| {
+            self.semantic_relations.document_state(doc_id).status
+                == Some(SemanticStatus::Superseded)
+        });
+        has_superseded.then(|| {
+            self.source_docs
+                .keys()
+                .filter(|doc_id| {
+                    self.semantic_relations.document_state(doc_id).status
+                        != Some(SemanticStatus::Superseded)
+                })
+                .cloned()
+                .collect()
+        })
+    }
+
+    fn annotate_semantic_results(
+        &self,
+        query: &str,
+        results: Vec<SearchResult>,
+        top_k: usize,
+    ) -> Vec<SearchResult> {
+        let historical = is_historical_query(query);
+        results
+            .into_iter()
+            .map(|mut result| {
+                let state = self.semantic_relations.document_state(&result.doc_id);
+                result.semantic_status =
+                    if historical && state.status == Some(SemanticStatus::Superseded) {
+                        Some(SemanticStatus::Historical)
+                    } else {
+                        state.status
+                    };
+                result.superseded_by = state.superseded_by;
+                result.relation_confidence = state.relation_confidence;
+                result.relation_evidence = state.evidence;
+                result
+            })
+            .take(top_k)
+            .collect()
     }
 
     /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores every
-    /// query. BM25 (tantivy) is still called once per term — that can't be collapsed — but the
+    /// query. BM25 (tantivy) is still called once per term. That cannot be collapsed, but the
     /// filter scan over all docs happens only once regardless of how many queries are given.
     /// Returns one `Vec<SearchResult>` per input query, in the same order.
     // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
@@ -1043,17 +1146,27 @@ impl IndexStore {
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<Vec<SearchResult>>> {
         self.refresh()?;
-        let candidate_k = top_k.saturating_mul(5).max(20);
-        let mut lexical_hits_per_query = Vec::with_capacity(queries.len());
-        for q in queries {
-            lexical_hits_per_query.push(self.lexical.search(q, candidate_k)?);
-        }
-        Ok(self
+        let index = self
             .snapshot
             .as_ref()
             .expect("snapshot should exist after refresh")
-            .global_index()
-            .query_with_filters_multi(queries, top_k, filters, &lexical_hits_per_query))
+            .global_index();
+        let filter_allowed = index.doc_ids_matching_filters(filters);
+        queries
+            .iter()
+            .map(|query| {
+                let query_allowed = intersect_doc_id_filters(
+                    filter_allowed.clone(),
+                    self.semantic_allowed_doc_ids(query),
+                );
+                let context = TemporalQueryContext {
+                    allowed_doc_ids: query_allowed.as_ref(),
+                    ..TemporalQueryContext::default()
+                };
+                let results = index.query_with_temporal_context(query, top_k, context).0;
+                Ok(self.annotate_semantic_results(query, results, top_k))
+            })
+            .collect()
     }
 
     fn prepare_pending_changes(&mut self) -> Result<()> {
@@ -1084,6 +1197,10 @@ impl IndexStore {
         }
         self.temporal_facts =
             TemporalFactStore::from_records(self.records.values(), &self.chunk_lifecycle);
+        self.semantic_relations = SemanticRelationStore::try_from_documents(
+            self.source_docs.values(),
+            self.options.supersession,
+        )?;
         let lexical_upserts = if self.snapshot.is_none() && self.snapshot_revision == 0 {
             self.records
                 .iter()
@@ -1871,6 +1988,17 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
+fn intersect_doc_id_filters(
+    left: Option<HashSet<String>>,
+    right: Option<HashSet<String>>,
+) -> Option<HashSet<String>> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.intersection(&right).cloned().collect()),
+        (Some(allowed), None) | (None, Some(allowed)) => Some(allowed),
+        (None, None) => None,
+    }
+}
+
 fn build_doc_records(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
@@ -2110,6 +2238,7 @@ pub fn build_query_snapshot_from_source_documents(
         text_rerank_ngram,
         text_rerank_lcs,
         claim_extraction: false,
+        supersession: crate::semantic_relations::SupersessionOptions::default(),
         index_location: IndexLocation::InMemory,
         memory_index_layout: MemoryIndexLayout::Single,
     };
@@ -2216,6 +2345,36 @@ mod tests {
         );
         assert!(
             results[0].score_breakdown.recency_score > results[1].score_breakdown.recency_score
+        );
+    }
+
+    #[test]
+    fn query_prefers_current_markdown_guidance_when_wording_changes() {
+        let today = chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).date_naive();
+        let mut old = sample_doc(
+            "ownership-history",
+            "The national structure assigned valve control to the National Park POD. This was the prior owner assignment.",
+        );
+        old.timestamp = Some(format!("{}T12:00:00Z", today - chrono::Duration::days(180)));
+
+        let mut current = sample_doc(
+            "ownership-current",
+            "Current domain responsibility: the Controls POD owns valve control. Effective today, use the Controls POD for this work.",
+        );
+        current.timestamp = Some(format!("{today}T12:00:00Z"));
+
+        let index = build_query_snapshot(&[old, current], &PipelineOptions::default())
+            .expect("Markdown-like ownership guidance should build");
+        let results = index.query("who is responsible for valve control", 2);
+
+        assert_eq!(
+            results.first().map(|result| result.doc_id.as_str()),
+            Some("ownership-current"),
+            "current guidance should outrank the older, still-relevant wording: {results:?}"
+        );
+        assert!(
+            results[0].score_breakdown.recency_score > results[1].score_breakdown.recency_score,
+            "current guidance should receive the stronger temporal signal: {results:?}"
         );
     }
 
@@ -2556,6 +2715,78 @@ mod tests {
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(index_root);
+    }
+
+    #[test]
+    fn reveals_bug_invalid_supersession_thresholds_are_silently_accepted() {
+        let index_root = unique_temp_dir("invalid-supersession-options");
+        let options = PipelineOptions {
+            supersession: SupersessionOptions {
+                suppress_confidence: 1.2,
+                ..SupersessionOptions::default()
+            },
+            ..PipelineOptions::default()
+        };
+
+        let result = IndexStore::at_path(&index_root, options);
+
+        match result {
+            Ok(store) => {
+                drop(store);
+                panic!("invalid supersession thresholds must fail IndexStore construction");
+            }
+            Err(error) => assert!(
+                error
+                    .to_string()
+                    .contains("confidence thresholds must be between 0 and 1"),
+                "constructor should report the invalid threshold clearly: {error}"
+            ),
+        }
+
+        let _ = fs::remove_dir_all(index_root);
+    }
+
+    #[test]
+    fn reveals_bug_fixed_candidate_window_returns_fewer_than_top_k_current_results() {
+        let mut index = IndexStore::new(PipelineOptions::default());
+
+        for i in 0..20 {
+            let old_id = format!("old-{i}");
+            let mut old = sample_doc(&old_id, "needle highrank highrank");
+            old.filters.insert("semantic_scope".into(), "test".into());
+            index.upsert(old);
+
+            let replacement_id = format!("replacement-{i}");
+            let mut replacement = sample_doc(&replacement_id, "replacement guidance");
+            replacement
+                .filters
+                .insert("semantic_scope".into(), "test".into());
+            replacement.filters.insert("supersedes_id".into(), old_id);
+            index.upsert(replacement);
+        }
+
+        for i in 0..3 {
+            let mut current = sample_doc(&format!("current-{i}"), "needle");
+            current
+                .filters
+                .insert("semantic_scope".into(), "test".into());
+            index.upsert(current);
+        }
+
+        let results = index
+            .query("needle highrank", 3)
+            .expect("query should succeed");
+        assert_eq!(
+            results.len(),
+            3,
+            "eligible current results should fill top_k before ranking"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|result| result.doc_id.starts_with("current-")),
+            "superseded documents must not consume candidate slots: {results:?}"
+        );
     }
 
     #[test]

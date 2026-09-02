@@ -152,7 +152,7 @@ target/release/lint-ai \
 A scenario's `setup_messages` array controls this: one message runs as a
 single request/response (single-turn); more than one message chains
 sequential turns into the same Codex session by threading `codex exec resume
-<thread_id>` between per-message processes (multi-turn) — see
+<thread_id>` between per-message processes (multi-turn). See
 `run_resume_chain_phase` in `benchmark/codex_code/src/runner.py`. The same
 applies to the optional `continuation_messages` array. This dispatch is
 shared across all three provider harnesses (Claude, Codex, AGY); Claude uses
@@ -187,9 +187,9 @@ calls versus native's 2, using roughly a fifth of native's input tokens and
 noticeably lower continuation latency. Unlike Claude, where enabling both
 memory layers together (`claude-both`) beat every other arm on every metric,
 Codex's combined arm only marginally improved continuation latency over
-plain `lint-ai` and was slightly worse on setup time and tokens — within the
+plain `lint-ai` and was slightly worse on setup time and tokens, within the
 noise of a single repetition, not a clear win. This is a
-single-repetition, single-scenario result, not a release benchmark — treat
+single-repetition, single-scenario result, not a release benchmark. Treat
 it as directional pending a multi-scenario, multi-repetition run.
 
 ### Latest multi-turn result (`routing-decision-supersession`, multi-turn)
@@ -217,11 +217,11 @@ Lint-AI is far larger here than in the single-turn scenario: to correctly
 distinguish the current decision from the superseded one, `codex-native`
 needed 6 tool calls and 216k input tokens re-deriving the temporal history
 from source, versus 0 tool calls and ~14k tokens for either `lint-ai` arm
-answering directly from injected memory — roughly 15x fewer input tokens and
+answering directly from injected memory, roughly 15x fewer input tokens and
 6x lower continuation latency. Temporal-correction/multi-turn scenarios
 expose Lint-AI's advantage far more sharply than simple single-turn recall.
 This is a single-repetition, single-scenario result, not a release
-benchmark — treat it as directional pending a multi-scenario,
+benchmark. Treat it as directional pending a multi-scenario,
 multi-repetition run.
 
 ## Generated Data

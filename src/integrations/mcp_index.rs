@@ -93,8 +93,8 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Option<Value> {
     let mut ignore_paths = ignore_paths.to_vec();
     ignore_paths.sort();
     let revision = git_output(root, &["rev-parse", "HEAD"]);
-    let status = git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"])
-        .map(|status| {
+    let status =
+        git_output(root, &["status", "--porcelain=v1", "--untracked-files=all"]).map(|status| {
             status
                 .lines()
                 .filter(|line| !line.contains(".lint-ai/"))

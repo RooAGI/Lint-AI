@@ -61,6 +61,7 @@ nav:
       - Light understanding: tier1-light-understanding.md
       - Filtered search: filtered-search.md
       - Artifact indexing: artifact-indexing.md
+      - Semantic supersession: semantic-supersession.md
       - Corpus graph: build-corpus-graph.md
       - Integration glossary: integration-glossary.md
       - Chunk strategy: chunk-strategy.md

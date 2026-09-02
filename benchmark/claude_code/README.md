@@ -40,7 +40,7 @@ enabled. The Lint-AI arms use hooks and durable memory without the MCP
 code-index server, matching the Codex hooks-only latency comparison. The
 `hooks-only` profile no longer installs the `lint-ai-memory` skill, since that
 skill tells Claude to call `mcp__lint-ai__search`, a tool that does not exist
-once MCP is stripped out of the isolated config — installing it there only
+once MCP is stripped out of the isolated config. Installing it there only
 confused the model and inflated tokens/latency without helping recall.
 
 Each scenario/arm/repetition worktree persists after the run instead of being
@@ -101,10 +101,10 @@ the architecture decision via repeated file reads/searches (9 tool calls).
 directly from 2 tool calls, using about a quarter of native's input tokens
 and roughly half its continuation latency. `claude-both` (Lint-AI memory and
 Claude's native auto-memory both enabled) went further still: 0 tool calls,
-the lowest latency, and the fewest tokens of the three — having two
+the lowest latency, and the fewest tokens of the three. Having two
 independent memory sources available appears to reinforce recall rather than
 add overhead or conflict. This is a single-repetition, single-scenario
-result, not a release benchmark — treat it as directional pending a
+result, not a release benchmark. Treat it as directional pending a
 multi-scenario, multi-repetition run.
 
 ### Latest multi-turn result (`routing-decision-supersession`, multi-turn)
@@ -119,7 +119,7 @@ Getting a clean result here required fixing two shared scoring bugs (both in
 `benchmark/codex_code/src/scorer.py` and `src/runner.py`, so they apply to
 every provider, not just Claude): Claude's harness never wrote a
 final-message-only file the way Codex's `--output-last-message` does, so
-scoring fell back to the full raw transcript — including tool-result text
+scoring fell back to the full raw transcript, including tool-result text
 that could contain scenario/rubric wording verbatim and produce false
 matches. `run_command` now extracts the final assistant message from
 Claude's stream-json output into a `.last` file, mirroring Codex. Separately,
@@ -139,7 +139,7 @@ pattern.
 | Output tokens | 1,897 | 266 | 442 |
 | Tool calls | 7 | 1 | 1 |
 
-All three arms reach identical, perfect accuracy — no arm is "smarter" at
+All three arms reach identical, perfect accuracy. No arm is "smarter" at
 recall. The gap is entirely in how much work it takes to get there:
 `claude-lint-ai` uses about a quarter of native's input tokens, is roughly
 3x faster on continuation, and needs 7x fewer tool calls than
@@ -147,7 +147,7 @@ recall. The gap is entirely in how much work it takes to get there:
 `claude-lint-ai` here, suggesting Lint-AI's injected memory is doing the
 work and Claude's own auto-memory adds little on top of it for this
 scenario. This is a single-repetition, single-scenario result, not a
-release benchmark — treat it as directional pending a multi-scenario,
+release benchmark. Treat it as directional pending a multi-scenario,
 multi-repetition run.
 
 ## Parse Run Metrics

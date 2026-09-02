@@ -2,7 +2,7 @@
 //! (`crate::index`) and the experimental segment-routing path
 //! (`crate::segments`).
 //!
-//! The two callers intentionally use different rules — this is not
+//! The two callers intentionally use different rules. This is not
 //! duplication to collapse into one behavior. A LongMemEval-S benchmark
 //! (500 scoped queries for the primary path, 133 multi-session queries for
 //! segment routing) showed each mode is a real, measured improvement for
@@ -43,7 +43,7 @@ pub fn tokenize(input: &str, mode: TokenizerMode) -> Vec<String> {
 }
 
 /// True if `token` is a stopword under `mode`. `token` must already be
-/// tokenized/normalized under the same mode — the two stopword lists use
+/// tokenized/normalized under the same mode. The two stopword lists use
 /// different vocabularies (raw words vs. stemmed fragments) and are not
 /// interchangeable.
 pub fn is_stopword(token: &str, mode: TokenizerMode) -> bool {

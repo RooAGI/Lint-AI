@@ -275,8 +275,7 @@ fn handle_connection(
                     .write()
                     .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
                     .add(request)
-            })
-        {
+            }) {
             Ok(response) => serde_json::to_value(response)?,
             Err(error) => {
                 return write_json(
@@ -293,8 +292,7 @@ fn handle_connection(
                     .read()
                     .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
                     .search_cached(request)
-            })
-        {
+            }) {
             Ok(response) => serde_json::to_value(response)?,
             Err(error) => {
                 return write_json(
@@ -311,8 +309,7 @@ fn handle_connection(
                     .write()
                     .map_err(|_| anyhow::anyhow!("service lock poisoned"))?
                     .delete(&request.user_id, &request.doc_id)
-            })
-        {
+            }) {
             Ok(affected) => serde_json::json!({"success": true, "affected": affected as usize}),
             Err(error) => {
                 return write_json(

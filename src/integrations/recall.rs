@@ -77,7 +77,7 @@ pub struct RecallHit {
     /// Documents keep their repo-relative path here; the dispatcher rewrites
     /// relative paths against the worker's base path, so they are never
     /// absolutised on this side. A memory is not a file, so it carries the
-    /// corpus it lives in — the dispatcher turns that into a real absolute path
+    /// corpus it lives in. The dispatcher turns that into a real absolute path
     /// too, which is what a reader on another machine can act on.
     pub doc_id: String,
     pub source: String,
@@ -100,6 +100,14 @@ pub struct RecallHit {
     pub document_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_status: Option<crate::semantic_relations::SemanticStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relation_confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relation_evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -123,7 +131,7 @@ pub struct RecallChunk {
     pub truncated: bool,
 }
 
-/// Query the unified store — project documents and recorded memories together —
+/// Query the unified store, including project documents and recorded memories,
 /// and return chunk-level hits.
 pub fn recall(options: &RecallOptions<'_>) -> Result<RecallOutput> {
     let started = Instant::now();
@@ -349,6 +357,10 @@ fn hit_from(result: &SearchResult, record: &DocRecord, query: &str) -> RecallHit
         revision: filter("revision"),
         document_type: filter("document_type"),
         timestamp: record.timestamp.clone(),
+        semantic_status: result.semantic_status,
+        superseded_by: result.superseded_by.clone(),
+        relation_confidence: result.relation_confidence,
+        relation_evidence: result.relation_evidence.clone(),
     }
 }
 
@@ -412,7 +424,7 @@ fn chunk_score(chunk: &SectionChunk, terms: &HashSet<String>) -> usize {
 
 /// Take a contiguous run of lines that fits the byte cap, centred on the
 /// densest match, and report the line numbers that run really occupies.
-/// The recorder writes a machine header above what it concluded — the agent
+/// The recorder writes a machine header above what it concluded. The agent
 /// that wrote the memory and the type of the record. An excerpt that opens on
 /// those lines spends its budget saying nothing, so leading header lines are
 /// dropped when they carry none of what was asked about. The reported range
@@ -648,6 +660,10 @@ mod tests {
             filters,
             probable_topic: None,
             doc_type_guess: None,
+            semantic_status: None,
+            superseded_by: None,
+            relation_confidence: None,
+            relation_evidence: vec![],
             headings: Vec::new(),
             doc_links: Vec::new(),
             temporal_terms: Vec::new(),
@@ -671,6 +687,10 @@ mod tests {
             matched_terms: matched_terms.iter().map(|t| t.to_string()).collect(),
             probable_topic: None,
             doc_type_guess: None,
+            semantic_status: None,
+            superseded_by: None,
+            relation_confidence: None,
+            relation_evidence: Vec::new(),
         }
     }
 

@@ -27,7 +27,6 @@ use std::fs;
 use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Instant;
 use toml::map::Map as TomlMap;
 use toml::Value as TomlValue;
 
@@ -385,7 +384,6 @@ impl CodexMcp {
                     .and_then(Value::as_u64)
                     .unwrap_or(DEFAULT_QUERY_TOP_K as u64)
                     .clamp(1, 20) as usize;
-                let started = Instant::now();
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
@@ -393,17 +391,7 @@ impl CodexMcp {
                     &mut *store,
                 )?;
                 let results = store.query(query, top_k)?;
-                let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-                let diagnostics = store.inspection();
-                let payload = json!({
-                    "query": query,
-                    "top_k": top_k,
-                    "root": self.root,
-                    "docs_count": store.source_documents().len(),
-                    "results": results,
-                    "timings_ms": { "total_ms": elapsed_ms },
-                    "diagnostics": diagnostics,
-                });
+                let payload = mcp_tools::search_results(&store, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -559,7 +547,7 @@ impl CodexMcp {
             ToolDefinition {
                 name: "search".to_string(),
                 description:
-                    "Search the indexed workspace and return ranked results with diagnostics."
+                    "Search the indexed workspace and return concise, self-contained relevant memories."
                         .to_string(),
                 input_schema: json!({
                     "type": "object",
@@ -1048,9 +1036,19 @@ args = ["old"]
         let result = response.result.unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(parsed["docs_count"].as_u64(), Some(1));
         assert_eq!(parsed["results"].as_array().unwrap().len(), 1);
-        assert_eq!(parsed["results"][0]["doc_id"].as_str(), Some("doc-1"));
+        assert_eq!(parsed["results"][0]["id"].as_str(), Some("doc-1"));
+        assert_eq!(
+            parsed["results"][0]["content"].as_str(),
+            Some("docker install guide")
+        );
+        assert_eq!(
+            parsed["results"][0]["source"].as_str(),
+            Some("docs/install.md")
+        );
+        assert!(parsed.get("diagnostics").is_none());
+        assert!(parsed.get("root").is_none());
+        assert!(parsed.get("timings_ms").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1109,7 +1107,11 @@ args = ["old"]
             .unwrap()
             .to_string();
         let payload: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(payload["results"][0]["doc_id"], "memory-1");
+        assert_eq!(payload["results"][0]["id"], "memory-1");
+        assert_eq!(
+            payload["results"][0]["content"],
+            "The durable routing codename is cobalt"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

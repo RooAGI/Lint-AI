@@ -84,6 +84,12 @@ pub(crate) fn list_memories_tool_definition() -> ToolDefinition {
     }
 }
 
+// Codex validates arguments locally because its protocol already exposes the
+// unknown argument name; Claude and Gemini use this shared parser instead.
+#[cfg_attr(
+    not(any(feature = "claude-code", feature = "gemini-cli")),
+    allow(dead_code)
+)]
 pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'static str> {
     if arguments
         .as_object()

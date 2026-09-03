@@ -2917,6 +2917,7 @@ fn cached_doc_rerank_tokens(index: &MemoryIndex, doc_u32: usize) -> Option<&[Str
         .map(|tokens| tokens.as_slice())
 }
 
+#[cfg(test)]
 fn doc_has_timestamped_chunk(doc: &DocRecord) -> bool {
     doc.section_chunks
         .iter()

@@ -920,21 +920,6 @@ impl IndexStore {
             .query_with_lexical_hits(query, top_k, Some(&lexical_hits)))
     }
 
-    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
-    #[allow(deprecated)]
-    fn query_fresh(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
-        self.refresh()?;
-        let lexical_hits = self
-            .lexical
-            .search(query, top_k.saturating_mul(5).max(20))?;
-        Ok(self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh")
-            .global_index()
-            .query_with_lexical_hits(query, top_k, Some(&lexical_hits)))
-    }
-
     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         self.refresh()?;
         let allowed = self.semantic_allowed_doc_ids(query);

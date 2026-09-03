@@ -2006,9 +2006,10 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
 
-    if let Some(root) = args.recall_server.as_deref() {
+    if args.recall_server.is_some() {
         #[cfg(any(feature = "claude-code", feature = "codex"))]
         {
+            let root = args.recall_server.as_deref().expect("checked above");
             let cfg = load_config(
                 args.config.as_deref(),
                 root,

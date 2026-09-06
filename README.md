@@ -1,293 +1,274 @@
 # Lint-AI
 
-Lint-AI is for teams building agent memory and semantic review over large, fast-changing corpora: assistant sessions, task notes, traces, reports, decisions, code, and documentation that accumulate faster than any team can review manually.
+**Current-state memory for AI agents.**
 
-It is a good fit for people who maintain:
-- long-running agent memory over conversations, notes, and decisions
-- markdown knowledge bases with lots of cross-links
-- internal docs where terminology drifts over time
-- codebases where symbols, ownership, usage, and review context matter
-- corpora where “what changed?” and “what is current?” matter as much as keyword search
+> Relevant context is not always true.
 
-Use Lint-AI when plain search is not enough and memory recall needs evidence. It treats stored context as a network of facts, concepts, links, symbols, ownership facts, and timestamps, then surfaces misalignment, missing context, and retrieval results suited for downstream review or LLM grounding.
+Lint-AI turns scattered project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** at the moment an agent needs it.
 
-The problem it solves is **system-level consistency**: reading individual documents is not enough when terminology drifts, definitions conflict, ownership changes, or outdated claims persist across a growing corpus. Lint-AI analyzes corpora collectively, not in isolation, to catch these issues before they spread.
+Search can find the right topic. Lint-AI helps an agent distinguish **what is relevant** from **what is still true**.
 
-Why people use it:
-- to recover the right past session or note when an agent needs context
-- to catch contradictions before they spread
-- to detect terminology drift across documents
-- to find orphaned or weakly linked pages
-- to ask corpus-level questions over facts, entities, symbols, and time
-- to build review packets from changed files and related semantic context
-- to feed grounded context into an LLM instead of raw text blobs
+It is built for long-running AI workflows where old decisions remain semantically relevant even after newer evidence has superseded them.
 
-## Benchmark
+**Works with Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY)** through project-scoped memory, lifecycle hooks, and MCP tools.
 
-Evaluated on **LongMemEval-S** (500 questions), a public benchmark for long-context agent memory retrieval over multi-session conversation corpora. The scoped variant is used: each query searches only the sessions attached to that question, matching the realistic setting where a system knows which sessions are candidates for a given user. No embedding vectors are used anywhere in the pipeline.
+[Documentation](https://rooagi.github.io/Lint-AI/) · [Quickstart](docs/quickstart.md) · [Agent integrations](docs/agents.md) · [Benchmark methodology](docs/comparison.md)
 
-The section below shows both the rust-bert POS/NER branch result and the default heuristic release result.
+---
 
-### Rust-BERT POS/NER Branch
+## Why Lint-AI?
 
-**Aggregate (n=500):**
+Imagine your project history contains both of these notes:
 
-| metric | value |
+| | Evidence |
 |---|---|
-| recall@5 | 86.9% |
-| recall@10 | 93.8% |
-| recall@20 | 94.4% |
-| recall_any@5 | 94.8% |
-| recall_any@10 | 98.2% |
-| MRR | 87.1% |
-| NDCG@10 | 86.0% |
-| avg query latency | 5.1 ms |
+| **Older** | “Increase retries to recover from the intermittent timeout.” |
+| **Current** | “Retries amplify load. Cap attempts and fix the token clock skew.” |
 
-`recall@k` is fractional recall over all gold sessions. `recall_any@k` counts 1.0 if any gold session appears in the top k. Latency is measured on a single CPU core with no GPU.
+A normal retrieval system can still rank the first passage highly because it is topically relevant.
 
-**By question type:**
+Lint-AI adds the signals needed to recover the **current state** while preserving the older guidance as history:
 
-| question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
-|---|---|---|---|---|---|---|
-| single-session-assistant | 56 | 100.0% | 100.0% | 100.0% | 99.1% | 99.3% |
-| single-session-user | 70 | 97.1% | 98.6% | 97.1% | 86.8% | 89.8% |
-| knowledge-update | 78 | 96.8% | 98.7% | 100.0% | 95.2% | 94.4% |
-| single-session-preference | 30 | 80.0% | 96.7% | 80.0% | 64.7% | 72.3% |
-| temporal-reasoning | 133 | 81.1% | 92.0% | 91.7% | 84.1% | 82.3% |
-| multi-session | 133 | 77.7% | 87.1% | 94.7% | 85.3% | 80.2% |
+1. **Relevance** — is this about the question?
+2. **Recency** — when was this evidence true?
+3. **Supersession** — did a newer decision replace it?
+4. **Evidence** — where did the answer come from?
 
-Results file: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
+That makes Lint-AI useful for agent memory, project knowledge, semantic review, and any corpus where **“what changed?”** and **“what is current?”** matter as much as keyword search.
 
-### Heuristic Release Backend
+### Ordinary retrieval vs. Lint-AI
 
-**Aggregate (n=500):**
-
-| metric | value |
+| Ordinary retrieval | Lint-AI |
 |---|---|
-| recall@5 | 83.5% |
-| recall@10 | 89.5% |
-| recall@20 | 91.1% |
-| recall_any@5 | 92.4% |
-| recall_any@10 | 95.6% |
-| recall_any@20 | 97.0% |
-| MRR | 84.0% |
-| NDCG@10 | 81.8% |
-| avg query latency | 1.9 ms |
+| Finds topically similar text | Ranks relevant **and current** evidence |
+| Can surface stale decisions as if they are current | Preserves supersession and time signals |
+| Returns passages | Returns context with source and relationship evidence |
+| Treats documents mostly in isolation | Connects facts, entities, links, symbols, ownership, and time |
+| Leaves corpus drift hidden | Surfaces contradictions, stale claims, terminology drift, orphan pages, and missing links |
 
-`recall@k` is fractional recall over all gold sessions. `recall_any@k` counts 1.0 if any gold session appears in the top k. Latency is measured on a single CPU core with no GPU.
-
-**By question type:**
-
-| question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
-|---|---|---|---|---|---|---|
-| single-session-assistant | 56 | 100.0% | 100.0% | 100.0% | 98.2% | 98.7% |
-| single-session-user | 70 | 94.3% | 98.6% | 94.3% | 77.4% | 82.6% |
-| knowledge-update | 78 | 94.2% | 96.8% | 98.7% | 94.6% | 92.4% |
-| single-session-preference | 30 | 80.0% | 93.3% | 80.0% | 65.8% | 72.2% |
-| temporal-reasoning | 133 | 77.0% | 85.7% | 86.5% | 81.8% | 78.2% |
-| multi-session | 133 | 72.5% | 79.3% | 93.2% | 82.7% | 74.3% |
-
-Results file: `benchmark/data/lintai_longmemeval_scoped_results.json`
+---
 
 ## Quickstart
 
-See [docs/quickstart.md](docs/quickstart.md) for the shortest path to build, run, query, and use the crate from Rust.
-
-## Claude Code and Codex integrations
-
-Lint-AI provides provider-specific integrations for Claude Code, Codex, and Gemini CLI. Each
-integration is opt-in at build time and combines lifecycle hooks with a
-project-scoped memory layer:
-
-| Feature | Claude Code | Codex |
-|---|---:|---:|
-| Project-scoped MCP server | Yes | Yes |
-| Lifecycle memory retrieval and capture | Yes | Yes |
-| Segmented persistent memory | Yes | Yes |
-| `search` and `info` MCP tools | Yes | Yes |
-| `record_session` control | Yes | Yes |
-| Enable/disable Lint-AI at runtime | Yes | Yes |
-| Session status reporting | Native status line plus MCP | MCP plus terminal status line |
-| Replay with Lint-AI enabled or disabled | Yes | Yes |
-| Session import into provider memory | Yes | Yes |
-
-Gemini CLI uses the opt-in `gemini-cli` feature and its documented JSON hooks:
+Install directly from GitHub:
 
 ```bash
-cargo build --release --features gemini-cli
-./lint-ai --gemini-cli-install /path/to/project
+cargo install --git https://github.com/RooAGI/Lint-AI
 ```
 
-Gemini records hook events, injects project memory, and exposes the shared MCP
-tools through `SessionStart`, `BeforeAgent`, model, tool, compression, and
-session-end events. See [docs/gemini-cli.md](docs/gemini-cli.md) for details.
-
-Antigravity CLI (`agy`) uses the opt-in `agy` feature and the same
-Gemini-compatible MCP and lifecycle-hook protocol:
+Index or lint a local corpus:
 
 ```bash
-cargo build --release --features agy
-./lint-ai --agy-install /path/to/project
+lint-ai /path/to/repo
 ```
 
-See [docs/agy.md](docs/agy.md) for configuration paths and session recording.
+Query it:
 
-Build and install both integrations:
+```bash
+lint-ai --query "docker install linux" /path/to/repo/docs
+```
+
+Ask for LLM-ready retrieval context:
+
+```bash
+lint-ai --llm-context "docker install linux" /path/to/repo/docs
+```
+
+For Docker, HTTP, Python, Rust, and MCP setup, see the [full quickstart](docs/quickstart.md).
+
+---
+
+## Agent integrations
+
+Lint-AI provides opt-in integrations for the major coding-agent clients.
+
+| Integration | Project memory | Lifecycle capture | MCP tools | Replay / comparison |
+|---|---:|---:|---:|---:|
+| [Claude Code](docs/claude-code.md) | Yes | Yes | Yes | Yes |
+| [Codex](docs/codex.md) | Yes | Yes | Yes | Yes |
+| [Gemini CLI](docs/gemini-cli.md) | Yes | Yes | Yes | — |
+| [Antigravity CLI / AGY](docs/agy.md) | Yes | Yes | Yes | — |
+
+Build the Claude Code and Codex integrations:
 
 ```bash
 cargo build --release --features claude-code,codex
-./lint-ai --claude-code-install /path/to/project
-./lint-ai --codex-install /path/to/project
+./target/release/lint-ai --claude-code-install /path/to/project
+./target/release/lint-ai --codex-install /path/to/project
 ```
 
-Each installer writes lifecycle hooks and an MCP server entry into that agent's
-own configuration, which is global, and a memory policy into the named project:
-a project skill for Claude Code and AGY, plus a delimited block in `AGENTS.md` for Codex. The MCP
-entry carries no project root. The server resolves the project it is launched
-in, so installing for a second project does not repoint the first.
-
-```bash
-```
-
-Provider memory remains isolated:
+Provider memory remains isolated by project and provider:
 
 ```text
 /path/to/project/.lint-ai/claude-memory/
 /path/to/project/.lint-ai/codex-memory/
 ```
 
-The MCP controls are available inside either client:
+The shared MCP controls include session recording, memory listing, and runtime enable/disable controls.
 
 ```text
 mcp__lint-ai__record_session       {"action":"start|stop|status"}
 mcp__lint-ai__list_memories        {"limit":20}
 mcp__lint-ai__enable_lint_ai       {}
 mcp__lint-ai__disable_lint_ai      {}
-mcp__lint-ai__lint_ai_status        {}
+mcp__lint-ai__lint_ai_status       {}
 ```
 
-Enabling Lint-AI enables recording by default. Recording can then be stopped
-independently, so memory retrieval and full session capture remain separate
-choices. Recording is local, bounded, redacted, and capture-only; it does not
-inject memory by itself.
+See [agent integrations](docs/agents.md) and the [MCP guide](docs/mcp.md) for the complete setup.
 
-For a baseline/replay A/B comparison:
+---
 
-```bash
-./lint-ai --replay-session <session-id> \
-  --session-provider codex \
-  --replay-disable-lint-ai
-./lint-ai --replay-session <session-id> \
-  --session-provider codex \
-  --replay-enable-lint-ai
+## Benchmark highlights
+
+Lint-AI is evaluated on **LongMemEval-S**, a public benchmark for long-context agent-memory retrieval over multi-session conversation corpora.
+
+The release backend uses no embedding vectors in this benchmark.
+
+### Heuristic release backend
+
+**500 scoped questions · single CPU core · no GPU**
+
+| Metric | Result |
+|---|---:|
+| recall@5 | **83.5%** |
+| recall@10 | **89.5%** |
+| recall_any@10 | **95.6%** |
+| MRR | **84.0%** |
+| NDCG@10 | **81.8%** |
+| Average query latency | **1.9 ms** |
+
+`recall@k` is fractional recall over all gold sessions. `recall_any@k` counts a query as successful when any gold session appears in the top *k*.
+
+Results: `benchmark/data/lintai_longmemeval_scoped_results.json`
+
+<details>
+<summary><strong>Experimental rust-bert POS/NER branch results</strong></summary>
+
+<br>
+
+| Metric | Result |
+|---|---:|
+| recall@5 | **86.9%** |
+| recall@10 | **93.8%** |
+| recall_any@10 | **98.2%** |
+| MRR | **87.1%** |
+| NDCG@10 | **86.0%** |
+| Average query latency | **5.1 ms** |
+
+Results: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
+
+The model-backed POS/NER path is experimental and is kept separate from the audited release dependency graph.
+
+</details>
+
+### Integration smoke measurements
+
+The repository also includes reproducible Claude Code and Codex replay/performance tests. These are diagnostic one-run measurements, **not universal performance guarantees**.
+
+| Provider / arm | Continuation | Input tokens | Tool calls | Recall | Hook time |
+|---|---:|---:|---:|---:|---:|
+| Claude native memory | 22.47 s | 123,536 | 4 | 2/3 | 0 ms |
+| Claude Lint-AI only | 7.05 s | 15,914 | 0 | 3/3 | 1.40 s |
+| Codex native memory | 38.13 s | 151,000 | 5 | 2/3 | 0 ms |
+| Codex Lint-AI only | 18.53 s | 62,478 | 2 | 2/3 | 1.33 s |
+
+Read the full conditions and limitations:
+
+- [Claude Code performance tests](docs/claude-code-performance-tests.md)
+- [Codex performance tests](docs/codex-performance-tests.md)
+- [Comparison methodology](docs/comparison.md)
+- [Session metrics](metrics/README.md)
+
+---
+
+## What Lint-AI can do
+
+- Recover the right past session or note when an agent needs context
+- Rank current evidence ahead of superseded guidance
+- Preserve historical answers when a question depends on the past
+- Catch contradictions before they spread
+- Detect terminology drift across documents
+- Find orphaned or weakly linked pages
+- Query facts, entities, symbols, ownership, and time
+- Build review packets from changed files and related semantic context
+- Feed grounded context into an LLM instead of raw text blobs
+- Keep agent memory inspectable and local to the project
+
+---
+
+## How it works
+
+Lint-AI treats project memory as more than a bag of text.
+
+```text
+Sessions · docs · code · traces
+            │
+            ▼
+        1. Ingest
+            │
+            ▼
+ Facts · entities · symbols · time
+            │
+            ▼
+      2. Understand
+            │
+            ▼
+ Links · ownership · co-occurrence
+            │
+            ▼
+       3. Connect
+            │
+            ▼
+ Ranked · sourced · current context
+            │
+            ▼
+       4. Retrieve
 ```
 
-Each replay receives a new `replay-*` session ID and a separate archive. The
-comparison workflow measures task quality, token usage, latency, tool
-activity, memory retrieval, and recording completeness.
+Under the hood, Lint-AI builds a lexical index plus sparse entity/term tables and overlays graph structure for links, symbols, ownership, and co-occurrence. Queries are analyzed for intent, entities, and temporal hints, then scored with lexical, claim, topic, timestamp, and graph signals.
 
-### Integration benchmark
+The same corpus model powers review-oriented checks such as missing cross-references, orphan pages, low-confidence claims, stale knowledge, and semantic drift.
 
-These are the latest validated smoke-run measurements for the segmented-routing
-scenario: one repetition, continuation phase only. They are diagnostic results
-for the stated run, not universal performance guarantees.
+For implementation details, see:
 
-| Provider / arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Claude native memory | 22.47 s | 123,536 | 123,526 | 1,239 | 4 | 2/3 | 0 ms |
-| Claude Lint-AI only | 7.05 s | 15,914 | 15,912 | 376 | 0 | 3/3 | 1.40 s |
-| Claude both layers | 7.17 s | 15,914 | 15,912 | 271 | 0 | 3/3 | 1.36 s |
-| Codex native memory | 38.13 s | 151,000 | 99,840 | 1,505 | 5 | 2/3 | 0 ms |
-| Codex Lint-AI only | 18.53 s | 62,478 | 43,264 | 604 | 2 | 2/3 | 1.33 s |
-| Codex both layers | 13.98 s | 31,684 | 25,088 | 454 | 1 | 2/3 | 1.39 s |
+- [Chunk strategy](docs/chunk-strategy.md)
+- [Lexical data](docs/lexical-data.md)
+- [Artifact indexing](docs/artifact-indexing.md)
+- [Shared integration architecture](src/integrations/README.md)
 
-The corresponding reports and run conditions are documented in the [Claude
-Code performance tests](docs/claude-code-performance-tests.md) and [Codex
-performance tests](docs/codex-performance-tests.md). Both documents describe
-the one-run limitation and the provider/model/repository versions used.
+---
 
-MCP-path smoke validation measured 47.09 s for Claude MCP-only and 9.38 s for
-Codex with Lint-AI MCP. The Codex run recorded 13,246 input tokens, 77 output
-tokens, 2/3 recall, and 1.35 s hook time; the Claude run recorded 189,022
-input tokens, 3,678 output tokens, and one Lint-AI MCP call. A separate direct
-Claude MCP search check returned results in approximately 220 ms; it did not
-measure agent search-selection behavior.
-
-More detail: [Claude Code integration](docs/claude-code.md), [Codex
-integration](docs/codex.md), [shared integration architecture](src/integrations/README.md),
-and the [integration test strategy](docs/integration-test-strategy.md).
-and [session metrics](metrics/README.md).
-
-## How It Works
-
-Lint-AI ingests sessions, notes, traces, documents, and code-oriented artifacts, builds a lexical index plus sparse entity/term tables, and overlays graph structure for links, symbols, ownership, and co-occurrence. Queries are analyzed for intent, entities, and temporal hints, then scored with a blend of lexical, semantic, claim, topic, timestamp, and graph signals. The same corpus analysis also powers misalignment checks such as missing cross-refs, orphan pages, low-confidence claims, and review-oriented packet generation.
-
-If you want the deeper implementation view, see:
-- `docs/chunk-strategy.md`
-- `docs/lexical-data.md`
-- `docs/artifact-indexing.md`
-
-## How To Use
-
-Query semantics currently use the heuristic backend in the release build.
-The model-backed POS/NER path was used in the experimental rust-bert branch and is kept separate from the audited release graph.
+## Use Lint-AI from your stack
 
 ### CLI
 
-Lint a corpus:
-
 ```bash
-./lint-ai /path/to/repo
+lint-ai --query "what is the current retry policy?" /path/to/repo
 ```
 
-If you prefer `cargo run`:
+### Docker / HTTP
 
 ```bash
-cargo run --bin lint-ai -- /path/to/repo
+export SERVER_TOKEN=local-dev-token
+docker compose up --build -d
+curl http://127.0.0.1:8080/health
 ```
 
-Query the corpus:
+See the [HTTP server guide](docs/server.md).
 
-```bash
-./lint-ai --query "docker install linux" /path/to/repo/docs
+### Python
+
+Build the optional Python extension with `maturin`, then use the same in-memory index from Python:
+
+```python
+import lint_ai
+
+store = lint_ai.IndexStore()
+store.upsert("doc-1", "Docker install guide for Ubuntu hosts")
+print(store.query("docker ubuntu", 5))
 ```
 
-Get LLM-ready retrieval context:
-
-```bash
-./lint-ai --llm-context "docker install linux" /path/to/repo/docs
-```
-
-Inspect the derived inventory:
-
-```bash
-./lint-ai /path/to/repo/docs --show-concepts
-./lint-ai /path/to/repo/docs --show-headings
-```
-
-Show the main query-oriented modes:
-
-```bash
-./lint-ai --index /path/to/repo/docs
-./lint-ai --show-tier0 /path/to/repo
-./lint-ai --show-tier1-entities /path/to/repo
-./lint-ai --show-tier1-terms /path/to/repo --tier1-term-ranker yake
-```
-
-Use spaCy for Tier 1 entities if available:
-
-```bash
-./lint-ai /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
-```
-
-For optional Claude Code support, build with `--features claude-code` and see
-[docs/claude-code.md](docs/claude-code.md) for the MCP, hooks, and install flow.
-
-Common graph exports, chunking knobs, lexical subset regeneration, and artifact indexing details are documented in `docs/`.
-
-### Rust Library
-
-Use `IndexStore` when you want mutable ingestion, `MemoryIndex` when you want an immutable query snapshot, and `SourceDocument` to add content. For the broader semantic graph, use `CorpusGraph`, `SymbolStore`, `UsageGraph`, and the review model types that are re-exported from the crate root.
+### Rust
 
 ```rust
 use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
@@ -314,139 +295,34 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-For corpus-local persistence under `.lint-ai/`, use:
+See [docs/quickstart.md](docs/quickstart.md) for complete examples.
 
-```rust
-use std::path::Path;
-use lint_ai::{IndexStore, PipelineOptions};
+---
 
-let index = IndexStore::for_corpus(Path::new("/path/to/corpus"), PipelineOptions::default())?;
-```
+## When is Lint-AI a good fit?
 
-If you already have prepared `DocRecord` values and want the built search structure directly, use `lint_ai::index::MemoryIndex`.
+Lint-AI is especially useful when you maintain:
 
-For symbol and review workflows, the crate root also re-exports:
+- Long-running agent memory over conversations, notes, and decisions
+- Markdown knowledge bases with many cross-links
+- Internal documentation where terminology and decisions drift over time
+- Codebases where symbols, ownership, usage, and review context matter
+- Fast-changing corpora where freshness matters as much as relevance
 
-- `CorpusGraph` for querying documents, symbols, and usage together
-- `SymbolRecord` / `SymbolStore` for symbol indexing
-- `OwnershipRecord` / `OwnershipSummary` for ownership facts and summaries
-- `UsageGraph` / `UsageEdge` / `UsageNode` for symbol and ownership relationship tracing
-- `ReviewPacket` / `ReviewFinding` / `ReviewDiff` for structured review output
+If your only requirement is simple keyword search over a static set of documents, Lint-AI is probably more machinery than you need.
 
-## Advanced
+---
 
-By default the linter skips files larger than 5MB and stops after 50k files. Override these limits:
+## Project status
 
-```bash
-./lint-ai /path/to/repo --max-bytes 10000000 --max-files 100000
-```
+Lint-AI is under active development. The release query path uses the heuristic backend; experimental model-backed query semantics remain separate from the audited release dependency graph.
 
-Limit directory traversal depth:
+Issues, benchmark reproductions, integration feedback, and contributions are welcome.
 
-```bash
-./lint-ai /path/to/repo --max-depth 10
-```
+- [Open an issue](https://github.com/RooAGI/Lint-AI/issues)
+- [Join a discussion](https://github.com/RooAGI/Lint-AI/discussions)
+- [Read the documentation](https://rooagi.github.io/Lint-AI/)
 
-Limit total bytes read across the corpus:
+## License
 
-```bash
-./lint-ai /path/to/repo --max-total-bytes 100000000
-```
-
-The tool automatically scopes to `/path/to/repo/docs/**` when that folder exists.
-
-## Configuration
-
-Analyze a corpus and emit a suggested `lint-ai.json` config:
-
-```bash
-./lint-ai /path/to/repo/docs --analyze
-```
-
-Example output:
-
-```
-Suggested config:
-{
-  "stopwords": ["group messages", "pairing", "channel routing"],
-  "ignore_sections": ["unscoped", "related"],
-  "ignore_crossref_sections": ["unscoped", "related"],
-  "ignore_paths": [],
-  "allowlist_concepts": []
-}
-
-Stats:
-pages: 31
-top concepts:
-- group messages (25)
-- pairing (25)
-- channel routing (22)
-- slack (11)
-- telegram (11)
-top sections:
-- configuration (41)
-- setup (35)
-- unscoped (31)
-- security (28)
-- related (22)
-```
-
-You can place a `lint-ai.json` file in the target root, or pass `--config /path/to/lint-ai.json`, to control filters.
-
-Use `--strict-config` to fail fast if the config is invalid.
-
-Limit config size:
-
-```bash
-./lint-ai /path/to/repo --max-config-bytes 2000000
-```
-
-Example used for Openclaw channels:
-
-```json
-{
-  "stopwords": ["channel", "message", "messages", "bot", "client", "config"],
-  "ignore_sections": ["related", "unscoped"],
-  "ignore_crossref_sections": ["related", "unscoped"],
-  "ignore_paths": [],
-  "allowlist_concepts": ["discord", "slack", "telegram", "whatsapp", "signal", "matrix"],
-  "scope_prefix": "docs/channels/"
-}
-```
-
-Run it with `./lint-ai /path/to/openclaw/docs/channels --config /path/to/openclaw/lint-ai.json`.
-
-## Contributing
-
-If you want to contribute, the most useful workflow is:
-
-```bash
-cargo build
-cargo test
-cargo fmt --all
-```
-
-Please keep changes focused and include tests when behavior changes.
-
-Useful contribution rules:
-
-- run `cargo test` before opening a PR
-- run `cargo fmt --all` for Rust code changes
-- update docs when CLI flags, benchmarks, or query behavior change
-- include benchmark notes when ranking or retrieval logic changes
-- prefer small PRs with a clear scope
-
-If the change affects query quality, mention the benchmark result it moves.
-
-## Output Examples
-
-Running the linter emits findings tagged with severity and link-debt signals:
-
-```text
-Missing cross-ref in docs/channels/discord.md -> [[signal]] (high)
-Low link density in docs/channels/location.md (outgoing 1, avg 4.2)
-Unreachable page: docs/channels/legacy.md
-Orphan page: docs/channels/unused.md
-```
-
-Use `--show-concepts` when you need the derived concept inventory for tuning stopwords or allowlists in `lint-ai.json`.
+Apache-2.0

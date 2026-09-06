@@ -138,9 +138,6 @@ pub fn parse_temporal_date(input: Option<&str>) -> Option<NaiveDate> {
 pub fn resolve_temporal_target(query: &str, anchor_date: Option<&str>) -> Option<TemporalTarget> {
     let base_date = parse_date(anchor_date)
         .unwrap_or_else(|| DateTime::<Utc>::from(SystemTime::now()).date_naive());
-    if let Some(target) = resolve_temporal_target_with_temps(query, base_date) {
-        return Some(target);
-    }
     let lower = query.to_lowercase();
 
     if lower.contains("today") {
@@ -286,7 +283,7 @@ pub fn resolve_temporal_target(query: &str, anchor_date: Option<&str>) -> Option
         });
     }
 
-    None
+    resolve_temporal_target_with_temps(query, base_date)
 }
 
 fn resolve_temporal_target_with_temps(query: &str, base_date: NaiveDate) -> Option<TemporalTarget> {
@@ -510,7 +507,7 @@ fn ago_patterns(lower: &str) -> Vec<(u32, String, String)> {
     static AGO_RE: OnceLock<Regex> = OnceLock::new();
     let re = AGO_RE.get_or_init(|| {
         Regex::new(
-            r"\b(one|two|three|four|five|six|seven|eight|nine|ten|1|2|3|4|5|6|7|8|9|10)\s+(day|week|month|year)s?\s+ago\b",
+            r"\b(a couple of|couple of|a|an|one|two|three|four|five|six|seven|eight|nine|ten|1|2|3|4|5|6|7|8|9|10)\s+(day|week|month|year)s?\s+ago\b",
         )
             .expect("valid ago regex")
     });
@@ -584,6 +581,12 @@ fn parse_date(input: Option<&str>) -> Option<NaiveDate> {
         })
         .or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok())
         .or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f").ok())
+        .or_else(|| {
+            s.parse::<i64>()
+                .ok()
+                .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+                .map(|date| date.date_naive())
+        })
 }
 
 fn query_word_tokens(query: &str) -> Vec<String> {
@@ -719,7 +722,8 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
 
 fn word_to_num(input: &str) -> u32 {
     match input {
-        "one" | "1" => 1,
+        "a" | "an" | "one" | "1" => 1,
+        "a couple of" | "couple of" => 2,
         "two" | "2" => 2,
         "three" | "3" => 3,
         "four" | "4" => 4,
@@ -792,6 +796,34 @@ mod tests {
     }
 
     #[test]
+    fn resolves_last_weekday_against_explicit_anchor() {
+        let target = resolve_temporal_target("Who did I meet last Tuesday?", Some("2024-05-10"))
+            .expect("expected temporal target");
+        assert_eq!(
+            target.target_date,
+            NaiveDate::from_ymd_opt(2024, 5, 7).unwrap()
+        );
+    }
+
+    #[test]
+    fn resolves_article_and_couple_ago_phrases() {
+        let one_week = resolve_temporal_target("What happened a week ago?", Some("2024-05-10"))
+            .expect("expected one-week target");
+        assert_eq!(
+            one_week.target_date,
+            NaiveDate::from_ymd_opt(2024, 5, 3).unwrap()
+        );
+
+        let couple_days =
+            resolve_temporal_target("What did I cook a couple of days ago?", Some("2024-05-10"))
+                .expect("expected two-day target");
+        assert_eq!(
+            couple_days.target_date,
+            NaiveDate::from_ymd_opt(2024, 5, 8).unwrap()
+        );
+    }
+
+    #[test]
     fn reveals_bug_rfc3339_timestamp_with_timezone_is_not_parsed() {
         assert_eq!(
             parse_temporal_date(Some("2024-05-10T14:30:00+00:00")),
@@ -812,5 +844,16 @@ mod tests {
         )
         .expect("timestamp should receive a recency boost");
         assert!((boost - 0.125).abs() < 0.001, "boost={boost}");
+    }
+}
+
+#[cfg(test)]
+mod unix_timestamp_tests {
+    use super::parse_temporal_date;
+
+    #[test]
+    fn parses_unix_epoch_seconds_for_timeline_dates() {
+        let date = parse_temporal_date(Some("1788710927")).expect("epoch timestamp should parse");
+        assert_eq!(date.to_string(), "2026-09-06");
     }
 }

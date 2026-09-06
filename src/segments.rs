@@ -254,6 +254,7 @@ impl SegmentedMemoryIndex {
             segment_limit,
             strategy,
             TemporalQueryContext::default(),
+            None,
             self.global_index.as_ref(),
             &self.corpus_stats,
         )
@@ -267,6 +268,25 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> SegmentQueryOutput {
+        self.query_with_temporal_context_at_and_diagnostics_and_strategy(
+            query,
+            top_k,
+            segment_limit,
+            strategy,
+            temporal,
+            None,
+        )
+    }
+
+    pub fn query_with_temporal_context_at_and_diagnostics_and_strategy(
+        &self,
+        query: &str,
+        top_k: usize,
+        segment_limit: usize,
+        strategy: SegmentRoutingStrategy,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+    ) -> SegmentQueryOutput {
         query_top_segments_with_corpus_stats_and_strategy(
             query,
             top_k,
@@ -274,6 +294,7 @@ impl SegmentedMemoryIndex {
             segment_limit,
             strategy,
             temporal,
+            reference_date,
             self.global_index.as_ref(),
             &self.corpus_stats,
         )
@@ -481,6 +502,7 @@ impl SegmentedMemoryIndex {
             self.segments.len(),
             SegmentRoutingStrategy::SparseOverlap,
             temporal,
+            None,
             self.global_index.as_ref(),
             &self.corpus_stats,
         )
@@ -886,6 +908,7 @@ pub fn query_top_segments_with_diagnostics(
         SegmentRoutingStrategy::SparseOverlap,
         TemporalQueryContext::default(),
         None,
+        None,
         &corpus_stats,
     )
 }
@@ -906,6 +929,7 @@ pub fn query_top_segments_with_diagnostics_and_strategy(
         strategy,
         TemporalQueryContext::default(),
         None,
+        None,
         &corpus_stats,
     )
 }
@@ -918,6 +942,7 @@ fn query_top_segments_with_corpus_stats_and_strategy(
     segment_limit: usize,
     strategy: SegmentRoutingStrategy,
     temporal: TemporalQueryContext<'_>,
+    reference_date: Option<&str>,
     global_index: Option<&MemoryIndex>,
     corpus_stats: &SegmentCorpusStats,
 ) -> SegmentQueryOutput {
@@ -1005,7 +1030,7 @@ fn query_top_segments_with_corpus_stats_and_strategy(
                 ..temporal
             };
             merged = global_index
-                .query_with_temporal_context(query, top_k, scoped_temporal)
+                .query_with_temporal_context_at(query, top_k, scoped_temporal, reference_date)
                 .0;
         } else if let Some(global_index) = build_global_index_from_segments(segments) {
             let allowed_doc_ids =
@@ -1015,7 +1040,7 @@ fn query_top_segments_with_corpus_stats_and_strategy(
                 ..temporal
             };
             merged = global_index
-                .query_with_temporal_context(query, top_k, scoped_temporal)
+                .query_with_temporal_context_at(query, top_k, scoped_temporal, reference_date)
                 .0;
         }
     }

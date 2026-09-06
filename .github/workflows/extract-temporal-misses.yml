@@ -1,0 +1,45 @@
+name: Extract temporal LongMemEval misses
+
+on:
+  push:
+    branches:
+      - fix-timeline-canonical-supersession
+    paths:
+      - .github/workflows/extract-temporal-misses.yml
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download cleaned LongMemEval-S
+        run: python3 benchmark/download_longmemeval_raw.py --out /tmp/longmemeval_s_cleaned.json
+      - name: Extract miss records
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          ids = {
+            'gpt4_7f6b06db','gpt4_e061b84f','2ebe6c92','gpt4_e061b84g','71017277',
+            'gpt4_1e4a8aec','gpt4_f420262d','gpt4_59149c78','gpt4_4929293b','gpt4_468eb064',
+            'gpt4_fa19884d','9a707b82','eac54add','6e984302','gpt4_b5700ca0','gpt4_68e94288',
+            'gpt4_70e84552_abs','gpt4_93159ced_abs'
+          }
+          data=json.loads(Path('/tmp/longmemeval_s_cleaned.json').read_text())
+          out=[]
+          for e in data:
+              if e.get('question_id') not in ids:
+                  continue
+              out.append(e)
+          assert len(out)==len(ids), (len(out), len(ids))
+          Path('/tmp/temporal-miss-records.json').write_text(json.dumps(out, indent=2))
+          print('records=', len(out))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: temporal-miss-records
+          retention-days: 1
+          path: /tmp/temporal-miss-records.json

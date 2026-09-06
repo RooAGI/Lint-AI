@@ -1,0 +1,84 @@
+name: Real Lint-AI demo capture
+
+on:
+  push:
+    branches:
+      - demo-video-build
+  workflow_dispatch:
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Lint-AI
+        run: cargo build --release --bin lint-ai
+
+      - name: Create reproducible demo corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p demo-output/demo-corpus
+
+          cat > demo-output/demo-corpus/old-retry-policy.md <<'EOF'
+          # Retry Policy
+
+          Initial recommendation for intermittent gateway timeouts:
+          increase HTTP retries to **5 attempts** to improve recovery.
+          This was the service retry policy at the time.
+          EOF
+
+          cat > demo-output/demo-corpus/current-retry-policy.md <<'EOF'
+          ---
+          supersedes: old-retry-policy.md
+          ---
+          # Retry Policy — Current Decision
+
+          Incident review found that retries amplify load during gateway failures.
+          The **current retry policy is a maximum of 2 attempts**.
+          This decision supersedes the previous five-retry recommendation.
+          EOF
+
+          touch -d '2026-08-15 12:00:00 UTC' demo-output/demo-corpus/old-retry-policy.md
+          touch -d '2026-09-06 12:00:00 UTC' demo-output/demo-corpus/current-retry-policy.md
+
+      - name: Run the actual Lint-AI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUERY='What is the current retry policy for gateway timeouts?'
+
+          ./target/release/lint-ai --query "$QUERY" demo-output/demo-corpus > demo-output/raw-query.json
+          ./target/release/lint-ai --llm-context "$QUERY" demo-output/demo-corpus > demo-output/llm-context.txt
+
+          {
+            echo '$ lint-ai --query "What is the current retry policy for gateway timeouts?" demo-corpus'
+            echo
+            cat demo-output/raw-query.json
+          } > demo-output/terminal-session.txt
+
+          {
+            echo "github_sha=${GITHUB_SHA}"
+            echo "branch=${GITHUB_REF_NAME}"
+            ./target/release/lint-ai --version || true
+            sha256sum target/release/lint-ai
+          } > demo-output/build-info.txt
+
+          jq '{query, elapsed_ms, result_count, results: [.results[] | {doc_id, source, score, score_breakdown}]}' \
+            demo-output/raw-query.json > demo-output/query-summary.json
+
+          TOP_DOC="$(jq -r '.results[0].doc_id // empty' demo-output/raw-query.json)"
+          echo "top_doc=${TOP_DOC}" | tee demo-output/assertion.txt
+          test "$TOP_DOC" = 'current-retry-policy.md'
+
+      - name: Upload captured demo data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-ai-real-demo-capture
+          path: demo-output/
+          if-no-files-found: error

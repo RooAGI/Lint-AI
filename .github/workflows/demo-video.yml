@@ -1,0 +1,73 @@
+name: Build terminal demo
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - demo-video-current-state
+    paths:
+      - '.github/workflows/demo-video.yml'
+      - 'examples/demo-current-state/**'
+      - 'scripts/render_demo_video.py'
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Lint-AI
+        run: cargo build --release --bin lint-ai
+      - name: Install renderer dependencies
+        run: |
+          python3 -m pip install --quiet pillow
+          command -v ffmpeg >/dev/null || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+      - name: Run real current-state demo
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p demo-artifacts
+          QUERY='How many retry attempts should we use for gateway timeouts?'
+          ./target/release/lint-ai --query "$QUERY" examples/demo-current-state > demo-artifacts/raw-query.json
+          ./target/release/lint-ai --llm-context "$QUERY" --result-count 5 examples/demo-current-state > demo-artifacts/llm-context.json
+
+          python3 - <<'PY'
+          import json
+          q=json.load(open('demo-artifacts/raw-query.json'))
+          c=json.load(open('demo-artifacts/llm-context.json'))
+          results=q['results']
+          assert [r['doc_id'] for r in results] == ['decision-b.md'], q
+          assert results[0].get('semantic_status') == 'current', q
+          assert q.get('aggregation') is None, q
+          chunks=c['top_chunks']
+          assert all(x['doc_id'] != 'decision-a.md' for x in chunks), c
+          assert any(x['doc_id']=='decision-b.md' and 'retry attempts: 2' in x.get('text','') for x in chunks), c
+          PY
+
+          {
+            echo '$ cat examples/demo-current-state/decision-a.md'
+            cat examples/demo-current-state/decision-a.md
+            echo
+            echo '$ cat examples/demo-current-state/decision-b.md'
+            cat examples/demo-current-state/decision-b.md
+            echo
+            echo '$ lint-ai --query "How many retry attempts should we use for gateway timeouts?" examples/demo-current-state'
+            jq '{result: (.results[0] | {doc_id, semantic_status, relation_confidence}), aggregation}' demo-artifacts/raw-query.json
+            echo
+            echo '$ lint-ai --llm-context "How many retry attempts should we use for gateway timeouts?" examples/demo-current-state'
+            jq '{current_context: ([.top_chunks[] | select(.doc_id == "decision-b.md")][0] | {doc_id, text})}' demo-artifacts/llm-context.json
+          } > demo-artifacts/transcript.txt
+
+      - name: Render GIF and MP4
+        run: |
+          python3 scripts/render_demo_video.py demo-artifacts/transcript.txt \
+            --gif demo-artifacts/lint-ai-current-state-demo.gif \
+            --mp4 demo-artifacts/lint-ai-current-state-demo.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lint-ai-current-state-demo
+          path: demo-artifacts/
+          if-no-files-found: error

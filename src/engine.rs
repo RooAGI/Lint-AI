@@ -69,41 +69,7 @@ use unicode_normalization::UnicodeNormalization;
 use walkdir::WalkDir;
 
 fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
-    let tier0_by_source: HashMap<String, &Tier0Record> = graph
-        .tier0_records
-        .iter()
-        .map(|r| (r.source.clone(), r))
-        .collect();
-    let concept_to_rel: HashMap<String, String> = graph
-        .pages
-        .iter()
-        .map(|p| (p.concept.clone(), p.rel_path.clone()))
-        .collect();
-
-    graph
-        .pages
-        .iter()
-        .map(|p| {
-            let t0 = tier0_by_source.get(&p.rel_path).copied();
-            SourceDocument {
-                doc_id: p.rel_path.clone(),
-                source: p.rel_path.clone(),
-                content: p.content.clone(),
-                concept: p.raw_concept.clone(),
-                group_id: None,
-                filters: std::collections::BTreeMap::new(),
-                headings: p.headings.clone(),
-                links: p
-                    .links
-                    .iter()
-                    .filter_map(|c| concept_to_rel.get(c).cloned())
-                    .collect(),
-                timestamp: t0.and_then(|r| r.timestamp.clone()),
-                doc_length: t0.map(|r| r.doc_length).unwrap_or(p.content.len()),
-                author_agent: t0.and_then(|r| r.author_agent.clone()),
-            }
-        })
-        .collect()
+    crate::adapters::graph_to_source_documents(graph)
 }
 
 fn surface_forms(raw: &str) -> Vec<String> {
@@ -2425,28 +2391,35 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             args.max_total_bytes,
         );
         let lexical_dir = query_cache_lexical_dir(&cache_settings);
+        let mut graph = Graph::build(
+            &args.path,
+            args.max_bytes,
+            args.max_files,
+            args.max_depth,
+            args.max_total_bytes,
+        )?;
+        if !cfg.ignore_paths.is_empty() {
+            let ignore = normalize_list(&cfg.ignore_paths);
+            graph.pages.retain(|p| {
+                let rel = p.rel_path.to_lowercase();
+                !ignore.iter().any(|pat| rel.contains(pat))
+            });
+            let retained: HashSet<String> =
+                graph.pages.iter().map(|p| p.rel_path.clone()).collect();
+            graph.tier0_records.retain(|r| retained.contains(&r.source));
+        }
+        let source_docs = graph_to_source_documents(&graph);
+        let semantic_relations =
+            crate::semantic_relations::SemanticRelationStore::try_from_documents(
+                source_docs.iter(),
+                crate::semantic_relations::SupersessionOptions::default(),
+            )?;
+
         let index = if let Some(cached) =
             load_cached_query_index(&cache_settings, &corpus_fingerprint)
         {
             cached
         } else {
-            let mut graph = Graph::build(
-                &args.path,
-                args.max_bytes,
-                args.max_files,
-                args.max_depth,
-                args.max_total_bytes,
-            )?;
-            if !cfg.ignore_paths.is_empty() {
-                let ignore = normalize_list(&cfg.ignore_paths);
-                graph.pages.retain(|p| {
-                    let rel = p.rel_path.to_lowercase();
-                    !ignore.iter().any(|pat| rel.contains(pat))
-                });
-                let retained: HashSet<String> =
-                    graph.pages.iter().map(|p| p.rel_path.clone()).collect();
-                graph.tier0_records.retain(|r| retained.contains(&r.source));
-            }
             let built = build_memory_index(
                 &graph,
                 &args.tier1_ner_provider,
@@ -2471,7 +2444,27 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             let prepared = PreparedQuery::new(query);
             let analysis = prepared.analysis().clone();
             let search_query = prepared.search_query().to_string();
-            let temporal_context = prepared.temporal_context();
+            let mut temporal_context = prepared.temporal_context();
+            let historical_query = crate::semantic_relations::is_historical_query(query);
+            let has_superseded = source_docs.iter().any(|doc| {
+                semantic_relations.document_state(&doc.doc_id).status
+                    == Some(crate::semantic_relations::SemanticStatus::Superseded)
+            });
+            let allowed_doc_ids = if historical_query || !has_superseded {
+                None
+            } else {
+                Some(
+                    source_docs
+                        .iter()
+                        .filter(|doc| {
+                            semantic_relations.document_state(&doc.doc_id).status
+                                != Some(crate::semantic_relations::SemanticStatus::Superseded)
+                        })
+                        .map(|doc| doc.doc_id.clone())
+                        .collect::<HashSet<_>>(),
+                )
+            };
+            temporal_context.allowed_doc_ids = allowed_doc_ids.as_ref();
             if args.llm_context.is_some() {
                 let requested = args.result_count.clamp(1, MAX_RESULT_COUNT);
                 let candidate_top_k = requested.max(LLM_CONTEXT_CANDIDATE_TOP_K);
@@ -2503,13 +2496,27 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 }
             } else {
-                let results = index
+                let mut results = index
                     .query_with_temporal_context(
                         &search_query,
                         DEFAULT_QUERY_TOP_K,
                         temporal_context,
                     )
                     .0;
+                for result in &mut results {
+                    let state = semantic_relations.document_state(&result.doc_id);
+                    result.semantic_status = if historical_query
+                        && state.status
+                            == Some(crate::semantic_relations::SemanticStatus::Superseded)
+                    {
+                        Some(crate::semantic_relations::SemanticStatus::Historical)
+                    } else {
+                        state.status
+                    };
+                    result.superseded_by = state.superseded_by;
+                    result.relation_confidence = state.relation_confidence;
+                    result.relation_evidence = state.evidence;
+                }
                 let elapsed_ms = started.elapsed().as_millis();
                 let aggregation =
                     build_aggregate_output(&index, query, &results, DEFAULT_QUERY_TOP_K);

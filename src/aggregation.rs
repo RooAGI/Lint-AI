@@ -34,6 +34,21 @@ pub struct AggregateOutput {
 
 pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
     let q = query.to_lowercase();
+    let asks_for_recommended_quantity = q.contains("how many")
+        && [
+            " should ",
+            " should we",
+            " should i",
+            " allowed ",
+            " maximum ",
+            " minimum ",
+            " limit ",
+        ]
+        .iter()
+        .any(|cue| q.contains(cue));
+    if asks_for_recommended_quantity {
+        return None;
+    }
     if q.contains("how many")
         || q.starts_with("count ")
         || q.contains(" number of ")

@@ -2,13 +2,6 @@ name: Build terminal demo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - demo-video-current-state
-    paths:
-      - '.github/workflows/demo-video.yml'
-      - 'examples/demo-current-state/**'
-      - 'scripts/render_demo_video.py'
 
 permissions:
   contents: read
@@ -55,7 +48,7 @@ jobs:
             cat examples/demo-current-state/decision-b.md
             echo
             echo '$ lint-ai --query "How many retry attempts should we use for gateway timeouts?" examples/demo-current-state'
-            jq '{result: (.results[0] | {doc_id, semantic_status, relation_confidence}), aggregation}' demo-artifacts/raw-query.json
+            jq '{result: (.results[0] | {doc_id, semantic_status}), aggregation}' demo-artifacts/raw-query.json
             echo
             echo '$ lint-ai --llm-context "How many retry attempts should we use for gateway timeouts?" examples/demo-current-state'
             jq '{current_context: ([.top_chunks[] | select(.doc_id == "decision-b.md")][0] | {doc_id, text})}' demo-artifacts/llm-context.json

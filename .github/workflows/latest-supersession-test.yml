@@ -1,0 +1,103 @@
+name: Latest supersession verification
+
+on:
+  push:
+    branches: [latest-supersession-test]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build latest main code
+        run: cargo build --release --bin lint-ai
+
+      - name: Create lexically balanced corpus
+        shell: bash
+        run: |
+          rm -rf /tmp/lint-supersession-test
+          mkdir -p /tmp/lint-supersession-test
+          cat > /tmp/lint-supersession-test/decision-a.md <<'EOF'
+          # Gateway Retry Policy
+
+          Gateway timeout retry attempts: 5.
+          EOF
+          cat > /tmp/lint-supersession-test/decision-b.md <<'EOF'
+          ---
+          supersedes: decision-a.md
+          ---
+          # Gateway Retry Policy
+
+          Gateway timeout retry attempts: 2.
+          EOF
+          # Make filesystem recency identical so modification time cannot decide the result.
+          touch -t 202609010000 /tmp/lint-supersession-test/decision-a.md
+          touch -t 202609010000 /tmp/lint-supersession-test/decision-b.md
+          printf '%s\n' '=== decision-a.md ===' > corpus.txt
+          cat /tmp/lint-supersession-test/decision-a.md >> corpus.txt
+          printf '%s\n' '=== decision-b.md ===' >> corpus.txt
+          cat /tmp/lint-supersession-test/decision-b.md >> corpus.txt
+
+      - name: Run actual CLI
+        shell: bash
+        run: |
+          ./target/release/lint-ai --query "How many retry attempts should we use for gateway timeouts?" /tmp/lint-supersession-test > raw-query.json
+          ./target/release/lint-ai --llm-context "How many retry attempts should we use for gateway timeouts?" /tmp/lint-supersession-test > llm-context.txt
+
+      - name: Evaluate result
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path('raw-query.json').read_text())
+          results = data.get('results', [])
+          ids = [r.get('doc_id') for r in results]
+          top = ids[0] if ids else None
+          old_present = 'decision-a.md' in ids
+          new_present = 'decision-b.md' in ids
+          context = Path('llm-context.txt').read_text()
+          context_has_old_value = 'retry attempts: 5' in context.lower()
+          context_has_new_value = 'retry attempts: 2' in context.lower()
+
+          lines = [
+              f'top_result={top}',
+              f'result_ids={ids}',
+              f'old_document_present={old_present}',
+              f'new_document_present={new_present}',
+              f'llm_context_has_5_attempts={context_has_old_value}',
+              f'llm_context_has_2_attempts={context_has_new_value}',
+          ]
+          for r in results:
+              if r.get('doc_id') in {'decision-a.md','decision-b.md'}:
+                  lines.append(json.dumps({
+                      'doc_id': r.get('doc_id'),
+                      'score': r.get('score'),
+                      'semantic_status': r.get('semantic_status'),
+                      'superseded_by': r.get('superseded_by'),
+                      'relation_confidence': r.get('relation_confidence'),
+                      'score_breakdown': r.get('score_breakdown'),
+                  }, sort_keys=True))
+
+          # Explicit supersession should remove the old single-claim document from a normal current-state query.
+          passed = (top == 'decision-b.md' and new_present and not old_present and context_has_new_value and not context_has_old_value)
+          lines.append(f'VERDICT={"PASS" if passed else "FAIL"}')
+          Path('verdict.txt').write_text('\n'.join(lines) + '\n')
+          print('\n'.join(lines))
+          PY
+
+      - name: Upload exact evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-supersession-test-evidence
+          path: |
+            corpus.txt
+            raw-query.json
+            llm-context.txt
+            verdict.txt
+          retention-days: 1

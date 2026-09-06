@@ -1,0 +1,80 @@
+name: Benchmark CLI supersession fix
+
+on:
+  push:
+    branches:
+      - fix-cli-supersession-query
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare main worktree
+        run: git worktree add /tmp/lint-main origin/main
+      - name: Build both release binaries
+        shell: bash
+        run: |
+          cargo build --release --bin lint-ai
+          (cd /tmp/lint-main && cargo build --release --bin lint-ai)
+          cp target/release/lint-ai /tmp/lint-fix
+          cp /tmp/lint-main/target/release/lint-ai /tmp/lint-main-bin
+      - name: Generate synthetic corpus
+        shell: bash
+        run: |
+          rm -rf /tmp/lint-bench-corpus
+          mkdir -p /tmp/lint-bench-corpus
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('/tmp/lint-bench-corpus')
+          for i in range(1500):
+              (root/f'doc-{i:04d}.md').write_text(f'# Service note {i}\n\nGateway timeout retries are discussed for service {i}. Observability ownership and rollout notes.\n')
+          (root/'decision-a.md').write_text('# Gateway Retry Policy\n\nGateway timeout retry attempts: 5.\n')
+          (root/'decision-b.md').write_text('---\nsupersedes: decision-a.md\n---\n# Gateway Retry Policy\n\nGateway timeout retry attempts: 2.\n')
+          PY
+      - name: Benchmark warm-cache wall time
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/main-run /tmp/fix-run
+          mkdir /tmp/main-run /tmp/fix-run
+          cp -a /tmp/lint-bench-corpus /tmp/main-run/corpus
+          cp -a /tmp/lint-bench-corpus /tmp/fix-run/corpus
+          (cd /tmp/main-run && /tmp/lint-main-bin --query 'gateway timeout retry policy' corpus >/dev/null)
+          (cd /tmp/fix-run && /tmp/lint-fix --query 'gateway timeout retry policy' corpus >/dev/null)
+          python3 - <<'PY'
+          import json, statistics, subprocess, time
+          def run(cwd, exe):
+              vals=[]
+              for _ in range(12):
+                  t=time.perf_counter()
+                  subprocess.run([exe,'--query','gateway timeout retry policy','corpus'],cwd=cwd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
+                  vals.append((time.perf_counter()-t)*1000)
+              return vals
+          main=run('/tmp/main-run','/tmp/lint-main-bin')
+          fix=run('/tmp/fix-run','/tmp/lint-fix')
+          out={
+              'corpus_docs':1502,
+              'main_ms':main,
+              'fix_ms':fix,
+              'main_median_ms':statistics.median(main),
+              'fix_median_ms':statistics.median(fix),
+              'main_mean_ms':statistics.mean(main),
+              'fix_mean_ms':statistics.mean(fix),
+          }
+          out['median_delta_ms']=out['fix_median_ms']-out['main_median_ms']
+          out['median_ratio']=out['fix_median_ms']/out['main_median_ms'] if out['main_median_ms'] else None
+          print(json.dumps(out,indent=2))
+          Path='/tmp/benchmark.json'
+          open(Path,'w').write(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-cache-benchmark
+          path: /tmp/benchmark.json

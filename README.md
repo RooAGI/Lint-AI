@@ -60,6 +60,8 @@ Current-state retrieval returns the newer decision with `semantic_status: curren
 
 The repository includes a reproducible **asciinema PTY recording** that builds the real `lint-ai` binary, sets deterministic file mtimes, runs the neutral query above, verifies the result, and renders the captured terminal session.
 
+![Lint-AI real terminal demo](docs/assets/lint-ai-real-terminal.gif)
+
 ```bash
 bash scripts/run_real_terminal_demo.sh
 ```

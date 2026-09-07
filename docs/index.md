@@ -58,6 +58,12 @@ hide:
   </div>
 </section>
 
+## See the real CLI run {.landing-heading}
+
+This is a real **asciinema PTY capture** of the merged `lint-ai` binary. The workflow sets deterministic file mtimes, runs the neutral retry-policy query, and independently verifies that the current value is `2` while stale value `5` is excluded from LLM context.
+
+![Lint-AI real terminal demo](assets/lint-ai-real-terminal.gif)
+
 <section class="proof-grid" aria-label="Lint-AI benchmark highlights">
   <div><strong>95.6%</strong><span>recall@10</span></div>
   <div><strong>84.0%</strong><span>MRR</span></div>

@@ -1,0 +1,80 @@
+name: Record real terminal demo
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - demo-real-terminal-recording
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build merged Lint-AI code
+        run: cargo build --release --bin lint-ai
+
+      - name: Install terminal recording tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y asciinema ffmpeg jq
+          cargo install --locked --git https://github.com/asciinema/agg --tag v1.9.0
+
+      - name: Establish chronology
+        run: |
+          set -euo pipefail
+          touch -d '2026-01-01T00:00:00Z' examples/demo-real-terminal/decision-a.md
+          touch -d '2026-02-01T00:00:00Z' examples/demo-real-terminal/decision-b.md
+          ! grep -Rqi '^supersedes:' examples/demo-real-terminal
+
+      - name: Record actual terminal session
+        run: |
+          set -euo pipefail
+          mkdir -p demo-artifacts
+          chmod +x scripts/run_real_terminal_demo.sh
+          TERM=xterm-256color asciinema rec \
+            --overwrite \
+            --cols 100 \
+            --rows 30 \
+            -c 'bash scripts/run_real_terminal_demo.sh' \
+            demo-artifacts/lint-ai-real-terminal.cast
+
+      - name: Verify recorded behavior independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUERY='How many retry attempts should we use for gateway timeouts?'
+          ./target/release/lint-ai --query "$QUERY" examples/demo-real-terminal > demo-artifacts/raw-query.json
+          ./target/release/lint-ai --llm-context "$QUERY" --result-count 5 examples/demo-real-terminal > demo-artifacts/llm-context.json
+          python3 - <<'PY'
+          import json
+          q=json.load(open('demo-artifacts/raw-query.json'))
+          c=json.load(open('demo-artifacts/llm-context.json'))
+          assert [r['doc_id'] for r in q['results']] == ['decision-b.md'], q
+          assert q['results'][0].get('semantic_status') == 'current', q
+          assert q.get('aggregation') is None, q
+          chunks=c['top_chunks']
+          assert all(x['doc_id'] != 'decision-a.md' for x in chunks), c
+          assert any(x['doc_id']=='decision-b.md' and 'retry attempts: 2' in x.get('text','') for x in chunks), c
+          assert all('retry attempts: 5' not in x.get('text','') for x in chunks), c
+          PY
+
+      - name: Render recording to GIF and MP4
+        run: |
+          set -euo pipefail
+          agg demo-artifacts/lint-ai-real-terminal.cast demo-artifacts/lint-ai-real-terminal.gif
+          ffmpeg -y -i demo-artifacts/lint-ai-real-terminal.gif \
+            -movflags +faststart -pix_fmt yuv420p \
+            -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' \
+            demo-artifacts/lint-ai-real-terminal.mp4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lint-ai-real-terminal-recording
+          path: demo-artifacts/
+          if-no-files-found: error

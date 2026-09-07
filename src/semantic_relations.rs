@@ -346,7 +346,28 @@ fn document_contains_only_target_claim(
     documents
         .iter()
         .find(|document| document.doc_id == relation.target_doc_id)
-        .is_some_and(|document| normalize(&document.content) == normalize(&target_claim.evidence))
+        .is_some_and(|document| {
+            normalize(&claim_bearing_document_content(&document.content))
+                == normalize(&target_claim.evidence)
+        })
+}
+
+fn claim_bearing_document_content(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| !is_markdown_heading_line(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_markdown_heading_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.bytes().take_while(|byte| *byte == b'#').count();
+    (1..=6).contains(&hashes)
+        && trimmed
+            .as_bytes()
+            .get(hashes)
+            .is_some_and(u8::is_ascii_whitespace)
 }
 
 fn push_relation(
@@ -410,6 +431,17 @@ fn extract_claims(doc: &SourceDocument) -> Vec<SemanticClaim> {
                 claims.len(),
             ));
         }
+        if let Some((subject, predicate, object)) = configuration_claim(sentence) {
+            claims.push(make_claim_in_scope(
+                doc,
+                sentence,
+                &subject,
+                predicate,
+                &object,
+                claims.len(),
+                scalar_configuration_scope(doc),
+            ));
+        }
     }
     dedupe_claims(&mut claims);
     claims
@@ -434,6 +466,26 @@ fn make_claim(
     object: &str,
     index: usize,
 ) -> SemanticClaim {
+    make_claim_in_scope(
+        doc,
+        evidence,
+        subject,
+        predicate,
+        object,
+        index,
+        semantic_scope(doc),
+    )
+}
+
+fn make_claim_in_scope(
+    doc: &SourceDocument,
+    evidence: &str,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    index: usize,
+    scope: String,
+) -> SemanticClaim {
     let subject = clean_phrase(subject);
     let object = clean_phrase(object);
     SemanticClaim {
@@ -444,7 +496,7 @@ fn make_claim(
         source_doc_id: doc.doc_id.clone(),
         evidence: evidence.trim().to_string(),
         effective_at: doc.timestamp.clone(),
-        scope: semantic_scope(doc),
+        scope,
         confidence: 0.85,
     }
 }
@@ -503,6 +555,19 @@ fn usage_claim(sentence: &str) -> Option<(String, &'static str, String)> {
     });
     uses.captures(sentence)
         .map(|caps| (caps[1].to_string(), "implementation", caps[2].to_string()))
+}
+
+fn configuration_claim(sentence: &str) -> Option<(String, &'static str, String)> {
+    static SCALAR_CONFIGURATION: OnceLock<Regex> = OnceLock::new();
+    let scalar = SCALAR_CONFIGURATION.get_or_init(|| {
+        Regex::new(
+            r"(?i)^(?:[-*]\s*)?(?:the\s+)?([a-z][a-z0-9 _/.-]{1,100}?)\s*(?::|=)\s*(-?\d+(?:\.\d+)?(?:\s*(?:ms|s|sec(?:ond)?s?|m|min(?:ute)?s?|h|hours?|%|kb|mb|gb|tb))?|true|false|enabled|disabled)$",
+        )
+        .expect("valid scalar configuration regex")
+    });
+    scalar
+        .captures(sentence)
+        .map(|caps| (caps[1].to_string(), "value", caps[2].to_string()))
 }
 
 fn sentences(content: &str) -> Vec<&str> {
@@ -565,6 +630,59 @@ fn semantic_scope(doc: &SourceDocument) -> String {
                 .map(|user| format!("user:{user}"))
         })
         .unwrap_or_else(|| "store".to_string())
+}
+
+fn scalar_configuration_scope(doc: &SourceDocument) -> String {
+    let base = semantic_scope(doc);
+    if doc.filters.contains_key("semantic_scope") {
+        return base;
+    }
+    if let Some(group_id) = doc.group_id.as_deref() {
+        let group = normalize(group_id);
+        if !group.is_empty() {
+            return format!("{base}::group:{group}");
+        }
+    }
+    if source_kind(doc) == "document" {
+        let parent = document_parent_scope(doc);
+        if let Some(heading) = doc.headings.iter().find_map(|heading| {
+            let heading = normalize(heading);
+            (!heading.is_empty() && !is_generic_scalar_heading(&heading)).then_some(heading)
+        }) {
+            return format!("{base}::parent:{parent}::heading:{heading}");
+        }
+        let concept = normalize(&doc.concept);
+        if !concept.is_empty() {
+            return format!("{base}::parent:{parent}::concept:{concept}");
+        }
+    }
+    format!("{base}::doc:{}", doc.doc_id)
+}
+
+fn document_parent_scope(doc: &SourceDocument) -> String {
+    doc.source
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .or_else(|| doc.source.rsplit_once('\\').map(|(parent, _)| parent))
+        .map(normalize)
+        .unwrap_or_default()
+}
+
+fn is_generic_scalar_heading(heading: &str) -> bool {
+    matches!(
+        heading,
+        "config"
+            | "configuration"
+            | "setting"
+            | "settings"
+            | "policy"
+            | "decision"
+            | "defaults"
+            | "parameter"
+            | "parameters"
+            | "option"
+            | "options"
+    )
 }
 
 fn source_kind(doc: &SourceDocument) -> &'static str {
@@ -1002,5 +1120,230 @@ mod tests {
                 "expected current-state query: {query}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod scalar_configuration_supersession_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn scalar_doc(id: &str, content: &str, timestamp: &str) -> SourceDocument {
+        SourceDocument {
+            doc_id: id.to_string(),
+            source: format!("docs/{id}.md"),
+            content: content.to_string(),
+            concept: "gateway retry policy".to_string(),
+            group_id: None,
+            filters: BTreeMap::new(),
+            headings: vec![],
+            links: vec![],
+            timestamp: Some(timestamp.to_string()),
+            doc_length: content.len(),
+            author_agent: None,
+        }
+    }
+
+    #[test]
+    fn unrelated_scalar_configuration_domains_do_not_supersede_each_other() {
+        let mut payments = scalar_doc("payments", "Retry attempts: 5.", "2026-01-01");
+        payments.concept = "payments".to_string();
+        payments.headings = vec!["Payments Retry Policy".to_string()];
+
+        let mut worker = scalar_doc("image-worker", "Retry attempts: 2.", "2026-06-01");
+        worker.concept = "image worker".to_string();
+        worker.headings = vec!["Image Worker Retry Policy".to_string()];
+
+        let store = SemanticRelationStore::from_documents(
+            [&payments, &worker],
+            SupersessionOptions::default(),
+        );
+        assert_eq!(
+            store.document_state("payments").status,
+            Some(SemanticStatus::Current)
+        );
+        assert_eq!(
+            store.document_state("image-worker").status,
+            Some(SemanticStatus::Current)
+        );
+        assert!(!store.relations().iter().any(|relation| {
+            relation.kind == SemanticRelationKind::Supersedes
+                && relation.source_doc_id == "image-worker"
+                && relation.target_doc_id == "payments"
+        }));
+    }
+
+    #[test]
+    fn same_filename_concept_in_different_directories_does_not_collide() {
+        let mut payments = scalar_doc("payments-config", "Retry attempts: 5.", "2026-01-01");
+        payments.source = "services/payments/config.md".to_string();
+        payments.concept = "config".to_string();
+        payments.headings.clear();
+
+        let mut worker = scalar_doc("worker-config", "Retry attempts: 2.", "2026-06-01");
+        worker.source = "services/image-worker/config.md".to_string();
+        worker.concept = "config".to_string();
+        worker.headings.clear();
+
+        let store = SemanticRelationStore::from_documents(
+            [&payments, &worker],
+            SupersessionOptions::default(),
+        );
+        assert_eq!(
+            store.document_state("payments-config").status,
+            Some(SemanticStatus::Current)
+        );
+        assert_eq!(
+            store.document_state("worker-config").status,
+            Some(SemanticStatus::Current)
+        );
+    }
+
+    #[test]
+    fn generic_headings_in_different_directories_do_not_collide() {
+        let mut payments = scalar_doc(
+            "payments-config",
+            "# Configuration\n\nTimeout: 30s.",
+            "2026-01-01",
+        );
+        payments.source = "services/payments/config.md".to_string();
+        payments.concept = "config".to_string();
+        payments.headings = vec!["Configuration".to_string()];
+
+        let mut worker = scalar_doc(
+            "worker-config",
+            "# Configuration\n\nTimeout: 10s.",
+            "2026-06-01",
+        );
+        worker.source = "services/image-worker/config.md".to_string();
+        worker.concept = "config".to_string();
+        worker.headings = vec!["Configuration".to_string()];
+
+        let store = SemanticRelationStore::from_documents(
+            [&payments, &worker],
+            SupersessionOptions::default(),
+        );
+        assert_eq!(
+            store.document_state("payments-config").status,
+            Some(SemanticStatus::Current)
+        );
+        assert_eq!(
+            store.document_state("worker-config").status,
+            Some(SemanticStatus::Current)
+        );
+    }
+
+    #[test]
+    fn same_specific_heading_in_different_directories_does_not_collide() {
+        let mut payments = scalar_doc(
+            "payments-retry",
+            "# Retry Policy\n\nRetry attempts: 5.",
+            "2026-01-01",
+        );
+        payments.source = "services/payments/retry.md".to_string();
+        payments.headings = vec!["Retry Policy".to_string()];
+
+        let mut worker = scalar_doc(
+            "worker-retry",
+            "# Retry Policy\n\nRetry attempts: 2.",
+            "2026-06-01",
+        );
+        worker.source = "services/image-worker/retry.md".to_string();
+        worker.headings = vec!["Retry Policy".to_string()];
+
+        let store = SemanticRelationStore::from_documents(
+            [&payments, &worker],
+            SupersessionOptions::default(),
+        );
+        assert_eq!(
+            store.document_state("payments-retry").status,
+            Some(SemanticStatus::Current)
+        );
+        assert_eq!(
+            store.document_state("worker-retry").status,
+            Some(SemanticStatus::Current)
+        );
+    }
+
+    #[test]
+    fn same_heading_scalar_configuration_still_supersedes_by_time() {
+        let mut old = scalar_doc(
+            "decision-a",
+            "# Gateway Retry Policy\n\nGateway timeout retry attempts: 5.",
+            "2026-01-01",
+        );
+        old.headings = vec!["Gateway Retry Policy".to_string()];
+        old.concept = "decision a".to_string();
+
+        let mut new = scalar_doc(
+            "decision-b",
+            "# Gateway Retry Policy\n\nGateway timeout retry attempts: 2.",
+            "2026-06-01",
+        );
+        new.headings = vec!["Gateway Retry Policy".to_string()];
+        new.concept = "decision b".to_string();
+
+        let store =
+            SemanticRelationStore::from_documents([&old, &new], SupersessionOptions::default());
+        assert_eq!(
+            store.document_state("decision-a").status,
+            Some(SemanticStatus::Superseded)
+        );
+        assert_eq!(
+            store.document_state("decision-a").superseded_by.as_deref(),
+            Some("decision-b")
+        );
+    }
+
+    #[test]
+    fn non_heading_extra_content_prevents_whole_document_suppression() {
+        let mut old = scalar_doc(
+            "decision-a",
+            "# Gateway Retry Policy\n\nGateway timeout retry attempts: 5.\nAdditional rationale remains relevant.",
+            "2026-01-01",
+        );
+        old.headings = vec!["Gateway Retry Policy".to_string()];
+        let mut new = scalar_doc(
+            "decision-b",
+            "# Gateway Retry Policy\n\nGateway timeout retry attempts: 2.",
+            "2026-06-01",
+        );
+        new.headings = vec!["Gateway Retry Policy".to_string()];
+
+        let store =
+            SemanticRelationStore::from_documents([&old, &new], SupersessionOptions::default());
+        assert_eq!(
+            store.document_state("decision-a").status,
+            Some(SemanticStatus::Conflicted)
+        );
+    }
+
+    #[test]
+    fn newer_scalar_configuration_claim_supersedes_older_value_by_time() {
+        let old = scalar_doc(
+            "decision-a",
+            "Gateway timeout retry attempts: 5.",
+            "2026-01-01",
+        );
+        let new = scalar_doc(
+            "decision-b",
+            "Gateway timeout retry attempts: 2.",
+            "2026-06-01",
+        );
+        let store =
+            SemanticRelationStore::from_documents([&old, &new], SupersessionOptions::default());
+        assert_eq!(
+            store.document_state("decision-a").status,
+            Some(SemanticStatus::Superseded)
+        );
+        assert_eq!(
+            store.document_state("decision-a").superseded_by.as_deref(),
+            Some("decision-b")
+        );
+        assert!(store.relations().iter().any(|relation| {
+            relation.kind == SemanticRelationKind::Supersedes
+                && relation.method == "canonical_claim_and_time"
+                && (relation.confidence - 0.90).abs() < f32::EPSILON
+        }));
     }
 }

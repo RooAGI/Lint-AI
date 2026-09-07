@@ -1,0 +1,23 @@
+name: Validate temporal reasoning fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run test suite
+        run: cargo test --quiet
+
+      - name: Check all targets
+        run: cargo check --all-targets --quiet

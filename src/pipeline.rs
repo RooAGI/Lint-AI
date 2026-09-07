@@ -4,13 +4,11 @@ use crate::chunking::{
 use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor};
 use crate::index::{
     build_semantic_doc_state, DocRecord, MemoryIndex, Provenance, QueryDiagnostics, QueryTimings,
-    SearchResult, SemanticAggregate, SemanticDocState, TemporalQueryContext,
+    SearchResult, SemanticAggregate, SemanticDocState,
 };
 use crate::query_plan::PreparedQuery;
 use crate::segments::{SegmentRoutingStrategy, SegmentedMemoryIndex};
-use crate::semantic_relations::{
-    is_historical_query, SemanticRelationStore, SemanticStatus, SupersessionOptions,
-};
+use crate::semantic_relations::{SemanticRelationStore, SupersessionOptions};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
 use crate::temporal_fact::TemporalFactStore;
@@ -921,81 +919,23 @@ impl IndexStore {
     }
 
     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
-        self.refresh()?;
-        let allowed = self.semantic_allowed_doc_ids(query);
-        let context = TemporalQueryContext {
-            allowed_doc_ids: allowed.as_ref(),
-            ..TemporalQueryContext::default()
-        };
-        let snapshot = self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh");
-        let results = match (snapshot, &self.options.memory_index_layout) {
-            (
-                MemoryIndexSnapshot::Segmented(index),
-                MemoryIndexLayout::Segmented {
-                    query_top_n,
-                    routing_strategy,
-                },
-            ) => {
-                index
-                    .query_with_temporal_context_and_diagnostics_and_strategy(
-                        query,
-                        top_k,
-                        (*query_top_n).max(1),
-                        *routing_strategy,
-                        context,
-                    )
-                    .results
-            }
-            _ => {
-                snapshot
-                    .global_index()
-                    .query_with_temporal_context(query, top_k, context)
-                    .0
-            }
-        };
-        Ok(self.annotate_semantic_results(query, results, top_k))
+        let prepared = PreparedQuery::new(query);
+        self.query_prepared(&prepared, top_k, &std::collections::BTreeMap::new())
     }
 
-    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
-    #[allow(deprecated)]
     pub fn query_timed(
         &mut self,
         query: &str,
         top_k: usize,
     ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
-        let refresh_start = std::time::Instant::now();
-        self.refresh()?;
-        let refresh_ms = refresh_start.elapsed().as_secs_f64() * 1000.0;
-        let index = self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh")
-            .global_index();
-        let allowed = self.semantic_allowed_doc_ids(query);
-        let context = TemporalQueryContext {
-            allowed_doc_ids: allowed.as_ref(),
-            ..TemporalQueryContext::default()
-        };
-        let (results, mut timings, diagnostics) =
-            index.query_with_temporal_context(query, top_k, context);
-        timings.refresh_ms = refresh_ms;
-        timings.total_ms += refresh_ms;
-        Ok((
-            self.annotate_semantic_results(query, results, top_k),
-            timings,
-            diagnostics,
-        ))
+        let prepared = PreparedQuery::new(query);
+        self.query_prepared_timed(&prepared, top_k, &std::collections::BTreeMap::new())
     }
 
-    /// Searches with the full query treatment the CLI gets, including intent inference
-    /// and query augmentation via [`PreparedQuery`], optionally scoped to the
-    /// documents matching `filters`.
-    ///
-    /// Prefer this over [`IndexStore::query_filtered`] for any caller handling
-    /// a raw user query, so the analysis stays identical across entry points.
+    /// Searches with the canonical query treatment: one [`PreparedQuery`] owns
+    /// intent inference, query augmentation, temporal context, and the optional
+    /// reference clock. `IndexStore` adds only semantic/filter scoping and
+    /// snapshot layout routing.
     pub fn query_prepared(
         &mut self,
         prepared: &PreparedQuery,
@@ -1003,21 +943,24 @@ impl IndexStore {
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<SearchResult>> {
         self.refresh()?;
-        let index = self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh")
-            .global_index();
-        let allowed = intersect_doc_id_filters(
-            index.doc_ids_matching_filters(filters),
-            self.semantic_allowed_doc_ids(prepared.search_query()),
-        );
-        let mut context = prepared.temporal_context();
-        context.allowed_doc_ids = allowed.as_ref();
-        let results = index
-            .query_with_temporal_context(prepared.search_query(), top_k, context)
-            .0;
-        Ok(self.annotate_semantic_results(prepared.search_query(), results, top_k))
+        self.execute_prepared_on_snapshot(prepared, top_k, filters)
+            .map(|(results, _, _)| results)
+    }
+
+    pub fn query_prepared_timed(
+        &mut self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
+        let refresh_start = std::time::Instant::now();
+        self.refresh()?;
+        let refresh_ms = refresh_start.elapsed().as_secs_f64() * 1000.0;
+        let (results, mut timings, diagnostics) =
+            self.execute_prepared_on_snapshot(prepared, top_k, filters)?;
+        timings.refresh_ms += refresh_ms;
+        timings.total_ms += refresh_ms;
+        Ok((results, timings, diagnostics))
     }
 
     /// Query the current immutable snapshot without attempting a refresh.
@@ -1029,101 +972,96 @@ impl IndexStore {
         top_k: usize,
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<SearchResult>> {
-        let Some(snapshot) = self.snapshot.as_ref() else {
+        if self.snapshot.is_none() {
             return Ok(Vec::new());
-        };
-        let index = snapshot.global_index();
-        let allowed = intersect_doc_id_filters(
-            index.doc_ids_matching_filters(filters),
-            self.semantic_allowed_doc_ids(prepared.search_query()),
-        );
-        let mut context = prepared.temporal_context();
-        context.allowed_doc_ids = allowed.as_ref();
-        let results = index
-            .query_with_temporal_context(prepared.search_query(), top_k, context)
-            .0;
-        Ok(self.annotate_semantic_results(prepared.search_query(), results, top_k))
+        }
+        self.execute_prepared_on_snapshot(prepared, top_k, filters)
+            .map(|(results, _, _)| results)
     }
 
-    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
-    #[allow(deprecated)]
     pub fn query_filtered(
         &mut self,
         query: &str,
         top_k: usize,
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<SearchResult>> {
-        self.refresh()?;
-        let index = self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh")
-            .global_index();
-        let allowed = intersect_doc_id_filters(
-            index.doc_ids_matching_filters(filters),
-            self.semantic_allowed_doc_ids(query),
-        );
-        let context = TemporalQueryContext {
-            allowed_doc_ids: allowed.as_ref(),
-            ..TemporalQueryContext::default()
-        };
-        let results = index.query_with_temporal_context(query, top_k, context).0;
-        Ok(self.annotate_semantic_results(query, results, top_k))
+        let prepared = PreparedQuery::new(query);
+        self.query_prepared(&prepared, top_k, filters)
     }
 
-    fn semantic_allowed_doc_ids(&self, query: &str) -> Option<HashSet<String>> {
-        if is_historical_query(query) {
-            return None;
-        }
-
-        let has_superseded = self.source_docs.keys().any(|doc_id| {
-            self.semantic_relations.document_state(doc_id).status
-                == Some(SemanticStatus::Superseded)
-        });
-        has_superseded.then(|| {
-            self.source_docs
-                .keys()
-                .filter(|doc_id| {
-                    self.semantic_relations.document_state(doc_id).status
-                        != Some(SemanticStatus::Superseded)
-                })
-                .cloned()
-                .collect()
-        })
-    }
-
-    fn annotate_semantic_results(
+    fn execute_prepared_on_snapshot(
         &self,
-        query: &str,
-        results: Vec<SearchResult>,
+        prepared: &PreparedQuery,
         top_k: usize,
-    ) -> Vec<SearchResult> {
-        let historical = is_historical_query(query);
-        results
-            .into_iter()
-            .map(|mut result| {
-                let state = self.semantic_relations.document_state(&result.doc_id);
-                result.semantic_status =
-                    if historical && state.status == Some(SemanticStatus::Superseded) {
-                        Some(SemanticStatus::Historical)
-                    } else {
-                        state.status
-                    };
-                result.superseded_by = state.superseded_by;
-                result.relation_confidence = state.relation_confidence;
-                result.relation_evidence = state.evidence;
-                result
-            })
-            .take(top_k)
-            .collect()
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return Ok((
+                Vec::new(),
+                QueryTimings::default(),
+                QueryDiagnostics::default(),
+            ));
+        };
+        let index = snapshot.global_index();
+        let filter_allowed = index.doc_ids_matching_filters(filters);
+        let document_ids = self.source_docs.keys().cloned().collect::<Vec<_>>();
+
+        let (results, timings, diagnostics) = match (snapshot, &self.options.memory_index_layout) {
+            (
+                MemoryIndexSnapshot::Segmented(segmented),
+                MemoryIndexLayout::Segmented {
+                    query_top_n,
+                    routing_strategy,
+                },
+            ) => {
+                let allowed = prepared.semantic_allowed_doc_ids(
+                    filter_allowed.clone(),
+                    &self.semantic_relations,
+                    &document_ids,
+                );
+                let mut context = prepared.temporal_context();
+                context.allowed_doc_ids = allowed.as_ref();
+                let started = std::time::Instant::now();
+                let output = segmented.query_with_temporal_context_at_and_diagnostics_and_strategy(
+                    prepared.search_query(),
+                    top_k,
+                    (*query_top_n).max(1),
+                    *routing_strategy,
+                    context,
+                    prepared.reference_date(),
+                );
+                let timings = QueryTimings {
+                    total_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    ..QueryTimings::default()
+                };
+                let diagnostics = QueryDiagnostics {
+                    candidates: output.diagnostics.merged_result_count,
+                    ..QueryDiagnostics::default()
+                };
+                (
+                    prepared.annotate_semantic_results(
+                        output.results,
+                        &self.semantic_relations,
+                        top_k,
+                    ),
+                    timings,
+                    diagnostics,
+                )
+            }
+            _ => prepared.execute_on_index_with_semantics(
+                index,
+                top_k,
+                filter_allowed,
+                &self.semantic_relations,
+                &document_ids,
+            ),
+        };
+
+        Ok((results, timings, diagnostics))
     }
 
-    /// Multi-term variant: builds the allowed-doc set once from `filters`, then scores every
-    /// query. BM25 (tantivy) is still called once per term. That cannot be collapsed, but the
-    /// filter scan over all docs happens only once regardless of how many queries are given.
-    /// Returns one `Vec<SearchResult>` per input query, in the same order.
-    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
-    #[allow(deprecated)]
+    /// Multi-query convenience wrapper over the same prepared-query executor.
+    /// Refresh happens once, then each query uses the current immutable snapshot.
     pub fn query_filtered_multi(
         &mut self,
         queries: &[&str],
@@ -1131,25 +1069,12 @@ impl IndexStore {
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<Vec<Vec<SearchResult>>> {
         self.refresh()?;
-        let index = self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh")
-            .global_index();
-        let filter_allowed = index.doc_ids_matching_filters(filters);
         queries
             .iter()
             .map(|query| {
-                let query_allowed = intersect_doc_id_filters(
-                    filter_allowed.clone(),
-                    self.semantic_allowed_doc_ids(query),
-                );
-                let context = TemporalQueryContext {
-                    allowed_doc_ids: query_allowed.as_ref(),
-                    ..TemporalQueryContext::default()
-                };
-                let results = index.query_with_temporal_context(query, top_k, context).0;
-                Ok(self.annotate_semantic_results(query, results, top_k))
+                let prepared = PreparedQuery::new(query);
+                self.execute_prepared_on_snapshot(&prepared, top_k, filters)
+                    .map(|(results, _, _)| results)
             })
             .collect()
     }

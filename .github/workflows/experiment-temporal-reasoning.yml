@@ -1,0 +1,118 @@
+name: Experiment temporal LongMemEval retrieval
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix-timeline-canonical-supersession
+    paths:
+      - .github/workflows/experiment-temporal-reasoning.yml
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Download cleaned LongMemEval-S
+        run: python3 benchmark/download_longmemeval_raw.py --out /tmp/longmemeval_s_cleaned.json
+
+      - name: Arm O - current temporal baseline
+        run: |
+          cargo test --lib --quiet
+          cargo build --release --bin haystack_indexstore_benchmark
+          ./target/release/haystack_indexstore_benchmark \
+            --longmemeval /tmp/longmemeval_s_cleaned.json \
+            --question-type temporal-reasoning \
+            --k 5 --k 10 --k 20 \
+            --out /tmp/arm-o.json
+
+      - name: Add point-relative temporal-window hard filtering
+        run: |
+          cp src/index.rs /tmp/index-before-window-policy.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/index.rs')
+          s = p.read_text()
+          marker = '        let hard_filter = temporal.hard_filter;'
+          repl = '        let lower_query = query.to_lowercase();\n        let point_relative = lower_query.contains(" ago")\n            || lower_query.contains("yesterday")\n            || lower_query.contains("today")\n            || lower_query.contains("tomorrow")\n            || ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]\n                .iter()\n                .any(|day| lower_query.contains(&format!("last {day}")) || lower_query.contains(&format!("this {day}")) || lower_query.contains(&format!("next {day}")));\n        let hard_filter = temporal.hard_filter || (target.is_some() && point_relative);'
+          assert marker in s
+          p.write_text(s.replace(marker, repl, 1))
+          PY
+
+      - name: Arm P - hard temporal window for point-relative queries
+        run: |
+          cargo build --release --bin haystack_indexstore_benchmark
+          ./target/release/haystack_indexstore_benchmark \
+            --longmemeval /tmp/longmemeval_s_cleaned.json \
+            --question-type temporal-reasoning \
+            --k 5 --k 10 --k 20 \
+            --out /tmp/arm-p.json
+
+      - name: Replace hard filtering with window-first prioritization
+        run: |
+          cp /tmp/index-before-window-policy.rs src/index.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/index.rs')
+          s = p.read_text()
+          marker = '                if delta_days <= window_days {\n                    let proximity = 1.0 - (delta_days as f32 / window_days as f32);\n                    let boost = proximity.clamp(0.0, 1.0) * TEMPORAL_PROXIMITY_WEIGHT;\n                    result.score += boost;\n                    result.score_breakdown.recency_score += boost;\n                }'
+          repl = '                if delta_days <= window_days {\n                    let proximity = 1.0 - (delta_days as f32 / window_days as f32);\n                    let lower_query = query.to_lowercase();\n                    let point_relative = lower_query.contains(" ago")\n                        || lower_query.contains("yesterday")\n                        || lower_query.contains("today")\n                        || lower_query.contains("tomorrow")\n                        || ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]\n                            .iter()\n                            .any(|day| lower_query.contains(&format!("last {day}")) || lower_query.contains(&format!("this {day}")) || lower_query.contains(&format!("next {day}")));\n                    let priority = if point_relative { 1000.0 } else { 0.0 };\n                    let boost = priority + proximity.clamp(0.0, 1.0) * TEMPORAL_PROXIMITY_WEIGHT;\n                    result.score += boost;\n                    result.score_breakdown.recency_score += boost;\n                }'
+          assert marker in s
+          p.write_text(s.replace(marker, repl, 1))
+          PY
+
+      - name: Arm Q - window-first point-relative prioritization
+        run: |
+          cargo build --release --bin haystack_indexstore_benchmark
+          ./target/release/haystack_indexstore_benchmark \
+            --longmemeval /tmp/longmemeval_s_cleaned.json \
+            --question-type temporal-reasoning \
+            --k 5 --k 10 --k 20 \
+            --out /tmp/arm-q.json
+
+      - name: Compare window-policy arms
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          arms = {k: json.loads(Path(f'/tmp/arm-{k}.json').read_text()) for k in ('o', 'p', 'q')}
+          summary = {k: v['aggregate'] for k, v in arms.items()}
+
+          def rank(q):
+              rel = set(q['relevant_session_ids'])
+              return next((i + 1 for i, sid in enumerate(q['retrieved_session_ids']) if sid in rel), 999)
+
+          for left, right in [('o', 'p'), ('o', 'q')]:
+              a = {x['id']: x for x in arms[left]['per_query']}
+              b = {x['id']: x for x in arms[right]['per_query']}
+              summary[f'changed_{left}_{right}'] = sum(
+                  a[i]['retrieved_session_ids'] != b[i]['retrieved_session_ids'] for i in a
+              )
+              summary[f'improved_{left}_{right}'] = [
+                  {'id': i, left: rank(a[i]), right: rank(b[i]), 'query': a[i]['query']}
+                  for i in a if rank(b[i]) < rank(a[i])
+              ]
+              summary[f'regressed_{left}_{right}'] = [
+                  {'id': i, left: rank(a[i]), right: rank(b[i]), 'query': a[i]['query']}
+                  for i in a if rank(b[i]) > rank(a[i])
+              ]
+
+          Path('/tmp/temporal-window-summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: temporal-window-policy-experiment
+          retention-days: 7
+          path: |
+            /tmp/arm-o.json
+            /tmp/arm-p.json
+            /tmp/arm-q.json
+            /tmp/temporal-window-summary.json

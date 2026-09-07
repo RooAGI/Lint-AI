@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Download the raw LongMemEval-S JSON from Hugging Face.
+"""Download the cleaned LongMemEval-S JSON from Hugging Face.
 
-This fetches the exact source file used by the benchmark:
-https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s?download=true
-
-The script writes the file to benchmark/data/longmemeval_s_raw.json by default
-and verifies the SHA-256 hash so the local copy stays byte-for-byte identical.
+The benchmark pins the official cleaned replacement dataset at a specific
+revision and verifies both SHA-256 and record count for reproducibility.
 """
 
 from __future__ import annotations
@@ -18,25 +15,26 @@ from pathlib import Path
 
 
 DEFAULT_URL = (
-    "https://huggingface.co/datasets/xiaowu0162/longmemeval/"
-    "resolve/main/longmemeval_s?download=true"
+    "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/"
+    "resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/"
+    "longmemeval_s_cleaned.json?download=true"
 )
-EXPECTED_SHA256 = "08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894"
+EXPECTED_SHA256 = "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 EXPECTED_RECORDS = 500
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Download the raw LongMemEval-S dataset used by the benchmarks."
+        description="Download the pinned cleaned LongMemEval-S dataset used by the benchmarks."
     )
     parser.add_argument(
         "--url",
         default=DEFAULT_URL,
-        help="Dataset download URL. Defaults to the official Hugging Face raw file.",
+        help="Dataset download URL. Defaults to the pinned cleaned LongMemEval-S file.",
     )
     parser.add_argument(
         "--out",
-        default=Path("benchmark/data/longmemeval_s_raw.json"),
+        default=Path("benchmark/data/longmemeval_s_cleaned.json"),
         type=Path,
         help="Output file path.",
     )

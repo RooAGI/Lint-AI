@@ -564,9 +564,6 @@ fn query_routing_intent(
         "earliest",
         "latest",
         "first",
-        "last",
-        "next",
-        "previous",
         "before",
         "after",
         "order",
@@ -843,7 +840,7 @@ fn temporal_candidates(query: &str) -> Vec<PhraseMatch> {
         r"\b(today|tomorrow|yesterday|tonight)\b",
         r"\b(?:last|this|next)\s+(?:week|month|year|weekend)\b",
         r"\b(?:last|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
-        r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|days|week|weeks|month|months|year|years)(?:\s+ago)?\b",
+        r"\b(?:a\s+couple\s+of|couple\s+of|a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|days|week|weeks|month|months|year|years)(?:\s+ago)?\b",
         r"\bconsecutive days\b",
     ];
 
@@ -1204,6 +1201,23 @@ mod tests {
         let sequence = analyze_query("Which tasks happened in consecutive days?");
         assert_eq!(
             sequence.query_routing_intent,
+            Some(QueryRoutingIntent::Sequence)
+        );
+    }
+
+    #[test]
+    fn ordinary_relative_dates_are_not_sequence_queries() {
+        let weekday = analyze_query("Who did I meet last Tuesday?");
+        assert!(weekday.temporal.is_some());
+        assert_ne!(
+            weekday.query_routing_intent,
+            Some(QueryRoutingIntent::Sequence)
+        );
+
+        let couple = analyze_query("What did I cook a couple of days ago?");
+        assert!(couple.temporal.is_some());
+        assert_ne!(
+            couple.query_routing_intent,
             Some(QueryRoutingIntent::Sequence)
         );
     }

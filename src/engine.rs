@@ -2414,6 +2414,10 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 source_docs.iter(),
                 crate::semantic_relations::SupersessionOptions::default(),
             )?;
+        let document_ids = source_docs
+            .iter()
+            .map(|doc| doc.doc_id.clone())
+            .collect::<Vec<_>>();
 
         let index = if let Some(cached) =
             load_cached_query_index(&cache_settings, &corpus_fingerprint)
@@ -2443,33 +2447,17 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             let started = Instant::now();
             let prepared = PreparedQuery::new(query);
             let analysis = prepared.analysis().clone();
-            let search_query = prepared.search_query().to_string();
-            let mut temporal_context = prepared.temporal_context();
-            let historical_query = crate::semantic_relations::is_historical_query(query);
-            let has_superseded = source_docs.iter().any(|doc| {
-                semantic_relations.document_state(&doc.doc_id).status
-                    == Some(crate::semantic_relations::SemanticStatus::Superseded)
-            });
-            let allowed_doc_ids = if historical_query || !has_superseded {
-                None
-            } else {
-                Some(
-                    source_docs
-                        .iter()
-                        .filter(|doc| {
-                            semantic_relations.document_state(&doc.doc_id).status
-                                != Some(crate::semantic_relations::SemanticStatus::Superseded)
-                        })
-                        .map(|doc| doc.doc_id.clone())
-                        .collect::<HashSet<_>>(),
-                )
-            };
-            temporal_context.allowed_doc_ids = allowed_doc_ids.as_ref();
             if args.llm_context.is_some() {
                 let requested = args.result_count.clamp(1, MAX_RESULT_COUNT);
                 let candidate_top_k = requested.max(LLM_CONTEXT_CANDIDATE_TOP_K);
-                let candidate_results = index
-                    .query_with_temporal_context(&search_query, candidate_top_k, temporal_context)
+                let candidate_results = prepared
+                    .execute_on_index_with_semantics(
+                        &index,
+                        candidate_top_k,
+                        None,
+                        &semantic_relations,
+                        &document_ids,
+                    )
                     .0;
                 let elapsed_ms = started.elapsed().as_millis();
                 let payload = build_llm_context_output(
@@ -2496,27 +2484,15 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 }
             } else {
-                let mut results = index
-                    .query_with_temporal_context(
-                        &search_query,
+                let results = prepared
+                    .execute_on_index_with_semantics(
+                        &index,
                         DEFAULT_QUERY_TOP_K,
-                        temporal_context,
+                        None,
+                        &semantic_relations,
+                        &document_ids,
                     )
                     .0;
-                for result in &mut results {
-                    let state = semantic_relations.document_state(&result.doc_id);
-                    result.semantic_status = if historical_query
-                        && state.status
-                            == Some(crate::semantic_relations::SemanticStatus::Superseded)
-                    {
-                        Some(crate::semantic_relations::SemanticStatus::Historical)
-                    } else {
-                        state.status
-                    };
-                    result.superseded_by = state.superseded_by;
-                    result.relation_confidence = state.relation_confidence;
-                    result.relation_evidence = state.evidence;
-                }
                 let elapsed_ms = started.elapsed().as_millis();
                 let aggregation =
                     build_aggregate_output(&index, query, &results, DEFAULT_QUERY_TOP_K);

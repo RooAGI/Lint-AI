@@ -1352,6 +1352,16 @@ impl MemoryIndex {
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at(query, top_k, temporal, None)
+    }
+
+    pub fn query_with_temporal_context_at(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let search_k = match temporal.query_routing_intent {
             Some(_) => top_k.saturating_mul(10).max(25),
             None => top_k.saturating_mul(5).max(20),
@@ -1359,8 +1369,8 @@ impl MemoryIndex {
         let total_start = Instant::now();
         let (temporal_start, temporal_end) =
             normalize_temporal_bounds(temporal.starts_from, temporal.ends_at);
-        let relative_anchor = temporal_start
-            .and(temporal.starts_from)
+        let relative_anchor = reference_date
+            .or(temporal_start.and(temporal.starts_from))
             .or(temporal_end.and(temporal.ends_at))
             .or(temporal.starts_from)
             .or(temporal.ends_at);

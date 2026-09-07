@@ -1,0 +1,182 @@
+name: Compare cleaned LongMemEval via IndexStore
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix-timeline-canonical-supersession
+    paths:
+      - src/temporal.rs
+      - src/semantic_relations.rs
+      - src/query_plan.rs
+      - src/query_semantics.rs
+      - src/index.rs
+      - src/pipeline.rs
+      - src/bin/haystack_indexstore_benchmark.rs
+      - benchmark/download_longmemeval_raw.py
+      - .github/workflows/compare-longmemeval-indexstore.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-timeline-canonical-supersession
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Download pinned cleaned LongMemEval-S
+        run: |
+          python3 benchmark/download_longmemeval_raw.py \
+            --out /tmp/longmemeval_s_cleaned.json
+
+      - name: Preserve branch benchmark harness
+        run: cp src/bin/haystack_indexstore_benchmark.rs /tmp/haystack_indexstore_benchmark.rs
+
+      - name: Run timeline-fix benchmark
+        run: |
+          cargo build --release --bin haystack_indexstore_benchmark
+          ./target/release/haystack_indexstore_benchmark \
+            --longmemeval /tmp/longmemeval_s_cleaned.json \
+            --k 5 --k 10 --k 20 \
+            --out /tmp/fix-cleaned-indexstore.json
+
+      - name: Run main through its normal IndexStore query path
+        run: |
+          git checkout main
+          cp /tmp/haystack_indexstore_benchmark.rs src/bin/haystack_indexstore_benchmark.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/bin/haystack_indexstore_benchmark.rs')
+          s = p.read_text()
+          old = '        let question_anchor = normalize_longmemeval_date(&entry.question_date);\n        let prepared = PreparedQuery::new_at(&entry.question, &question_anchor);'
+          new = '        let prepared = PreparedQuery::new(&entry.question);'
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cargo build --release --bin haystack_indexstore_benchmark
+          ./target/release/haystack_indexstore_benchmark \
+            --longmemeval /tmp/longmemeval_s_cleaned.json \
+            --k 5 --k 10 --k 20 \
+            --out /tmp/main-cleaned-indexstore.json
+
+      - name: Compare results
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          main = json.loads(Path('/tmp/main-cleaned-indexstore.json').read_text())
+          fix = json.loads(Path('/tmp/fix-cleaned-indexstore.json').read_text())
+
+          main_rank = {q['id']: q['retrieved_session_ids'] for q in main['per_query']}
+          fix_rank = {q['id']: q['retrieved_session_ids'] for q in fix['per_query']}
+          changed = [qid for qid in main_rank if main_rank[qid] != fix_rank.get(qid)]
+
+          def delta(a, b):
+              return b - a
+
+          metric_delta = {
+              'recall_at_k': {
+                  k: delta(main['aggregate']['recall_at_k'][k], fix['aggregate']['recall_at_k'][k])
+                  for k in main['aggregate']['recall_at_k']
+              },
+              'recall_any_at_k': {
+                  k: delta(main['aggregate']['recall_any_at_k'][k], fix['aggregate']['recall_any_at_k'][k])
+                  for k in main['aggregate']['recall_any_at_k']
+              },
+              'mrr': delta(main['aggregate']['mrr'], fix['aggregate']['mrr']),
+              'ndcg_at_10': delta(main['aggregate']['ndcg_at_10'], fix['aggregate']['ndcg_at_10']),
+          }
+
+          by_type = {}
+          for question_type in sorted(set(main['by_question_type']) | set(fix['by_question_type'])):
+              before = main['by_question_type'].get(question_type)
+              after = fix['by_question_type'].get(question_type)
+              if before is None or after is None:
+                  continue
+              by_type[question_type] = {
+                  'query_count': after['query_count'],
+                  'recall_at_5_delta': after['recall_at_k'].get('5', 0.0) - before['recall_at_k'].get('5', 0.0),
+                  'recall_at_10_delta': after['recall_at_k'].get('10', 0.0) - before['recall_at_k'].get('10', 0.0),
+                  'mrr_delta': after['mrr'] - before['mrr'],
+                  'ndcg_at_10_delta': after['ndcg_at_10'] - before['ndcg_at_10'],
+              }
+
+          summary = {
+              'dataset': 'longmemeval-cleaned/longmemeval_s_cleaned.json',
+              'query_path': fix['query_path'],
+              'main': main['aggregate'],
+              'fix': fix['aggregate'],
+              'delta': metric_delta,
+              'changed_rankings': len(changed),
+              'changed_ids': changed,
+              'by_question_type_delta': by_type,
+          }
+          print(json.dumps(summary, indent=2))
+          Path('/tmp/indexstore-summary.json').write_text(json.dumps(summary, indent=2))
+          PY
+
+      - name: Extract temporal top-5 misses
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          dataset = json.loads(Path('/tmp/longmemeval_s_cleaned.json').read_text())
+          results = json.loads(Path('/tmp/fix-cleaned-indexstore.json').read_text())
+          by_id = {row['question_id']: row for row in dataset}
+
+          def session_payload(entry, session_id):
+              try:
+                  idx = entry['haystack_session_ids'].index(session_id)
+              except ValueError:
+                  return {'session_id': session_id, 'date': None, 'text': ''}
+              dates = entry.get('haystack_dates', [])
+              sessions = entry.get('haystack_sessions', [])
+              date = dates[idx] if idx < len(dates) else None
+              turns = sessions[idx] if idx < len(sessions) else []
+              text = '\n'.join(f"{turn.get('role', '')}: {turn.get('content', '')}" for turn in turns)
+              return {'session_id': session_id, 'date': date, 'text': text[:12000]}
+
+          misses = []
+          for query in results['per_query']:
+              if query['question_type'] != 'temporal-reasoning':
+                  continue
+              if query['recall_any_at_k'].get('5', 0.0) != 0.0:
+                  continue
+              entry = by_id[query['id']]
+              gold_ids = query['relevant_session_ids']
+              top_ids = query['retrieved_session_ids'][:8]
+              misses.append({
+                  'id': query['id'],
+                  'question': query['query'],
+                  'question_date': query['question_date'],
+                  'answer': entry.get('answer'),
+                  'gold_session_ids': gold_ids,
+                  'top_retrieved_session_ids': top_ids,
+                  'gold_sessions': [session_payload(entry, sid) for sid in gold_ids],
+                  'top_retrieved_sessions': [session_payload(entry, sid) for sid in top_ids],
+              })
+
+          Path('/tmp/temporal-top5-misses.json').write_text(json.dumps({
+              'miss_count': len(misses),
+              'misses': misses,
+          }, indent=2))
+          print(f"temporal top-5 misses={len(misses)}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: longmemeval-cleaned-indexstore-main-vs-timeline-fix
+          retention-days: 7
+          path: |
+            /tmp/main-cleaned-indexstore.json
+            /tmp/fix-cleaned-indexstore.json
+            /tmp/indexstore-summary.json
+            /tmp/temporal-top5-misses.json

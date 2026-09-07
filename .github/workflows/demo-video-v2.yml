@@ -2,6 +2,15 @@ name: Build chronology-only terminal demo
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - demo-video-current-state-v2
+    paths:
+      - '.github/workflows/demo-video-v2.yml'
+      - 'examples/demo-current-state/**'
+      - 'scripts/render_demo_video.py'
+      - 'src/**'
+      - 'Cargo.toml'
 
 permissions:
   contents: read

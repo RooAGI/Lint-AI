@@ -187,6 +187,7 @@ pub struct Args {
     #[cfg(feature = "claude-code")]
     pub claude_code_statusline: bool,
     #[arg(long)]
+    #[cfg(feature = "claude-code")]
     pub claude_code_verify_mcp: bool,
     #[arg(long, value_enum)]
     #[cfg(feature = "claude-code")]
@@ -207,6 +208,7 @@ pub struct Args {
     #[cfg(feature = "codex")]
     pub codex_statusline: bool,
     #[arg(long)]
+    #[cfg(feature = "codex")]
     pub codex_verify_mcp: bool,
     #[arg(long, value_enum)]
     #[cfg(feature = "codex")]
@@ -297,6 +299,7 @@ pub fn parse() -> Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     #[test]
     fn parses_recall_query_and_result_count() {
@@ -340,5 +343,47 @@ mod tests {
 
         assert!(args.review);
         assert_eq!(args.path, "docs");
+    }
+
+    #[cfg(not(feature = "claude-code"))]
+    #[test]
+    fn default_help_hides_claude_code_feature_flags() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(!help.contains("--claude-code-install"));
+        assert!(!help.contains("--claude-code-verify-mcp"));
+
+        let error = Args::try_parse_from(["lint-ai", "--claude-code-install"])
+            .expect_err("Claude Code install should be unavailable without the feature")
+            .to_string();
+        assert!(!error.contains("--claude-code-verify-mcp"));
+    }
+
+    #[cfg(feature = "claude-code")]
+    #[test]
+    fn claude_code_help_exposes_feature_flags_when_enabled() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("--claude-code-install"));
+        assert!(help.contains("--claude-code-verify-mcp"));
+    }
+
+    #[cfg(not(feature = "codex"))]
+    #[test]
+    fn default_help_hides_codex_feature_flags() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(!help.contains("--codex-install"));
+        assert!(!help.contains("--codex-verify-mcp"));
+
+        let error = Args::try_parse_from(["lint-ai", "--codex-install"])
+            .expect_err("Codex install should be unavailable without the feature")
+            .to_string();
+        assert!(!error.contains("--codex-verify-mcp"));
+    }
+
+    #[cfg(feature = "codex")]
+    #[test]
+    fn codex_help_exposes_feature_flags_when_enabled() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("--codex-install"));
+        assert!(help.contains("--codex-verify-mcp"));
     }
 }

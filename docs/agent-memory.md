@@ -1,5 +1,7 @@
 # Agent Memory for AI Coding Agents
 
+**Lint-AI — AI memory that knows what is still true.**
+
 **Agent memory** lets an AI agent carry useful project knowledge across sessions instead of rediscovering the same decisions, files, failures, and conventions every time it starts work.
 
 Lint-AI is an open-source **current-state agent memory** layer for AI coding agents. It works with Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY), and exposes project memory through lifecycle hooks, MCP tools, CLI commands, HTTP, Python, and Rust interfaces.

@@ -1,5 +1,5 @@
 site_name: Lint-AI
-site_description: Evidence-aware memory and semantic review for AI agents.
+site_description: Current-state agent memory for AI coding agents. Persistent memory for Claude Code, Codex, Gemini CLI, and MCP workflows that filters stale and superseded context.
 site_url: https://rooagi.github.io/Lint-AI/
 repo_url: https://github.com/RooAGI/Lint-AI
 repo_name: RooAGI/Lint-AI
@@ -41,6 +41,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Agent memory: agent-memory.md
   - Get started:
       - Quickstart: quickstart.md
       - HTTP server: server.md

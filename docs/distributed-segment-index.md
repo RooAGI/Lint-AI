@@ -1,6 +1,6 @@
 # Distributed Segment Index
 
-Status: design proposal
+Status: local coordinator implemented; remote transport pending
 
 `SegmentedMemoryIndex` today is a single-process structure, but its shape is
 already that of a sharded index: each segment is a self-contained
@@ -9,7 +9,13 @@ query touches. This document describes what has to change for segments to live
 on different machines, and — just as importantly — which of the current
 "duplication" is load-bearing and must not be refactored away.
 
-It does not describe an implemented change.
+The local coordinator now preserves segment routing, queries selected segments
+through a fallible shard-executor boundary, scores each segment with shared
+Tantivy BM25 statistics, and reports shard completeness. Segmented snapshots no
+longer retain a corpus-wide `MemoryIndex`. `lint-service` currently provides
+generic CLI federation with deadlines and partial worker failures, but not yet
+the typed query/statistics contract described here. Physical per-segment index
+artifacts remain future work.
 
 ## What the current design already gets right
 
@@ -65,8 +71,11 @@ coordinator reduce phase of a query-then-fetch pipeline.
       └──────────────┘      └──────────────┘      └──────────────┘
 ```
 
-The coordinator holds only metadata. Documents live on shards and stay there;
-a query returns scored results, not corpora.
+In the single-process deployment, the coordinator and shards share one
+immutable snapshot, so the coordinator has access to the segment-local indexes
+for local fan-out. In a remote deployment, that same query boundary moves the
+indexes behind workers: the coordinator holds routing metadata and receives
+scored results, not corpora.
 
 ## Problem 1: cross-shard score comparability
 
@@ -108,9 +117,15 @@ currently *not* recommended for unrelated reasons — see
 `docs/query-context-and-ranking-consolidation.md` and the 0.26 tie-breaking
 change.)
 
-### Proposed: `GlobalCorpusStats`
+### Implemented locally: `GlobalBm25Statistics`
 
-Introduce a corpus-statistics object that is authoritative across all shards:
+`GlobalBm25Statistics` implements `Bm25StatisticsProvider` by aggregating the
+live Tantivy searchers owned by every local segment. Tantivy requests only the
+field and terms needed by the parsed query, so the coordinator does not copy a
+corpus-sized vocabulary map. The same provider is passed to every selected
+segment query.
+
+The remote representation still needs a serializable snapshot equivalent to:
 
 ```rust
 pub struct GlobalCorpusStats {
@@ -122,9 +137,9 @@ pub struct GlobalCorpusStats {
 impl Bm25StatisticsProvider for GlobalCorpusStats { /* … */ }
 ```
 
-Shard-local scoring then calls `search_with_statistics_provider` with this
-object rather than the local searcher, making BM25 scores from every shard
-directly comparable without normalization tricks.
+Shard-local scoring calls `search_with_statistics_provider` with the shared
+provider rather than the local searcher, making the lexical BM25 component
+comparable across local shards without normalization tricks.
 
 Two things to settle during implementation:
 
@@ -139,15 +154,16 @@ Two things to settle during implementation:
 
 ## Problem 2: `global_index` does not survive distribution
 
-`SegmentedMemoryIndex.global_index: Option<MemoryIndex>` (`src/segments.rs:47`)
-holds **every document in the corpus**, in addition to each segment holding its
-own copy. On one machine that is redundant work; across machines it is
-incoherent, because it would require replicating the entire corpus to the
-coordinator — precisely what sharding exists to avoid.
+The former `SegmentedMemoryIndex.global_index` held **every document in the
+corpus**, in addition to each segment holding its own copy. It has now been
+removed from segmented snapshots. Routed queries execute against selected
+segments and use the coordinator reduce phase.
 
-It is load-bearing today: `global_index()` has 11 call sites across
-`src/pipeline.rs` and `src/segments.rs`, serving two distinct purposes that
-should be separated.
+Explicit v1 dumps still serialize one global compatibility core so existing dump
+consumers remain readable. Normal segmented stores persist records and a logical
+`segments.json` manifest without creating or loading `core.bin`; reload uses the
+manifest when valid and falls back to deterministic group reconstruction for
+older stores. Per-segment binary cores remain a future layout optimization.
 
 | Current use | Distributed replacement |
 | --- | --- |
@@ -161,16 +177,15 @@ that currently knows corpus-wide statistics. Extracting `GlobalCorpusStats`
 removes that reason. What remains of `global_index` is a query convenience,
 which fan-out replaces.
 
-**Proposed end state:** `global_index` is removed. The coordinator holds
-`GlobalCorpusStats` plus segment profiles; any query that would have hit the
-global index becomes a fan-out to all shards followed by the normal reduce.
+**Current state:** `global_index` ownership is removed. The coordinator holds
+shared BM25 statistics plus segment profiles; routed queries fan out to the
+selected local shards and apply the normal reduce. Segmented on-disk stores no
+longer create the redundant compatibility core during ordinary refresh.
 
-**Migration note.** This is a larger change than it looks, because
-`IndexStore` currently treats `global_index()` as its primary query surface
-even in the single-segment case. A staged path is to introduce
-`GlobalCorpusStats` first (a pure addition that improves single-process
-scoring consistency on its own merits), then convert the fallback paths to
-fan-out, then remove the field.
+**Migration note.** `IndexStore::refresh` now returns `Result<()>`, and
+`MemoryIndexSnapshot::single_index` returns `None` for segmented layouts.
+Inspection derives corpus document counts from segment metadata. Existing v1
+dumps remain readable and writable through transient reconstruction.
 
 ## Problem 3: shard access is assumed to be local, synchronous, and infallible
 
@@ -183,9 +198,10 @@ Every segment query today is a direct method call:
 segment.index.query_with_temporal_context(&enrichment.enriched_query, top_k, temporal)
 ```
 
-It cannot fail, cannot time out, and returns no indication of completeness.
-Over a network all three change. The design must state, and the types must
-express, answers to:
+The local executor is now fallible and `ShardQueryCompleteness` records expected,
+successful, and failed segments in query diagnostics. The implementation is
+still synchronous and local; over a network timeouts and retries remain to be
+added:
 
 - **Partial results.** If one shard of five is unreachable, is the query an
   error, or a success over four shards? Memory recall usually prefers the

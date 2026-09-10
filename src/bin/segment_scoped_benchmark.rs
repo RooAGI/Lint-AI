@@ -354,6 +354,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_scoped_benchmark(
     raw: Vec<LongMemEvalEntry>,
     limit: Option<usize>,
@@ -580,6 +581,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
     docs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_segment_comparison(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
@@ -1335,6 +1337,7 @@ fn connection_diagnostics(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rewrite_stability_diagnostics(
     segmented: &SegmentedMemoryIndex,
     query_text: &str,

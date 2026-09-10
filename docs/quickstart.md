@@ -153,14 +153,20 @@ Rust library work without an agent client.
 ## 8. Use it from Python
 
 The Python extension exposes an in-memory `IndexStore` with `upsert`, `query`,
-`remove`, and inspection methods. Build it locally with [maturin](https://www.maturin.rs/):
+`remove`, and inspection methods. Build it locally with [uv](https://docs.astral.sh/uv/)
+and [maturin](https://www.maturin.rs/):
 
 ```bash
-python3 -m venv .venv
+uv venv --python 3.10
 source .venv/bin/activate
-python -m pip install maturin
-maturin develop --release
+uv pip install maturin
+PYO3_PYTHON="$PWD/.venv/bin/python" maturin develop --release --uv
 ```
+
+The explicit `PYO3_PYTHON` keeps the Rust extension build on uv's Python
+environment instead of accidentally selecting an older system or Anaconda
+interpreter. The `--uv` flag is required because `uv venv` does not install
+`pip` by default.
 
 Then use it from Python:
 

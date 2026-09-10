@@ -299,7 +299,15 @@ See the [HTTP server guide](docs/server.md).
 
 ### Python
 
-Build the optional Python extension with `maturin`, then use the same in-memory index from Python:
+Build the optional Python extension with `uv` and `maturin`, then use the same
+in-memory index from Python:
+
+```bash
+uv venv --python 3.10
+source .venv/bin/activate
+uv pip install maturin
+PYO3_PYTHON="$PWD/.venv/bin/python" maturin develop --release --uv
+```
 
 ```python
 import lint_ai

@@ -391,7 +391,7 @@ impl CodexMcp {
                     &mut *store,
                 )?;
                 let results = store.query(query, top_k)?;
-                let payload = mcp_tools::search_results(&store, results);
+                let payload = mcp_tools::search_results(store, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,

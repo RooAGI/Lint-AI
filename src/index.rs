@@ -15,13 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{Bm25StatisticsProvider, Query, QueryParser};
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
-use tantivy::{doc, Index, IndexReader};
+use tantivy::{doc, Index, IndexReader, Searcher, Term};
 
 const LEXICAL_CONTENT_BOOST: f32 = 1.0;
 const LEXICAL_HEADINGS_BOOST: f32 = 1.4;
@@ -33,6 +33,72 @@ const ENTITY_TERM_WEIGHT: f32 = 1.2;
 const ENTITY_PREFIX_MULTIPLIER: f32 = 0.25;
 const IMPORTANT_TERM_WEIGHT: f32 = 0.8;
 const IMPORTANT_TERM_PREFIX_MULTIPLIER: f32 = 0.25;
+
+const QUERY_TERM_CACHE_CAPACITY: usize = 256;
+
+#[derive(Clone)]
+struct PreparedQueryTerms {
+    normalized: String,
+    terms: Vec<String>,
+    expanded_terms: Vec<String>,
+}
+
+static PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, PreparedQueryTerms>>> = OnceLock::new();
+// All MemoryIndex lexical shards use the same fixed schema, so Tantivy's parsed
+// query object can be shared safely between shards. This avoids rebuilding the
+// QueryParser and query tree once per selected segment.
+static PARSED_LEXICAL_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn Query>>>> =
+    OnceLock::new();
+
+fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
+    const MAX_QUERY_CHARS: usize = 4096;
+    const MAX_QUERY_TOKENS: usize = 128;
+    let truncated = if query.len() > MAX_QUERY_CHARS {
+        let mut cut = 0usize;
+        for (idx, _) in query.char_indices() {
+            if idx > MAX_QUERY_CHARS {
+                break;
+            }
+            cut = idx;
+        }
+        &query[..cut]
+    } else {
+        query
+    };
+    let normalized = normalize_for_index(truncated);
+    if normalized.is_empty() {
+        return None;
+    }
+    let cache = PREPARED_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cached = {
+        let cache = cache.lock().expect("prepared query cache lock poisoned");
+        cache.get(&normalized).cloned()
+    };
+    if let Some(prepared) = cached {
+        return Some(prepared);
+    }
+
+    let mut terms = tokenize_query_terms(&normalized);
+    if terms.len() > MAX_QUERY_TOKENS {
+        terms.truncate(MAX_QUERY_TOKENS);
+    }
+    if terms.is_empty() {
+        terms.push(normalized.clone());
+    }
+    let prepared = PreparedQueryTerms {
+        expanded_terms: expand_query_terms(&terms).expanded_terms,
+        normalized: normalized.clone(),
+        terms,
+    };
+    let mut cache = cache.lock().expect("prepared query cache lock poisoned");
+    if cache.len() >= QUERY_TERM_CACHE_CAPACITY {
+        if let Some(oldest_key) = cache.keys().next().cloned() {
+            cache.remove(&oldest_key);
+        }
+    }
+    cache.insert(normalized, prepared.clone());
+    Some(prepared)
+}
 const EXPANDED_ENTITY_WEIGHT: f32 = 0.45;
 const EXPANDED_TERM_WEIGHT: f32 = 0.35;
 const TOPIC_OVERLAP_WEIGHT: f32 = 0.35;
@@ -395,6 +461,131 @@ struct LexicalIndex {
     temporal_f: Field,
 }
 
+/// A live corpus-wide BM25 statistics provider assembled from shard searchers.
+/// Tantivy asks for statistics only for terms present in the parsed query, so
+/// this avoids copying a corpus-sized term dictionary into the coordinator.
+#[derive(Clone)]
+pub struct GlobalBm25Statistics {
+    searchers: Arc<Vec<Searcher>>,
+    cache: Arc<GlobalBm25StatisticsCache>,
+    generation: u64,
+}
+
+struct GlobalBm25StatisticsCache {
+    total_num_docs: Mutex<Option<u64>>,
+    total_num_tokens: Mutex<HashMap<Field, u64>>,
+    doc_freq: Mutex<HashMap<Term, u64>>,
+}
+
+impl GlobalBm25Statistics {
+    pub fn from_indexes<'a>(indexes: impl IntoIterator<Item = &'a MemoryIndex>) -> Self {
+        Self::from_indexes_with_generation(indexes, 0)
+    }
+
+    pub fn from_indexes_with_generation<'a>(
+        indexes: impl IntoIterator<Item = &'a MemoryIndex>,
+        generation: u64,
+    ) -> Self {
+        let searchers = indexes
+            .into_iter()
+            .filter_map(|index| index.lexical.as_ref())
+            .map(|lexical| lexical.reader.searcher())
+            .collect();
+        Self {
+            searchers: Arc::new(searchers),
+            cache: Arc::new(GlobalBm25StatisticsCache {
+                total_num_docs: Mutex::new(None),
+                total_num_tokens: Mutex::new(HashMap::new()),
+                doc_freq: Mutex::new(HashMap::new()),
+            }),
+            generation,
+        }
+    }
+
+    pub fn shard_count(&self) -> usize {
+        self.searchers.len()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl Bm25StatisticsProvider for GlobalBm25Statistics {
+    fn total_num_tokens(&self, field: Field) -> tantivy::Result<u64> {
+        if let Some(total) = self
+            .cache
+            .total_num_tokens
+            .lock()
+            .expect("global BM25 token cache lock poisoned")
+            .get(&field)
+            .copied()
+        {
+            return Ok(total);
+        }
+        let total =
+            self.searchers
+                .iter()
+                .try_fold(0u64, |total, searcher| -> tantivy::Result<u64> {
+                    Ok(total + Bm25StatisticsProvider::total_num_tokens(searcher, field)?)
+                })?;
+        self.cache
+            .total_num_tokens
+            .lock()
+            .expect("global BM25 token cache lock poisoned")
+            .insert(field, total);
+        Ok(total)
+    }
+
+    fn total_num_docs(&self) -> tantivy::Result<u64> {
+        if let Some(total) = *self
+            .cache
+            .total_num_docs
+            .lock()
+            .expect("global BM25 document cache lock poisoned")
+        {
+            return Ok(total);
+        }
+        let total =
+            self.searchers
+                .iter()
+                .try_fold(0u64, |total, searcher| -> tantivy::Result<u64> {
+                    Ok(total + Bm25StatisticsProvider::total_num_docs(searcher)?)
+                })?;
+        *self
+            .cache
+            .total_num_docs
+            .lock()
+            .expect("global BM25 document cache lock poisoned") = Some(total);
+        Ok(total)
+    }
+
+    fn doc_freq(&self, term: &Term) -> tantivy::Result<u64> {
+        if let Some(total) = self
+            .cache
+            .doc_freq
+            .lock()
+            .expect("global BM25 doc-frequency cache lock poisoned")
+            .get(term)
+            .copied()
+        {
+            return Ok(total);
+        }
+        let total =
+            self.searchers
+                .iter()
+                .try_fold(0u64, |total, searcher| -> tantivy::Result<u64> {
+                    Ok(total + Bm25StatisticsProvider::doc_freq(searcher, term)?)
+                })?;
+        self.cache
+            .doc_freq
+            .lock()
+            .expect("global BM25 doc-frequency cache lock poisoned")
+            .insert(term.clone(), total);
+        Ok(total)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ScoreBreakdown {
     pub lexical_score: f32,
@@ -461,6 +652,13 @@ pub struct QueryDiagnostics {
     pub expanded_terms: usize,
     pub lexical_hits: usize,
     pub candidates: usize,
+    /// Generation of the immutable snapshot used for the query. Single-index
+    /// callers use zero because they do not publish segmented snapshots.
+    pub snapshot_generation: u64,
+    /// Present for segmented queries so callers can distinguish no hits from
+    /// an incomplete fan-out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shard_completeness: Option<crate::segments::ShardQueryCompleteness>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1291,40 +1489,73 @@ impl MemoryIndex {
         })
     }
 
-    fn lexical_bm25(&self, query: &str, top_k: usize) -> Result<HashMap<String, f32>> {
+    fn lexical_bm25(
+        &self,
+        query: &str,
+        top_k: usize,
+        statistics: Option<&dyn Bm25StatisticsProvider>,
+    ) -> Result<HashMap<String, f32>> {
         let Some(lex) = self.lexical.as_ref() else {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        let mut query_parser = QueryParser::for_index(
-            &lex.index,
-            vec![
-                lex.content_f,
-                lex.headings_f,
-                lex.terms_f,
-                lex.entities_f,
-                lex.temporal_f,
-            ],
-        );
-        query_parser.set_field_boost(lex.content_f, LEXICAL_CONTENT_BOOST);
-        query_parser.set_field_boost(lex.headings_f, LEXICAL_HEADINGS_BOOST);
-        query_parser.set_field_boost(lex.terms_f, LEXICAL_TERMS_BOOST);
-        query_parser.set_field_boost(lex.entities_f, LEXICAL_ENTITIES_BOOST);
-        query_parser.set_field_boost(lex.temporal_f, 1.1);
-        let parsed = match query_parser.parse_query(query) {
-            Ok(parsed) => parsed,
-            Err(first_err) => {
-                let fallback_query = sanitize_bm25_query(query);
-                if fallback_query.is_empty() {
-                    return Err(first_err.into());
+        let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let cached = {
+            let cache = parsed_cache
+                .lock()
+                .expect("parsed lexical query cache lock poisoned");
+            cache.get(query).cloned()
+        };
+        let parsed = if let Some(parsed) = cached {
+            parsed
+        } else {
+            let mut query_parser = QueryParser::for_index(
+                &lex.index,
+                vec![
+                    lex.content_f,
+                    lex.headings_f,
+                    lex.terms_f,
+                    lex.entities_f,
+                    lex.temporal_f,
+                ],
+            );
+            query_parser.set_field_boost(lex.content_f, LEXICAL_CONTENT_BOOST);
+            query_parser.set_field_boost(lex.headings_f, LEXICAL_HEADINGS_BOOST);
+            query_parser.set_field_boost(lex.terms_f, LEXICAL_TERMS_BOOST);
+            query_parser.set_field_boost(lex.entities_f, LEXICAL_ENTITIES_BOOST);
+            query_parser.set_field_boost(lex.temporal_f, 1.1);
+            let parsed = match query_parser.parse_query(query) {
+                Ok(parsed) => parsed,
+                Err(first_err) => {
+                    let fallback_query = sanitize_bm25_query(query);
+                    if fallback_query.is_empty() {
+                        return Err(first_err.into());
+                    }
+                    match query_parser.parse_query(&fallback_query) {
+                        Ok(parsed) => parsed,
+                        Err(_) => return Err(first_err.into()),
+                    }
                 }
-                match query_parser.parse_query(&fallback_query) {
-                    Ok(parsed) => parsed,
-                    Err(_) => return Err(first_err.into()),
+            };
+            let parsed: Arc<dyn Query> = Arc::from(parsed);
+            let mut cache = parsed_cache
+                .lock()
+                .expect("parsed lexical query cache lock poisoned");
+            if cache.len() >= QUERY_TERM_CACHE_CAPACITY {
+                if let Some(oldest_key) = cache.keys().next().cloned() {
+                    cache.remove(&oldest_key);
                 }
             }
+            cache.insert(query.to_string(), parsed.clone());
+            parsed
         };
-        let top_docs = searcher.search(&parsed, &TopDocs::with_limit(top_k))?;
+        let collector = TopDocs::with_limit(top_k);
+        let top_docs = match statistics {
+            Some(statistics) => {
+                searcher.search_with_statistics_provider(parsed.as_ref(), &collector, statistics)?
+            }
+            None => searcher.search(parsed.as_ref(), &collector)?,
+        };
 
         let mut out = HashMap::new();
         for (score, addr) in top_docs {
@@ -1355,12 +1586,64 @@ impl MemoryIndex {
         self.query_with_temporal_context_at(query, top_k, temporal, None)
     }
 
+    pub fn query_with_temporal_context_and_statistics(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        statistics: &GlobalBm25Statistics,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at_and_statistics(
+            query,
+            top_k,
+            temporal,
+            None,
+            Some(statistics),
+        )
+    }
+
     pub fn query_with_temporal_context_at(
         &self,
         query: &str,
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
         reference_date: Option<&str>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at_and_statistics(
+            query,
+            top_k,
+            temporal,
+            reference_date,
+            None,
+        )
+    }
+
+    pub fn query_with_temporal_context_at_and_statistics(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+        statistics: Option<&GlobalBm25Statistics>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at_and_statistics_with_local_terms(
+            query,
+            top_k,
+            temporal,
+            reference_date,
+            statistics,
+            &[],
+        )
+    }
+
+    pub(crate) fn query_with_temporal_context_at_and_statistics_with_local_terms(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+        statistics: Option<&GlobalBm25Statistics>,
+        local_terms: &[String],
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let search_k = match temporal.query_routing_intent {
             Some(_) => top_k.saturating_mul(10).max(25),
@@ -1380,8 +1663,14 @@ impl MemoryIndex {
             && temporal_start.is_none()
             && temporal_end.is_none()
             && temporal.time_hint.is_none();
-        let (mut results, mut timings, diagnostics) =
-            self.query_timed_with_context(query, search_k, temporal, apply_recency);
+        let (mut results, mut timings, diagnostics) = self.query_timed_with_context(
+            query,
+            search_k,
+            temporal,
+            apply_recency,
+            statistics,
+            local_terms,
+        );
         if target.is_none()
             && temporal_start.is_none()
             && temporal_end.is_none()
@@ -1508,7 +1797,14 @@ impl MemoryIndex {
         query: &str,
         top_k: usize,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
-        self.query_timed_with_context(query, top_k, TemporalQueryContext::default(), true)
+        self.query_timed_with_context(
+            query,
+            top_k,
+            TemporalQueryContext::default(),
+            true,
+            None,
+            &[],
+        )
     }
 
     fn query_timed_with_context(
@@ -1517,10 +1813,16 @@ impl MemoryIndex {
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
         apply_recency: bool,
+        statistics: Option<&GlobalBm25Statistics>,
+        local_terms: &[String],
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let total_start = Instant::now();
         let lexical_start = Instant::now();
-        let lexical_hits = match self.lexical_bm25(query, top_k.saturating_mul(5).max(20)) {
+        let lexical_hits = match self.lexical_bm25(
+            query,
+            top_k.saturating_mul(5).max(20),
+            statistics.map(|value| value as &dyn Bm25StatisticsProvider),
+        ) {
             Ok(hits) => Some(hits),
             Err(err) => {
                 eprintln!("warning: lexical BM25 query component failed: {}", err);
@@ -1537,6 +1839,7 @@ impl MemoryIndex {
             temporal.has_explicit_temporal,
             temporal.allowed_doc_ids,
             apply_recency,
+            local_terms,
         );
         let snapshot_query_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
         let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -1557,7 +1860,7 @@ impl MemoryIndex {
         top_k: usize,
         lexical_hits: Option<&HashMap<String, f32>>,
     ) -> Vec<SearchResult> {
-        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None, true)
+        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None, true, &[])
             .0
     }
 
@@ -1627,6 +1930,7 @@ impl MemoryIndex {
             false,
             Some(&allowed),
             true,
+            &[],
         )
         .0
     }
@@ -1674,12 +1978,14 @@ impl MemoryIndex {
                     false,
                     allowed_opt.as_ref(),
                     true,
+                    &[],
                 )
                 .0
             })
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn query_with_lexical_hits_timed(
         &self,
         query: &str,
@@ -1689,41 +1995,25 @@ impl MemoryIndex {
         has_explicit_temporal: bool,
         allowed_doc_ids: Option<&HashSet<String>>,
         apply_recency: bool,
+        local_terms: &[String],
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
-        const MAX_QUERY_CHARS: usize = 4096;
-        const MAX_QUERY_TOKENS: usize = 128;
-
         let rerank_start = Instant::now();
         let parse_start = Instant::now();
-        let truncated = if query.len() > MAX_QUERY_CHARS {
-            let mut cut = 0usize;
-            for (idx, _) in query.char_indices() {
-                if idx > MAX_QUERY_CHARS {
-                    break;
-                }
-                cut = idx;
-            }
-            &query[..cut]
-        } else {
-            query
-        };
-        let q = normalize_for_index(truncated);
-        if q.is_empty() {
+        let Some(prepared) = prepare_query_terms(query) else {
             return (
                 Vec::new(),
                 QueryTimings::default(),
                 QueryDiagnostics::default(),
             );
+        };
+        let q = prepared.normalized;
+        let q_terms = prepared.terms;
+        let mut expanded_terms = prepared.expanded_terms;
+        for term in local_terms {
+            if !q_terms.contains(term) && !expanded_terms.contains(term) {
+                expanded_terms.push(term.clone());
+            }
         }
-        let mut q_terms: Vec<String> = tokenize_query_terms(&q);
-        if q_terms.len() > MAX_QUERY_TOKENS {
-            q_terms.truncate(MAX_QUERY_TOKENS);
-        }
-        if q_terms.is_empty() {
-            q_terms.push(q.clone());
-        }
-        let expanded = expand_query_terms(&q_terms);
-        let expanded_terms = expanded.expanded_terms;
         let mut query_entities: HashSet<String> = HashSet::new();
         if self.entity_trie.get(&q).is_some() {
             query_entities.insert(q.clone());
@@ -2470,6 +2760,7 @@ impl MemoryIndex {
                 expanded_terms: expanded_terms.len(),
                 lexical_hits: lexical_hits.map_or(0, HashMap::len),
                 candidates: candidates.len(),
+                ..QueryDiagnostics::default()
             },
         )
     }

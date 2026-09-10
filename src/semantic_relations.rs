@@ -370,6 +370,7 @@ fn is_markdown_heading_line(line: &str) -> bool {
             .is_some_and(u8::is_ascii_whitespace)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_relation(
     relations: &mut Vec<SemanticRelation>,
     seen: &mut HashSet<String>,
@@ -572,7 +573,7 @@ fn configuration_claim(sentence: &str) -> Option<(String, &'static str, String)>
 
 fn sentences(content: &str) -> Vec<&str> {
     content
-        .split(|ch| matches!(ch, '\n' | '.' | '!' | '?'))
+        .split(['\n', '.', '!', '?'])
         .map(str::trim)
         .filter(|sentence| !sentence.is_empty())
         .collect()

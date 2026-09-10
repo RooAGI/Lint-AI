@@ -43,6 +43,7 @@ pub mod pipeline;
 pub mod query_expansion;
 pub mod query_plan;
 pub mod query_semantics;
+pub mod remote_query;
 pub mod report;
 pub mod review;
 pub mod rules;
@@ -60,7 +61,8 @@ pub use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor, Ext
 pub use crate::corpus_graph::CorpusGraph;
 pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
 pub use crate::index::{
-    MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult, TemporalQueryContext,
+    GlobalBm25Statistics, MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult,
+    TemporalQueryContext,
 };
 pub use crate::ownership::{
     FlowEdge, FlowEdgeKind, FlowState, LeakFinding, OwnershipKind, OwnershipRecord,
@@ -72,10 +74,19 @@ pub use crate::pipeline::{
     MemoryIndexSnapshotInspection, PipelineOptions, StorePaths, Tier1NerProvider,
     Tier1TermRankerKind,
 };
+pub use crate::remote_query::{
+    aggregate_statistics, reduce_candidates, RemoteCandidateRequest, RemoteCandidateResponse,
+    RemoteFieldStatistics, RemoteQueryCompleteness, RemoteQueryFailure, RemoteQueryRequest,
+    RemoteSearchResult, RemoteStatisticsRequest, RemoteStatisticsResponse,
+    RemoteStatisticsSnapshot, RemoteTemporalContext, REMOTE_QUERY_PROTOCOL_VERSION,
+};
 pub use crate::review::{
     DocumentSummary, OwnershipSummary, ReviewCategory, ReviewContext, ReviewDiff,
     ReviewDiffSummary, ReviewEvidence, ReviewFileChange, ReviewFinding, ReviewHunk, ReviewPacket,
     ReviewRepoRef, ReviewSeverity, ReviewUsageSummary, SymbolSummary,
+};
+pub use crate::segments::{
+    SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,
 };
 pub use crate::semantic_relations::{
     DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,

@@ -49,7 +49,10 @@ fn concurrent_codex_mcp_clients_initialize_and_open_shared_index() {
                 ])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                // Preserve startup diagnostics: this test intentionally
+                // exercises concurrent persistent-index initialization, where
+                // a child can otherwise close stdout with no explanation.
+                .stderr(Stdio::inherit())
                 .spawn()
                 .expect("Codex MCP server should start");
             let stdin = child

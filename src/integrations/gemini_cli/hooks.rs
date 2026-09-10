@@ -425,7 +425,7 @@ mod tests {
             .unwrap();
             let mut store = IndexStore::at_path(
                 &root.join(".lint-ai").join(memory_dir),
-                PipelineOptions::default(),
+                crate::integrations::mcp_index::segmented_store_options(),
             )
             .unwrap();
             store.refresh().unwrap();
@@ -512,12 +512,12 @@ mod tests {
 
         let mut gemini = IndexStore::at_path(
             &root.join(".lint-ai/gemini-cli-memory"),
-            PipelineOptions::default(),
+            crate::integrations::mcp_index::segmented_store_options(),
         )
         .unwrap();
         let mut agy = IndexStore::at_path(
             &root.join(".lint-ai/agy-memory"),
-            PipelineOptions::default(),
+            crate::integrations::mcp_index::segmented_store_options(),
         )
         .unwrap();
         gemini.refresh().unwrap();

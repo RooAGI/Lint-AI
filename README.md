@@ -1,24 +1,24 @@
 # Lint-AI
 
-**Current-state memory for AI agents.**
+**AI memory that knows what is still true.**
 
-> Relevant context is not always true.
+> Your agent doesn't just forget. It can confidently remember outdated decisions.
 
-Lint-AI turns project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** when an agent needs it.
+Lint-AI gives coding agents **current, evidence-backed project memory**. It uses **relevance + time + semantic relationships** to distinguish the latest truth from old-but-still-relevant history.
 
-Search can find the right topic. Lint-AI helps an agent distinguish **what is relevant** from **what is still true**.
-
-It is built for long-running AI workflows where old decisions remain semantically relevant even after newer evidence has replaced them.
+Search can find the right topic. Lint-AI helps an agent answer the harder question: **is this information still true?**
 
 **Works with Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY)** through project-scoped memory, lifecycle hooks, and MCP tools.
 
-[Documentation](https://rooagi.github.io/Lint-AI/) · [Quickstart](docs/quickstart.md) · [Agent integrations](docs/agents.md) · [Benchmark methodology](docs/benchmark.md)
+[Quickstart](docs/quickstart.md) · [Real demo](#real-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
+
+**Release benchmark:** 83.6% Recall@5 · 95.8% Recall-any@10 · ~4.7 ms average query latency · single CPU · no GPU
 
 ---
 
-## The problem: your agent retrieved the right document — and still got the wrong answer
+## The stale-memory problem
 
-Imagine your project contains two versions of the same decision:
+Your project says one thing on Monday and something different on Friday. Both versions remain relevant to the same question.
 
 **Older — `decision-a.md`**
 
@@ -36,15 +36,17 @@ Gateway timeout retry attempts: 5.
 Gateway timeout retry attempts: 2.
 ```
 
-Both documents are relevant to:
+Now ask:
 
 ```text
 How many retry attempts should we use for gateway timeouts?
 ```
 
-A normal retriever can return either one — or both — and leave the model to guess which value is current.
+A normal retriever can return either document — or both — and leave the model to guess which value is current.
 
-Lint-AI uses **relevance + time + semantic relationships** to keep the newer value in current-state retrieval while preserving the older document as history.
+**Lint-AI keeps `2` as the current answer and preserves `5` as superseded history.**
+
+That difference matters anywhere project truth changes over time: architecture decisions, API contracts, configuration values, runbooks, ownership, terminology, and implementation plans.
 
 There is no required `supersedes:` frontmatter in this example. For simple configuration/value claims, Lint-AI can infer chronological replacement when the documents establish the same semantic domain. Inferred supersession is domain-scoped so unrelated settings such as two different services' `timeout` values do not suppress one another. Explicit supersession metadata remains authoritative when you provide it.
 
@@ -58,9 +60,9 @@ Current-state retrieval returns the newer decision with `semantic_status: curren
 
 ### Real terminal demo
 
-The repository includes a reproducible **asciinema PTY recording** that builds the real `lint-ai` binary, sets deterministic file mtimes, runs the neutral query above, verifies the result, and renders the captured terminal session.
-
 ![Lint-AI real terminal demo](docs/assets/lint-ai-real-terminal.gif)
+
+The repository includes a reproducible **asciinema PTY recording** that builds the real `lint-ai` binary, sets deterministic file mtimes, runs the neutral query above, verifies the result, and renders the captured terminal session.
 
 ```bash
 bash scripts/run_real_terminal_demo.sh

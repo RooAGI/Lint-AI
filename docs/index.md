@@ -6,9 +6,9 @@ hide:
 
 <div class="hero-stack">
 <section class="hero">
-  <div class="hero__eyebrow">AGENT MEMORY FOR AI CODING AGENTS</div>
-  <h1>Agent memory that knows<br><span>what is still true.</span></h1>
-  <p class="hero__lede">Lint-AI is a current-state agent memory layer for Claude Code, Codex, Gemini CLI, and other AI agents. It turns project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context when an agent needs it.</p>
+  <div class="hero__eyebrow">LINT-AI · CURRENT-STATE AGENT MEMORY</div>
+  <h1>AI memory that knows<br><span>what is still true.</span></h1>
+  <p class="hero__lede"><strong>Current-state agent memory for AI coding agents.</strong> Lint-AI works with Claude Code, Codex, Gemini CLI, and other AI agents, turning project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context when an agent needs it.</p>
 </section>
 
 <section class="scenario" aria-label="Example of an agent retrieving a superseded decision">
@@ -128,7 +128,7 @@ Lint-AI does not ask you to discard your existing project knowledge. It indexes 
 </div>
 
 <section class="final-cta">
-  <p>Start with a local corpus. Keep the evidence.</p>
-  <h2>Make agent memory inspectable.</h2>
+  <p>Current-state agent memory for AI coding agents.</p>
+  <h2>AI memory that knows what is still true.</h2>
   <a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a>
 </section>

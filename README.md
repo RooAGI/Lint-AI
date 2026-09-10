@@ -1,18 +1,16 @@
 # Lint-AI
 
-**AI memory that knows what is still true.**
+**Current-state agent memory for AI coding agents.**
 
-> Your agent doesn't just forget. It can confidently remember outdated decisions.
+> **AI memory that knows what is still true.** Your agent doesn't just forget; it can confidently remember outdated decisions.
 
-Lint-AI gives coding agents **current, evidence-backed project memory**. It uses **relevance + time + semantic relationships** to distinguish the latest truth from old-but-still-relevant history.
+Lint-AI is an open-source **persistent agent memory** layer for Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY). It turns project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** when an agent needs it.
 
-Search can find the right topic. Lint-AI helps an agent answer the harder question: **is this information still true?**
+Search can find the right topic. Lint-AI helps an agent answer the harder question: **is this information still true?** It uses relevance, time, and semantic relationships to distinguish the latest truth from old-but-still-relevant history.
 
-**Works with Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY)** through project-scoped memory, lifecycle hooks, and MCP tools.
+[Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
 
-[Quickstart](docs/quickstart.md) · [Real demo](#real-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
-
-**Release benchmark:** 83.6% Recall@5 · 95.8% Recall-any@10 · ~4.7 ms average query latency · single CPU · no GPU
+**Current benchmark:** 83.5% fractional Recall@5 · 95.6% any-hit Recall@10 · ~1.88 ms average query latency · single CPU · no GPU
 
 ---
 
@@ -58,11 +56,11 @@ lint-ai --query \
 
 Current-state retrieval returns the newer decision with `semantic_status: current`, and `--llm-context` excludes the stale value.
 
-### Real terminal demo
+### Reproducible terminal demo
 
-![Lint-AI real terminal demo](docs/assets/lint-ai-real-terminal.gif)
+![Lint-AI reproducible terminal demo](docs/assets/lint-ai-real-terminal.gif)
 
-The repository includes a reproducible **asciinema PTY recording** that builds the real `lint-ai` binary, sets deterministic file mtimes, runs the neutral query above, verifies the result, and renders the captured terminal session.
+The repository includes a reproducible **asciinema PTY recording** that builds the actual `lint-ai` binary, sets deterministic file mtimes for a controlled stale-memory scenario, runs the neutral query above, verifies the result, and renders the captured terminal session.
 
 ```bash
 bash scripts/run_real_terminal_demo.sh
@@ -171,23 +169,23 @@ See [agent integrations](docs/agents.md) and the [MCP guide](docs/mcp.md) for th
 
 Lint-AI is evaluated on **LongMemEval-S**, a public benchmark for long-context agent-memory retrieval over multi-session conversations.
 
-The current release benchmark uses the **official cleaned LongMemEval-S dataset**, runs queries through the normal production-style `IndexStore` path, and uses no embedding vectors.
+The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 question-scoped queries through the heuristic release backend, and uses no embedding vectors.
 
 **500 questions · heuristic release backend · single CPU · no GPU**
 
 | Metric | Result |
 |---|---:|
-| Recall@5 | **83.6%** |
-| Recall@10 | **89.7%** |
-| Recall@20 | **91.2%** |
-| Recall-any@10 | **95.8%** |
-| MRR | **84.1%** |
+| Fractional Recall@5 | **83.5%** |
+| Fractional Recall@10 | **89.5%** |
+| Fractional Recall@20 | **91.1%** |
+| Any-hit Recall@10 | **95.6%** |
+| MRR | **84.0%** |
 | NDCG@10 | **81.8%** |
-| Average query latency | **~4.7 ms** |
+| Average query latency | **~1.88 ms** |
 
-`Recall@k` is fractional recall over all gold sessions. `Recall-any@k` counts a query as successful when any gold session appears in the top *k*.
+`Fractional Recall@k` is the average fraction of all correct answer sessions recovered in the top *k*. `Any-hit Recall@k` counts a query as successful when any correct answer session appears in the top *k*.
 
-The repository keeps the cleaned-dataset downloader, production-style benchmark binary, main-vs-branch comparison workflow, and temporal-reasoning experiment harnesses so results can be reproduced and changes can be evaluated without silently changing the query path.
+The repository keeps the dataset downloader, production-style benchmark binary, shared AgentMemory scorer, comparison workflow, and temporal-reasoning experiment harnesses so results can be reproduced and changes can be evaluated without silently changing the query path.
 
 See [benchmark methodology](docs/benchmark.md), [benchmark results](docs/benchmark-results.md), and [comparison methodology](docs/comparison.md).
 

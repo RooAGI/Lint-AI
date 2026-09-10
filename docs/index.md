@@ -6,9 +6,9 @@ hide:
 
 <div class="hero-stack">
 <section class="hero">
-  <div class="hero__eyebrow">CURRENT CONTEXT FOR AI AGENTS</div>
-  <h1>Relevant context<br><span>is not always true.</span></h1>
-  <p class="hero__lede">Lint-AI turns scattered project history, including sessions, documents, decisions, and traces, into current, evidence-backed context at the moment an agent needs it.</p>
+  <div class="hero__eyebrow">AGENT MEMORY FOR AI CODING AGENTS</div>
+  <h1>Agent memory that knows<br><span>what is still true.</span></h1>
+  <p class="hero__lede">Lint-AI is a current-state agent memory layer for Claude Code, Codex, Gemini CLI, and other AI agents. It turns project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context when an agent needs it.</p>
 </section>
 
 <section class="scenario" aria-label="Example of an agent retrieving a superseded decision">
@@ -46,11 +46,12 @@ hide:
 </div>
 
 <section class="solution-intro">
-  <div class="hero__eyebrow">THE MISSING LAYER</div>
-  <h2>Move from relevant retrieval to current understanding.</h2>
-  <p>Search can find the right topic. Lint-AI helps agents distinguish what is relevant from what is still true, while preserving the sources, timestamps, and history behind each answer.</p>
+  <div class="hero__eyebrow">PERSISTENT MEMORY IS THE FIRST STEP</div>
+  <h2>Move from remembering history to understanding current state.</h2>
+  <p>Traditional agent memory helps an AI agent remember. Lint-AI adds time, supersession, and evidence so the agent can distinguish what is relevant from what is still true.</p>
   <div class="hero__actions">
     <a class="md-button md-button--primary" href="quickstart/">Start building</a>
+    <a class="md-button" href="agent-memory/">What is agent memory?</a>
     <a class="md-button" href="https://github.com/RooAGI/Lint-AI">View on GitHub</a>
   </div>
   <div class="install-line">
@@ -58,11 +59,11 @@ hide:
   </div>
 </section>
 
-## See the real CLI run {.landing-heading}
+## See the reproducible CLI run {.landing-heading}
 
-This is a real **asciinema PTY capture** of the merged `lint-ai` binary. The workflow sets deterministic file mtimes, runs the neutral retry-policy query, and independently verifies that the current value is `2` while stale value `5` is excluded from LLM context.
+This is a reproducible **asciinema PTY capture** of the actual `lint-ai` binary running a controlled stale-memory scenario. The workflow sets deterministic file mtimes, runs the neutral retry-policy query, and independently verifies that the current value is `2` while stale value `5` is excluded from LLM context.
 
-![Lint-AI real terminal demo](assets/lint-ai-real-terminal.gif)
+![Lint-AI reproducible terminal demo](assets/lint-ai-real-terminal.gif)
 
 <section class="proof-grid" aria-label="Lint-AI benchmark highlights">
   <div><strong>95.6%</strong><span>recall@10</span></div>
@@ -106,9 +107,9 @@ Agent context is not a pile of text. Decisions supersede older decisions. Terms 
   </article>
 </div>
 
-## Keep your sources. Add a current-state layer. {.landing-heading}
+## Keep your sources. Add a current-state memory layer. {.landing-heading}
 
-Lint-AI does not ask you to discard your existing project knowledge. It indexes the sessions, notes, documents, and decisions you already have, then makes their relationships and history usable at retrieval time. Each provider gets isolated, project-scoped memory, lifecycle capture, and shared MCP controls.
+Lint-AI does not ask you to discard your existing project knowledge. It indexes the sessions, notes, documents, and decisions you already have, then makes their relationships and history usable at retrieval time. Each provider gets isolated, project-scoped agent memory, lifecycle capture, and shared MCP controls.
 
 <div class="integration-grid">
   <a href="codex/"><strong>Codex</strong><span>Hooks, MCP, replay, project memory →</span></a>
@@ -128,6 +129,6 @@ Lint-AI does not ask you to discard your existing project knowledge. It indexes 
 
 <section class="final-cta">
   <p>Start with a local corpus. Keep the evidence.</p>
-  <h2>Make memory inspectable.</h2>
+  <h2>Make agent memory inspectable.</h2>
   <a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a>
 </section>

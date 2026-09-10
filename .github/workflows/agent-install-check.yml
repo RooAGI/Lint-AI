@@ -1,0 +1,45 @@
+name: Agent install contract
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "INSTALL_FOR_AGENTS.md"
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/agent-install-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+      - "INSTALL_FOR_AGENTS.md"
+      - "scripts/install.sh"
+      - "scripts/install.ps1"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/agent-install-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  agent-features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile and test bundled agent integrations
+        run: cargo test --features agent-integrations --lib
+      - name: Validate Unix installer syntax
+        run: sh -n scripts/install.sh
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $source = Get-Content -Raw scripts/install.ps1
+          [void][scriptblock]::Create($source)

@@ -15,6 +15,9 @@ const MAX_EVENT_BYTES: usize = 64 * 1024;
 const MAX_STRING_BYTES: usize = 8 * 1024;
 const MAX_ARRAY_ITEMS: usize = 128;
 const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_REPLAY_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_REPLAY_EVENTS: usize = 100_000;
+const MAX_REPLAY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 const REPLAY_SESSION_ENV: &str = "LINT_AI_REPLAY_SESSION_ID";
 const INTERRUPTED_SESSION_STALE_SECONDS: u64 = 30 * 60;
 
@@ -284,10 +287,20 @@ struct ReplayExecution {
 }
 
 fn recorded_prompts(events_path: &Path) -> Result<Vec<String>> {
+    let size = fs::metadata(events_path)?.len();
+    if size > MAX_REPLAY_ARCHIVE_BYTES {
+        anyhow::bail!(
+            "recorded session exceeds the {} byte replay limit",
+            MAX_REPLAY_ARCHIVE_BYTES
+        );
+    }
     let content = fs::read_to_string(events_path)
         .with_context(|| format!("failed to read recorded session {}", events_path.display()))?;
     let mut prompts = Vec::new();
-    for line in content.lines() {
+    for (event_index, line) in content.lines().enumerate() {
+        if event_index >= MAX_REPLAY_EVENTS {
+            anyhow::bail!("recorded session exceeds the {MAX_REPLAY_EVENTS} event replay limit");
+        }
         let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -387,12 +400,8 @@ fn run_provider_process(
         }
         execution.success = output.status.success();
         execution.exit_code = output.status.code();
-        execution
-            .stdout
-            .push_str(&String::from_utf8_lossy(&output.stdout));
-        execution
-            .stderr
-            .push_str(&String::from_utf8_lossy(&output.stderr));
+        append_bounded(&mut execution.stdout, &output.stdout);
+        append_bounded(&mut execution.stderr, &output.stderr);
         eprintln!(
             "lint-ai replay: finished turn {}/{} in {:.1}s ({})",
             index + 1,
@@ -409,6 +418,18 @@ fn run_provider_process(
         }
     }
     Ok(execution)
+}
+
+fn append_bounded(target: &mut String, bytes: &[u8]) {
+    let remaining = MAX_REPLAY_OUTPUT_BYTES.saturating_sub(target.len());
+    if remaining == 0 {
+        return;
+    }
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(remaining)]);
+    target.push_str(&text);
+    if bytes.len() > remaining {
+        target.push_str("\n[output truncated]");
+    }
 }
 
 fn extract_codex_session_id(stderr: &[u8]) -> Option<String> {

@@ -38,6 +38,9 @@ struct Args {
     index: Option<PathBuf>,
     #[arg(long)]
     server_token: Option<String>,
+    /// Restrict all memory operations to this tenant/user ID.
+    #[arg(long)]
+    tenant_id: Option<String>,
     /// Serve without a token on a non-loopback address. Only for closed networks.
     #[arg(long)]
     allow_unauthenticated: bool,
@@ -45,6 +48,12 @@ struct Args {
 
 fn main() -> Result<()> {
     let mut args = Args::parse();
+    if args.tenant_id.is_none() {
+        args.tenant_id = std::env::var("SERVER_TENANT_ID")
+            .ok()
+            .map(|tenant| tenant.trim().to_string())
+            .filter(|tenant| !tenant.is_empty());
+    }
     if args.server_token.is_none() {
         args.server_token = std::env::var("SERVER_TOKEN")
             .ok()
@@ -75,7 +84,19 @@ fn main() -> Result<()> {
     for connection in listener.incoming() {
         match connection {
             Ok(mut stream) => {
-                if active.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+                let admitted = loop {
+                    let current = active.load(Ordering::Acquire);
+                    if current >= MAX_CONCURRENT_CONNECTIONS {
+                        break false;
+                    }
+                    if active
+                        .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
+                        break true;
+                    }
+                };
+                if !admitted {
                     let _ = write_json(
                         &mut stream,
                         503,
@@ -85,12 +106,16 @@ fn main() -> Result<()> {
                 }
                 let service = Arc::clone(&service);
                 let server_token = args.server_token.clone();
+                let tenant_id = args.tenant_id.clone();
                 let active = Arc::clone(&active);
-                active.fetch_add(1, Ordering::AcqRel);
                 std::thread::spawn(move || {
                     let _guard = ConnectionGuard(active);
-                    if let Err(error) = handle_connection(stream, service, server_token.as_deref())
-                    {
+                    if let Err(error) = handle_connection(
+                        stream,
+                        service,
+                        server_token.as_deref(),
+                        tenant_id.as_deref(),
+                    ) {
                         eprintln!("Request failed: {error:#}");
                     }
                 });
@@ -167,6 +192,7 @@ fn handle_connection(
     mut stream: TcpStream,
     service: Arc<RwLock<MemoryService>>,
     server_token: Option<&str>,
+    tenant_id: Option<&str>,
 ) -> Result<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
@@ -267,6 +293,16 @@ fn handle_connection(
             )
         }
     };
+    if let Some(expected_tenant) = tenant_id {
+        let supplied_tenant = value.get("user_id").and_then(Value::as_str);
+        if supplied_tenant != Some(expected_tenant) {
+            return write_json(
+                &mut stream,
+                403,
+                &serde_json::json!({"detail": "tenant is not authorized"}),
+            );
+        }
+    }
     let response = match path {
         "/add" => match serde_json::from_value::<AddRequest>(value)
             .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -367,6 +403,7 @@ fn write_json(stream: &mut TcpStream, status: u16, body: &Value) -> Result<()> {
         200 => "OK",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         413 => "Payload Too Large",
         422 => "Unprocessable Entity",

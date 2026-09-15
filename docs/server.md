@@ -20,6 +20,11 @@ uses an in-memory store; provide `--index` when data must survive a restart.
 For non-loopback binds, configure `--server-token` (or `SERVER_TOKEN`) unless
 you explicitly use `--allow-unauthenticated` on a closed network.
 
+For a single-tenant deployment, also set `--tenant-id TENANT` (or
+`SERVER_TENANT_ID`). Requests whose `user_id` does not match this configured
+tenant are rejected; this prevents a bearer token from being used to select
+another tenant by changing the request body.
+
 The server exposes `GET /health`, `POST /add`, `POST /search`, `POST /delete`,
 `POST /supersede`, and `POST /expire`.
 

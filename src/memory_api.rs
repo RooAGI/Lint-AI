@@ -4,12 +4,12 @@ use crate::query_plan::PreparedQuery;
 use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const USER_FILTER: &str = "memory_user_id";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddRequest {
     pub request_id: String,
     pub messages: Vec<Message>,
@@ -17,7 +17,7 @@ pub struct AddRequest {
     pub session_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     pub timestamp: Option<i64>,
@@ -75,6 +75,7 @@ pub struct SearchMemory {
 pub struct MemoryService {
     store: IndexStore,
     superseded_ids: HashSet<(String, String)>,
+    request_fingerprints: HashMap<(String, String), String>,
 }
 
 impl MemoryService {
@@ -92,6 +93,7 @@ impl MemoryService {
         Self {
             store,
             superseded_ids,
+            request_fingerprints: HashMap::new(),
         }
     }
 
@@ -102,10 +104,31 @@ impl MemoryService {
         if request.messages.is_empty() {
             anyhow::bail!("messages must not be empty");
         }
+        if request.messages.len() > MAX_MESSAGES_PER_REQUEST {
+            anyhow::bail!("messages must contain at most {MAX_MESSAGES_PER_REQUEST} items");
+        }
+        let fingerprint = serde_json::to_string(&request.messages)?;
+        let request_key = (request.user_id.clone(), request.request_id.clone());
+        if let Some(previous) = self.request_fingerprints.get(&request_key) {
+            if previous != &fingerprint {
+                anyhow::bail!("request_id was already used with different content");
+            }
+            return Ok(AddResponse {
+                success: true,
+                request_id: request.request_id,
+                user_id: request.user_id,
+                session_id: request.session_id,
+            });
+        }
 
         for (message_index, message) in request.messages.iter().enumerate() {
             if message.content.trim().is_empty() {
                 anyhow::bail!("messages[{message_index}].content must not be empty");
+            }
+            if message.content.len() > MAX_MESSAGE_CONTENT_BYTES {
+                anyhow::bail!(
+                    "messages[{message_index}].content exceeds {MAX_MESSAGE_CONTENT_BYTES} bytes"
+                );
             }
             if message.role != "user" && message.role != "assistant" {
                 anyhow::bail!("messages[{message_index}].role must be user or assistant");
@@ -133,8 +156,8 @@ impl MemoryService {
             });
             self.store.upsert(SourceDocument {
                 doc_id: crate::stable_doc_id_from_source(&format!(
-                    "{}:{message_index}",
-                    request.request_id
+                    "{}:{}:{message_index}",
+                    request.user_id, request.request_id
                 )),
                 source,
                 content: format!("{}: {}", message.role, message.content),
@@ -151,6 +174,7 @@ impl MemoryService {
 
         // Add returns only after the memory is searchable.
         self.store.refresh()?;
+        self.request_fingerprints.insert(request_key, fingerprint);
         Ok(AddResponse {
             success: true,
             request_id: request.request_id,
@@ -314,6 +338,8 @@ fn unix_time_ms() -> u64 {
 /// Identifiers reach the index as filter values and as `memory://` source URIs,
 /// so they must stay short, single-line, and free of control characters.
 const MAX_IDENTIFIER_BYTES: usize = 256;
+const MAX_MESSAGES_PER_REQUEST: usize = 1024;
+const MAX_MESSAGE_CONTENT_BYTES: usize = 1024 * 1024;
 
 fn validate_identifier(value: &str, name: &str) -> anyhow::Result<()> {
     if value.trim().is_empty() {
@@ -403,6 +429,47 @@ mod tests {
     }
 
     #[test]
+    fn identical_request_ids_are_isolated_between_users() {
+        let mut service = service();
+        for (user_id, content) in [("user-a", "alpha secret"), ("user-b", "beta secret")] {
+            service
+                .add(AddRequest {
+                    request_id: "same-request".into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: user_id.into(),
+                    session_id: "session".into(),
+                })
+                .unwrap();
+        }
+        let a = service
+            .search(SearchRequest {
+                query: "secret".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+            })
+            .unwrap();
+        let b = service
+            .search(SearchRequest {
+                query: "secret".into(),
+                options: None,
+                user_id: "user-b".into(),
+                top_k: 10,
+            })
+            .unwrap();
+        assert_eq!(a.data.len(), 1);
+        assert_eq!(b.data.len(), 1);
+        assert!(a.data[0].content.contains("alpha"));
+        assert!(b.data[0].content.contains("beta"));
+    }
+
+    #[test]
     fn expired_memories_are_not_searchable_and_can_be_deleted_idempotently() {
         let mut service = service();
         service
@@ -434,7 +501,7 @@ mod tests {
     #[test]
     fn superseded_memory_is_hidden_but_replacement_remains_searchable() {
         let mut service = service();
-        let old_id = crate::stable_doc_id_from_source("old:0");
+        let old_id = crate::stable_doc_id_from_source("user-a:old:0");
         for (request_id, content, supersedes_id) in [
             ("old", "old deployment decision", None),
             ("new", "new deployment decision", Some(old_id.as_str())),

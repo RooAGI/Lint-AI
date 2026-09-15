@@ -43,8 +43,14 @@ pub fn read_request(reader: &mut impl BufRead) -> Result<Option<(JsonRpcRequest,
     let mut content_length = None;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        let read = reader
+            .take((MAX_REQUEST_BYTES + 1) as u64)
+            .read_line(&mut line)?;
+        if read == 0 {
             return Ok(None);
+        }
+        if read > MAX_REQUEST_BYTES {
+            anyhow::bail!("MCP line-framed request exceeds {MAX_REQUEST_BYTES} byte limit");
         }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.starts_with('{') {

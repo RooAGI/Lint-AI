@@ -69,10 +69,10 @@ This is a reproducible **asciinema PTY capture** of the actual `lint-ai` binary 
   <div><strong>95.6%</strong><span>any-hit recall@10</span></div>
   <div><strong>84.0%</strong><span>MRR</span></div>
   <div><strong>1.9 ms</strong><span>average query latency</span></div>
-  <div><strong>1,383.66/s</strong><span>v0.2.0 routed HTTP at C=10</span></div>
+  <div><strong>162/s</strong><span>v0.2.0 HTTP at C=10</span></div>
 </section>
 
-<p class="benchmark-note">Heuristic release backend · LongMemEval-S, 500 scoped questions, fair comparison track using any-hit recall · Throughput figure is the v0.2.0 macOS M5 Pro layout comparison over 23,366 records; results vary by hardware and index layout</p>
+<p class="benchmark-note">Heuristic release backend · LongMemEval-S, 500 scoped questions, fair comparison track using any-hit recall · HTTP figure is the v0.2.0 post-refactor run over 23,366 records; 952 req/s is the historical 0.1.9 single-index baseline</p>
 
 <p class="benchmark-note">The 500-question aggregate headline and the separate 133-question segmented multi-session comparison use different scopes. Every recall value below is labeled as either fractional (regular) or any-hit, and by its cutoff.</p>
 
@@ -92,12 +92,12 @@ fixed top-3 for predictable latency.
 ## Reproducible performance comparison {.landing-heading}
 
 Lint-AI's retrieval and server-load measurements are published with the exact
-scripts, payloads, corpus sizes, and caveats needed to reproduce them. In the
-v0.2.0 macOS layout comparison, routed segmented indexing reached **1,383.66
-req/s at concurrency 10** on an Apple M5 Pro, while global segmented indexing
-reached **1,662.27 req/s**. These are local uncached service-load measurements,
-not an internet-facing SLA; results depend on hardware, corpus, and index
-layout.
+scripts, payloads, corpus sizes, and caveats needed to reproduce them. The
+v0.2.0 23,366-record HTTP run measured **386.55 req/s at concurrency 10**. The
+historical 0.1.9 single-index run sustained **952 req/s**, compared with **171
+req/s** for AgentMemory in keyless BM25
+mode. This baseline predates the 0.2.0 server refactor. It is a service-load
+comparison, not a claim that the two systems have identical retrieval semantics.
 
 [View the comparison methodology and results](comparison.md)
 

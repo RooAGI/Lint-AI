@@ -66,8 +66,10 @@ nav:
       - Corpus graph: build-corpus-graph.md
       - Integration glossary: integration-glossary.md
       - Chunk strategy: chunk-strategy.md
-      - Query context and ranking: query-context-and-ranking-consolidation.md
       - Index concurrency: index-concurrency.md
+      - Distributed query architecture: distributed-query-architecture.md
+      - Distributed segment index: distributed-segment-index.md
+      - Remote query contract: remote-query-contract.md
       - Lexical expansion data: lexical-data.md
       - Claude Code hooks design: claude-code-hooks-design.md
       - C++ code adapter design: cpp-code-adapter-design.md
@@ -80,6 +82,7 @@ nav:
       - Claude Code performance: claude-code-performance-tests.md
       - Antigravity (AGY) performance: agy-performance-tests.md
   - Releases:
+      - 0.2.0: releases/0.2.0.md
       - 0.1.9: releases/0.1.9.md
       - 0.1.8: releases/0.1.8.md
       - 0.1.7: releases/0.1.7.md

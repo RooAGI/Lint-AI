@@ -1,15 +1,18 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
+use crate::pipeline::PublishedIndexSnapshot;
 use crate::query_plan::PreparedQuery;
 use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const USER_FILTER: &str = "memory_user_id";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddRequest {
     pub request_id: String,
     pub messages: Vec<Message>,
@@ -17,7 +20,7 @@ pub struct AddRequest {
     pub session_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     pub timestamp: Option<i64>,
@@ -75,6 +78,14 @@ pub struct SearchMemory {
 pub struct MemoryService {
     store: IndexStore,
     superseded_ids: HashSet<(String, String)>,
+    request_fingerprints: HashMap<(String, String), String>,
+}
+
+#[derive(Clone)]
+pub struct MemorySearchService {
+    index: PublishedIndexSnapshot,
+    superseded_ids: HashSet<(String, String)>,
+    query_cache: Arc<Mutex<HashMap<String, Vec<crate::SearchResult>>>>,
 }
 
 impl MemoryService {
@@ -89,34 +100,89 @@ impl MemoryService {
                 ))
             })
             .collect();
+        let request_fingerprints = store
+            .source_documents()
+            .into_iter()
+            .filter_map(|doc| {
+                let persisted = doc.filters.get("request_fingerprint")?;
+                let fingerprint = if persisted.starts_with("v2:") {
+                    persisted.clone()
+                } else {
+                    let messages = serde_json::from_str::<Vec<Message>>(persisted).ok()?;
+                    request_fingerprint(doc.group_id.as_deref()?, &messages).ok()?
+                };
+                Some((
+                    (
+                        doc.filters.get(USER_FILTER)?.clone(),
+                        doc.filters.get("request_id")?.clone(),
+                    ),
+                    fingerprint,
+                ))
+            })
+            .collect();
         Self {
             store,
             superseded_ids,
+            request_fingerprints,
         }
     }
 
     pub fn add(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
+        let response = self.add_unpublished(request)?;
+        self.store.refresh()?;
+        Ok(response)
+    }
+
+    /// Adds several requests and publishes one snapshot after all mutations.
+    /// Each request retains the normal per-request message limit and validation.
+    pub fn add_batch(&mut self, requests: Vec<AddRequest>) -> anyhow::Result<Vec<AddResponse>> {
+        if requests.is_empty() {
+            anyhow::bail!("requests must not be empty");
+        }
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.add_unpublished(request)?);
+        }
+        self.store.refresh()?;
+        Ok(responses)
+    }
+
+    fn add_unpublished(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
         validate_identifier(&request.request_id, "request_id")?;
         validate_identifier(&request.user_id, "user_id")?;
         validate_identifier(&request.session_id, "session_id")?;
         if request.messages.is_empty() {
             anyhow::bail!("messages must not be empty");
         }
+        if request.messages.len() > MAX_MESSAGES_PER_REQUEST {
+            anyhow::bail!("messages must contain at most {MAX_MESSAGES_PER_REQUEST} items");
+        }
+        for (message_index, message) in request.messages.iter().enumerate() {
+            validate_message(message, message_index)?;
+        }
+        let fingerprint = request_fingerprint(&request.session_id, &request.messages)?;
+        let request_key = (request.user_id.clone(), request.request_id.clone());
+        if let Some(previous) = self.request_fingerprints.get(&request_key) {
+            if previous != &fingerprint {
+                anyhow::bail!("request_id was already used with different content");
+            }
+            return Ok(AddResponse {
+                success: true,
+                request_id: request.request_id,
+                user_id: request.user_id,
+                session_id: request.session_id,
+            });
+        }
 
         for (message_index, message) in request.messages.iter().enumerate() {
-            if message.content.trim().is_empty() {
-                anyhow::bail!("messages[{message_index}].content must not be empty");
-            }
-            if message.role != "user" && message.role != "assistant" {
-                anyhow::bail!("messages[{message_index}].role must be user or assistant");
-            }
-
             let source = format!(
                 "memory://{}/{}/{}",
                 request.user_id, request.session_id, message_index
             );
             let mut filters = BTreeMap::new();
             filters.insert(USER_FILTER.to_string(), request.user_id.clone());
+            filters.insert("request_id".to_string(), request.request_id.clone());
+            filters.insert("request_fingerprint".to_string(), fingerprint.clone());
             if let Some(expires_at_ms) = message.expires_at_ms {
                 filters.insert("expires_at_ms".to_string(), expires_at_ms.to_string());
             }
@@ -133,8 +199,8 @@ impl MemoryService {
             });
             self.store.upsert(SourceDocument {
                 doc_id: crate::stable_doc_id_from_source(&format!(
-                    "{}:{message_index}",
-                    request.request_id
+                    "{}:{}:{message_index}",
+                    request.user_id, request.request_id
                 )),
                 source,
                 content: format!("{}: {}", message.role, message.content),
@@ -149,8 +215,7 @@ impl MemoryService {
             });
         }
 
-        // Add returns only after the memory is searchable.
-        self.store.refresh()?;
+        self.request_fingerprints.insert(request_key, fingerprint);
         Ok(AddResponse {
             success: true,
             request_id: request.request_id,
@@ -179,6 +244,14 @@ impl MemoryService {
         let top_k = request.top_k.min(100);
         let results = self.query_results_cached(&request, top_k)?;
         Ok(self.format_search_response(results))
+    }
+
+    pub fn published_search(&self) -> MemorySearchService {
+        MemorySearchService {
+            index: self.store.published_snapshot(),
+            superseded_ids: self.superseded_ids.clone(),
+            query_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     fn query_results(
@@ -304,6 +377,81 @@ impl MemoryService {
     }
 }
 
+impl MemorySearchService {
+    pub fn search(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
+        validate_identifier(&request.user_id, "user_id")?;
+        if request.query.trim().is_empty() {
+            return Ok(SearchResponse { data: vec![] });
+        }
+        let mut filters = BTreeMap::new();
+        let cache_key = format!(
+            "{}\0{}\0{}",
+            request.user_id,
+            request.query,
+            request.top_k.min(100)
+        );
+        filters.insert(USER_FILTER.to_string(), request.user_id);
+        let prepared = PreparedQuery::new(&request.query);
+        let cached = if std::env::var_os("LINT_AI_DISABLE_QUERY_CACHE").is_some() {
+            None
+        } else {
+            self.query_cache
+                .lock()
+                .expect("query cache lock poisoned")
+                .get(&cache_key)
+                .cloned()
+        };
+        let results = if let Some(cached) = cached {
+            cached
+        } else {
+            let results = self
+                .index
+                .query_prepared(&prepared, request.top_k.min(100), &filters)?;
+            let mut cache = self.query_cache.lock().expect("query cache lock poisoned");
+            if cache.len() >= 256 {
+                if let Some(key) = cache.keys().next().cloned() {
+                    cache.remove(&key);
+                }
+            }
+            cache.insert(cache_key, results.clone());
+            results
+        };
+        let now_ms = unix_time_ms();
+        let data = results
+            .into_iter()
+            .filter_map(|result| {
+                self.index
+                    .source_document_by_id(&result.doc_id)
+                    .filter(|doc| {
+                        doc.filters
+                            .get(USER_FILTER)
+                            .map(|user| (user.clone(), doc.doc_id.clone()))
+                            .is_none_or(|key| !self.superseded_ids.contains(&key))
+                    })
+                    .filter(|doc| {
+                        doc.filters
+                            .get("expires_at_ms")
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .is_none_or(|expires_at| expires_at > now_ms)
+                    })
+                    .map(|doc| SearchMemory {
+                        id: result.doc_id,
+                        content: doc.content.clone(),
+                        score: result.score,
+                        created_at: doc.timestamp.clone(),
+                    })
+            })
+            .collect();
+        Ok(SearchResponse { data })
+    }
+}
+
+fn request_fingerprint(session_id: &str, messages: &[Message]) -> anyhow::Result<String> {
+    let canonical = serde_json::to_vec(&(session_id, messages))?;
+    let digest = Sha256::digest(canonical);
+    Ok(format!("v2:{digest:x}"))
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -314,6 +462,8 @@ fn unix_time_ms() -> u64 {
 /// Identifiers reach the index as filter values and as `memory://` source URIs,
 /// so they must stay short, single-line, and free of control characters.
 const MAX_IDENTIFIER_BYTES: usize = 256;
+const MAX_MESSAGES_PER_REQUEST: usize = 1024;
+const MAX_MESSAGE_CONTENT_BYTES: usize = 1024 * 1024;
 
 fn validate_identifier(value: &str, name: &str) -> anyhow::Result<()> {
     if value.trim().is_empty() {
@@ -324,6 +474,22 @@ fn validate_identifier(value: &str, name: &str) -> anyhow::Result<()> {
     }
     if value.chars().any(|character| character.is_control()) {
         anyhow::bail!("{name} must not contain control characters");
+    }
+    Ok(())
+}
+
+fn validate_message(message: &Message, index: usize) -> anyhow::Result<()> {
+    if message.content.trim().is_empty() {
+        anyhow::bail!("messages[{index}].content must not be empty");
+    }
+    if message.content.len() > MAX_MESSAGE_CONTENT_BYTES {
+        anyhow::bail!("messages[{index}].content exceeds {MAX_MESSAGE_CONTENT_BYTES} bytes");
+    }
+    if message.role != "user" && message.role != "assistant" {
+        anyhow::bail!("messages[{index}].role must be user or assistant");
+    }
+    if let Some(supersedes_id) = &message.supersedes_id {
+        validate_identifier(supersedes_id, "supersedes_id")?;
     }
     Ok(())
 }
@@ -403,6 +569,169 @@ mod tests {
     }
 
     #[test]
+    fn identical_request_ids_are_isolated_between_users() {
+        let mut service = service();
+        for (user_id, content) in [("user-a", "alpha secret"), ("user-b", "beta secret")] {
+            service
+                .add(AddRequest {
+                    request_id: "same-request".into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: user_id.into(),
+                    session_id: "session".into(),
+                })
+                .unwrap();
+        }
+        let a = service
+            .search(SearchRequest {
+                query: "secret".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+            })
+            .unwrap();
+        let b = service
+            .search(SearchRequest {
+                query: "secret".into(),
+                options: None,
+                user_id: "user-b".into(),
+                top_k: 10,
+            })
+            .unwrap();
+        assert_eq!(a.data.len(), 1);
+        assert_eq!(b.data.len(), 1);
+        assert!(a.data[0].content.contains("alpha"));
+        assert!(b.data[0].content.contains("beta"));
+    }
+
+    #[test]
+    fn request_fingerprint_is_a_digest_and_includes_session_id() {
+        let mut service = service();
+        let messages = vec![Message {
+            role: "user".into(),
+            timestamp: None,
+            content: "sensitive preference".into(),
+            expires_at_ms: None,
+            supersedes_id: None,
+        }];
+        service
+            .add(AddRequest {
+                request_id: "same-request".into(),
+                messages: messages.clone(),
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap();
+
+        let persisted = service.store.source_documents()[0]
+            .filters
+            .get("request_fingerprint")
+            .unwrap();
+        assert!(persisted.starts_with("v2:"));
+        assert!(!persisted.contains("sensitive preference"));
+
+        let error = service
+            .add(AddRequest {
+                request_id: "same-request".into(),
+                messages,
+                user_id: "user-a".into(),
+                session_id: "session-b".into(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("different content"));
+    }
+
+    #[test]
+    fn invalid_later_message_does_not_partially_add_request() {
+        let mut service = service();
+        let error = service
+            .add(AddRequest {
+                request_id: "atomic-request".into(),
+                messages: vec![
+                    Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: "first valid message".into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    },
+                    Message {
+                        role: "system".into(),
+                        timestamp: None,
+                        content: "invalid role".into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    },
+                ],
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("role"));
+        assert!(service.store.source_documents().is_empty());
+    }
+
+    #[test]
+    fn published_search_remains_stable_while_writer_advances() {
+        let mut service = service();
+        service
+            .add(AddRequest {
+                request_id: "first".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "project codename zephyr".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap();
+        let previous = service.published_search();
+
+        service
+            .add(AddRequest {
+                request_id: "second".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "database codename quartz".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "session-b".into(),
+            })
+            .unwrap();
+
+        let request = || SearchRequest {
+            query: "database codename quartz".into(),
+            options: None,
+            user_id: "user-a".into(),
+            top_k: 10,
+        };
+        assert!(previous
+            .search(request())
+            .unwrap()
+            .data
+            .iter()
+            .all(|memory| !memory.content.contains("quartz")));
+        assert!(service
+            .published_search()
+            .search(request())
+            .unwrap()
+            .data
+            .iter()
+            .any(|memory| memory.content.contains("quartz")));
+    }
+
+    #[test]
     fn expired_memories_are_not_searchable_and_can_be_deleted_idempotently() {
         let mut service = service();
         service
@@ -434,7 +763,7 @@ mod tests {
     #[test]
     fn superseded_memory_is_hidden_but_replacement_remains_searchable() {
         let mut service = service();
-        let old_id = crate::stable_doc_id_from_source("old:0");
+        let old_id = crate::stable_doc_id_from_source("user-a:old:0");
         for (request_id, content, supersedes_id) in [
             ("old", "old deployment decision", None),
             ("new", "new deployment decision", Some(old_id.as_str())),

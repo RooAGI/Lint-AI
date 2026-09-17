@@ -7,7 +7,7 @@ use crate::index::{
     SearchResult, SemanticAggregate, SemanticDocState,
 };
 use crate::query_plan::PreparedQuery;
-use crate::segments::{SegmentRoutingStrategy, SegmentedMemoryIndex};
+use crate::segments::{SegmentManifest, SegmentRoutingStrategy, SegmentedMemoryIndex};
 use crate::semantic_relations::{SemanticRelationStore, SupersessionOptions};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
@@ -26,7 +26,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -73,6 +73,13 @@ pub enum MemoryIndexLayout {
         query_top_n: usize,
         routing_strategy: SegmentRoutingStrategy,
     },
+    /// Adaptive segmented routing starts at `query_top_n` and expands up to
+    /// `max_query_n` when routed segments do not cover enough query evidence.
+    AdaptiveSegmented {
+        query_top_n: usize,
+        max_query_n: usize,
+        routing_strategy: SegmentRoutingStrategy,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +121,7 @@ impl Default for PipelineOptions {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum MemoryIndexSnapshot {
     Single(MemoryIndex),
     Segmented(SegmentedMemoryIndex),
@@ -150,13 +158,10 @@ pub struct IndexStoreInspection {
 }
 
 impl MemoryIndexSnapshot {
-    pub fn global_index(&self) -> &MemoryIndex {
+    pub fn single_index(&self) -> Option<&MemoryIndex> {
         match self {
-            Self::Single(index) => index,
-            Self::Segmented(index) => index
-                .global_index
-                .as_ref()
-                .expect("IndexStore segmented snapshots always have a global fallback"),
+            Self::Single(index) => Some(index),
+            Self::Segmented(_) => None,
         }
     }
 
@@ -184,6 +189,7 @@ const STORE_SCHEMA_VERSION: u32 = 1;
 const STORE_LAYOUT_VERSION: &str = "index-store-v1";
 const SEMANTIC_RECORDS_FILE: &str = "records.json";
 const SEMANTIC_CORE_FILE: &str = "core.bin";
+const SEGMENT_MANIFEST_FILE: &str = "segments.json";
 const CHUNK_LIFECYCLE_FILE: &str = "chunk_lifecycle.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,11 +368,47 @@ pub struct IndexStore {
     dirty_docs: HashSet<String>,
     tombstones: HashSet<String>,
     lexical: LexicalState,
-    snapshot: Option<MemoryIndexSnapshot>,
+    snapshot: Option<Arc<MemoryIndexSnapshot>>,
     snapshot_revision: u64,
     store_revision: u64,
     background_refresh: Option<BackgroundRefresh>,
     dirty: bool,
+}
+
+/// Immutable, cheaply clonable view of the last fully published index generation.
+/// It intentionally excludes all mutable writer and persistence state.
+#[derive(Clone)]
+pub struct PublishedIndexSnapshot {
+    options: PipelineOptions,
+    source_docs: Arc<HashMap<String, SourceDocument>>,
+    records: Arc<HashMap<String, DocRecord>>,
+    semantic_relations: Arc<SemanticRelationStore>,
+    snapshot: Option<Arc<MemoryIndexSnapshot>>,
+}
+
+impl PublishedIndexSnapshot {
+    pub fn query_prepared(
+        &self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<SearchResult>> {
+        execute_prepared_on_snapshot_parts(
+            &self.options,
+            &self.source_docs,
+            &self.records,
+            &self.semantic_relations,
+            self.snapshot.as_deref(),
+            prepared,
+            top_k,
+            filters,
+        )
+        .map(|(results, _, _)| results)
+    }
+
+    pub fn source_document_by_id(&self, doc_id: &str) -> Option<&SourceDocument> {
+        self.source_docs.get(doc_id)
+    }
 }
 
 struct BackgroundRefresh {
@@ -376,21 +418,34 @@ struct BackgroundRefresh {
 
 fn build_memory_index_snapshot(
     records: Vec<DocRecord>,
-    global_index: MemoryIndex,
+    global_index: Option<MemoryIndex>,
     layout: &MemoryIndexLayout,
+    generation: u64,
 ) -> MemoryIndexSnapshot {
     match layout {
-        MemoryIndexLayout::Single => MemoryIndexSnapshot::Single(global_index),
-        MemoryIndexLayout::Segmented { .. } => MemoryIndexSnapshot::Segmented(
-            SegmentedMemoryIndex::from_records_by_group_id_with_global_index(
-                &records,
-                global_index,
-            ),
+        MemoryIndexLayout::Single => MemoryIndexSnapshot::Single(
+            global_index.expect("single-index snapshots require a global index"),
         ),
+        MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. } => {
+            MemoryIndexSnapshot::Segmented(
+                SegmentedMemoryIndex::from_records_by_group_id_with_generation(
+                    &records, generation,
+                ),
+            )
+        }
     }
 }
 
 impl IndexStore {
+    pub fn published_snapshot(&self) -> PublishedIndexSnapshot {
+        PublishedIndexSnapshot {
+            options: self.options.clone(),
+            source_docs: Arc::new(self.source_docs.clone()),
+            records: Arc::new(self.records.clone()),
+            semantic_relations: Arc::new(self.semantic_relations.clone()),
+            snapshot: self.snapshot.clone(),
+        }
+    }
     pub fn new(options: PipelineOptions) -> Self {
         match Self::try_new(options.clone()) {
             Ok(store) => store,
@@ -449,11 +504,40 @@ impl IndexStore {
     fn build_with_store_paths(options: PipelineOptions, store_paths: StorePaths) -> Result<Self> {
         let lexical_index_dir = store_paths.lexical_dir.clone();
         let (source_docs, records, chunk_lifecycle, loaded_snapshot) =
-            load_semantic_state(&store_paths)?;
-        let snapshot = loaded_snapshot.map(|global| {
-            let records = records.values().cloned().collect::<Vec<_>>();
-            build_memory_index_snapshot(records, global, &options.memory_index_layout)
-        });
+            load_semantic_state(&store_paths, &options.memory_index_layout)?;
+        let snapshot =
+            if let Some(global) = loaded_snapshot {
+                let records = records.values().cloned().collect::<Vec<_>>();
+                Some(build_memory_index_snapshot(
+                    records,
+                    Some(global),
+                    &options.memory_index_layout,
+                    0,
+                ))
+            } else if matches!(
+                options.memory_index_layout,
+                MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+            ) && !records.is_empty()
+            {
+                let records = records.values().cloned().collect::<Vec<_>>();
+                let manifest = load_segment_manifest(&store_paths)?;
+                let snapshot = manifest.and_then(|manifest| {
+                    match SegmentedMemoryIndex::from_records_by_manifest(&records, &manifest, 0) {
+                        Ok(segmented) => Some(MemoryIndexSnapshot::Segmented(segmented)),
+                        Err(error) => {
+                            eprintln!(
+                                "warning: ignoring invalid persisted segment manifest: {error}"
+                            );
+                            None
+                        }
+                    }
+                });
+                Some(snapshot.unwrap_or_else(|| {
+                    build_memory_index_snapshot(records, None, &options.memory_index_layout, 0)
+                }))
+            } else {
+                None
+            };
         let mut semantic_docs = HashMap::new();
         let mut semantic_aggregate = SemanticAggregate::default();
         let mut chunk_latest_by_lineage = HashMap::new();
@@ -487,7 +571,7 @@ impl IndexStore {
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
             lexical,
-            snapshot,
+            snapshot: snapshot.map(Arc::new),
             snapshot_revision: 0,
             store_revision: 0,
             background_refresh: None,
@@ -503,17 +587,48 @@ impl IndexStore {
         index
     }
 
+    fn build_compatibility_index(&self) -> MemoryIndex {
+        let mut records = self.records.values().cloned().collect::<Vec<_>>();
+        records.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+        MemoryIndex::from_records_with_semantic_aggregate(
+            records,
+            self.semantic_aggregate.clone(),
+            self.options.text_rerank_ngram,
+            self.options.text_rerank_lcs,
+            self.options.claim_extraction,
+        )
+    }
+
+    fn persist_compatibility_state(&self) -> Result<()> {
+        if self.store_paths.semantic_dir.is_none() {
+            return Ok(());
+        }
+        match self.snapshot.as_deref().expect("snapshot should exist") {
+            MemoryIndexSnapshot::Single(index) => persist_semantic_state(
+                &self.store_paths,
+                Some(index),
+                &self.records,
+                &self.chunk_lifecycle,
+            ),
+            MemoryIndexSnapshot::Segmented(segmented) => {
+                persist_semantic_state(
+                    &self.store_paths,
+                    None,
+                    &self.records,
+                    &self.chunk_lifecycle,
+                )?;
+                persist_segment_manifest(&self.store_paths, &segmented.manifest())
+            }
+        }
+    }
+
     /// Serialize the current index state to a pair of opaque byte buffers suitable
     /// for storage in an external system (e.g. Postgres BYTEA / JSONB columns).
     /// Call `load_from_dump` to restore.
     pub fn dump(&mut self) -> Result<IndexDump> {
         self.refresh()?;
-        let core_bytes = self
-            .snapshot
-            .as_ref()
-            .expect("snapshot exists after refresh")
-            .global_index()
-            .to_bytes()?;
+        let compatibility_index = self.build_compatibility_index();
+        let core_bytes = compatibility_index.to_bytes()?;
         let records: Vec<PersistedDocRecord> = self
             .records
             .values()
@@ -558,8 +673,9 @@ impl IndexStore {
         let global_index = MemoryIndex::from_bytes(&dump.core_bytes, restored_records.clone())?;
         let snapshot = build_memory_index_snapshot(
             restored_records.clone(),
-            global_index,
+            Some(global_index),
             &options.memory_index_layout,
+            0,
         );
         let mut source_docs = HashMap::new();
         let mut records = HashMap::new();
@@ -631,7 +747,7 @@ impl IndexStore {
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
             lexical,
-            snapshot: Some(snapshot),
+            snapshot: Some(Arc::new(snapshot)),
             snapshot_revision: 1,
             store_revision: 1,
             background_refresh: None,
@@ -715,7 +831,7 @@ impl IndexStore {
     }
 
     pub fn memory_index_snapshot(&self) -> Option<&MemoryIndexSnapshot> {
-        self.snapshot.as_ref()
+        self.snapshot.as_deref()
     }
 
     pub fn inspection(&self) -> IndexStoreInspection {
@@ -726,7 +842,7 @@ impl IndexStore {
             store_revision: self.store_revision,
             snapshot_revision: self.snapshot_revision,
             tombstones: self.tombstones().into_iter().map(str::to_string).collect(),
-            snapshot: self.snapshot.as_ref().map(inspect_memory_index_snapshot),
+            snapshot: self.snapshot.as_deref().map(inspect_memory_index_snapshot),
         }
     }
 
@@ -819,42 +935,27 @@ impl IndexStore {
             .adjacent_pairs_between(start, end, max_gap_days)
     }
 
-    pub fn refresh(&mut self) -> Result<&MemoryIndex> {
+    pub fn refresh(&mut self) -> Result<()> {
         self.poll_background_refresh()?;
         if self.dirty || self.snapshot.is_none() {
             self.prepare_pending_changes()?;
             let mut records = self.records.values().cloned().collect::<Vec<DocRecord>>();
             records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-            let global_index = MemoryIndex::from_records_with_semantic_aggregate(
-                records.clone(),
-                self.semantic_aggregate.clone(),
-                self.options.text_rerank_ngram,
-                self.options.text_rerank_lcs,
-                self.options.claim_extraction,
-            );
-            self.snapshot = Some(build_memory_index_snapshot(
+            let global_index =
+                matches!(self.options.memory_index_layout, MemoryIndexLayout::Single)
+                    .then(|| self.build_compatibility_index());
+            self.snapshot = Some(Arc::new(build_memory_index_snapshot(
                 records,
                 global_index,
                 &self.options.memory_index_layout,
-            ));
+                self.store_revision,
+            )));
             self.snapshot_revision = self.store_revision;
             persist_store_metadata(&self.store_paths, &self.options)?;
-            persist_semantic_state(
-                &self.store_paths,
-                self.snapshot
-                    .as_ref()
-                    .expect("snapshot should exist")
-                    .global_index(),
-                &self.records,
-                &self.chunk_lifecycle,
-            )?;
+            self.persist_compatibility_state()?;
             self.dirty = false;
         }
-        Ok(self
-            .snapshot
-            .as_ref()
-            .expect("snapshot should exist after refresh")
-            .global_index())
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -877,17 +978,21 @@ impl IndexStore {
         let claim_extraction = self.options.claim_extraction;
         let memory_index_layout = self.options.memory_index_layout.clone();
         thread::spawn(move || {
-            let global_index = MemoryIndex::from_records_with_semantic_aggregate(
-                records.clone(),
-                semantic_aggregate,
-                text_rerank_ngram,
-                text_rerank_lcs,
-                claim_extraction,
-            );
+            let global_index =
+                matches!(memory_index_layout, MemoryIndexLayout::Single).then(|| {
+                    MemoryIndex::from_records_with_semantic_aggregate(
+                        records.clone(),
+                        semantic_aggregate,
+                        text_rerank_ngram,
+                        text_rerank_lcs,
+                        claim_extraction,
+                    )
+                });
             let _ = sender.send(Ok(build_memory_index_snapshot(
                 records,
                 global_index,
                 &memory_index_layout,
+                target_revision,
             )));
         });
         self.background_refresh = Some(BackgroundRefresh {
@@ -910,12 +1015,16 @@ impl IndexStore {
         let lexical_hits = self
             .lexical
             .search(query, top_k.saturating_mul(5).max(20))?;
-        Ok(self
+        match self
             .snapshot
-            .as_ref()
+            .as_deref()
             .expect("snapshot should exist after latest query preparation")
-            .global_index()
-            .query_with_lexical_hits(query, top_k, Some(&lexical_hits)))
+        {
+            MemoryIndexSnapshot::Single(index) => {
+                Ok(index.query_with_lexical_hits(query, top_k, Some(&lexical_hits)))
+            }
+            MemoryIndexSnapshot::Segmented(_) => self.query(query, top_k),
+        }
     }
 
     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
@@ -995,69 +1104,16 @@ impl IndexStore {
         top_k: usize,
         filters: &std::collections::BTreeMap<String, String>,
     ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
-        let Some(snapshot) = self.snapshot.as_ref() else {
-            return Ok((
-                Vec::new(),
-                QueryTimings::default(),
-                QueryDiagnostics::default(),
-            ));
-        };
-        let index = snapshot.global_index();
-        let filter_allowed = index.doc_ids_matching_filters(filters);
-        let document_ids = self.source_docs.keys().cloned().collect::<Vec<_>>();
-
-        let (results, timings, diagnostics) = match (snapshot, &self.options.memory_index_layout) {
-            (
-                MemoryIndexSnapshot::Segmented(segmented),
-                MemoryIndexLayout::Segmented {
-                    query_top_n,
-                    routing_strategy,
-                },
-            ) => {
-                let allowed = prepared.semantic_allowed_doc_ids(
-                    filter_allowed.clone(),
-                    &self.semantic_relations,
-                    &document_ids,
-                );
-                let mut context = prepared.temporal_context();
-                context.allowed_doc_ids = allowed.as_ref();
-                let started = std::time::Instant::now();
-                let output = segmented.query_with_temporal_context_at_and_diagnostics_and_strategy(
-                    prepared.search_query(),
-                    top_k,
-                    (*query_top_n).max(1),
-                    *routing_strategy,
-                    context,
-                    prepared.reference_date(),
-                );
-                let timings = QueryTimings {
-                    total_ms: started.elapsed().as_secs_f64() * 1000.0,
-                    ..QueryTimings::default()
-                };
-                let diagnostics = QueryDiagnostics {
-                    candidates: output.diagnostics.merged_result_count,
-                    ..QueryDiagnostics::default()
-                };
-                (
-                    prepared.annotate_semantic_results(
-                        output.results,
-                        &self.semantic_relations,
-                        top_k,
-                    ),
-                    timings,
-                    diagnostics,
-                )
-            }
-            _ => prepared.execute_on_index_with_semantics(
-                index,
-                top_k,
-                filter_allowed,
-                &self.semantic_relations,
-                &document_ids,
-            ),
-        };
-
-        Ok((results, timings, diagnostics))
+        execute_prepared_on_snapshot_parts(
+            &self.options,
+            &self.source_docs,
+            &self.records,
+            &self.semantic_relations,
+            self.snapshot.as_deref(),
+            prepared,
+            top_k,
+            filters,
+        )
     }
 
     /// Multi-query convenience wrapper over the same prepared-query executor.
@@ -1146,18 +1202,10 @@ impl IndexStore {
                 self.background_refresh = None;
                 let snapshot = result?;
                 if target_revision == self.store_revision {
-                    self.snapshot = Some(snapshot);
+                    self.snapshot = Some(Arc::new(snapshot));
                     self.snapshot_revision = target_revision;
                     persist_store_metadata(&self.store_paths, &self.options)?;
-                    persist_semantic_state(
-                        &self.store_paths,
-                        self.snapshot
-                            .as_ref()
-                            .expect("snapshot should exist")
-                            .global_index(),
-                        &self.records,
-                        &self.chunk_lifecycle,
-                    )?;
+                    self.persist_compatibility_state()?;
                     self.dirty = false;
                 }
                 Ok(())
@@ -1262,6 +1310,188 @@ impl IndexStore {
     }
 }
 
+fn execute_prepared_on_snapshot_parts(
+    options: &PipelineOptions,
+    source_docs: &HashMap<String, SourceDocument>,
+    records: &HashMap<String, DocRecord>,
+    semantic_relations: &SemanticRelationStore,
+    snapshot: Option<&MemoryIndexSnapshot>,
+    prepared: &PreparedQuery,
+    top_k: usize,
+    filters: &std::collections::BTreeMap<String, String>,
+) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
+    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let query_started = std::time::Instant::now();
+    let Some(snapshot) = snapshot else {
+        return Ok((
+            Vec::new(),
+            QueryTimings::default(),
+            QueryDiagnostics::default(),
+        ));
+    };
+    let filter_started = std::time::Instant::now();
+    let filter_bitmap = match snapshot {
+        MemoryIndexSnapshot::Single(index) => index.doc_bitmap_matching_filters(filters),
+        MemoryIndexSnapshot::Segmented(_) => None,
+    };
+    let filter_allowed = if filters.is_empty() {
+        None
+    } else if let MemoryIndexSnapshot::Segmented(segmented) = snapshot {
+        // Build the routing scope from the per-segment bitmap postings. This
+        // preserves filter-aware segment selection without scanning records.
+        // A one-segment snapshot has no routing decision to make; the local
+        // bitmap is sufficient and avoids materializing 23k string IDs.
+        if segmented.segment_count() == 1 {
+            None
+        } else {
+            segmented.doc_ids_matching_filters(filters)
+        }
+    } else if let MemoryIndexSnapshot::Single(index) = snapshot {
+        // The bitmap is the canonical filter representation. Keep the legacy
+        // string allow-list only when semantic suppression must be intersected
+        // with it; otherwise this avoids a full ID materialization per query.
+        if semantic_relations.is_empty() {
+            None
+        } else {
+            index.doc_ids_matching_filters(filters)
+        }
+    } else {
+        Some(
+            records
+                .iter()
+                .filter(|(_, record)| {
+                    filters.iter().all(|(key, value)| {
+                        record
+                            .filters
+                            .get(key)
+                            .is_some_and(|actual| actual == value)
+                    })
+                })
+                .map(|(doc_id, _)| doc_id.clone())
+                .collect::<HashSet<_>>(),
+        )
+    };
+    let filter_segment_bitmaps = match snapshot {
+        MemoryIndexSnapshot::Segmented(segmented) => {
+            Some(segmented.doc_bitmaps_matching_filters(filters))
+        }
+        MemoryIndexSnapshot::Single(_) => None,
+    };
+    if profile {
+        eprintln!(
+            "query_timing filter_ms={:.3}",
+            filter_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    let document_ids = source_docs.keys().cloned().collect::<Vec<_>>();
+    let allowed_doc_ids =
+        prepared.semantic_allowed_doc_ids(filter_allowed, semantic_relations, &document_ids);
+
+    let (results, timings, diagnostics) = match snapshot {
+        MemoryIndexSnapshot::Segmented(segmented) => {
+            let (query_top_n, max_query_n, routing_strategy, adaptive) =
+                match &options.memory_index_layout {
+                    MemoryIndexLayout::Segmented {
+                        query_top_n,
+                        routing_strategy,
+                    } => (*query_top_n, *query_top_n, *routing_strategy, false),
+                    MemoryIndexLayout::AdaptiveSegmented {
+                        query_top_n,
+                        max_query_n,
+                        routing_strategy,
+                    } => (*query_top_n, *max_query_n, *routing_strategy, true),
+                    MemoryIndexLayout::Single => {
+                        anyhow::bail!("segmented snapshot published under single-index options")
+                    }
+                };
+            let mut context = prepared.temporal_context();
+            context.allowed_doc_ids = allowed_doc_ids.as_ref();
+            context.allowed_doc_bitmap = filter_bitmap.as_ref();
+            context.allowed_segment_doc_bitmaps = filter_segment_bitmaps.as_ref();
+            let started = std::time::Instant::now();
+            let output = if segmented.segment_count() == 1 {
+                let local_bitmap = filter_segment_bitmaps
+                    .as_ref()
+                    .and_then(|maps| maps.values().next());
+                let mut local_context = context;
+                local_context.allowed_doc_ids = None;
+                local_context.allowed_doc_bitmap = local_bitmap;
+                let (results, _) = segmented
+                    .query_single_segment(
+                        prepared.search_query(),
+                        top_k,
+                        local_context,
+                        prepared.reference_date(),
+                    )
+                    .unwrap_or_default();
+                crate::segments::SegmentQueryOutput {
+                    results,
+                    diagnostics: Default::default(),
+                }
+            } else if adaptive {
+                segmented
+                    .query_with_adaptive_segment_enrichment_temporal_context_and_strategy(
+                        prepared.search_query(),
+                        top_k,
+                        query_top_n.max(1),
+                        max_query_n.max(query_top_n).max(1),
+                        routing_strategy,
+                        context,
+                        prepared.reference_date(),
+                    )
+                    .0
+            } else {
+                segmented.query_with_temporal_context_at_and_diagnostics_and_strategy(
+                    prepared.search_query(),
+                    top_k,
+                    query_top_n.max(1),
+                    routing_strategy,
+                    context,
+                    prepared.reference_date(),
+                )
+            };
+            let timings = QueryTimings {
+                total_ms: started.elapsed().as_secs_f64() * 1000.0,
+                ..QueryTimings::default()
+            };
+            if profile {
+                eprintln!(
+                    "query_timing segmented_ms={:.3} total_ms={:.3} segments={}",
+                    timings.total_ms,
+                    query_started.elapsed().as_secs_f64() * 1000.0,
+                    output.diagnostics.queried_segment_count
+                );
+            }
+            let diagnostics = QueryDiagnostics {
+                candidates: output.diagnostics.merged_result_count,
+                snapshot_generation: output.diagnostics.snapshot_generation,
+                shard_completeness: output.diagnostics.shard_completeness,
+                ..QueryDiagnostics::default()
+            };
+            (
+                prepared.annotate_semantic_results(output.results, semantic_relations, top_k),
+                timings,
+                diagnostics,
+            )
+        }
+        MemoryIndexSnapshot::Single(index) => {
+            let (results, timings, diagnostics) =
+                if filter_bitmap.is_some() && semantic_relations.is_empty() {
+                    prepared.execute_on_index_with_bitmap(index, top_k, filter_bitmap.as_ref())
+                } else {
+                    prepared.execute_on_index(index, top_k, allowed_doc_ids.as_ref())
+                };
+            (
+                prepared.annotate_semantic_results(results, semantic_relations, top_k),
+                timings,
+                diagnostics,
+            )
+        }
+    };
+
+    Ok((results, timings, diagnostics))
+}
+
 fn inspect_memory_index_snapshot(snapshot: &MemoryIndexSnapshot) -> MemoryIndexSnapshotInspection {
     match snapshot {
         MemoryIndexSnapshot::Single(index) => {
@@ -1286,21 +1516,25 @@ fn inspect_memory_index_snapshot(snapshot: &MemoryIndexSnapshot) -> MemoryIndexS
             layout: "segmented".to_string(),
             segment_count: index.segments.len(),
             global_document_count: index
-                .global_index
-                .as_ref()
-                .map(|global| global.docs.len())
-                .unwrap_or_default(),
+                .segments
+                .iter()
+                .map(|segment| segment.doc_ids.len())
+                .sum(),
             segments: index
                 .segments
                 .iter()
-                .map(|segment| MemoryIndexSegmentInspection {
-                    segment_id: segment.segment_id.clone(),
-                    document_count: segment.doc_ids.len(),
-                    doc_ids: segment.doc_ids.clone(),
-                    profile_term_count: segment.profile.terms.len(),
-                    profile_entity_count: segment.profile.entities.len(),
-                    profile_topic_count: segment.profile.topics.len(),
-                    profile_local_memory_count: segment.profile.local_memory.len(),
+                .map(|segment| {
+                    let (term_count, entity_count, topic_count, local_memory_count) =
+                        index.routing_summary_counts(&segment.segment_id);
+                    MemoryIndexSegmentInspection {
+                        segment_id: segment.segment_id.clone(),
+                        document_count: segment.doc_ids.len(),
+                        doc_ids: segment.doc_ids.clone(),
+                        profile_term_count: term_count,
+                        profile_entity_count: entity_count,
+                        profile_topic_count: topic_count,
+                        profile_local_memory_count: local_memory_count,
+                    }
                 })
                 .collect(),
         },
@@ -1390,6 +1624,34 @@ fn semantic_core_path(store_paths: &StorePaths) -> Option<PathBuf> {
         .map(|dir| dir.join(SEMANTIC_CORE_FILE))
 }
 
+fn segment_manifest_path(store_paths: &StorePaths) -> Option<PathBuf> {
+    store_paths
+        .semantic_dir
+        .as_ref()
+        .map(|dir| dir.join(SEGMENT_MANIFEST_FILE))
+}
+
+fn load_segment_manifest(store_paths: &StorePaths) -> Result<Option<SegmentManifest>> {
+    let Some(path) = segment_manifest_path(store_paths) else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_str(&fs::read_to_string(path)?)?))
+}
+
+fn persist_segment_manifest(store_paths: &StorePaths, manifest: &SegmentManifest) -> Result<()> {
+    let Some(semantic_dir) = store_paths.semantic_dir.as_ref() else {
+        return Ok(());
+    };
+    fs::create_dir_all(semantic_dir)?;
+    let path = segment_manifest_path(store_paths)
+        .expect("segment manifest path should exist when semantic dir exists");
+    write_text_file_atomic(&path, &serde_json::to_string_pretty(manifest)?)?;
+    Ok(())
+}
+
 fn chunk_lifecycle_path(store_paths: &StorePaths) -> Option<PathBuf> {
     store_paths
         .semantic_dir
@@ -1442,14 +1704,20 @@ type SemanticState = (
     Option<MemoryIndex>,
 );
 
-fn load_semantic_state(store_paths: &StorePaths) -> Result<SemanticState> {
+fn load_semantic_state(
+    store_paths: &StorePaths,
+    layout: &MemoryIndexLayout,
+) -> Result<SemanticState> {
     let Some(records_path) = semantic_records_path(store_paths) else {
         return Ok((HashMap::new(), HashMap::new(), HashMap::new(), None));
     };
-    let Some(core_path) = semantic_core_path(store_paths) else {
+    if !records_path.exists() {
         return Ok((HashMap::new(), HashMap::new(), HashMap::new(), None));
-    };
-    if !records_path.exists() || !core_path.exists() {
+    }
+    let core_path = semantic_core_path(store_paths);
+    if matches!(layout, MemoryIndexLayout::Single)
+        && !core_path.as_ref().is_some_and(|p| p.exists())
+    {
         return Ok((HashMap::new(), HashMap::new(), HashMap::new(), None));
     }
 
@@ -1477,8 +1745,17 @@ fn load_semantic_state(store_paths: &StorePaths) -> Result<SemanticState> {
         .into_iter()
         .map(Into::into)
         .collect::<Vec<DocRecord>>();
-    let snapshot =
-        MemoryIndex::load_with_binary_core(restored_records.clone(), &core_path, None, false)?;
+    let snapshot = match layout {
+        MemoryIndexLayout::Single => Some(MemoryIndex::load_with_binary_core(
+            restored_records.clone(),
+            core_path
+                .as_ref()
+                .expect("single layout requires a core path"),
+            None,
+            false,
+        )?),
+        MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. } => None,
+    };
     let mut source_docs = HashMap::new();
     let mut records = HashMap::new();
     for record in restored_records {
@@ -1519,12 +1796,12 @@ fn load_semantic_state(store_paths: &StorePaths) -> Result<SemanticState> {
             )?;
         }
     }
-    Ok((source_docs, records, chunk_lifecycle, Some(snapshot)))
+    Ok((source_docs, records, chunk_lifecycle, snapshot))
 }
 
 fn persist_semantic_state(
     store_paths: &StorePaths,
-    snapshot: &MemoryIndex,
+    snapshot: Option<&MemoryIndex>,
     records_map: &HashMap<String, DocRecord>,
     chunk_lifecycle_map: &HashMap<String, ChunkLifecycleMeta>,
 ) -> Result<()> {
@@ -1534,8 +1811,6 @@ fn persist_semantic_state(
     fs::create_dir_all(semantic_dir)?;
     let records_path = semantic_records_path(store_paths)
         .expect("records path should exist when semantic dir exists");
-    let core_path =
-        semantic_core_path(store_paths).expect("core path should exist when semantic dir exists");
     let mut records = records_map.values().cloned().collect::<Vec<_>>();
     records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
     let payload = PersistedSemanticRecords {
@@ -1556,7 +1831,11 @@ fn persist_semantic_state(
         lifecycle.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
         write_text_file_atomic(&lifecycle_path, &serde_json::to_string_pretty(&lifecycle)?)?;
     }
-    save_binary_core_atomic(snapshot, &core_path)?;
+    if let Some(snapshot) = snapshot {
+        let core_path = semantic_core_path(store_paths)
+            .expect("core path should exist when persisting a single index");
+        save_binary_core_atomic(snapshot, &core_path)?;
+    }
     Ok(())
 }
 
@@ -1898,17 +2177,6 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
-fn intersect_doc_id_filters(
-    left: Option<HashSet<String>>,
-    right: Option<HashSet<String>>,
-) -> Option<HashSet<String>> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left.intersection(&right).cloned().collect()),
-        (Some(allowed), None) | (None, Some(allowed)) => Some(allowed),
-        (None, None) => None,
-    }
-}
-
 fn build_doc_records(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
@@ -2167,6 +2435,7 @@ pub fn build_index_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::TemporalQueryContext;
     use std::fs;
     use std::path::PathBuf;
     use std::thread;
@@ -2347,6 +2616,105 @@ mod tests {
     }
 
     #[test]
+    fn single_and_segmented_queries_share_ranking_and_filter_semantics() {
+        let segmented_options = PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 8,
+                routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let documents = [
+            sample_doc_with_group("docker-1", "session-docker", "docker compose containers"),
+            sample_doc_with_group("docker-2", "session-docker", "docker deployment guide"),
+            sample_doc_with_group(
+                "database-1",
+                "session-database",
+                "database migration schema",
+            ),
+        ];
+        let mut single = IndexStore::new(PipelineOptions::default());
+        let mut segmented = IndexStore::new(segmented_options);
+        for document in documents {
+            single.upsert(document.clone());
+            segmented.upsert(document);
+        }
+
+        let single_ids = single
+            .query("docker deployment", 5)
+            .expect("single query should succeed")
+            .into_iter()
+            .map(|result| result.doc_id)
+            .collect::<Vec<_>>();
+        let segmented_ids = segmented
+            .query("docker deployment", 5)
+            .expect("segmented query should succeed")
+            .into_iter()
+            .map(|result| result.doc_id)
+            .collect::<Vec<_>>();
+        assert_eq!(segmented_ids, single_ids);
+
+        let mut filters = std::collections::BTreeMap::new();
+        filters.insert("missing-scope".to_string(), "true".to_string());
+        assert!(single
+            .query_filtered("docker", 5, &filters)
+            .expect("single filtered query should succeed")
+            .is_empty());
+        assert!(segmented
+            .query_filtered("docker", 5, &filters)
+            .expect("segmented filtered query should succeed")
+            .is_empty());
+    }
+
+    #[test]
+    fn segmented_routing_applies_filters_before_selecting_segments() {
+        let options = PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 1,
+                routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut single = IndexStore::new(PipelineOptions::default());
+        let mut segmented = IndexStore::new(options);
+        let mut excluded = sample_doc_with_group("session-a-doc", "session-a", "docker guide");
+        excluded
+            .filters
+            .insert("scope".to_string(), "excluded".to_string());
+        let mut allowed = sample_doc_with_group("session-b-doc", "session-b", "docker guide");
+        allowed
+            .filters
+            .insert("scope".to_string(), "allowed".to_string());
+        for document in [excluded, allowed] {
+            single.upsert(document.clone());
+            segmented.upsert(document);
+        }
+        let mut filters = std::collections::BTreeMap::new();
+        filters.insert("scope".to_string(), "allowed".to_string());
+
+        let single_results = single
+            .query_filtered("docker", 1, &filters)
+            .expect("single filtered query should succeed");
+        let segmented_results = segmented
+            .query_filtered("docker", 1, &filters)
+            .expect("segmented filtered query should succeed");
+        assert_eq!(
+            single_results
+                .iter()
+                .map(|result| result.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session-b-doc"]
+        );
+        assert_eq!(
+            segmented_results
+                .iter()
+                .map(|result| result.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session-b-doc"]
+        );
+    }
+
+    #[test]
     fn index_store_publishes_and_queries_segmented_snapshot() {
         let options = PipelineOptions {
             memory_index_layout: MemoryIndexLayout::Segmented {
@@ -2373,12 +2741,54 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].doc_id, "docker-doc");
 
+        let (_, _, query_diagnostics) = index
+            .query_timed("docker containers", 5)
+            .expect("timed query should succeed");
+        assert_eq!(
+            query_diagnostics.snapshot_generation,
+            index.snapshot_revision()
+        );
+        let completeness = query_diagnostics
+            .shard_completeness
+            .expect("segmented diagnostics should expose completeness");
+        assert_eq!(completeness.expected_segments, vec!["session-docker"]);
+        assert!(completeness.is_complete());
+
         let snapshot = index
             .memory_index_snapshot()
             .expect("snapshot should be published");
         assert!(snapshot.is_segmented());
         assert_eq!(snapshot.segment_count(), 2);
-        assert_eq!(snapshot.global_index().docs.len(), 2);
+        assert!(snapshot.single_index().is_none());
+        assert_eq!(index.snapshot_revision(), 2);
+        let output = match snapshot {
+            MemoryIndexSnapshot::Segmented(segmented) => {
+                segmented.query_with_diagnostics("docker containers", 5, 1)
+            }
+            MemoryIndexSnapshot::Single(_) => panic!("expected segmented snapshot"),
+        };
+        assert_eq!(
+            output.diagnostics.snapshot_generation,
+            index.snapshot_revision()
+        );
+        let enrichment_output = match snapshot {
+            MemoryIndexSnapshot::Segmented(segmented) => {
+                segmented
+                    .query_with_segment_enrichment_temporal_context_and_strategy(
+                        "docker containers",
+                        5,
+                        1,
+                        SegmentRoutingStrategy::SparseOverlap,
+                        TemporalQueryContext::default(),
+                    )
+                    .0
+            }
+            MemoryIndexSnapshot::Single(_) => panic!("expected segmented snapshot"),
+        };
+        assert_eq!(
+            enrichment_output.diagnostics.snapshot_generation,
+            index.snapshot_revision()
+        );
 
         let inspection = index.inspection();
         let snapshot = inspection
@@ -2399,6 +2809,48 @@ mod tests {
             .segments
             .iter()
             .all(|segment| segment.document_count == 1));
+    }
+
+    #[test]
+    fn segmented_snapshot_generation_tracks_publication_revision() {
+        let options = PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 2,
+                routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut index = IndexStore::new(options);
+        index.upsert(sample_doc_with_group(
+            "doc-1",
+            "session-1",
+            "docker installation",
+        ));
+        index
+            .query("docker", 1)
+            .expect("initial query should succeed");
+
+        let first_generation = match index.memory_index_snapshot().unwrap() {
+            MemoryIndexSnapshot::Segmented(segmented) => segmented.generation(),
+            MemoryIndexSnapshot::Single(_) => panic!("expected segmented snapshot"),
+        };
+        assert_eq!(first_generation, index.snapshot_revision());
+
+        index.upsert(sample_doc_with_group(
+            "doc-2",
+            "session-2",
+            "postgres database",
+        ));
+        index
+            .query("postgres", 1)
+            .expect("replacement query should succeed");
+
+        let second_generation = match index.memory_index_snapshot().unwrap() {
+            MemoryIndexSnapshot::Segmented(segmented) => segmented.generation(),
+            MemoryIndexSnapshot::Single(_) => panic!("expected segmented snapshot"),
+        };
+        assert!(second_generation > first_generation);
+        assert_eq!(second_generation, index.snapshot_revision());
     }
 
     #[test]
@@ -2609,6 +3061,214 @@ mod tests {
         assert_eq!(second_results[0].doc_id, "doc-1");
 
         let _ = fs::remove_dir_all(corpus_root.join(".lint-ai"));
+    }
+
+    #[test]
+    fn segmented_store_reloads_without_a_compatibility_core() {
+        let index_root = unique_temp_dir("segmented-semantic-state");
+        let options = PipelineOptions {
+            index_location: IndexLocation::Explicit(index_root.clone()),
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 2,
+                routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+
+        let mut first = IndexStore::at_path(&index_root, options.clone())
+            .expect("segmented explicit-path store should initialize");
+        first.upsert(sample_doc_with_group(
+            "doc-1",
+            "session-1",
+            "segmented persistence works",
+        ));
+        first.upsert(sample_doc_with_group(
+            "doc-2",
+            "session-2",
+            "manifest preserves segment assignment",
+        ));
+        assert!(!first
+            .query("persistence", 5)
+            .expect("query should succeed")
+            .is_empty());
+        drop(first);
+
+        let semantic_dir = index_root.join("semantic");
+        assert!(semantic_dir.join("records.json").exists());
+        assert!(!semantic_dir.join("core.bin").exists());
+        let manifest: SegmentManifest = serde_json::from_str(
+            &fs::read_to_string(semantic_dir.join("segments.json"))
+                .expect("segment manifest should be persisted"),
+        )
+        .expect("segment manifest should be valid JSON");
+        assert_eq!(manifest.segments.len(), 2);
+
+        // Prove that a valid manifest is authoritative rather than merely
+        // reproducing the default group-id partitioning.
+        let custom_manifest = SegmentManifest {
+            generation: manifest.generation,
+            segments: vec![crate::segments::SegmentManifestEntry {
+                segment_id: "combined".to_string(),
+                doc_ids: vec!["doc-1".to_string(), "doc-2".to_string()],
+            }],
+        };
+        fs::write(
+            semantic_dir.join("segments.json"),
+            serde_json::to_string_pretty(&custom_manifest).expect("manifest should serialize"),
+        )
+        .expect("custom manifest should be writable");
+
+        let mut second = reopen_store_after_writer_drop(&index_root, options);
+        let results = second
+            .query("persistence", 5)
+            .expect("reloaded segmented query should succeed");
+        assert_eq!(
+            results.first().map(|result| result.doc_id.as_str()),
+            Some("doc-1")
+        );
+        let snapshot = second
+            .memory_index_snapshot()
+            .expect("reloaded snapshot should be published");
+        let diagnostics = match snapshot {
+            MemoryIndexSnapshot::Segmented(segmented) => {
+                segmented.query_with_diagnostics("manifest", 5, 1)
+            }
+            MemoryIndexSnapshot::Single(_) => panic!("expected segmented snapshot"),
+        };
+        assert_eq!(diagnostics.diagnostics.queried_segment_count, 1);
+        assert_eq!(
+            diagnostics.diagnostics.selected_segments[0].segment_id,
+            "combined"
+        );
+
+        let _ = fs::remove_dir_all(index_root);
+    }
+
+    #[test]
+    fn adaptive_segmented_pipeline_expands_routed_segments() {
+        let options = PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::AdaptiveSegmented {
+                query_top_n: 1,
+                max_query_n: 2,
+                routing_strategy: SegmentRoutingStrategy::CoverageLocalDistinctiveness,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut store = IndexStore::with_documents(
+            options,
+            vec![
+                sample_doc_with_group("doc-a", "session-a", "GPA undergraduate record"),
+                sample_doc_with_group("doc-b", "session-b", "graduate jewelry appointment"),
+            ],
+        );
+        let prepared = PreparedQuery::new("GPA undergraduate graduate jewelry appointment");
+        let (_, _, diagnostics) = store
+            .query_prepared_timed(&prepared, 5, &std::collections::BTreeMap::new())
+            .expect("adaptive pipeline query should succeed");
+        assert_eq!(
+            diagnostics
+                .shard_completeness
+                .as_ref()
+                .map(|s| s.expected_segments.len()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn adaptive_segmented_store_reloads_from_persisted_records() {
+        let index_root = unique_temp_dir("adaptive-segmented");
+        let options = PipelineOptions {
+            index_location: IndexLocation::Explicit(index_root.clone()),
+            memory_index_layout: MemoryIndexLayout::AdaptiveSegmented {
+                query_top_n: 1,
+                max_query_n: 2,
+                routing_strategy: SegmentRoutingStrategy::CoverageLocalDistinctiveness,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut first = IndexStore::at_path(&index_root, options.clone())
+            .expect("adaptive store should initialize");
+        first.upsert(sample_doc_with_group(
+            "doc-a",
+            "session-a",
+            "GPA undergraduate record",
+        ));
+        first.upsert(sample_doc_with_group(
+            "doc-b",
+            "session-b",
+            "graduate jewelry appointment",
+        ));
+        assert!(!first
+            .query("GPA", 5)
+            .expect("query should succeed")
+            .is_empty());
+        drop(first);
+
+        let mut restored = reopen_store_after_writer_drop(&index_root, options);
+        assert!(matches!(
+            restored
+                .memory_index_snapshot()
+                .expect("adaptive snapshot should be published during reload"),
+            MemoryIndexSnapshot::Segmented(_)
+        ));
+        let cached = restored
+            .query_prepared_cached(
+                &PreparedQuery::new("jewelry"),
+                5,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("cold-start cached query should succeed");
+        assert!(!cached.is_empty());
+        assert!(!restored
+            .query("jewelry", 5)
+            .expect("reloaded query should succeed")
+            .is_empty());
+        assert!(matches!(
+            restored
+                .memory_index_snapshot()
+                .expect("snapshot should exist"),
+            MemoryIndexSnapshot::Segmented(_)
+        ));
+        let _ = fs::remove_dir_all(index_root);
+    }
+
+    #[test]
+    fn segmented_dump_round_trips_without_retaining_a_global_snapshot() {
+        let options = PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 2,
+                routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut first = IndexStore::new(options.clone());
+        first.upsert(sample_doc_with_group(
+            "docker-doc",
+            "session-docker",
+            "docker compose installation",
+        ));
+        first.upsert(sample_doc_with_group(
+            "database-doc",
+            "session-database",
+            "postgres schema migration",
+        ));
+
+        let dump = first.dump().expect("segmented dump should succeed");
+        let mut restored =
+            IndexStore::load_from_dump(dump, options).expect("segmented dump should load");
+
+        assert!(restored
+            .memory_index_snapshot()
+            .expect("snapshot should be restored")
+            .single_index()
+            .is_none());
+        let results = restored
+            .query("docker compose", 5)
+            .expect("restored segmented query should succeed");
+        assert_eq!(
+            results.first().map(|result| result.doc_id.as_str()),
+            Some("docker-doc")
+        );
     }
 
     #[test]

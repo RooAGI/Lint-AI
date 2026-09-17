@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::io::{BufRead, Write};
 
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+const MAX_HEADER_COUNT: usize = 100;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequest {
@@ -41,19 +43,40 @@ pub struct ToolDefinition {
 
 pub fn read_request(reader: &mut impl BufRead) -> Result<Option<(JsonRpcRequest, bool)>> {
     let mut content_length = None;
+    let mut header_bytes = 0usize;
+    let mut header_count = 0usize;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        let read = std::io::Read::take(
+            std::io::Read::by_ref(reader),
+            (MAX_REQUEST_BYTES + 1) as u64,
+        )
+        .read_line(&mut line)?;
+        if read == 0 {
             return Ok(None);
+        }
+        if read > MAX_REQUEST_BYTES {
+            anyhow::bail!("MCP line or request exceeds {MAX_REQUEST_BYTES} byte limit");
         }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.starts_with('{') {
             return Ok(Some((serde_json::from_str(trimmed)?, true)));
         }
+        header_bytes += read;
+        if header_bytes > MAX_HEADER_BYTES {
+            anyhow::bail!("MCP headers exceed {MAX_HEADER_BYTES} bytes");
+        }
         if trimmed.is_empty() {
             break;
         }
+        header_count += 1;
+        if header_count > MAX_HEADER_COUNT {
+            anyhow::bail!("too many MCP headers");
+        }
         if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
+            if content_length.is_some() {
+                anyhow::bail!("duplicate Content-Length header");
+            }
             content_length = Some(
                 rest.trim()
                     .parse::<usize>()
@@ -118,5 +141,32 @@ mod tests {
         let input = format!("Content-Length: {}\r\n\r\n", MAX_REQUEST_BYTES + 1);
         let error = read_request(&mut Cursor::new(input)).unwrap_err();
         assert!(error.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn rejects_duplicate_content_length() {
+        let input = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}";
+        let error = read_request(&mut Cursor::new(input)).unwrap_err();
+        assert!(error.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn rejects_oversized_header_budget() {
+        let input = format!("X: {}\r\n\r\n", "x".repeat(70_000));
+        let error = read_request(&mut Cursor::new(input.as_bytes())).unwrap_err();
+        assert!(error.to_string().contains("headers") || error.to_string().contains("request"));
+    }
+
+    #[test]
+    fn line_framed_request_may_exceed_header_budget() {
+        let padding = "x".repeat(MAX_HEADER_BYTES);
+        let input = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"padding":"{padding}"}}}}"#
+        );
+        let (request, line_framed) = read_request(&mut Cursor::new(input.as_bytes()))
+            .unwrap()
+            .unwrap();
+        assert!(line_framed);
+        assert_eq!(request.method, "initialize");
     }
 }

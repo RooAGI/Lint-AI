@@ -3,10 +3,49 @@ use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
+
+const STORE_INIT_LOCK_WAIT: Duration = Duration::from_secs(30);
+const STORE_INIT_LOCK_RETRY: Duration = Duration::from_millis(100);
+
+struct StoreInitLock {
+    path: std::path::PathBuf,
+    _file: File,
+}
+
+impl StoreInitLock {
+    fn acquire(index_root: &Path) -> Result<Self> {
+        fs::create_dir_all(index_root)?;
+        let path = index_root.join(".initialization.lock");
+        let started = std::time::Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok(Self { path, _file: file }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if started.elapsed() >= STORE_INIT_LOCK_WAIT {
+                        return Err(anyhow::anyhow!(
+                            "timed out waiting for persistent store initialization lock at {}",
+                            path.display()
+                        ));
+                    }
+                    thread::sleep(STORE_INIT_LOCK_RETRY);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+impl Drop for StoreInitLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
 
 pub fn segmented_store_options() -> PipelineOptions {
     PipelineOptions {
@@ -17,7 +56,6 @@ pub fn segmented_store_options() -> PipelineOptions {
         ..PipelineOptions::default()
     }
 }
-
 pub fn trace_event(event: &str) {
     let Some(path) = std::env::var_os("LINT_AI_MCP_TRACE_PATH") else {
         return;
@@ -39,6 +77,7 @@ pub fn open_persistent_store(
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<IndexStore> {
     let index_root = root.join(".lint-ai").join(index_name);
+    let _init_lock = StoreInitLock::acquire(&index_root)?;
     let mut store = IndexStore::at_path(&index_root, segmented_store_options())?;
     let state = workspace_state(root, ignore_paths);
     if store.is_empty() || !index_is_current(&index_root, state.as_ref()) {

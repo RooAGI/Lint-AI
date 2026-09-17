@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "date": "2026-09-16",
+  "server": "Axum release server",
+  "tantivy_version": "0.25.0",
+  "records": 23366,
+  "requests_per_cell": 100,
+  "top_k": 20,
+  "query": "deployment configuration system decision",
+  "endpoint": "POST /search",
+  "seed_batch_size": 1024,
+  "results": [
+    {"concurrency": 1, "p50_ms": 10.388, "p90_ms": 10.899, "p99_ms": 12.211, "mean_ms": 10.497, "throughput_per_s": 95.0},
+    {"concurrency": 10, "p50_ms": 23.712, "p90_ms": 38.021, "p99_ms": 45.894, "mean_ms": 24.943, "throughput_per_s": 386.55}
+  ],
+  "note": "Post-refactor local loopback rerun after parallelizing per-segment enrichment and BM25 execution. The prior 0.1.9 result is retained as a historical baseline; ingestion now uses bounded batches and the server defaults to segmented indexing."
+}

@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "tantivy_version": "0.25.0",
+  "date": "2026-09-16",
+  "dataset": "LongMemEval-S",
+  "question_type": "multi-session",
+  "query_count": 133,
+  "router": "coverage-local",
+  "segment_top_n": 5,
+  "adaptive_segment_max_n": 12,
+  "command": "cargo run --release --features experimental --bin segment_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --question-type multi-session --segment-compare --segment-top-n 5 --adaptive-segment-max-n 12 --segment-router coverage-local",
+  "modes": {
+    "segmented_fixed": {
+      "recall_any_at_5": 0.9548872180451128,
+      "recall_any_at_10": 0.9548872180451128,
+      "mrr": 0.8590225563909775,
+      "average_latency_ms": 1.248752819548872
+    },
+    "segmented_adaptive": {
+      "recall_any_at_5": 0.9624060150375939,
+      "recall_any_at_10": 0.9624060150375939,
+      "mrr": 0.8392230576441102,
+      "average_latency_ms": 4.361229563909775
+    },
+    "single_index": {
+      "recall_any_at_5": 0.9323308270676691,
+      "recall_any_at_10": 0.9398496240601504,
+      "mrr": 0.8141066953097028,
+      "average_latency_ms": 6.409936571428573
+    }
+  }
+}

@@ -66,22 +66,38 @@ This is a reproducible **asciinema PTY capture** of the actual `lint-ai` binary 
 ![Lint-AI reproducible terminal demo](assets/lint-ai-real-terminal.gif)
 
 <section class="proof-grid" aria-label="Lint-AI benchmark highlights">
-  <div><strong>95.6%</strong><span>recall@10</span></div>
+  <div><strong>95.6%</strong><span>any-hit recall@10</span></div>
   <div><strong>84.0%</strong><span>MRR</span></div>
   <div><strong>1.9 ms</strong><span>average query latency</span></div>
-  <div><strong>952/s</strong><span>HTTP searches at C=10</span></div>
+  <div><strong>162/s</strong><span>v0.2.0 HTTP at C=10</span></div>
 </section>
 
-<p class="benchmark-note">Heuristic release backend · LongMemEval-S, 500 scoped questions, fair comparison track using any-hit recall · HTTP figure uses 23,366 records</p>
+<p class="benchmark-note">Heuristic release backend · LongMemEval-S, 500 scoped questions, fair comparison track using any-hit recall · HTTP figure is the v0.2.0 post-refactor run over 23,366 records; 952 req/s is the historical 0.1.9 single-index baseline</p>
+
+<p class="benchmark-note">The 500-question aggregate headline and the separate 133-question segmented multi-session comparison use different scopes. Every recall value below is labeled as either fractional (regular) or any-hit, and by its cutoff.</p>
+
+<p class="benchmark-note">The single-index value in the segmented table is the controlled global baseline for those same 133 multi-session questions. It is not a second 500-question headline, so the two benchmark tables must not be combined.</p>
+
+### Segmented-index benchmark
+
+On the latest 133-query multi-session comparison, fixed segmented routing
+achieved **95.49% any-hit Recall@5** at **1.25 ms** average latency. Adaptive
+routing (5→12 segments) reached **96.24% any-hit Recall@5** at **4.36 ms**;
+the single-index baseline reached **93.23% any-hit Recall@5** at **6.41 ms**. This
+comparison explicitly used top-5; the server defaults to
+fixed top-3 for predictable latency.
+
+[See the full benchmark comparison](benchmark.md)
 
 ## Reproducible performance comparison {.landing-heading}
 
 Lint-AI's retrieval and server-load measurements are published with the exact
-scripts, payloads, corpus sizes, and caveats needed to reproduce them. In the
-normalized 23,366-record HTTP run, Lint-AI sustained **952 req/s at
-concurrency 10**, compared with **171 req/s** for AgentMemory in keyless BM25
-mode. This is a service-load comparison, not a claim that the two systems have
-identical retrieval semantics.
+scripts, payloads, corpus sizes, and caveats needed to reproduce them. The
+v0.2.0 23,366-record HTTP run measured **386.55 req/s at concurrency 10**. The
+historical 0.1.9 single-index run sustained **952 req/s**, compared with **171
+req/s** for AgentMemory in keyless BM25
+mode. This baseline predates the 0.2.0 server refactor. It is a service-load
+comparison, not a claim that the two systems have identical retrieval semantics.
 
 [View the comparison methodology and results](comparison.md)
 

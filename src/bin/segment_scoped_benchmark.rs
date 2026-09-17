@@ -354,6 +354,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_scoped_benchmark(
     raw: Vec<LongMemEvalEntry>,
     limit: Option<usize>,
@@ -440,6 +441,8 @@ fn run_scoped_benchmark(
                     QueryTimeHint::Mixed => TemporalQueryHint::Mixed,
                 }),
             allowed_doc_ids: None,
+            allowed_doc_bitmap: None,
+            allowed_segment_doc_bitmaps: None,
             query_routing_intent: analysis.query_routing_intent,
             has_explicit_temporal: analysis.temporal.is_some(),
         };
@@ -488,6 +491,7 @@ fn run_scoped_benchmark(
                 timings.total_ms,
                 &global_results,
                 temporal,
+                Some(entry.question_date.as_str()),
             )?)
         } else {
             None
@@ -580,6 +584,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
     docs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_segment_comparison(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
@@ -596,6 +601,7 @@ fn build_segment_comparison(
     global_latency_ms: f64,
     global_results: &[SearchResult],
     temporal: TemporalQueryContext<'_>,
+    reference_date: Option<&str>,
 ) -> Result<SegmentComparisonMetrics> {
     let index_store = build_index_store(source_docs, options)?;
     let records = index_store
@@ -694,6 +700,7 @@ fn build_segment_comparison(
             adaptive_max_n,
             segment_router,
             temporal,
+            reference_date,
         );
     let adaptive_segment_enriched_latency_ms =
         adaptive_segment_enriched_start.elapsed().as_secs_f64() * 1000.0;
@@ -706,6 +713,7 @@ fn build_segment_comparison(
             adaptive_max_n,
             segment_router,
             temporal,
+            reference_date,
         );
     let adaptive_segment_enriched_reranked_latency_ms = adaptive_segment_enriched_reranked_start
         .elapsed()
@@ -1335,6 +1343,7 @@ fn connection_diagnostics(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rewrite_stability_diagnostics(
     segmented: &SegmentedMemoryIndex,
     query_text: &str,

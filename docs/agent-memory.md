@@ -80,9 +80,18 @@ On the current 500-question LongMemEval-S retrieval track, the heuristic release
 | Any-hit Recall@20 | 97.0% |
 | MRR | 84.0% |
 | NDCG@10 | 81.8% |
+
+These are the 500-question aggregate any-hit results. They are separate from
+the 133-question multi-session segmented comparison in the benchmark overview;
+“fractional recall” and “any-hit recall” are different metrics and are never
+combined into one headline.
 | Average in-process query latency | 1.88 ms |
 
-The normalized HTTP load test uses 23,366 records and 100 requests per cell. At concurrency 10, Lint-AI recorded 952 requests per second in that test. Benchmark conditions, scripts, comparison data, and caveats are published in the [benchmark overview](benchmark.md) and [comparison](comparison.md).
+The recorded 0.1.9 HTTP load baseline used 23,366 records and 100 requests per
+cell. At concurrency 10, Lint-AI recorded 952 requests per second in that test.
+It predates the 0.2.0 server refactor. Benchmark conditions, scripts,
+comparison data, and caveats are published in the
+[benchmark overview](benchmark.md) and [comparison](comparison.md).
 
 ## Claude Code memory, Codex memory, and Gemini CLI memory
 

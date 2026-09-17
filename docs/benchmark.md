@@ -42,6 +42,24 @@ directories.
 These are 500 question-scoped queries using the current heuristic release
 backend and no embeddings.
 
+### Reading the two benchmark tracks
+
+The **500-question aggregate** covers the full scoped dataset and is the source
+of the website headline. The **133-question segmented comparison** covers only
+the multi-session slice and compares fixed segmented, adaptive segmented, and
+single-index modes. They must not be merged into one score.
+
+The single-index row in the segmented table is the controlled global baseline
+for that same 133-question slice. It is not the 500-question aggregate rerun,
+so its recall and latency should not be compared directly with the headline
+numbers.
+
+Within either track, the metric name is significant: **Fractional Recall@K**
+(regular recall) measures the fraction of all relevant sessions recovered, while
+**Any-hit Recall@K** measures whether at least one relevant session was found.
+`@5`, `@10`, and `@20` are separate result cutoffs, so each value must retain
+both its metric type and cutoff label.
+
 **Any-hit Recall@K** is the percentage of questions where at least one
 correct answer session appears in the top *K* results. **Fractional Recall@K**
 is the average fraction of all correct answer sessions recovered in the top
@@ -80,6 +98,25 @@ Lint-AI's fractional recall is 83.5% at 5, 89.5% at 10, and 91.1% at 20.
 | Average query latency | 1.88 ms |
 | Reproduction command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20` |
 
+### Segmented-index comparison
+
+The latest 133-query multi-session comparison uses the same corpus with the
+segmented benchmark's fixed, adaptive, and single-index modes:
+
+| Mode | Any-hit Recall@5 | Any-hit Recall@10 | MRR | Average latency |
+|---|---:|---:|---:|---:|
+| Segmented (fixed top-5) | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
+| Segmented (adaptive 5→12) | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
+| Single index | 93.23% | 93.98% | 0.814 | 6.41 ms |
+
+This run explicitly selected fixed top-5; the benchmark CLI and server default
+to top-3. Adaptive routing improves any-hit recall at the cost of additional query
+latency. These results are scoped to the multi-session slice and should not be
+compared directly with the 500-question aggregate above.
+
+Summary artifact:
+[`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).
+
 ## Corpus-scale and HTTP results
 
 The in-process corpus-scale run used 19,829 sessions and 500 eligible queries:
@@ -88,7 +125,8 @@ The in-process corpus-scale run used 19,829 sessions and 500 eligible queries:
 |---:|---:|---:|
 | 1.65 ms | 3.42 ms | 85.0% |
 
-The normalized Lint-AI HTTP run used 23,366 records and 100 requests per cell:
+The normalized Lint-AI HTTP run used 23,366 records and 100 requests per cell.
+It is a 0.1.9 service baseline and predates the 0.2.0 Axum/snapshot refactor:
 
 | Concurrency | p50 | p90 | p99 | Throughput |
 |---:|---:|---:|---:|---:|

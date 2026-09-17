@@ -181,12 +181,8 @@ fn run_benchmark(
         let results = store.query_prepared(&prepared, max_k, &BTreeMap::new())?;
         let query_ms = query_start.elapsed().as_secs_f64() * 1000.0;
 
-        let retrieved_session_ids = dedupe_preserve_order(
-            results
-                .iter()
-                .map(|result| evaluation_group_id(result))
-                .collect(),
-        );
+        let retrieved_session_ids =
+            dedupe_preserve_order(results.iter().map(evaluation_group_id).collect());
         let relevant = candidate_session_ids
             .iter()
             .filter(|session_id| entry.answer_session_ids.contains(session_id))

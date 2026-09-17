@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::env;
 use std::fs;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -201,8 +201,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
 /// Render the compact state indicator consumed by Claude Code's status line.
 /// Claude sends session metadata as JSON on stdin, including the active cwd.
 pub fn run_status_line() -> Result<()> {
-    let mut input = String::new();
-    io::stdin().lock().read_to_string(&mut input)?;
+    let input = crate::integrations::read_bounded_stdin()?;
     let payload: Value = serde_json::from_str(&input).unwrap_or_default();
     let cwd = payload
         .get("workspace")
@@ -372,7 +371,7 @@ impl ClaudeMcp {
                     &mut *store,
                 )?;
                 let results = store.query(query, top_k)?;
-                let payload = mcp_tools::search_results(&store, results);
+                let payload = mcp_tools::search_results(store, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,

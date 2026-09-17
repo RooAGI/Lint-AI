@@ -54,10 +54,11 @@ pub fn load_config(
                 if strict {
                     return Err(format!("Failed to load config at {}: {}", path, err));
                 }
-                return Err(format!(
-                    "Failed to load config at {}: {} (use --strict-config to fail or fix the file)",
+                eprintln!(
+                    "Warning: failed to load config at {}: {}; using defaults",
                     path, err
-                ));
+                );
+                return Ok(Config::default());
             }
         }
     }
@@ -80,11 +81,11 @@ pub fn load_config(
                         err
                     ));
                 }
-                return Err(format!(
-                    "Failed to load config at {}: {} (use --strict-config to fail or fix the file)",
+                eprintln!(
+                    "Warning: failed to load config at {}: {}; using defaults",
                     candidate.display(),
                     err
-                ));
+                );
             }
         }
     }
@@ -104,11 +105,21 @@ pub fn normalize_list(values: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn normalize_list_trims_and_lowercases() {
         let values = vec![" Foo ".to_string(), "BAR".to_string(), "".to_string()];
         let out = normalize_list(&values);
         assert_eq!(out, vec!["foo".to_string(), "bar".to_string()]);
+    }
+
+    #[test]
+    fn malformed_config_falls_back_only_in_non_strict_mode() {
+        let path = std::env::temp_dir().join(format!("lint-ai-config-{}.json", std::process::id()));
+        fs::write(&path, "{ malformed").unwrap();
+        assert!(load_config(path.to_str(), ".", false, 1024).is_ok());
+        assert!(load_config(path.to_str(), ".", true, 1024).is_err());
+        let _ = fs::remove_file(path);
     }
 }

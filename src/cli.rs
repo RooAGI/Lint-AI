@@ -6,7 +6,6 @@ pub enum LlmChunkStrategy {
     All,
     ByDoc,
 }
-
 #[derive(Debug, Clone, ValueEnum)]
 pub enum GraphExportFormat {
     Dot,

@@ -96,8 +96,8 @@ pub fn run_hook_for(
     memory_dir: &str,
     provider_label: &str,
 ) -> Result<()> {
-    let raw: Value = serde_json::from_reader(std::io::stdin().lock())
-        .context("failed to parse Gemini hook input")?;
+    let raw: Value =
+        crate::integrations::read_bounded_json().context("failed to parse Gemini hook input")?;
     let input: GeminiHookInput =
         serde_json::from_value(raw.clone()).context("failed to decode Gemini hook input")?;
     let root = resolve_root(&input.cwd, fallback_root)?;
@@ -425,7 +425,7 @@ mod tests {
             .unwrap();
             let mut store = IndexStore::at_path(
                 &root.join(".lint-ai").join(memory_dir),
-                PipelineOptions::default(),
+                crate::integrations::mcp_index::segmented_store_options(),
             )
             .unwrap();
             store.refresh().unwrap();
@@ -512,12 +512,12 @@ mod tests {
 
         let mut gemini = IndexStore::at_path(
             &root.join(".lint-ai/gemini-cli-memory"),
-            PipelineOptions::default(),
+            crate::integrations::mcp_index::segmented_store_options(),
         )
         .unwrap();
         let mut agy = IndexStore::at_path(
             &root.join(".lint-ai/agy-memory"),
-            PipelineOptions::default(),
+            crate::integrations::mcp_index::segmented_store_options(),
         )
         .unwrap();
         gemini.refresh().unwrap();

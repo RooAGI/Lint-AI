@@ -1,0 +1,35 @@
+{
+  "date": "2026-09-16",
+  "commit": "1a3029a",
+  "records": 23366,
+  "requests_per_cell": 100,
+  "query": "deployment configuration system decision",
+  "top_k": 20,
+  "cache": "disabled",
+  "server": "target/release/server",
+  "seed": "comparison/seed_lint_ai.py --count 23366 --batch-size 1024 --bulk",
+  "client": "comparison/http_latency.py",
+  "machine": {
+    "hostname": "dreamhost",
+    "os": "Ubuntu 22.04.5 LTS (Jammy Jellyfish)",
+    "kernel": "Linux 5.15.0-177-generic",
+    "cpu": "Intel Core i7-7700K @ 4.20GHz",
+    "logical_cpus": 8,
+    "rustc": "1.94.1",
+    "cargo": "1.94.1"
+  },
+  "results": {
+    "single": {
+      "concurrency_1": {"p50_ms": 19.598, "p90_ms": 20.241, "p99_ms": 42.797, "throughput_per_s": 50.02},
+      "concurrency_10": {"p50_ms": 38.361, "p90_ms": 47.199, "p99_ms": 57.876, "throughput_per_s": 261.72}
+    },
+    "global": {
+      "concurrency_1": {"p50_ms": 11.427, "p90_ms": 12.728, "p99_ms": 32.764, "throughput_per_s": 83.19},
+      "concurrency_10": {"p50_ms": 25.539, "p90_ms": 33.161, "p99_ms": 51.045, "throughput_per_s": 385.81}
+    },
+    "segment": {
+      "concurrency_1": {"p50_ms": 11.042, "p90_ms": 11.395, "p99_ms": 33.236, "throughput_per_s": 88.10},
+      "concurrency_10": {"p50_ms": 22.281, "p90_ms": 29.199, "p99_ms": 42.231, "throughput_per_s": 433.32}
+    }
+  }
+}

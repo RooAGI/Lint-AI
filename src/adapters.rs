@@ -14,7 +14,6 @@ pub struct AdapterInput<'a> {
     pub max_depth: usize,
     pub max_total_bytes: usize,
 }
-
 pub trait SourceAdapter {
     fn name(&self) -> &'static str;
     fn supports(&self, path: &Path) -> bool;

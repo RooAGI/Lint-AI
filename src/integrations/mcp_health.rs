@@ -217,6 +217,7 @@ fn read_frame(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
     Ok(Some(body))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn report(
     status: &str,
     started: Instant,

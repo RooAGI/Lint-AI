@@ -17,6 +17,8 @@ Implemented pieces:
   - generic input document type for non-Markdown sources
 - `PipelineOptions`
   - library-facing configuration for chunking and enrichment
+- `MemoryIndexLayout`
+  - selects single, fixed segmented, or adaptive segmented snapshots
 - `build_index_store(...)`
   - builder for the public mutable `IndexStore`
 - `build_query_snapshot(...)`
@@ -24,6 +26,8 @@ Implemented pieces:
 - `IndexStore`
   - public mutable store that owns source docs, cached records, tombstones,
     an internal Tantivy lexical index, and the current built semantic snapshot
+- `PublishedIndexSnapshot`
+  - cheaply clonable immutable query view of the latest complete generation
 
 Relevant API surface:
 
@@ -38,6 +42,8 @@ Relevant API surface:
   - `build_query_snapshot(...)`
   - `build_query_snapshot_from_source_documents(...)`
   - `IndexStore`
+  - `MemoryIndexLayout`
+  - `PublishedIndexSnapshot`
 - `src/index.rs`
   - `MemoryIndex`
   - `SearchResult`
@@ -54,6 +60,11 @@ The intended artifact flow is:
 4. Internally derive or update a cached `DocRecord`.
 5. Insert or update it inside `IndexStore`.
 6. Query through the current snapshot.
+
+For a read path that must remain independent of later writer refreshes, call
+`IndexStore::published_snapshot()` and retain the returned
+`PublishedIndexSnapshot`. It excludes mutable writer and persistence state and
+continues to represent the generation that was published when it was cloned.
 
 Example:
 

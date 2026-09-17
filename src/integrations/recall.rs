@@ -59,7 +59,6 @@ pub struct RecallOptions<'a> {
     pub index_name: &'a str,
     pub memory_name: &'a str,
 }
-
 /// The wire contract consumed by lint-service: a `results` array whose every
 /// element carries a numeric `score`. Fields beyond that pass through the
 /// dispatcher untouched.

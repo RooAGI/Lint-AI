@@ -28,6 +28,22 @@ different metric from the comparison headline), see
 The rust-bert POS/NER branch is reported separately in
 [`benchmark/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/README.md).
 
+## Segmented-index comparison
+
+The latest 133-query multi-session run compares the supported index modes:
+
+| Mode | Any-hit Recall@5 | Any-hit Recall@10 | MRR | Average latency |
+|---|---:|---:|---:|---:|
+| Segmented (fixed top-5) | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
+| Segmented (adaptive 5→12) | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
+| Single index | 93.23% | 93.98% | 0.814 | 6.41 ms |
+
+These results are scoped to the multi-session slice and are not interchangeable
+with the 500-question aggregate headline above.
+
+The checked-in summary is
+[`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).
+
 ## Reproduce
 
 ```bash

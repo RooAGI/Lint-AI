@@ -96,6 +96,8 @@ impl PreparedQuery {
             query_routing_intent: self.analysis.query_routing_intent,
             has_explicit_temporal: self.analysis.temporal.is_some(),
             allowed_doc_ids: None,
+            allowed_doc_bitmap: None,
+            allowed_segment_doc_bitmaps: None,
         }
     }
 
@@ -121,6 +123,25 @@ impl PreparedQuery {
         )
     }
 
+    /// Executes against a precomputed numeric filter bitmap. This avoids
+    /// rebuilding a string-ID allow-list when the index already owns the
+    /// corresponding bitmap postings.
+    pub fn execute_on_index_with_bitmap(
+        &self,
+        index: &MemoryIndex,
+        top_k: usize,
+        allowed_doc_bitmap: Option<&roaring::RoaringBitmap>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        let mut context = self.temporal_context();
+        context.allowed_doc_bitmap = allowed_doc_bitmap;
+        index.query_with_temporal_context_at(
+            self.search_query(),
+            top_k,
+            context,
+            self.reference_date(),
+        )
+    }
+
     /// Intersects caller-provided document filters with current-state semantic policy.
     /// Historical queries retain superseded documents; ordinary queries suppress them.
     pub fn semantic_allowed_doc_ids(
@@ -129,7 +150,9 @@ impl PreparedQuery {
         semantic_relations: &SemanticRelationStore,
         document_ids: &[String],
     ) -> Option<HashSet<String>> {
-        let semantic_allowed = if is_historical_query(&self.analysis.original_query) {
+        let semantic_allowed = if semantic_relations.is_empty()
+            || is_historical_query(&self.analysis.original_query)
+        {
             None
         } else {
             let has_superseded = document_ids.iter().any(|doc_id| {

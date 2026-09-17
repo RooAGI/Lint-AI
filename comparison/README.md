@@ -22,11 +22,44 @@ python3 comparison/http_latency.py \
   --payload '{"query":"deployment configuration system decision","limit":20}'
 ```
 
-For a fresh Lint-AI corpus, use the bulk seeder (it refreshes once):
+For a fresh Lint-AI corpus, use the bounded batch seeder (it refreshes once per
+batch; the API caps each request at 1,024 messages):
 
 ```bash
-python3 comparison/seed_lint_ai.py --count 23366
+python3 comparison/seed_lint_ai.py --count 23366 --batch-size 1024 --bulk
 ```
+
+### Layout throughput comparison
+
+`throughput.py` starts the release server, seeds an isolated corpus, runs the
+same C=1/C=10 HTTP workload, and emits JSON. Use `--no-cache` for raw index
+throughput; omit it to measure repeated-query cache throughput.
+
+```bash
+python3 comparison/throughput.py --mode single --no-cache
+python3 comparison/throughput.py --mode global --no-cache
+python3 comparison/throughput.py --mode segment --no-cache
+```
+
+`single` uses one global Tantivy index, `global` stores segmented data but
+queries every segment, and `segment` uses routed segmented execution. The
+three modes use separate temporary indexes and never share persisted state.
+
+The latest full run is recorded in
+[`results/throughput-layout-v0.2.0.json`](results/throughput-layout-v0.2.0.json).
+It used release mode, 23,366 records, 100 requests per cell, `top_k: 20`, the
+query above, and cache disabled. The machine was an Intel Core i7-7700K with
+8 logical CPUs, Ubuntu 22.04.5 LTS (kernel 5.15.0-177-generic), Rust 1.94.1,
+and Cargo 1.94.1.
+
+| Mode | C=1 req/s | C=10 req/s | C=10 p50 |
+|---|---:|---:|---:|
+| Single index | 50.02 | 261.72 | 38.36 ms |
+| Global segmented | 83.19 | 385.81 | 25.54 ms |
+| Routed segment | 88.10 | 433.32 | 22.28 ms |
+
+These are uncached local measurements; they are not directly comparable with
+the historical 0.1.9 result until machine and server-build provenance match.
 
 AgentMemory's official load harness seeds one record per request and can be
 run with `BENCH_N=23366 BENCH_C=1,10 BENCH_OPS=100 npx tsx
@@ -35,8 +68,18 @@ behind this repository's scripts.
 
 ## Recorded results
 
-The normalized service-load results are in
-[`results/latency-23366.json`](results/latency-23366.json). In summary:
+The current v0.2.0 post-refactor Lint-AI-only rerun is in
+[`results/latency-23366-v0.2.0.json`](results/latency-23366-v0.2.0.json):
+
+| System | C | p50 (ms) | p90 (ms) | p99 (ms) | req/s |
+|---|---:|---:|---:|---:|---:|
+| Lint-AI v0.2.0 | 1 | 10.39 | 10.90 | 12.21 | 95.00 |
+| Lint-AI v0.2.0 | 10 | 23.71 | 38.02 | 45.89 | 386.55 |
+
+The older artifact below is the 0.1.9 single-index baseline used for the
+cross-system comparison:
+
+[`results/latency-23366.json`](results/latency-23366.json)
 
 | System | C | p50 (ms) | p90 (ms) | p99 (ms) | req/s |
 |---|---:|---:|---:|---:|---:|

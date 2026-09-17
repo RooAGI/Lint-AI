@@ -66,8 +66,9 @@ The full scorer and per-question outputs are available in
 
 ### HTTP search load
 
-The normalized service run uses 23,366 records, 100 requests per cell,
-`top_k`/`limit` 20, and a keyword query on the same local machine.
+The normalized service run used 23,366 records, 100 requests per cell,
+`top_k`/`limit` 20, and a keyword query on the same local machine. These are
+0.1.9 baseline numbers; they predate the 0.2.0 Axum/snapshot refactor.
 
 | System | Concurrency | p50 | p90 | p99 | Throughput |
 |---|---:|---:|---:|---:|---:|
@@ -79,6 +80,44 @@ The normalized service run uses 23,366 records, 100 requests per cell,
 At concurrency 10, Lint-AI delivered about 5.6× the throughput. This measures
 service behavior, not retrieval quality; the endpoint implementations and
 corpus contents are not identical.
+
+### v0.2.0 layout throughput
+
+The current uncached layout run is recorded in
+[`throughput-layout-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-layout-v0.2.0.json).
+It used release mode, 23,366 records, 100 requests per cell, `top_k: 20`, and
+the query `deployment configuration system decision`. The machine was an Intel
+Core i7-7700K with 8 logical CPUs running Ubuntu 22.04.5 LTS (kernel
+5.15.0-177-generic) with Rust 1.94.1.
+
+| Layout | C=1 req/s | C=10 req/s | C=10 p50 |
+|---|---:|---:|---:|
+| Single index | 50.02 | 261.72 | 38.36 ms |
+| Global segmented | 83.19 | 385.81 | 25.54 ms |
+| Routed segment | 88.10 | 433.32 | 22.28 ms |
+
+These are local uncached measurements. The `single`, `global`, and `segment`
+runner commands are documented in `comparison/README.md`.
+
+#### macOS rerun
+
+A fresh rerun was performed on 2026-09-16 against the `release/v0.2.0` build
+at commit `83f0107`. It used the same 23,366-record corpus, 100 requests per
+cell, `top_k: 20`, keyword query, and disabled query cache. The corpus was
+seeded through `POST /add/batch`; the search measurements used the standard
+`comparison/http_latency.py` client.
+
+| Layout | C=1 req/s | C=10 req/s | C=10 p50 | C=10 p99 |
+|---|---:|---:|---:|---:|
+| Single index | 168.77 | 1,085.93 | 8.16 ms | 15.96 ms |
+| Global segmented | 274.45 | 1,662.27 | 5.65 ms | 10.07 ms |
+| Routed segment | 270.01 | 1,383.66 | 6.32 ms | 11.36 ms |
+
+The machine was a MacBook Pro (Mac17,9) with an Apple M5 Pro chip (15 cores)
+and 24 GB RAM, running macOS 26.6.2. The toolchain was Rust 1.96.0, Cargo
+1.96.0, and Python 3.9.6. These results are local uncached measurements and
+should not be compared directly with the Ubuntu results above without matching
+the hardware and software environment.
 
 ### Reproduce the comparison
 

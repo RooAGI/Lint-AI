@@ -60,8 +60,8 @@ impl ClaudeHookKind {
 }
 
 pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
-    let raw: Value = serde_json::from_reader(std::io::stdin().lock())
-        .context("failed to parse Claude hook input")?;
+    let raw: Value =
+        crate::integrations::read_bounded_json().context("failed to parse Claude hook input")?;
     let input: ClaudeHookInput =
         serde_json::from_value(raw).context("failed to decode Claude hook input")?;
     let root = resolve_root(&input.cwd, fallback_root)?;

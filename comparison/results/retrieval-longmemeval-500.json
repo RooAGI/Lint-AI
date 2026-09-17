@@ -3,6 +3,7 @@
   "dataset": "LongMemEval-S",
   "questions": 500,
   "scorer": "benchmark/score_retrieval.py",
+  "metric_semantics": "any-hit recall",
   "metrics": ["Recall@5","Recall@10","Recall@20","MRR","NDCG@10"],
   "Lint-AI": {"Recall@5":0.924,"Recall@10":0.956,"Recall@20":0.970,"MRR":0.8398937876,"NDCG@10":0.8176314136},
   "AgentMemory": {"Recall@5":0.870,"Recall@10":0.948,"Recall@20":0.984,"MRR":0.7164099239,"NDCG@10":0.7299873453},

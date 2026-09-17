@@ -11,17 +11,18 @@ use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use deunicode::deunicode;
 use regex::Regex;
+use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{Bm25StatisticsProvider, Query, QueryParser};
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
-use tantivy::{doc, Index, IndexReader};
+use tantivy::{doc, Index, IndexReader, Searcher, Term};
 
 const LEXICAL_CONTENT_BOOST: f32 = 1.0;
 const LEXICAL_HEADINGS_BOOST: f32 = 1.4;
@@ -33,6 +34,94 @@ const ENTITY_TERM_WEIGHT: f32 = 1.2;
 const ENTITY_PREFIX_MULTIPLIER: f32 = 0.25;
 const IMPORTANT_TERM_WEIGHT: f32 = 0.8;
 const IMPORTANT_TERM_PREFIX_MULTIPLIER: f32 = 0.25;
+
+const QUERY_TERM_CACHE_CAPACITY: usize = 256;
+
+#[derive(Clone)]
+struct PreparedQueryTerms {
+    normalized: String,
+    terms: Vec<String>,
+    expanded_terms: Vec<String>,
+}
+
+static PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, PreparedQueryTerms>>> = OnceLock::new();
+static RAW_PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, PreparedQueryTerms>>> =
+    OnceLock::new();
+// All MemoryIndex lexical shards use the same fixed schema, so Tantivy's parsed
+// query object can be shared safely between shards. This avoids rebuilding the
+// QueryParser and query tree once per selected segment.
+static PARSED_LEXICAL_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn Query>>>> =
+    OnceLock::new();
+
+fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
+    const MAX_QUERY_CHARS: usize = 4096;
+    const MAX_QUERY_TOKENS: usize = 128;
+    let truncated = if query.len() > MAX_QUERY_CHARS {
+        let mut cut = 0usize;
+        for (idx, _) in query.char_indices() {
+            if idx > MAX_QUERY_CHARS {
+                break;
+            }
+            cut = idx;
+        }
+        &query[..cut]
+    } else {
+        query
+    };
+    // Avoid repeating Unicode normalization/deaccenting for hot identical
+    // queries (the HTTP benchmark and typical agent retries commonly do this).
+    let raw_cache = RAW_PREPARED_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(prepared) = raw_cache
+        .lock()
+        .expect("raw prepared query cache lock poisoned")
+        .get(truncated)
+        .cloned()
+    {
+        return Some(prepared);
+    }
+    let normalized = normalize_for_index(truncated);
+    if normalized.is_empty() {
+        return None;
+    }
+    let cache = PREPARED_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cached = {
+        let cache = cache.lock().expect("prepared query cache lock poisoned");
+        cache.get(&normalized).cloned()
+    };
+    if let Some(prepared) = cached {
+        return Some(prepared);
+    }
+
+    let mut terms = tokenize_query_terms(&normalized);
+    if terms.len() > MAX_QUERY_TOKENS {
+        terms.truncate(MAX_QUERY_TOKENS);
+    }
+    if terms.is_empty() {
+        terms.push(normalized.clone());
+    }
+    let prepared = PreparedQueryTerms {
+        expanded_terms: expand_query_terms(&terms).expanded_terms,
+        normalized: normalized.clone(),
+        terms,
+    };
+    let mut cache = cache.lock().expect("prepared query cache lock poisoned");
+    if cache.len() >= QUERY_TERM_CACHE_CAPACITY {
+        if let Some(oldest_key) = cache.keys().next().cloned() {
+            cache.remove(&oldest_key);
+        }
+    }
+    cache.insert(normalized, prepared.clone());
+    let mut raw_cache = raw_cache
+        .lock()
+        .expect("raw prepared query cache lock poisoned");
+    if raw_cache.len() >= QUERY_TERM_CACHE_CAPACITY {
+        if let Some(oldest_key) = raw_cache.keys().next().cloned() {
+            raw_cache.remove(&oldest_key);
+        }
+    }
+    raw_cache.insert(truncated.to_string(), prepared.clone());
+    Some(prepared)
+}
 const EXPANDED_ENTITY_WEIGHT: f32 = 0.45;
 const EXPANDED_TERM_WEIGHT: f32 = 0.35;
 const TOPIC_OVERLAP_WEIGHT: f32 = 0.35;
@@ -328,6 +417,8 @@ pub struct MemoryIndex {
     pub topic_to_docs: HashMap<String, Vec<String>>,
     pub doc_type_to_docs: HashMap<String, Vec<String>>,
     #[serde(skip_serializing)]
+    filter_postings: HashMap<String, HashMap<String, RoaringBitmap>>,
+    #[serde(skip_serializing)]
     lexical: Option<LexicalIndex>,
     #[serde(skip_serializing)]
     #[allow(dead_code)]
@@ -393,6 +484,131 @@ struct LexicalIndex {
     terms_f: Field,
     entities_f: Field,
     temporal_f: Field,
+}
+
+/// A live corpus-wide BM25 statistics provider assembled from shard searchers.
+/// Tantivy asks for statistics only for terms present in the parsed query, so
+/// this avoids copying a corpus-sized term dictionary into the coordinator.
+#[derive(Clone)]
+pub struct GlobalBm25Statistics {
+    searchers: Arc<Vec<Searcher>>,
+    cache: Arc<GlobalBm25StatisticsCache>,
+    generation: u64,
+}
+
+struct GlobalBm25StatisticsCache {
+    total_num_docs: Mutex<Option<u64>>,
+    total_num_tokens: Mutex<HashMap<Field, u64>>,
+    doc_freq: Mutex<HashMap<Term, u64>>,
+}
+
+impl GlobalBm25Statistics {
+    pub fn from_indexes<'a>(indexes: impl IntoIterator<Item = &'a MemoryIndex>) -> Self {
+        Self::from_indexes_with_generation(indexes, 0)
+    }
+
+    pub fn from_indexes_with_generation<'a>(
+        indexes: impl IntoIterator<Item = &'a MemoryIndex>,
+        generation: u64,
+    ) -> Self {
+        let searchers = indexes
+            .into_iter()
+            .filter_map(|index| index.lexical.as_ref())
+            .map(|lexical| lexical.reader.searcher())
+            .collect();
+        Self {
+            searchers: Arc::new(searchers),
+            cache: Arc::new(GlobalBm25StatisticsCache {
+                total_num_docs: Mutex::new(None),
+                total_num_tokens: Mutex::new(HashMap::new()),
+                doc_freq: Mutex::new(HashMap::new()),
+            }),
+            generation,
+        }
+    }
+
+    pub fn shard_count(&self) -> usize {
+        self.searchers.len()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl Bm25StatisticsProvider for GlobalBm25Statistics {
+    fn total_num_tokens(&self, field: Field) -> tantivy::Result<u64> {
+        if let Some(total) = self
+            .cache
+            .total_num_tokens
+            .lock()
+            .expect("global BM25 token cache lock poisoned")
+            .get(&field)
+            .copied()
+        {
+            return Ok(total);
+        }
+        let total =
+            self.searchers
+                .iter()
+                .try_fold(0u64, |total, searcher| -> tantivy::Result<u64> {
+                    Ok(total + Bm25StatisticsProvider::total_num_tokens(searcher, field)?)
+                })?;
+        self.cache
+            .total_num_tokens
+            .lock()
+            .expect("global BM25 token cache lock poisoned")
+            .insert(field, total);
+        Ok(total)
+    }
+
+    fn total_num_docs(&self) -> tantivy::Result<u64> {
+        if let Some(total) = *self
+            .cache
+            .total_num_docs
+            .lock()
+            .expect("global BM25 document cache lock poisoned")
+        {
+            return Ok(total);
+        }
+        let total =
+            self.searchers
+                .iter()
+                .try_fold(0u64, |total, searcher| -> tantivy::Result<u64> {
+                    Ok(total + Bm25StatisticsProvider::total_num_docs(searcher)?)
+                })?;
+        *self
+            .cache
+            .total_num_docs
+            .lock()
+            .expect("global BM25 document cache lock poisoned") = Some(total);
+        Ok(total)
+    }
+
+    fn doc_freq(&self, term: &Term) -> tantivy::Result<u64> {
+        if let Some(total) = self
+            .cache
+            .doc_freq
+            .lock()
+            .expect("global BM25 doc-frequency cache lock poisoned")
+            .get(term)
+            .copied()
+        {
+            return Ok(total);
+        }
+        let total =
+            self.searchers
+                .iter()
+                .try_fold(0u64, |total, searcher| -> tantivy::Result<u64> {
+                    Ok(total + Bm25StatisticsProvider::doc_freq(searcher, term)?)
+                })?;
+        self.cache
+            .doc_freq
+            .lock()
+            .expect("global BM25 doc-frequency cache lock poisoned")
+            .insert(term.clone(), total);
+        Ok(total)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -461,6 +677,13 @@ pub struct QueryDiagnostics {
     pub expanded_terms: usize,
     pub lexical_hits: usize,
     pub candidates: usize,
+    /// Generation of the immutable snapshot used for the query. Single-index
+    /// callers use zero because they do not publish segmented snapshots.
+    pub snapshot_generation: u64,
+    /// Present for segmented queries so callers can distinguish no hits from
+    /// an incomplete fan-out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shard_completeness: Option<crate::segments::ShardQueryCompleteness>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -473,6 +696,8 @@ pub struct TemporalQueryContext<'a> {
     pub query_routing_intent: Option<QueryRoutingIntent>,
     pub has_explicit_temporal: bool,
     pub allowed_doc_ids: Option<&'a HashSet<String>>,
+    pub allowed_doc_bitmap: Option<&'a RoaringBitmap>,
+    pub allowed_segment_doc_bitmaps: Option<&'a HashMap<String, RoaringBitmap>>,
 }
 
 impl<'a> Default for TemporalQueryContext<'a> {
@@ -486,6 +711,8 @@ impl<'a> Default for TemporalQueryContext<'a> {
             query_routing_intent: None,
             has_explicit_temporal: false,
             allowed_doc_ids: None,
+            allowed_doc_bitmap: None,
+            allowed_segment_doc_bitmaps: None,
         }
     }
 }
@@ -611,6 +838,7 @@ impl MemoryIndex {
         let mut claim_to_docs: HashMap<String, Vec<TermPosting>> = HashMap::new();
         let mut topic_to_docs: HashMap<String, Vec<String>> = HashMap::new();
         let mut doc_type_to_docs: HashMap<String, Vec<String>> = HashMap::new();
+        let mut filter_postings: HashMap<String, HashMap<String, RoaringBitmap>> = HashMap::new();
         let mut doc_id_to_u32: HashMap<String, u32> = HashMap::new();
         let mut doc_u32_to_id: Vec<String> = Vec::new();
         let mut chunk_id_to_u32: HashMap<String, u32> = HashMap::new();
@@ -632,6 +860,14 @@ impl MemoryIndex {
             let doc_u32 = doc_u32_to_id.len() as u32;
             doc_id_to_u32.insert(doc_id.clone(), doc_u32);
             doc_u32_to_id.push(doc_id.clone());
+            for (key, value) in &record.filters {
+                filter_postings
+                    .entry(key.clone())
+                    .or_default()
+                    .entry(value.clone())
+                    .or_default()
+                    .insert(doc_u32);
+            }
             doc_to_chunks.push(Vec::new());
             doc_key_entities.push(normalized_entity_keys(&record.key_entities));
             let (rerank_text, rerank_tokens) = build_doc_rerank_cache(&record);
@@ -918,6 +1154,7 @@ impl MemoryIndex {
             claim_to_docs,
             topic_to_docs,
             doc_type_to_docs,
+            filter_postings,
             lexical,
             doc_id_to_u32,
             doc_u32_to_id,
@@ -986,7 +1223,8 @@ impl MemoryIndex {
         claim_scoring: bool,
     ) -> Result<Self> {
         let bytes = fs::read(core_path)?;
-        let core: PersistedMemoryCore = bincode::deserialize(&bytes)?;
+        let (core, _): (PersistedMemoryCore, usize) =
+            oxicode::serde::decode_from_slice(&bytes, oxicode::config::standard())?;
         Self::load_from_core_with_options(core, records, lexical_dir, claim_scoring)
     }
 
@@ -1077,6 +1315,20 @@ impl MemoryIndex {
                 doc_rerank_tokens[doc_u32 as usize] = rerank_tokens;
             }
         }
+        let mut filter_postings: HashMap<String, HashMap<String, RoaringBitmap>> = HashMap::new();
+        for (doc_id, record) in &docs {
+            let Some(&doc_u32) = core.doc_id_to_u32.get(doc_id) else {
+                continue;
+            };
+            for (key, value) in &record.filters {
+                filter_postings
+                    .entry(key.clone())
+                    .or_default()
+                    .entry(value.clone())
+                    .or_default()
+                    .insert(doc_u32);
+            }
+        }
         Ok(Self {
             docs,
             entity_to_docs: core.entity_to_docs,
@@ -1088,6 +1340,7 @@ impl MemoryIndex {
             },
             topic_to_docs: core.topic_to_docs,
             doc_type_to_docs: core.doc_type_to_docs,
+            filter_postings,
             lexical,
             doc_id_to_u32: core.doc_id_to_u32,
             doc_u32_to_id: core.doc_u32_to_id,
@@ -1134,11 +1387,15 @@ impl MemoryIndex {
             chunk_terms: self.chunk_terms.clone(),
             chunk_entities: self.chunk_entities.clone(),
         };
-        Ok(bincode::serialize(&core)?)
+        Ok(oxicode::serde::encode_to_vec(
+            &core,
+            oxicode::config::standard(),
+        )?)
     }
 
     pub fn from_bytes(bytes: &[u8], records: Vec<DocRecord>) -> Result<Self> {
-        let core: PersistedMemoryCore = bincode::deserialize(bytes)?;
+        let (core, _): (PersistedMemoryCore, usize) =
+            oxicode::serde::decode_from_slice(bytes, oxicode::config::standard())?;
         Self::load_from_core(core, records, None)
     }
 
@@ -1164,7 +1421,10 @@ impl MemoryIndex {
             chunk_terms: self.chunk_terms.clone(),
             chunk_entities: self.chunk_entities.clone(),
         };
-        fs::write(core_path, bincode::serialize(&core)?)?;
+        fs::write(
+            core_path,
+            oxicode::serde::encode_to_vec(&core, oxicode::config::standard())?,
+        )?;
         Ok(())
     }
 
@@ -1291,40 +1551,73 @@ impl MemoryIndex {
         })
     }
 
-    fn lexical_bm25(&self, query: &str, top_k: usize) -> Result<HashMap<String, f32>> {
+    fn lexical_bm25(
+        &self,
+        query: &str,
+        top_k: usize,
+        statistics: Option<&dyn Bm25StatisticsProvider>,
+    ) -> Result<HashMap<String, f32>> {
         let Some(lex) = self.lexical.as_ref() else {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        let mut query_parser = QueryParser::for_index(
-            &lex.index,
-            vec![
-                lex.content_f,
-                lex.headings_f,
-                lex.terms_f,
-                lex.entities_f,
-                lex.temporal_f,
-            ],
-        );
-        query_parser.set_field_boost(lex.content_f, LEXICAL_CONTENT_BOOST);
-        query_parser.set_field_boost(lex.headings_f, LEXICAL_HEADINGS_BOOST);
-        query_parser.set_field_boost(lex.terms_f, LEXICAL_TERMS_BOOST);
-        query_parser.set_field_boost(lex.entities_f, LEXICAL_ENTITIES_BOOST);
-        query_parser.set_field_boost(lex.temporal_f, 1.1);
-        let parsed = match query_parser.parse_query(query) {
-            Ok(parsed) => parsed,
-            Err(first_err) => {
-                let fallback_query = sanitize_bm25_query(query);
-                if fallback_query.is_empty() {
-                    return Err(first_err.into());
+        let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let cached = {
+            let cache = parsed_cache
+                .lock()
+                .expect("parsed lexical query cache lock poisoned");
+            cache.get(query).cloned()
+        };
+        let parsed = if let Some(parsed) = cached {
+            parsed
+        } else {
+            let mut query_parser = QueryParser::for_index(
+                &lex.index,
+                vec![
+                    lex.content_f,
+                    lex.headings_f,
+                    lex.terms_f,
+                    lex.entities_f,
+                    lex.temporal_f,
+                ],
+            );
+            query_parser.set_field_boost(lex.content_f, LEXICAL_CONTENT_BOOST);
+            query_parser.set_field_boost(lex.headings_f, LEXICAL_HEADINGS_BOOST);
+            query_parser.set_field_boost(lex.terms_f, LEXICAL_TERMS_BOOST);
+            query_parser.set_field_boost(lex.entities_f, LEXICAL_ENTITIES_BOOST);
+            query_parser.set_field_boost(lex.temporal_f, 1.1);
+            let parsed = match query_parser.parse_query(query) {
+                Ok(parsed) => parsed,
+                Err(first_err) => {
+                    let fallback_query = sanitize_bm25_query(query);
+                    if fallback_query.is_empty() {
+                        return Err(first_err.into());
+                    }
+                    match query_parser.parse_query(&fallback_query) {
+                        Ok(parsed) => parsed,
+                        Err(_) => return Err(first_err.into()),
+                    }
                 }
-                match query_parser.parse_query(&fallback_query) {
-                    Ok(parsed) => parsed,
-                    Err(_) => return Err(first_err.into()),
+            };
+            let parsed: Arc<dyn Query> = Arc::from(parsed);
+            let mut cache = parsed_cache
+                .lock()
+                .expect("parsed lexical query cache lock poisoned");
+            if cache.len() >= QUERY_TERM_CACHE_CAPACITY {
+                if let Some(oldest_key) = cache.keys().next().cloned() {
+                    cache.remove(&oldest_key);
                 }
             }
+            cache.insert(query.to_string(), parsed.clone());
+            parsed
         };
-        let top_docs = searcher.search(&parsed, &TopDocs::with_limit(top_k))?;
+        let collector = TopDocs::with_limit(top_k);
+        let top_docs = match statistics {
+            Some(statistics) => {
+                searcher.search_with_statistics_provider(parsed.as_ref(), &collector, statistics)?
+            }
+            None => searcher.search(parsed.as_ref(), &collector)?,
+        };
 
         let mut out = HashMap::new();
         for (score, addr) in top_docs {
@@ -1355,12 +1648,64 @@ impl MemoryIndex {
         self.query_with_temporal_context_at(query, top_k, temporal, None)
     }
 
+    pub fn query_with_temporal_context_and_statistics(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        statistics: &GlobalBm25Statistics,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at_and_statistics(
+            query,
+            top_k,
+            temporal,
+            None,
+            Some(statistics),
+        )
+    }
+
     pub fn query_with_temporal_context_at(
         &self,
         query: &str,
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
         reference_date: Option<&str>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at_and_statistics(
+            query,
+            top_k,
+            temporal,
+            reference_date,
+            None,
+        )
+    }
+
+    pub fn query_with_temporal_context_at_and_statistics(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+        statistics: Option<&GlobalBm25Statistics>,
+    ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
+        self.query_with_temporal_context_at_and_statistics_with_local_terms(
+            query,
+            top_k,
+            temporal,
+            reference_date,
+            statistics,
+            &[],
+        )
+    }
+
+    pub(crate) fn query_with_temporal_context_at_and_statistics_with_local_terms(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+        statistics: Option<&GlobalBm25Statistics>,
+        local_terms: &[String],
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let search_k = match temporal.query_routing_intent {
             Some(_) => top_k.saturating_mul(10).max(25),
@@ -1380,8 +1725,14 @@ impl MemoryIndex {
             && temporal_start.is_none()
             && temporal_end.is_none()
             && temporal.time_hint.is_none();
-        let (mut results, mut timings, diagnostics) =
-            self.query_timed_with_context(query, search_k, temporal, apply_recency);
+        let (mut results, mut timings, diagnostics) = self.query_timed_with_context(
+            query,
+            search_k,
+            temporal,
+            apply_recency,
+            statistics,
+            local_terms,
+        );
         if target.is_none()
             && temporal_start.is_none()
             && temporal_end.is_none()
@@ -1501,14 +1852,21 @@ impl MemoryIndex {
     #[deprecated(
         since = "0.1.9",
         note = "use `query_with_temporal_context`, which also carries query intent; \
-                scheduled for removal in 0.2.0"
+                retained for 0.2 compatibility; scheduled for a later breaking release"
     )]
     pub fn query_timed(
         &self,
         query: &str,
         top_k: usize,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
-        self.query_timed_with_context(query, top_k, TemporalQueryContext::default(), true)
+        self.query_timed_with_context(
+            query,
+            top_k,
+            TemporalQueryContext::default(),
+            true,
+            None,
+            &[],
+        )
     }
 
     fn query_timed_with_context(
@@ -1517,10 +1875,16 @@ impl MemoryIndex {
         top_k: usize,
         temporal: TemporalQueryContext<'_>,
         apply_recency: bool,
+        statistics: Option<&GlobalBm25Statistics>,
+        local_terms: &[String],
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let total_start = Instant::now();
         let lexical_start = Instant::now();
-        let lexical_hits = match self.lexical_bm25(query, top_k.saturating_mul(5).max(20)) {
+        let lexical_hits = match self.lexical_bm25(
+            query,
+            top_k.saturating_mul(5).max(20),
+            statistics.map(|value| value as &dyn Bm25StatisticsProvider),
+        ) {
             Ok(hits) => Some(hits),
             Err(err) => {
                 eprintln!("warning: lexical BM25 query component failed: {}", err);
@@ -1536,7 +1900,9 @@ impl MemoryIndex {
             temporal.query_routing_intent,
             temporal.has_explicit_temporal,
             temporal.allowed_doc_ids,
+            temporal.allowed_doc_bitmap,
             apply_recency,
+            local_terms,
         );
         let snapshot_query_ms = snapshot_start.elapsed().as_secs_f64() * 1000.0;
         let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -1549,7 +1915,7 @@ impl MemoryIndex {
     #[deprecated(
         since = "0.1.9",
         note = "use `query_with_temporal_context`; externally supplied lexical hits are \
-                no longer needed now that the index scores its own. Scheduled for removal in 0.2.0"
+                no longer needed now that the index scores its own. Retained for 0.2 compatibility"
     )]
     pub fn query_with_lexical_hits(
         &self,
@@ -1557,8 +1923,18 @@ impl MemoryIndex {
         top_k: usize,
         lexical_hits: Option<&HashMap<String, f32>>,
     ) -> Vec<SearchResult> {
-        self.query_with_lexical_hits_timed(query, top_k, lexical_hits, None, false, None, true)
-            .0
+        self.query_with_lexical_hits_timed(
+            query,
+            top_k,
+            lexical_hits,
+            None,
+            false,
+            None,
+            None,
+            true,
+            &[],
+        )
+        .0
     }
 
     /// Query with exact-match field filtering. All supplied filter key-value pairs must match
@@ -1566,9 +1942,9 @@ impl MemoryIndex {
     #[deprecated(
         since = "0.1.9",
         note = "use `query_with_temporal_context` with `TemporalQueryContext::allowed_doc_ids` \
-                built from `doc_ids_matching_filters`; scheduled for removal in 0.2.0"
+                built from `doc_ids_matching_filters`; retained for 0.2 compatibility"
     )]
-    #[allow(deprecated)] // delegates to another deprecated helper; both go in 0.2.0
+    #[allow(deprecated)] // delegates to a compatibility helper
     pub fn query_with_filters(
         &self,
         query: &str,
@@ -1590,25 +1966,58 @@ impl MemoryIndex {
         if filters.is_empty() {
             return None;
         }
+        let mut matches = filters.iter().filter_map(|(key, value)| {
+            self.filter_postings
+                .get(key)
+                .and_then(|values| values.get(value))
+        });
+        let Some(first) = matches.next() else {
+            return Some(HashSet::new());
+        };
+        let mut bitmap = first.clone();
+        for posting in matches {
+            bitmap &= posting;
+        }
         Some(
-            self.docs
+            bitmap
                 .iter()
-                .filter(|(_, doc)| {
-                    filters
-                        .iter()
-                        .all(|(k, v)| doc.filters.get(k).map(|dv| dv == v).unwrap_or(false))
-                })
-                .map(|(doc_id, _)| doc_id.clone())
+                .filter_map(|doc_u32| self.doc_u32_to_id.get(doc_u32 as usize).cloned())
                 .collect(),
         )
+    }
+
+    pub fn doc_bitmap_matching_filters(
+        &self,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Option<RoaringBitmap> {
+        if filters.is_empty() {
+            return None;
+        }
+        let mut matches = filters
+            .iter()
+            .filter_map(|(key, value)| self.filter_postings.get(key)?.get(value));
+        let Some(first) = matches.next() else {
+            return Some(RoaringBitmap::new());
+        };
+        let mut bitmap = first.clone();
+        for posting in matches {
+            bitmap &= posting;
+        }
+        Some(bitmap)
+    }
+
+    pub fn doc_bitmap_for_ids(&self, ids: &HashSet<String>) -> RoaringBitmap {
+        ids.iter()
+            .filter_map(|id| self.doc_id_to_u32.get(id).copied())
+            .collect()
     }
 
     #[deprecated(
         since = "0.1.9",
         note = "use `query_with_temporal_context` with `TemporalQueryContext::allowed_doc_ids` \
-                built from `doc_ids_matching_filters`; scheduled for removal in 0.2.0"
+                built from `doc_ids_matching_filters`; retained for 0.2 compatibility"
     )]
-    #[allow(deprecated)] // delegates to another deprecated helper; both go in 0.2.0
+    #[allow(deprecated)] // delegates to a compatibility helper
     pub fn query_with_filters_and_lexical(
         &self,
         query: &str,
@@ -1626,7 +2035,9 @@ impl MemoryIndex {
             None,
             false,
             Some(&allowed),
+            None,
             true,
+            &[],
         )
         .0
     }
@@ -1638,7 +2049,7 @@ impl MemoryIndex {
         since = "0.1.9",
         note = "use `query_with_temporal_context` with `TemporalQueryContext::allowed_doc_ids` \
                 built once from `doc_ids_matching_filters` and reused across queries; \
-                scheduled for removal in 0.2.0"
+                retained for 0.2 compatibility; scheduled for a later breaking release"
     )]
     pub fn query_with_filters_multi(
         &self,
@@ -1673,13 +2084,16 @@ impl MemoryIndex {
                     None,
                     false,
                     allowed_opt.as_ref(),
+                    None,
                     true,
+                    &[],
                 )
                 .0
             })
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn query_with_lexical_hits_timed(
         &self,
         query: &str,
@@ -1688,42 +2102,27 @@ impl MemoryIndex {
         query_routing_intent: Option<QueryRoutingIntent>,
         has_explicit_temporal: bool,
         allowed_doc_ids: Option<&HashSet<String>>,
+        allowed_doc_bitmap: Option<&RoaringBitmap>,
         apply_recency: bool,
+        local_terms: &[String],
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
-        const MAX_QUERY_CHARS: usize = 4096;
-        const MAX_QUERY_TOKENS: usize = 128;
-
         let rerank_start = Instant::now();
         let parse_start = Instant::now();
-        let truncated = if query.len() > MAX_QUERY_CHARS {
-            let mut cut = 0usize;
-            for (idx, _) in query.char_indices() {
-                if idx > MAX_QUERY_CHARS {
-                    break;
-                }
-                cut = idx;
-            }
-            &query[..cut]
-        } else {
-            query
-        };
-        let q = normalize_for_index(truncated);
-        if q.is_empty() {
+        let Some(prepared) = prepare_query_terms(query) else {
             return (
                 Vec::new(),
                 QueryTimings::default(),
                 QueryDiagnostics::default(),
             );
+        };
+        let q = prepared.normalized;
+        let q_terms = prepared.terms;
+        let mut expanded_terms = prepared.expanded_terms;
+        for term in local_terms {
+            if !q_terms.contains(term) && !expanded_terms.contains(term) {
+                expanded_terms.push(term.clone());
+            }
         }
-        let mut q_terms: Vec<String> = tokenize_query_terms(&q);
-        if q_terms.len() > MAX_QUERY_TOKENS {
-            q_terms.truncate(MAX_QUERY_TOKENS);
-        }
-        if q_terms.is_empty() {
-            q_terms.push(q.clone());
-        }
-        let expanded = expand_query_terms(&q_terms);
-        let expanded_terms = expanded.expanded_terms;
         let mut query_entities: HashSet<String> = HashSet::new();
         if self.entity_trie.get(&q).is_some() {
             query_entities.insert(q.clone());
@@ -1744,25 +2143,45 @@ impl MemoryIndex {
         let sparse_start = Instant::now();
         let mut candidates: HashMap<usize, CandidateState> = HashMap::new();
         let query_set: HashSet<String> = q_terms.iter().cloned().collect();
-        let allowed_doc_u32s: Option<HashSet<usize>> = allowed_doc_ids.map(|allowed| {
-            allowed
-                .iter()
-                .filter_map(|doc_id| self.doc_id_to_u32.get(doc_id).copied())
-                .map(|doc_u32| doc_u32 as usize)
-                .collect()
-        });
+        enum AllowedDocs<'a> {
+            Set(&'a HashSet<usize>),
+            Bitmap(&'a RoaringBitmap),
+        }
+        impl AllowedDocs<'_> {
+            fn contains(&self, doc_u32: usize) -> bool {
+                match self {
+                    Self::Set(ids) => ids.contains(&doc_u32),
+                    Self::Bitmap(bitmap) => bitmap.contains(doc_u32 as u32),
+                }
+            }
+        }
+        let allowed_doc_ids_u32 = allowed_doc_bitmap
+            .is_none()
+            .then(|| {
+                allowed_doc_ids.map(|allowed| {
+                    allowed
+                        .iter()
+                        .filter_map(|id| self.doc_id_to_u32.get(id).copied())
+                        .map(|id| id as usize)
+                        .collect::<HashSet<_>>()
+                })
+            })
+            .flatten();
+        let allowed_doc_u32s = allowed_doc_bitmap
+            .map(AllowedDocs::Bitmap)
+            .or_else(|| allowed_doc_ids_u32.as_ref().map(AllowedDocs::Set));
 
         fn score_doc<F>(
             candidates: &mut HashMap<usize, CandidateState>,
             doc_u32: usize,
             delta: f32,
-            allowed_doc_u32s: Option<&HashSet<usize>>,
+            allowed_doc_u32s: Option<&AllowedDocs<'_>>,
             apply: F,
         ) where
             F: FnOnce(&mut CandidateState),
         {
             if let Some(allowed_doc_u32s) = allowed_doc_u32s {
-                if !allowed_doc_u32s.contains(&doc_u32) {
+                if !allowed_doc_u32s.contains(doc_u32) {
                     return;
                 }
             }
@@ -2441,6 +2860,14 @@ impl MemoryIndex {
         }
         let ranking_ms = ranking_start.elapsed().as_secs_f64() * 1000.0;
         let rerank_ms = rerank_start.elapsed().as_secs_f64() * 1000.0;
+        if std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some() {
+            eprintln!(
+                "index_timing total={:.3} parse={:.3} lexical={:.3} posting={:.3} accumulate={:.3} rank={:.3} sequence={:.3} candidates={}",
+                rerank_ms, parse_ms, lexical_merge_ms, posting_scoring_ms,
+                candidate_accumulation_ms, candidate_rank_ms, sequence_rerank_ms,
+                candidates.len()
+            );
+        }
         (
             results,
             QueryTimings {
@@ -2470,6 +2897,7 @@ impl MemoryIndex {
                 expanded_terms: expanded_terms.len(),
                 lexical_hits: lexical_hits.map_or(0, HashMap::len),
                 candidates: candidates.len(),
+                ..QueryDiagnostics::default()
             },
         )
     }

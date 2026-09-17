@@ -3,11 +3,11 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use std::thread::sleep;
+use std::thread::{self, sleep};
 use std::time::{Duration, Instant};
 
 const SPACY_SUBPROCESS_TIMEOUT_SECS: u64 = 20;
@@ -338,16 +338,28 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin.write_all(input_json.as_bytes())?;
+        if let Some(stdin) = child.stdin.take() {
+            write_spacy_input(stdin, input_json.as_bytes())?;
         }
+        let mut stdout = child.stdout.take().expect("stdout pipe configured");
+        let mut stderr = child.stderr.take().expect("stderr pipe configured");
+        let stdout_reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.read_to_end(&mut bytes);
+            bytes
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stderr.read_to_end(&mut bytes);
+            bytes
+        });
         let timeout = Duration::from_secs(SPACY_SUBPROCESS_TIMEOUT_SECS);
         let start = Instant::now();
         loop {
             if let Some(status) = child.try_wait()? {
                 if !status.success() {
-                    let output = child.wait_with_output()?;
-                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stderr_bytes = stderr_reader.join().unwrap_or_default();
+                    let stderr = String::from_utf8_lossy(&stderr_bytes);
                     anyhow::bail!("spaCy subprocess failed: {}", stderr.trim());
                 }
                 break;
@@ -355,16 +367,21 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
             if start.elapsed() >= timeout {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 anyhow::bail!("spaCy subprocess timed out after {}s", timeout.as_secs());
             }
             sleep(Duration::from_millis(50));
         }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("spaCy subprocess failed: {}", stderr.trim());
+        let stdout = stdout_reader.join().unwrap_or_default();
+        let stderr = stderr_reader.join().unwrap_or_default();
+        if !child.try_wait()?.is_some_and(|status| status.success()) {
+            anyhow::bail!(
+                "spaCy subprocess failed: {}",
+                String::from_utf8_lossy(&stderr).trim()
+            );
         }
-        let parsed: SpacyBatchOutput = serde_json::from_slice(&output.stdout)?;
+        let parsed: SpacyBatchOutput = serde_json::from_slice(&stdout)?;
         let mut out: HashMap<String, Vec<Tier1Entity>> = HashMap::new();
         for doc in parsed.documents {
             let entities = doc
@@ -386,6 +403,42 @@ impl KeyEntityRanker for SpacyKeyEntityRanker {
 
     fn name(&self) -> &'static str {
         "spacy"
+    }
+}
+
+fn write_spacy_input<W: Write>(mut writer: W, payload: &[u8]) -> Result<()> {
+    writer.write_all(payload)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod subprocess_tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct DropProbe(Arc<AtomicBool>);
+    impl Write for DropProbe {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn spacy_input_writer_is_closed_after_payload() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        write_spacy_input(DropProbe(dropped.clone()), b"{}").unwrap();
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }
 

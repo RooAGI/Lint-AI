@@ -10,7 +10,8 @@ Search can find the right topic. Lint-AI helps an agent answer the harder questi
 
 [Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
 
-**Current benchmark:** 83.5% fractional Recall@5 · 95.6% any-hit Recall@10 · ~1.88 ms average query latency · single CPU · no GPU
+**Current benchmark:** 500-question aggregate · 83.5% fractional Recall@5 ·
+95.6% any-hit Recall@10 · ~1.88 ms average query latency · single CPU · no GPU
 
 ---
 
@@ -169,6 +170,37 @@ See [agent integrations](docs/agents.md) and the [MCP guide](docs/mcp.md) for th
 
 Lint-AI is evaluated on **LongMemEval-S**, a public benchmark for long-context agent-memory retrieval over multi-session conversations.
 
+### How to read the benchmark numbers
+
+Every result has three independent labels:
+
+1. **Scope:** the 500-question aggregate evaluates the full scoped dataset;
+   the 133-question segmented comparison evaluates only the multi-session
+   slice.
+2. **Metric:** fractional (regular) recall measures the fraction of all gold
+   sessions recovered; any-hit recall counts a question as successful when at
+   least one gold session is recovered.
+3. **Cutoff:** `@5`, `@10`, and `@20` mean the top 5, 10, or 20 returned
+   results. A Recall@5 value must not be compared with Recall@10 without
+   checking both the metric type and benchmark scope.
+
+| Benchmark | Scope | Metric | Cutoffs |
+|---|---|---|---|
+| Aggregate headline | 500 questions | Fractional and any-hit recall | @5, @10, @20 |
+| Segmented comparison | 133 multi-session questions | Any-hit recall (fractional also in raw report) | @5, @10 |
+
+### Why two benchmark tables?
+
+The **500-question aggregate** is the public overall headline. It runs the
+heuristic global path across every LongMemEval-S question category. The
+**133-question segmented comparison** isolates the multi-session category and
+uses the same question subset for fixed segmented, adaptive segmented, and
+single-index baselines. The single-index row is therefore the fair control for
+segmented routing—not a second overall headline.
+
+Because the scopes and query mix differ, their recall and latency values must
+not be compared as a time series or combined into one score.
+
 The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 question-scoped queries through the heuristic release backend, and uses no embedding vectors.
 
 **500 questions · heuristic release backend · single CPU · no GPU**
@@ -178,7 +210,9 @@ The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 
 | Fractional Recall@5 | **83.5%** |
 | Fractional Recall@10 | **89.5%** |
 | Fractional Recall@20 | **91.1%** |
+| Any-hit Recall@5 | **92.4%** |
 | Any-hit Recall@10 | **95.6%** |
+| Any-hit Recall@20 | **97.0%** |
 | MRR | **84.0%** |
 | NDCG@10 | **81.8%** |
 | Average query latency | **~1.88 ms** |
@@ -188,6 +222,28 @@ The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 
 The repository keeps the dataset downloader, production-style benchmark binary, shared AgentMemory scorer, comparison workflow, and temporal-reasoning experiment harnesses so results can be reproduced and changes can be evaluated without silently changing the query path.
 
 See [benchmark methodology](docs/benchmark.md), [benchmark results](docs/benchmark-results.md), and [comparison methodology](docs/comparison.md).
+
+### Latest segmented-index comparison
+
+The latest 133-query multi-session comparison measures the three supported
+retrieval modes on the same corpus and CPU-only host. This run explicitly used
+five initial segments; adaptive routing is opt-in and may expand that candidate
+set from 5 to 12 segments. The server and benchmark CLI default to fixed top-3.
+
+| Mode | Routing / candidates | Any-hit Recall@5 | Any-hit Recall@10 | MRR | Avg. query latency |
+|---|---|---:|---:|---:|---:|
+| Segmented (fixed) | top-5 | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
+| Segmented (adaptive) | 5 → 12 | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
+| Single index | global search | 93.23% | 93.98% | 0.814 | 6.41 ms |
+
+Adaptive routing improves any-hit Recall@5 and any-hit Recall@10 by 0.75
+percentage points over
+fixed routing, with a latency trade-off. The fixed segmented mode remains the
+recommended default for predictable latency. See the
+[segmented-index design](docs/distributed-segment-index.md) and
+`segment_scoped_benchmark` for the full command and conditions. The exact
+summary is checked in as
+[`segment-multisession-v0.2.0.json`](comparison/results/segment-multisession-v0.2.0.json).
 
 <details>
 <summary><strong>Experimental rust-bert POS/NER branch</strong></summary>
@@ -202,7 +258,7 @@ An experimental model-backed POS/NER branch has also reached higher retrieval me
 
 The repository also includes reproducible Claude Code and Codex replay/performance tests. These are diagnostic one-run measurements, **not universal performance guarantees**.
 
-| Provider / arm | Continuation | Input tokens | Tool calls | Recall | Hook time |
+| Provider / arm | Continuation | Input tokens | Tool calls | Scenario recall | Hook time |
 |---|---:|---:|---:|---:|---:|
 | Claude native memory | 22.47 s | 123,536 | 4 | 2/3 | 0 ms |
 | Claude Lint-AI only | 7.05 s | 15,914 | 0 | 3/3 | 1.40 s |
@@ -364,7 +420,11 @@ If your only requirement is simple keyword search over a static set of documents
 
 Lint-AI is under active development. The release query path uses the heuristic backend; experimental model-backed query semantics remain separate from the audited release dependency graph.
 
-The security audit workflow runs `cargo audit`. The current release has no newly introduced blocking RustSec vulnerability from the current-state query changes; known dependency warnings are documented in the repository's audit workflow and dependency history.
+The security audit workflow runs `cargo audit`. Binary persistence uses
+`oxicode`, and the lexical index uses Tantivy 0.25 to preserve measured recall.
+Current audits report only
+transitive Tantivy warnings in `lru` and `memmap2`; these are tracked for
+upstream fixes.
 
 Issues, benchmark reproductions, integration feedback, and contributions are welcome.
 

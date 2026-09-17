@@ -1,7 +1,9 @@
 # Remote Query Contract
 
-Status: local contract and deterministic reduction implemented; `lint-service`
-transport implementation pending
+Status: the transport-neutral Rust types, validation, statistics aggregation,
+and deterministic candidate reduction are implemented. The transport schema,
+`lint-service` adapter, end-to-end two-phase orchestration, and operational
+failure handling remain pending.
 
 This is the wire-level contract for placing the local segmented query
 coordinator behind `lint-service`. It is deliberately separate from the
@@ -12,8 +14,9 @@ The Rust data model for this contract lives in `src/remote_query.rs` and is
 re-exported from the crate root. Its `aggregate_statistics` and
 `reduce_candidates` helpers are the canonical validation/reduction boundary.
 They are transport-neutral and intentionally do not change the legacy
-`RunLint` protocol. The equivalent protobuf schema is checked in at
-`proto/remote_query.proto` for the eventual `lint-service` adapter.
+`RunLint` protocol. A protobuf or other transport schema should be added with
+the eventual `lint-service` adapter and generated bindings so its parity with
+these types can be tested.
 
 ## Deployment model
 
@@ -34,15 +37,18 @@ statistics generation match the coordinator's query.
 
 ## Versioning and identity
 
-Every request carries:
+The common request envelope used by both phases carries:
 
 - `protocol_version`: monotonically versioned wire contract;
 - `request_id`: globally unique ID used for logs and deduplication;
 - `deadline_unix_ms`: absolute deadline, not an independently reset timeout;
 - `coordinator_generation`: the service's worker-set/configuration snapshot;
-- `statistics_generation`: the query-scoped scoring view;
-- `query`: the original query plus normalized/expanded query fields as needed;
+- `query`: the original query;
 - `top_k`, filters, temporal bounds, and reference date.
+
+The statistics request additionally carries parsed query terms and field names.
+The candidate request carries the frozen `statistics_generation` and aggregated
+statistics payload produced after phase 1.
 
 Every response carries the request ID, worker ID, worker snapshot generation,
 statistics generation, and a protocol version. A response from a different
@@ -83,11 +89,14 @@ each eligible worker. Each worker returns query-scoped statistics:
 }
 ```
 
-The coordinator sums successful worker statistics and freezes the result under
-`statistics_generation`. Missing workers are recorded in the completeness
-object; the coordinator must not silently treat partial statistics as complete.
-It may either continue with an explicitly partial scoring view or fail closed,
-according to the request policy.
+The implemented `aggregate_statistics` helper validates request and protocol
+identity, rejects duplicate workers or mismatched statistics generations, sums
+successful worker statistics, and merges segment completeness. The future
+service adapter must freeze that result under the shared
+`statistics_generation`. Missing workers must be represented by the adapter;
+partial statistics must never be presented as complete. A service may continue
+with an explicitly partial scoring view or fail closed according to its request
+policy.
 
 ### Phase 2: candidates
 
@@ -118,11 +127,19 @@ stable document IDs, score components, and local completeness:
 ```
 
 The worker must reject a statistics generation it did not receive or cannot
-apply. The coordinator merges successful candidates, applies cross-worker
-group/session reduction, uses deterministic tie-breaking (`score`, then stable
-document ID), and truncates only after reduction.
+apply. The implemented `reduce_candidates` helper validates the generation,
+rejects duplicate worker responses, deduplicates candidates by stable document
+ID, sorts by score and then document ID, and truncates only after merging.
+Cross-worker group/session aggregation is not part of the current remote
+reducer; workers must return results at the ranking granularity expected by the
+coordinator.
 
-## Failure semantics
+## Required service behavior
+
+The local contract helpers validate messages and preserve segment-level
+completeness, but they do not run discovery, authentication, RPCs, retries, or
+deadline cancellation. The future `lint-service` adapter must provide the
+following behavior:
 
 - The deadline is shared across discovery, both phases, and reduction.
 - A worker failure is represented in completeness and does not erase successful
@@ -145,15 +162,19 @@ The migration should add a new RPC rather than reinterpret `RunLint`. Existing
 CLI dispatch keeps its behavior; typed distributed query clients opt into the
 new protocol and can be rolled out worker-by-worker.
 
-## Acceptance criteria
+## Implementation status and acceptance criteria
 
-The remote implementation is ready when contract tests prove:
+Local unit tests currently cover wire serialization and request validation,
+statistics aggregation, generation mismatch rejection, completeness validation,
+and order-independent candidate reduction. The remote service implementation is
+ready only when integration or contract tests additionally prove:
 
 1. identical query-scoped statistics produce comparable scores across two
    workers;
-2. a stale or mismatched generation is rejected and reported;
+2. a stale or mismatched generation is rejected and reported across the RPC
+   boundary;
 3. one failed worker/segment yields partial results with explicit completeness;
 4. the same request ID and deadline are preserved through both phases;
-5. reduction is deterministic across response arrival orders;
+5. service response ordering remains deterministic across worker arrival orders;
 6. all-worker failure returns an unavailable result;
 7. the legacy `RunLint` path remains unchanged.

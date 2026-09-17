@@ -71,8 +71,8 @@ pub use crate::pipeline::{
     build_index_store, build_query_snapshot, build_query_snapshot_from_source_documents,
     resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, IndexStoreInspection,
     MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
-    MemoryIndexSnapshotInspection, PipelineOptions, StorePaths, Tier1NerProvider,
-    Tier1TermRankerKind,
+    MemoryIndexSnapshotInspection, PipelineOptions, PublishedIndexSnapshot, StorePaths,
+    Tier1NerProvider, Tier1TermRankerKind,
 };
 pub use crate::remote_query::{
     aggregate_statistics, reduce_candidates, RemoteCandidateRequest, RemoteCandidateResponse,

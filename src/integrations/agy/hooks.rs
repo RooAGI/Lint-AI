@@ -56,8 +56,8 @@ struct AgyHookOutput {
 }
 
 pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
-    let raw: Value = serde_json::from_reader(std::io::stdin().lock())
-        .context("failed to parse AGY hook input")?;
+    let raw: Value =
+        crate::integrations::read_bounded_json().context("failed to parse AGY hook input")?;
     let input: AgyHookInput =
         serde_json::from_value(raw.clone()).context("failed to decode AGY hook input")?;
     let root = resolve_root(&input, fallback_root)?;

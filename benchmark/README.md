@@ -86,9 +86,9 @@ The section below shows both the rust-bert POS/NER branch result and the default
 
 | metric | value |
 |---|---|
-| recall@5 | 86.9% |
-| recall@10 | 93.8% |
-| recall@20 | 94.4% |
+| Fractional recall@5 | 86.9% |
+| Fractional recall@10 | 93.8% |
+| Fractional recall@20 | 94.4% |
 | recall_any@5 | 94.8% |
 | recall_any@10 | 98.2% |
 | MRR | 87.1% |
@@ -99,7 +99,7 @@ The section below shows both the rust-bert POS/NER branch result and the default
 
 **By question type:**
 
-| question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
+| question type | n | fractional recall@5 | fractional recall@10 | any-hit recall@5 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
 | single-session-assistant | 56 | 100.0% | 100.0% | 100.0% | 99.1% | 99.3% |
 | single-session-user | 70 | 97.1% | 98.6% | 97.1% | 86.8% | 89.8% |
@@ -116,9 +116,9 @@ Results file: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
 
 | metric | value |
 |---|---|
-| recall@5 | 83.5% |
-| recall@10 | 89.5% |
-| recall@20 | 91.1% |
+| Fractional recall@5 | 83.5% |
+| Fractional recall@10 | 89.5% |
+| Fractional recall@20 | 91.1% |
 | recall_any@5 | 92.4% |
 | recall_any@10 | 95.6% |
 | recall_any@20 | 97.0% |
@@ -135,7 +135,7 @@ current aggregate above with the command in the Reproduce section. The
 published cross-system comparison uses the any-hit aggregate and the shared
 scorer, not this historical per-type table.
 
-| question type | n | recall@5 | recall@10 | recall_any@5 | MRR | NDCG@10 |
+| question type | n | fractional recall@5 | fractional recall@10 | any-hit recall@5 | MRR | NDCG@10 |
 |---|---|---|---|---|---|---|
 | single-session-assistant | 56 | 100.0% | 100.0% | 100.0% | 98.2% | 98.7% |
 | single-session-user | 70 | 94.3% | 98.6% | 94.3% | 77.4% | 82.6% |
@@ -241,6 +241,22 @@ cargo run --release --features experimental --bin segment_scoped_benchmark -- \
 ```
 
 The segmented benchmark reports the same scoped retrieval metrics plus experimental segment variants, segment-specific enrichment diagnostics, and router-miss failure analysis.
+
+The latest 133-query multi-session segment comparison produced:
+
+| mode | candidates | recall_any@5 | recall_any@10 | MRR | average latency |
+|---|---|---:|---:|---:|---:|
+| segmented (fixed) | top-5 | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
+| segmented (adaptive) | 5 → 12 | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
+| single index | global search | 93.23% | 93.98% | 0.814 | 6.41 ms |
+
+These are question-scoped multi-session results and are separate from the
+500-question aggregate heuristic headline above. This run explicitly selected
+top-5 (`--segment-top-n 5`); the benchmark CLI and server default to top-3.
+Adaptive routing trades additional latency for higher any-hit recall.
+
+The checked-in summary artifact is
+`comparison/results/segment-multisession-v0.2.0.json`.
 
 ## Report Metrics
 

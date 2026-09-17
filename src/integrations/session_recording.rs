@@ -380,7 +380,7 @@ fn run_provider_process(
                 command
             }
         };
-        let output = command
+        let mut child = command
             .current_dir(project_root)
             .env(REPLAY_SESSION_ENV, replay_session_id)
             .env("HOME", &isolated_home)
@@ -392,32 +392,62 @@ fn run_provider_process(
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
+            .spawn()
             .with_context(|| format!("failed to launch {} replay process", provider.as_str()))?;
 
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let stdout_thread = std::thread::spawn(move || bounded_reader(stdout));
+        let stderr_thread = std::thread::spawn(move || bounded_reader(stderr));
+        let status = child.wait()?;
+        let stdout = stdout_thread
+            .join()
+            .map_err(|_| anyhow::anyhow!("replay stdout reader thread panicked"))??;
+        let stderr = stderr_thread
+            .join()
+            .map_err(|_| anyhow::anyhow!("replay stderr reader thread panicked"))??;
+
         if index == 0 && matches!(provider, RecordingProvider::Codex) {
-            provider_session_id = extract_codex_session_id(&output.stderr);
+            provider_session_id = extract_codex_session_id(&stderr);
         }
-        execution.success = output.status.success();
-        execution.exit_code = output.status.code();
-        append_bounded(&mut execution.stdout, &output.stdout);
-        append_bounded(&mut execution.stderr, &output.stderr);
+        execution.success = status.success();
+        execution.exit_code = status.code();
+        append_bounded(&mut execution.stdout, &stdout);
+        append_bounded(&mut execution.stderr, &stderr);
         eprintln!(
             "lint-ai replay: finished turn {}/{} in {:.1}s ({})",
             index + 1,
             prompts.len(),
             turn_started.elapsed().as_secs_f64(),
-            if output.status.success() {
-                "ok"
-            } else {
-                "failed"
-            }
+            if status.success() { "ok" } else { "failed" }
         );
-        if !output.status.success() {
+        if !status.success() {
             break;
         }
     }
     Ok(execution)
+}
+
+fn bounded_reader<R: Read>(reader: Option<R>) -> Result<Vec<u8>> {
+    let Some(mut reader) = reader else {
+        return Ok(Vec::new());
+    };
+    let mut bytes = Vec::with_capacity(MAX_REPLAY_OUTPUT_BYTES.min(64 * 1024));
+    let mut buffer = [0u8; 16 * 1024];
+    let mut truncated = false;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_REPLAY_OUTPUT_BYTES.saturating_sub(bytes.len());
+        bytes.extend_from_slice(&buffer[..read.min(remaining)]);
+        truncated |= read > remaining;
+    }
+    if truncated {
+        bytes.extend_from_slice(b"\n[output truncated]");
+    }
+    Ok(bytes)
 }
 
 fn append_bounded(target: &mut String, bytes: &[u8]) {
@@ -1208,6 +1238,20 @@ fn timestamp_compact() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_reader_truncates_but_drains_output() {
+        let input = vec![b'x'; MAX_REPLAY_OUTPUT_BYTES + 1];
+        let output = bounded_reader(Some(std::io::Cursor::new(input))).unwrap();
+        assert!(output.starts_with(&vec![b'x'; MAX_REPLAY_OUTPUT_BYTES]));
+        assert!(output.ends_with(b"\n[output truncated]"));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_missing_pipe() {
+        let output = bounded_reader::<std::io::Empty>(None).unwrap();
+        assert!(output.is_empty());
+    }
 
     fn temp_root(name: &str) -> PathBuf {
         let nonce = SystemTime::now()

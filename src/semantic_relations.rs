@@ -98,6 +98,9 @@ pub struct SemanticRelationStore {
 }
 
 impl SemanticRelationStore {
+    pub fn is_empty(&self) -> bool {
+        self.relations.is_empty() && self.document_states.is_empty()
+    }
     pub fn from_documents<'a, I>(documents: I, options: SupersessionOptions) -> Self
     where
         I: IntoIterator<Item = &'a SourceDocument>,

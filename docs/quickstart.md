@@ -57,6 +57,11 @@ cargo run --release -- /path/to/repo
 
 If the repository has a `docs/` folder, the tool will usually scope itself there automatically.
 
+Lint-AI discovers `lint-ai.json` beside the target corpus, or accepts an
+explicit file with `--config PATH`. A malformed configuration prints a warning
+and falls back to defaults. Use `--strict-config` in CI or production when a
+missing, oversized, or malformed configuration must fail the command instead.
+
 ## 3. Inspect the corpus
 
 Show the derived inventory:

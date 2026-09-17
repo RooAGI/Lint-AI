@@ -337,6 +337,8 @@ fn run_scoped_benchmark(
                     QueryTimeHint::Mixed => TemporalQueryHint::Mixed,
                 }),
             allowed_doc_ids: None,
+            allowed_doc_bitmap: None,
+            allowed_segment_doc_bitmaps: None,
             query_routing_intent: analysis.query_routing_intent,
             has_explicit_temporal: analysis.temporal.is_some(),
         };

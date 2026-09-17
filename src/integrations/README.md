@@ -45,6 +45,11 @@ bounded retrieval, capture, and context-injection work. MCP adds server startup,
 index initialization or loading, JSON-RPC transport, and model-selected tool
 calls. Keep their latency and reliability measurements separate.
 
+Provider hook payloads and status-line input are capped at 8 MiB. Inputs over
+that limit fail the hook invocation instead of being buffered without bound;
+provider fail-open behavior still determines whether normal client work
+continues.
+
 ## Memory Layer and Hooks
 
 The Lint-AI memory layer is the durable project-local store used to carry

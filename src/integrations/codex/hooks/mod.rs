@@ -63,8 +63,8 @@ impl CodexHookKind {
 }
 
 pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
-    let raw: Value = serde_json::from_reader(std::io::stdin().lock())
-        .context("failed to parse Codex hook input")?;
+    let raw: Value =
+        crate::integrations::read_bounded_json().context("failed to parse Codex hook input")?;
     let input: CodexHookInput =
         serde_json::from_value(raw).context("failed to decode Codex hook input")?;
     let root = resolve_root(&input.cwd, fallback_root)?;

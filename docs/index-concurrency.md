@@ -18,13 +18,11 @@ deployments.
 batch construction and fast reads over compact global structures. It is not the
 right object to mutate incrementally in place.
 
-Today, public queries call `refresh()` before searching. That gives strongest
-freshness, but it also means the first query after a write can pay the full
-semantic rebuild cost.
-
-There is also a private background refresh scaffold. It preserves the old
-snapshot while building a newer one and publishes the result only if no newer
-write has advanced the store revision.
+`IndexStore::refresh()` builds and publishes a complete immutable generation.
+`PublishedIndexSnapshot` is a cheaply clonable read view that excludes mutable
+writer and persistence state. The server exposes the same separation through
+`MemoryService` (writer) and `MemorySearchService` (published reader), so a
+refresh does not hold the reader lock for the duration of the rebuild.
 
 ## Recommended Rule
 
@@ -52,8 +50,8 @@ obsolete revisions when writes continue arriving.
 
 ## Segmented MemoryIndex Sets
 
-For large corpora, the next useful architecture is likely an `IndexStore` that
-can publish many smaller `MemoryIndex` segments as one logical search surface.
+For large corpora, `IndexStore` can publish many smaller `MemoryIndex` segments
+as one logical search surface.
 
 Examples:
 
@@ -101,13 +99,14 @@ rather than the number of segments. That keeps the pipeline predictable:
 chunk_pipeline_workers = min(configured_workers, cpu_limit)
 ```
 
-## Minimal Segmented Query Step
+## Implemented Segmented Query Path
 
-The smallest useful change is not a full sharded indexing system. It is the
-ability to query one selected segment `MemoryIndex`, then compare its result
-against the existing global query path.
+The current implementation builds validated segment snapshots, routes queries
+to fixed or adaptive candidate sets, and merges segment results against shared
+global BM25 statistics. It remains a single-process segmented index, not a
+remote sharded storage system.
 
-Small units:
+The implemented units are:
 
 1. Define `MemoryIndexSegment`.
    - `segment_id`
@@ -117,10 +116,10 @@ Small units:
    - one compact `SegmentProfile`
 2. Build profiles for existing records without changing query behavior.
 3. Add a router that ranks segments for a query.
-4. Query only the top segment.
-5. Query the top N segments and merge top-k results.
-6. Rebuild only the segment touched by an upsert/remove.
-7. Publish the replacement segment set as one generation.
+4. Query the top N routed segments and merge top-k results.
+5. Expand the routed set adaptively when requested and evidence coverage is
+   insufficient.
+6. Publish the replacement segment set as one immutable generation.
 
 This gives a small benchmarkable ladder. Each step can be compared against the
 current one-global-`MemoryIndex` baseline.
@@ -240,60 +239,27 @@ For a huge corpus, prefer this order:
 
 This model keeps memory bounded and avoids rebuilding obsolete snapshots.
 
-## Current Implementation Gap
-
-The current code does not yet implement segmented `MemoryIndex` sets.
+## Current Implementation and Remaining Work
 
 Current behavior:
 
 - `SourceDocument` is the canonical ingestion unit.
-- `build_doc_records()` processes source documents serially.
-- `assemble_doc_record()` chunks one source document into `section_chunks`.
-- `build_query_snapshot()` builds one `MemoryIndex` from all records passed to
-  that call.
-- `IndexStore::refresh()` rebuilds one semantic `MemoryIndex` snapshot from all
-  current records in the store.
-- group/session/folder identity is metadata, not a separate index boundary.
+- `MemoryIndexLayout` selects `Single`, `Segmented`, or `AdaptiveSegmented`.
+- Segmented layouts build one validated `MemoryIndex` per group/session
+  boundary and publish the complete set as one generation.
+- Fixed routing queries the configured top-N segments. Adaptive routing starts
+  at the same top-N and expands to `max_query_n` when evidence coverage is
+  insufficient.
+- Empty or low-signal routes execute a bounded deterministic fallback, and
+  diagnostics report the segments actually executed.
+- `PublishedIndexSnapshot` and `MemorySearchService` separate immutable readers
+  from the mutable writer during refresh.
 
-For the scoped haystack benchmark in this checkout, each question builds a
-snapshot over that question's candidate sessions; each turn is a
-`SourceDocument`, and session identity is carried in `group_id`.
+The implementation still rebuilds a complete semantic generation during
+`IndexStore::refresh()`; it does not update semantic postings in place or write
+independent binary cores per segment. Those optimizations should be driven by
+benchmark evidence and preserve atomic generation publication.
 
-## Implementation Direction
-
-The next implementation step should be routing over segmented query generations.
-Keep it smaller than a low-level incremental rewrite of `MemoryIndex`.
-
-Useful pieces:
-
-1. Add segment metadata/profile types without changing public query behavior.
-2. Build one `MemoryIndex` per explicit boundary, such as folder or session.
-3. Add a `SegmentRouter` that returns ranked segment ids plus diagnostics.
-4. Query the top one segment and benchmark recall/latency.
-5. Query top N segments and merge top-k results.
-6. Add low-confidence fallback to the global index or all segments.
-7. Add CPU-capped parallel segment builds.
-8. Add stale-while-refresh publication for segment generations.
-
-Useful controls:
-
-- `memory_index_chunk_limit`: maximum chunk/doc payload per size-based segment
-- `segment_build_workers`: CPU-capped worker count, usually defaulting near four
-- `segment_query_top_n`: number of routed segments to query
-- `segment_router_min_confidence`: threshold for broad fallback
-- `segment_strategy`: folder, session, language, time, chunk range, or cluster
-
-Useful metrics:
-
-- segment count
-- selected segment ids
-- router confidence
-- routed segment recall
-- top-N merge recall
-- segment build duration
-- skipped obsolete builds
-- snapshot age
-
-True incremental semantic postings updates are still a larger redesign. They
-should be driven by benchmark evidence that segmented rebuilds are still not
-enough.
+Operational metrics that remain useful include segment count, selected segment
+IDs, routed relevant-segment recall, snapshot generation, build duration, and
+query latency by routing mode.

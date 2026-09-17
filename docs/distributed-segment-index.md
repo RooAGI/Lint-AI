@@ -43,7 +43,7 @@ duplicate implementations of one policy: they are the shard-local phase and the
 coordinator reduce phase of a query-then-fetch pipeline.
 
 > **Do not consolidate the two aggregators into one shared policy.** An earlier
-> proposal (`docs/query-context-and-ranking-consolidation.md`) reads them as
+> ranking-consolidation proposal read them as
 > accidental duplication. Under a distributed design they are distinct tiers
 > with distinct jobs, and collapsing them would erase the split that
 > distribution requires. What should be shared is a defined two-phase
@@ -96,7 +96,7 @@ shard the same global term statistics rather than by post-hoc normalization.
 
 ### Tantivy already supports this
 
-`tantivy::query::Bm25StatisticsProvider` exists in the pinned version (0.25) and
+`tantivy::query::Bm25StatisticsProvider` exists in the pinned Tantivy 0.25 line and
 is exactly the required hook:
 
 ```rust
@@ -112,10 +112,8 @@ search scoring against supplied statistics instead of the local index's own.
 `Searcher` implements the trait for itself, which is what the ordinary
 `search()` path uses.
 
-No tantivy upgrade is required to adopt this. (Note that tantivy 0.26 is
-currently *not* recommended for unrelated reasons — see
-`docs/query-context-and-ranking-consolidation.md` and the 0.26 tie-breaking
-change.)
+The implementation currently uses Tantivy 0.25. Version 0.26 was evaluated but
+not retained because its `TopDocs` tie-breaking reduced measured recall and MRR.
 
 ### Implemented locally: `GlobalBm25Statistics`
 
@@ -226,13 +224,11 @@ scope here and deserve a separate document.
 
 ## Consequences for work currently in flight
 
-1. **The ranking consolidation in
-   `docs/query-context-and-ranking-consolidation.md` should not proceed as
-   written.** Its core proposal — one shared `ranking::aggregate_groups`
-   replacing both aggregators — conflicts with the two-tier split this design
-   depends on. The query-*preparation* half of that document (shared
-   `PreparedQuery` across CLI and memory server) is unaffected and remains
-   valid.
+1. **The ranking consolidation should not proceed as a single shared
+   aggregator.** Replacing both aggregators with one `ranking::aggregate_groups`
+   function conflicts with the two-tier split this design depends on. Query
+   preparation is already shared through `PreparedQuery` across the CLI,
+   pipeline, and memory server.
 
 2. **The two aggregation formulas should be documented as tiers, not
    reconciled.** A measured comparison on the multi-session slice (133 queries,
@@ -241,10 +237,10 @@ scope here and deserve a separate document.
    recall unchanged. The tiers are doing different jobs and are tuned
    differently; that is the intended state, not drift.
 
-3. **`GlobalCorpusStats` is worth building before distribution.** It improves
-   score consistency in the current single-process segmented mode too, where
-   per-segment IDF already makes cross-segment scores incomparable. It can be
-   benchmarked immediately with the existing `segment_scoped_benchmark`.
+3. **A serializable `GlobalCorpusStats` is still required before remote
+   distribution.** Local segmented queries already share
+   `GlobalBm25Statistics`; a transport-safe snapshot must preserve equivalent
+   query-scoped statistics and generation identity across workers.
 
 ## Open questions
 

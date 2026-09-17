@@ -1,6 +1,6 @@
 [package]
 name = "lint-ai"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2021"
 description = "Semantic wiki and docs linting for contradictions, stale claims, orphan pages, and missing cross-references"
 license = "Apache-2.0"
@@ -22,7 +22,12 @@ serde_json = "1"
 toml = "0.8"
 walkdir = "2"
 regex = "1"
+roaring = "0.10"
 anyhow = "1"
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tower = { version = "0.5", features = ["limit", "timeout"] }
+jsonwebtoken = "9"
 aho-corasick = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 comrak = { version = "0.20", default-features = false }
@@ -32,12 +37,14 @@ deunicode = "1"
 rust-stemmers = "1"
 petgraph = "0.5"
 tantivy = "0.25"
-bincode = "1.3"
-text2num = "2"
+oxicode = { version = "0.2.6", features = ["serde"] }
+text2num = "2.8"
 thesaurus = "0.5"
 temps = { version = "3", features = ["chrono"] }
 fuzzydate = "0.4.1"
 console = { version = "0.16.3", features = ["std"] }
+sha2 = "0.10"
+rayon = "1.11"
 pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 
 [features]

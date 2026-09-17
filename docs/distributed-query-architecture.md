@@ -195,11 +195,23 @@ contract to transport; it does not by itself make the system a remote cluster.
 
 ## Current evidence
 
+The latest 133-query multi-session comparison used `coverage-local` routing and
+an explicit top-5 setting:
+
+| Mode | Any-hit Recall@5 | Any-hit Recall@10 | MRR | Mean latency |
+| --- | ---: | ---: | ---: | ---: |
+| Segmented, fixed top-5 | 95.49% | 95.49% | 0.859 | 1.25 ms |
+| Segmented, adaptive 5→12 | 96.24% | 96.24% | 0.839 | 4.36 ms |
+| Single index | 93.23% | 93.98% | 0.814 | 6.41 ms |
+
+These results are the current routed-versus-global comparison. They do not
+change the server's fixed top-3 default.
+
 A previous 500-question run of `segment_scoped_benchmark` on the checked-in
 LongMemEval-S data used an average of 47.7 segments per question and
 `top_k=5`. It remains diagnostic evidence, not a release result:
 
-| Query scope | Recall@5 | MRR | Mean latency |
+| Query scope | Fractional Recall@5 | MRR | Mean latency |
 | --- | ---: | ---: | ---: |
 | Top 1 routed segment | 41.3% | 65.4% | 2.83 ms |
 | Top 3 routed segments | 70.9% | 79.9% | 4.33 ms |
@@ -218,15 +230,15 @@ The current implementation was also compared with a clean HEAD checkout using
 the same five-query slice. After removing repeated BM25-statistics scans, the
 mean routed latency was:
 
-| Query scope | Clean HEAD | Current | Current recall@5 |
+| Query scope | Clean HEAD | Current | Routed relevant-segment recall |
 | --- | ---: | ---: | ---: |
 | Top 1 routed segment | 0.79 ms | 1.14 ms | 80% |
 | Top 5 routed segments | 0.74 ms | 0.90 ms | 80% |
 
-This confirms a remaining structural fan-out cost for one selected segment. It
-is tracked as a maturity gap; no compatibility global index is being restored
-to hide it. The benchmark must be rerun on a representative corpus before
-declaring a performance target or enabling remote fan-out by default.
+This historical five-query result exposed structural fan-out cost and motivated
+the routing work. The current 133-query comparison above supersedes it for
+local performance claims. Remote fan-out still needs its own representative
+benchmark before it is enabled by default.
 
 ## Remote extension
 

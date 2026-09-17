@@ -1,10 +1,11 @@
 use crate::index::{
-    DocRecord, GlobalBm25Statistics, MemoryIndex, SearchResult, TemporalQueryContext,
+    DocRecord, GlobalBm25Statistics, MemoryIndex, QueryTimings, SearchResult, TemporalQueryContext,
     TemporalQueryHint,
 };
 use crate::query_expansion::normalize_for_index;
 use crate::tokenizer::{self, TokenizerMode};
 use chrono::NaiveDate;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -35,6 +36,7 @@ const RERANK_COVERAGE_GAIN_WEIGHT: f32 = 0.16;
 const RERANK_SEGMENT_COVERAGE_WEIGHT: f32 = 0.28;
 const RERANK_COMMON_ONLY_PENALTY: f32 = 0.18;
 const CONNECTED_EXPANSION_POOL_MULTIPLIER: usize = 3;
+const CONNECTED_NEIGHBOR_CANDIDATE_LIMIT: usize = 128;
 const CONNECTED_EXPANSION_MIN_SCORE: f32 = 1.4;
 const CONNECTED_EXPANSION_MAX_SWAP_PENALTY: f32 = 0.35;
 const TYPED_EVIDENCE_ROUTE_WEIGHT: f32 = 1.15;
@@ -43,6 +45,8 @@ const MISSING_COVERAGE_MIN_GAIN: f32 = 1.8;
 const MISSING_COVERAGE_MIN_WEAK_SCORE: f32 = 1.5;
 const MAX_LOCAL_SEGMENT_QUERY_CONCURRENCY: usize = 8;
 const SEGMENT_CANDIDATE_OVERSAMPLE: usize = 2;
+const ROUTING_POSTINGS_PER_TERM: usize = 16;
+const ROUTING_CANDIDATE_POOL_LIMIT: usize = 64;
 
 fn segment_candidate_limit(top_k: usize) -> usize {
     top_k
@@ -87,9 +91,13 @@ struct SegmentRoutingSummary {
 struct SegmentCatalog {
     generation: u64,
     segment_count: usize,
+    ordered_segment_ids: Vec<String>,
+    segment_positions: HashMap<String, usize>,
     summaries: HashMap<String, SegmentRoutingSummary>,
     term_segment_counts: HashMap<String, usize>,
     term_to_segments: HashMap<String, Vec<String>>,
+    weighted_term_to_segments: HashMap<String, Vec<(String, f32)>>,
+    typed_evidence_to_segments: HashMap<String, Vec<String>>,
     connection_profiles: HashMap<String, SegmentConnectionProfile>,
 }
 
@@ -203,65 +211,51 @@ fn execute_selected_segments(
         .collect::<HashMap<_, _>>();
     let mut executed = Vec::with_capacity(selected_segments.len());
     for route_batch in selected_segments.chunks(MAX_LOCAL_SEGMENT_QUERY_CONCURRENCY) {
-        if route_batch.len() == 1 {
-            let route = &route_batch[0];
-            let result = segments_by_id
-                .get(route.segment_id.as_str())
-                .copied()
-                .map(|segment| {
-                    query_local_segment(
-                        segment,
-                        query,
-                        candidate_limit,
-                        temporal,
-                        reference_date,
-                        statistics,
-                    )
-                })
-                .unwrap_or_else(|| Err("segment is not present in the query snapshot".to_string()));
-            executed.push(LocalSegmentResult {
-                segment_id: route.segment_id.clone(),
-                result,
-            });
-            continue;
-        }
-
-        let batch = std::thread::scope(|scope| {
-            route_batch
-                .iter()
-                .map(|route| {
-                    let segment_id = route.segment_id.clone();
-                    let segment = segments_by_id.get(route.segment_id.as_str()).copied();
-                    let statistics = statistics.clone();
-                    (
-                        segment_id,
-                        scope.spawn(move || {
-                            segment
-                                .map(|segment| {
-                                    query_local_segment(
-                                        segment,
-                                        query,
-                                        candidate_limit,
-                                        temporal,
-                                        reference_date,
-                                        &statistics,
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    Err("segment is not present in the query snapshot".to_string())
-                                })
-                        }),
-                    )
-                })
-                .map(|(segment_id, handle)| {
-                    let result = match handle.join() {
-                        Ok(result) => result,
-                        Err(_) => Err("local segment query panicked".to_string()),
-                    };
-                    LocalSegmentResult { segment_id, result }
-                })
-                .collect::<Vec<_>>()
-        });
+        let batch = route_batch
+            .par_iter()
+            .map(|route| {
+                let segment = segments_by_id.get(route.segment_id.as_str()).copied();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    segment
+                        .map(|segment| {
+                            let mut local_bitmap = temporal
+                                .allowed_segment_doc_bitmaps
+                                .and_then(|maps| maps.get(&segment.segment_id).cloned())
+                                .or_else(|| {
+                                    temporal
+                                        .allowed_doc_ids
+                                        .map(|ids| segment.index.doc_bitmap_for_ids(ids))
+                                });
+                            if let (Some(bitmap), Some(ids)) =
+                                (local_bitmap.as_mut(), temporal.allowed_doc_ids)
+                            {
+                                *bitmap &= segment.index.doc_bitmap_for_ids(ids);
+                            }
+                            let local_temporal = TemporalQueryContext {
+                                allowed_doc_ids: None,
+                                allowed_doc_bitmap: local_bitmap.as_ref(),
+                                ..temporal
+                            };
+                            query_local_segment(
+                                segment,
+                                query,
+                                candidate_limit,
+                                local_temporal,
+                                reference_date,
+                                statistics,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            Err("segment is not present in the query snapshot".to_string())
+                        })
+                }))
+                .unwrap_or_else(|_| Err("local segment query panicked".to_string()));
+                LocalSegmentResult {
+                    segment_id: route.segment_id.clone(),
+                    result,
+                }
+            })
+            .collect::<Vec<_>>();
         executed.extend(batch);
     }
     executed
@@ -312,25 +306,83 @@ pub struct ConnectedSegmentExpansion {
 }
 
 impl SegmentedMemoryIndex {
-    pub fn from_segments(segments: Vec<MemoryIndexSegment>) -> Self {
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn query_single_segment(
+        &self,
+        query: &str,
+        top_k: usize,
+        temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
+    ) -> Option<(Vec<SearchResult>, QueryTimings)> {
+        let segment = self.segments.first()?;
+        let (results, timings, _) =
+            segment
+                .index
+                .query_with_temporal_context_at(query, top_k, temporal, reference_date);
+        Some((results, timings))
+    }
+    /// Returns document IDs matching a generic filter across all logical
+    /// segments. Filtering remains owned by the underlying MemoryIndex; this
+    /// method only unions the per-segment results for the snapshot.
+    pub fn doc_ids_matching_filters(
+        &self,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Option<HashSet<String>> {
+        if filters.is_empty() {
+            return None;
+        }
+        Some(
+            self.segments
+                .iter()
+                .flat_map(|segment| {
+                    segment
+                        .index
+                        .doc_ids_matching_filters(filters)
+                        .into_iter()
+                        .flatten()
+                })
+                .collect(),
+        )
+    }
+
+    pub fn doc_bitmaps_matching_filters(
+        &self,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> HashMap<String, roaring::RoaringBitmap> {
+        self.segments
+            .iter()
+            .filter_map(|segment| {
+                segment
+                    .index
+                    .doc_bitmap_matching_filters(filters)
+                    .map(|bitmap| (segment.segment_id.clone(), bitmap))
+            })
+            .collect()
+    }
+
+    pub fn from_segments(segments: Vec<MemoryIndexSegment>) -> Result<Self, String> {
         Self::from_segments_with_generation(segments, 0)
     }
 
     pub fn from_segments_with_generation(
         segments: Vec<MemoryIndexSegment>,
         generation: u64,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        validate_segments(&segments)?;
         let catalog = SegmentCatalog::from_segments(&segments, generation);
         let global_statistics = GlobalBm25Statistics::from_indexes_with_generation(
             segments.iter().map(|segment| &segment.index),
             generation,
         );
-        Self {
+        Ok(Self {
             segments,
             catalog,
             global_statistics,
             generation,
-        }
+        })
     }
 
     pub fn from_records_by_group_id(records: &[DocRecord]) -> Self {
@@ -343,6 +395,7 @@ impl SegmentedMemoryIndex {
     ) -> Self {
         let segments = build_segments_by_group_id(records);
         Self::from_segments_with_generation(segments, generation)
+            .expect("grouped records must produce structurally valid segments")
     }
 
     pub fn from_records_by_manifest(
@@ -387,7 +440,7 @@ impl SegmentedMemoryIndex {
         if seen_doc_ids.len() != records.len() {
             return Err("manifest does not assign every document".to_string());
         }
-        Ok(Self::from_segments_with_generation(segments, generation))
+        Self::from_segments_with_generation(segments, generation)
     }
 
     pub fn manifest(&self) -> SegmentManifest {
@@ -629,6 +682,7 @@ impl SegmentedMemoryIndex {
         max_segment_limit: usize,
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
         query_top_segments_with_adaptive_segment_enrichment_and_strategy(
             query,
@@ -638,6 +692,7 @@ impl SegmentedMemoryIndex {
             max_segment_limit,
             strategy,
             temporal,
+            reference_date,
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
@@ -652,6 +707,7 @@ impl SegmentedMemoryIndex {
         max_segment_limit: usize,
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
+        reference_date: Option<&str>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
         query_top_segments_with_adaptive_route_aware_segment_enrichment_and_strategy(
             query,
@@ -661,6 +717,7 @@ impl SegmentedMemoryIndex {
             max_segment_limit,
             strategy,
             temporal,
+            reference_date,
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
@@ -769,6 +826,50 @@ impl SegmentedMemoryIndex {
     }
 }
 
+fn validate_segments(segments: &[MemoryIndexSegment]) -> Result<(), String> {
+    let mut segment_ids = HashSet::new();
+    let mut assigned_doc_ids = HashSet::new();
+    for segment in segments {
+        if segment.segment_id.trim().is_empty() {
+            return Err("segment id must not be empty".to_string());
+        }
+        if !segment_ids.insert(segment.segment_id.as_str()) {
+            return Err(format!("duplicate segment id: {}", segment.segment_id));
+        }
+        if segment.doc_ids.is_empty() || segment.index.docs.is_empty() {
+            return Err(format!("segment is empty: {}", segment.segment_id));
+        }
+
+        let mut local_doc_ids = HashSet::new();
+        for doc_id in &segment.doc_ids {
+            if !local_doc_ids.insert(doc_id.as_str()) {
+                return Err(format!(
+                    "duplicate document id in segment {}: {doc_id}",
+                    segment.segment_id
+                ));
+            }
+            if !assigned_doc_ids.insert(doc_id.as_str()) {
+                return Err(format!(
+                    "document is assigned to multiple segments: {doc_id}"
+                ));
+            }
+        }
+        let indexed_doc_ids = segment
+            .index
+            .docs
+            .keys()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        if local_doc_ids != indexed_doc_ids {
+            return Err(format!(
+                "segment doc_ids do not match indexed documents: {}",
+                segment.segment_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentRoutingStrategy {
     SparseOverlap,
@@ -844,28 +945,53 @@ fn route_segments_with_corpus_stats(
         return route_segments_by_coverage_team_selection(&query_terms, segments, corpus_stats);
     }
     if strategy == SegmentRoutingStrategy::TypedEvidence {
-        return route_segments_by_typed_evidence(query, &query_terms, segments, corpus_stats);
+        return route_segments_by_typed_evidence(query, &query_terms, corpus_stats);
     }
 
-    let candidate_segment_ids = corpus_stats.candidate_segment_ids(&query_terms);
-    let use_inverted_candidates = !candidate_segment_ids.is_empty()
-        && !matches!(strategy, SegmentRoutingStrategy::KlDivergence);
-    let mut routes = segments
-        .iter()
-        .map(|segment| SegmentRoute {
-            segment_id: segment.segment_id.clone(),
-            score: if use_inverted_candidates
-                && !candidate_segment_ids.contains(&segment.segment_id)
-            {
-                0.0
-            } else {
-                corpus_stats
+    let candidate_segment_ids = corpus_stats.bounded_candidate_segment_ids(&query_terms);
+    // Coverage/team/typed strategies compare candidates across the whole corpus
+    // and therefore require the exhaustive route pool. Sparse and local routing
+    // can safely use the inverted catalog directly.
+    let supports_inverted_candidates = matches!(
+        strategy,
+        SegmentRoutingStrategy::SparseOverlap
+            | SegmentRoutingStrategy::LocalDistinctiveness
+            | SegmentRoutingStrategy::CoverageLocalDistinctiveness
+    );
+    let use_inverted_candidates = supports_inverted_candidates && !candidate_segment_ids.is_empty();
+    let mut routes = if use_inverted_candidates {
+        candidate_segment_ids
+            .into_iter()
+            .map(|segment_id| SegmentRoute {
+                score: corpus_stats
+                    .summary(&segment_id)
+                    .score_query_terms_with_strategy(&query_terms, strategy, corpus_stats),
+                segment_id,
+                fallback: false,
+            })
+            .collect::<Vec<_>>()
+    } else if supports_inverted_candidates {
+        corpus_stats
+            .ordered_segment_ids
+            .iter()
+            .map(|segment_id| SegmentRoute {
+                segment_id: segment_id.clone(),
+                score: 0.0,
+                fallback: false,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        segments
+            .iter()
+            .map(|segment| SegmentRoute {
+                segment_id: segment.segment_id.clone(),
+                score: corpus_stats
                     .summary(&segment.segment_id)
-                    .score_query_terms_with_strategy(&query_terms, strategy, corpus_stats)
-            },
-            fallback: false,
-        })
-        .collect::<Vec<_>>();
+                    .score_query_terms_with_strategy(&query_terms, strategy, corpus_stats),
+                fallback: false,
+            })
+            .collect::<Vec<_>>()
+    };
     routes.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -878,24 +1004,30 @@ fn route_segments_with_corpus_stats(
 fn route_segments_by_typed_evidence(
     query: &str,
     query_terms: &HashSet<String>,
-    segments: &[MemoryIndexSegment],
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
     let query_profile = query_connection_profile(query);
-    let mut routes = segments
-        .iter()
-        .map(|segment| {
+    let mut candidate_ids = corpus_stats.typed_candidate_segment_ids(&query_profile);
+    candidate_ids.extend(corpus_stats.bounded_candidate_segment_ids(query_terms));
+    let route_ids = if candidate_ids.is_empty() {
+        corpus_stats.ordered_segment_ids.clone()
+    } else {
+        candidate_ids.into_iter().collect()
+    };
+    let mut routes = route_ids
+        .into_iter()
+        .filter_map(|segment_id| {
+            corpus_stats.segment_positions.get(&segment_id)?;
             let base_score = corpus_stats
-                .summary(&segment.segment_id)
+                .summary(&segment_id)
                 .coverage_local_distinctiveness_score(query_terms, corpus_stats);
-            let segment_profile =
-                segment_connection_profile(segment, TemporalQueryContext::default());
+            let segment_profile = corpus_stats.connection_profiles.get(&segment_id)?;
             let typed_score = typed_evidence_route_score(&query_profile, &segment_profile);
-            SegmentRoute {
-                segment_id: segment.segment_id.clone(),
+            Some(SegmentRoute {
+                segment_id,
                 score: base_score + typed_score * TYPED_EVIDENCE_ROUTE_WEIGHT,
                 fallback: false,
-            }
+            })
         })
         .collect::<Vec<_>>();
     routes.sort_by(|a, b| {
@@ -912,10 +1044,11 @@ fn route_segments_by_team_coverage(
     segments: &[MemoryIndexSegment],
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
-    let mut selected = Vec::with_capacity(segments.len());
+    let eligible_segments = bounded_routing_candidates(segments, query_terms, corpus_stats);
+    let mut selected = Vec::with_capacity(eligible_segments.len());
     let mut selected_segment_ids = HashSet::new();
     let mut covered_terms = HashSet::new();
-    let base_scores = segments
+    let base_scores = eligible_segments
         .iter()
         .map(|segment| {
             (
@@ -926,7 +1059,7 @@ fn route_segments_by_team_coverage(
             )
         })
         .collect::<HashMap<_, _>>();
-    let mut base_order = segments.iter().collect::<Vec<_>>();
+    let mut base_order = eligible_segments;
     base_order.sort_by(|left, right| {
         base_scores
             .get(right.segment_id.as_str())
@@ -942,7 +1075,7 @@ fn route_segments_by_team_coverage(
             .then_with(|| left.segment_id.cmp(&right.segment_id))
     });
 
-    while selected.len() < segments.len() {
+    while selected.len() < base_order.len() {
         let candidate_pool_limit = ((selected.len() + 1) * 3).max(8).min(base_order.len());
         let candidate_pool = base_order
             .iter()
@@ -999,15 +1132,42 @@ fn route_segments_by_team_coverage(
     selected
 }
 
+fn bounded_routing_candidates<'a>(
+    segments: &'a [MemoryIndexSegment],
+    query_terms: &HashSet<String>,
+    corpus_stats: &SegmentCorpusStats,
+) -> Vec<&'a MemoryIndexSegment> {
+    let mut candidate_ids = corpus_stats.bounded_candidate_segment_ids(query_terms);
+    if candidate_ids.is_empty() {
+        candidate_ids.extend(
+            corpus_stats
+                .ordered_segment_ids
+                .iter()
+                .take(ROUTING_CANDIDATE_POOL_LIMIT)
+                .cloned(),
+        );
+    }
+    candidate_ids
+        .into_iter()
+        .filter_map(|segment_id| {
+            corpus_stats
+                .segment_positions
+                .get(&segment_id)
+                .and_then(|position| segments.get(*position))
+        })
+        .collect()
+}
+
 fn route_segments_by_coverage_team_selection(
     query_terms: &HashSet<String>,
     segments: &[MemoryIndexSegment],
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
-    let mut selected = Vec::with_capacity(segments.len());
+    let eligible_segments = bounded_routing_candidates(segments, query_terms, corpus_stats);
+    let mut selected = Vec::with_capacity(eligible_segments.len());
     let mut selected_segment_ids = HashSet::new();
     let mut coverage = TeamCoverageState::default();
-    let base_scores = segments
+    let base_scores = eligible_segments
         .iter()
         .map(|segment| {
             (
@@ -1018,7 +1178,7 @@ fn route_segments_by_coverage_team_selection(
             )
         })
         .collect::<HashMap<_, _>>();
-    let mut base_order = segments.iter().collect::<Vec<_>>();
+    let mut base_order = eligible_segments;
     base_order.sort_by(|left, right| {
         base_scores
             .get(right.segment_id.as_str())
@@ -1034,7 +1194,7 @@ fn route_segments_by_coverage_team_selection(
             .then_with(|| left.segment_id.cmp(&right.segment_id))
     });
 
-    while selected.len() < segments.len() {
+    while selected.len() < base_order.len() {
         let candidate_pool_limit = ((selected.len() + 1) * 5).max(16).min(base_order.len());
         let candidate_pool = base_order
             .iter()
@@ -1128,22 +1288,16 @@ fn route_segments_with_temporal_context_and_corpus_stats(
 ) -> Vec<SegmentRoute> {
     let mut routes = route_segments_with_corpus_stats(query, segments, strategy, corpus_stats)
         .into_iter()
-        .filter(|route| {
-            segments
-                .iter()
-                .find(|segment| segment.segment_id == route.segment_id)
-                .is_some_and(|segment| {
-                    segment_has_allowed_documents(segment, temporal.allowed_doc_ids)
-                })
-        })
-        .map(|mut route| {
-            if let Some(segment) = segments
-                .iter()
-                .find(|segment| segment.segment_id == route.segment_id)
-            {
-                route.score += segment_temporal_route_boost(segment, temporal);
+        .filter_map(|mut route| {
+            let segment = corpus_stats
+                .segment_positions
+                .get(&route.segment_id)
+                .and_then(|position| segments.get(*position))?;
+            if !segment_has_allowed_documents(segment, temporal.allowed_doc_ids) {
+                return None;
             }
-            route
+            route.score += segment_temporal_route_boost(segment, temporal);
+            Some(route)
         })
         .collect::<Vec<_>>();
     routes.sort_by(|a, b| {
@@ -1251,6 +1405,8 @@ fn query_top_segments_with_corpus_stats_and_strategy(
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
 ) -> SegmentQueryOutput {
+    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let coordinator_started = std::time::Instant::now();
     let query_terms = query_tokens(query);
     if top_k == 0 || segment_limit == 0 {
         return SegmentQueryOutput {
@@ -1268,7 +1424,7 @@ fn query_top_segments_with_corpus_stats_and_strategy(
         .iter()
         .map(|segment| (segment.segment_id.as_str(), segment))
         .collect::<HashMap<_, _>>();
-    let routes = route_segments_with_corpus_stats(query, segments, strategy, corpus_stats)
+    let mut routes = route_segments_with_corpus_stats(query, segments, strategy, corpus_stats)
         .into_iter()
         .filter(|route| {
             segments_by_id
@@ -1279,6 +1435,28 @@ fn query_top_segments_with_corpus_stats_and_strategy(
                 })
         })
         .collect::<Vec<_>>();
+    if execute_all_eligible {
+        let mut present = routes
+            .iter()
+            .map(|route| route.segment_id.clone())
+            .collect::<HashSet<_>>();
+        for segment_id in &corpus_stats.ordered_segment_ids {
+            if present.contains(segment_id.as_str()) {
+                continue;
+            }
+            let Some(segment) = segments_by_id.get(segment_id.as_str()).copied() else {
+                continue;
+            };
+            if segment_has_allowed_documents(segment, temporal.allowed_doc_ids) {
+                routes.push(SegmentRoute {
+                    segment_id: segment_id.clone(),
+                    score: 0.0,
+                    fallback: false,
+                });
+                present.insert(segment_id.clone());
+            }
+        }
+    }
     let signal_routes = routes
         .iter()
         .filter(|route| route_has_signal(route, strategy, &query_terms))
@@ -1289,17 +1467,24 @@ fn query_top_segments_with_corpus_stats_and_strategy(
         .take(segment_limit)
         .cloned()
         .collect::<Vec<_>>();
+    let fallback_limit = if execute_all_eligible {
+        segment_limit.saturating_sub(selected_segments.len())
+    } else if selected_segments.is_empty() {
+        segment_limit
+    } else {
+        0
+    };
     let fallback_segments = routes
         .iter()
         .filter(|route| !route_has_signal(route, strategy, &query_terms))
-        .take(segment_limit.saturating_sub(selected_segments.len()))
+        .take(fallback_limit)
         .map(|route| SegmentRoute {
             segment_id: route.segment_id.clone(),
             score: route.score,
             fallback: true,
         })
         .collect::<Vec<_>>();
-    let execution_segments = if execute_all_eligible {
+    let execution_segments = if execute_all_eligible || selected_segments.is_empty() {
         selected_segments
             .iter()
             .chain(fallback_segments.iter())
@@ -1360,6 +1545,13 @@ fn query_top_segments_with_corpus_stats_and_strategy(
         reference_date,
         global_statistics,
     );
+    if profile {
+        eprintln!(
+            "query_timing default_segment_execution_ms={:.3} segments={}",
+            coordinator_started.elapsed().as_secs_f64() * 1000.0,
+            execution_segments.len()
+        );
+    }
     let queried_segment_count = execution_results.len();
     for execution in execution_results {
         if let Some(segment) = segments_by_id.get(execution.segment_id.as_str()).copied() {
@@ -1487,6 +1679,7 @@ fn query_top_segments_with_segment_enrichment_and_strategy(
         Vec::new(),
         false,
         false,
+        None,
         cached_statistics,
         snapshot_generation,
     )
@@ -1546,6 +1739,7 @@ fn query_top_segments_with_route_aware_segment_enrichment_and_strategy(
         Vec::new(),
         true,
         false,
+        None,
         cached_statistics,
         snapshot_generation,
     )
@@ -1605,6 +1799,7 @@ fn query_top_segments_with_session_aggregated_segment_enrichment_and_strategy(
         Vec::new(),
         false,
         true,
+        None,
         cached_statistics,
         snapshot_generation,
     )
@@ -1666,6 +1861,7 @@ fn query_top_segments_with_temporal_path_enrichment_and_strategy(
         Vec::new(),
         false,
         false,
+        None,
         cached_statistics,
         snapshot_generation,
     )
@@ -1735,6 +1931,7 @@ fn query_top_segments_with_connected_segment_enrichment_and_strategy(
         connected_expanded_segments,
         false,
         true,
+        None,
         cached_statistics,
         snapshot_generation,
     )
@@ -1803,6 +2000,7 @@ fn query_top_segments_with_missing_coverage_recovery_segment_enrichment_and_stra
         recovery_events,
         false,
         false,
+        None,
         cached_statistics,
         snapshot_generation,
     )
@@ -1817,6 +2015,7 @@ fn query_top_segments_with_adaptive_segment_enrichment_and_strategy(
     max_segment_limit: usize,
     strategy: SegmentRoutingStrategy,
     temporal: TemporalQueryContext<'_>,
+    reference_date: Option<&str>,
     corpus_stats: &SegmentCorpusStats,
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
@@ -1868,6 +2067,7 @@ fn query_top_segments_with_adaptive_segment_enrichment_and_strategy(
         Vec::new(),
         false,
         false,
+        reference_date,
         cached_statistics,
         snapshot_generation,
     )
@@ -1882,6 +2082,7 @@ fn query_top_segments_with_adaptive_route_aware_segment_enrichment_and_strategy(
     max_segment_limit: usize,
     strategy: SegmentRoutingStrategy,
     temporal: TemporalQueryContext<'_>,
+    reference_date: Option<&str>,
     corpus_stats: &SegmentCorpusStats,
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
@@ -1933,6 +2134,7 @@ fn query_top_segments_with_adaptive_route_aware_segment_enrichment_and_strategy(
         Vec::new(),
         true,
         false,
+        reference_date,
         cached_statistics,
         snapshot_generation,
     )
@@ -2262,15 +2464,15 @@ fn selected_query_terms(
     segments: &[MemoryIndexSegment],
     corpus_stats: &SegmentCorpusStats,
 ) -> HashSet<String> {
-    let selected_ids = selected_routes
+    let segments_by_id = segments
         .iter()
-        .map(|route| route.segment_id.as_str())
-        .collect::<HashSet<_>>();
+        .map(|segment| (segment.segment_id.as_str(), segment))
+        .collect::<HashMap<_, _>>();
     let mut covered = HashSet::new();
-    for segment in segments {
-        if !selected_ids.contains(segment.segment_id.as_str()) {
+    for route in selected_routes {
+        let Some(segment) = segments_by_id.get(route.segment_id.as_str()).copied() else {
             continue;
-        }
+        };
         for term in query_terms {
             if corpus_stats.summary(&segment.segment_id).covers_term(term) {
                 covered.insert(term.clone());
@@ -2300,9 +2502,12 @@ fn query_selected_segments_with_enrichment(
     connected_expanded_segments: Vec<ConnectedSegmentExpansion>,
     route_aware_rerank: bool,
     session_aggregate: bool,
+    reference_date: Option<&str>,
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
 ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
+    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let coordinator_started = std::time::Instant::now();
     let query_terms = query_tokens(query);
     let mut merged = Vec::new();
     let mut rerank_candidates = Vec::new();
@@ -2320,6 +2525,10 @@ fn query_selected_segments_with_enrichment(
             .collect(),
         ..ShardQueryCompleteness::default()
     };
+    let segments_by_id = segments
+        .iter()
+        .map(|segment| (segment.segment_id.as_str(), segment))
+        .collect::<HashMap<_, _>>();
     let computed_statistics;
     let global_statistics = if let Some(cached_statistics) = cached_statistics {
         debug_assert_eq!(cached_statistics.generation(), snapshot_generation);
@@ -2334,18 +2543,67 @@ fn query_selected_segments_with_enrichment(
         .iter()
         .map(|route| route.score.max(0.0))
         .fold(0.0f32, f32::max);
+    // Enrichment is independent for each routed segment. Compute it in
+    // parallel before the deterministic reduction below.
+    let enrichments = selected_segments
+        .par_iter()
+        .filter_map(|route| {
+            segments_by_id
+                .get(route.segment_id.as_str())
+                .map(|segment| {
+                    (
+                        route.segment_id.clone(),
+                        segment.enriched_query(query, &query_terms, temporal, corpus_stats),
+                    )
+                })
+        })
+        .collect::<HashMap<_, _>>();
+    if profile {
+        eprintln!(
+            "query_timing enrichment_ms={:.3}",
+            coordinator_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    let bm25_started = std::time::Instant::now();
+    let segment_results = selected_segments
+        .par_iter()
+        .filter_map(|route| {
+            let segment = segments_by_id.get(route.segment_id.as_str())?;
+            let enrichment = enrichments.get(route.segment_id.as_str())?;
+            let results = segment
+                .index
+                .query_with_temporal_context_at_and_statistics_with_local_terms(
+                    query,
+                    candidate_limit,
+                    temporal,
+                    reference_date,
+                    Some(global_statistics),
+                    &enrichment.added_terms,
+                )
+                .0;
+            Some((route.segment_id.clone(), results))
+        })
+        .collect::<HashMap<_, _>>();
+    if profile {
+        eprintln!(
+            "query_timing segment_bm25_ms={:.3}",
+            bm25_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+    let reduction_started = std::time::Instant::now();
 
-    for route in &selected_segments {
-        let Some(segment) = segments
-            .iter()
-            .find(|segment| segment.segment_id == route.segment_id)
-        else {
+    for route in selected_segments.iter().filter(|route| {
+        if !segments_by_id.contains_key(route.segment_id.as_str()) {
             shard_completeness.failures.push(ShardQueryFailure {
                 segment_id: route.segment_id.clone(),
                 message: "segment is not present in the query snapshot".to_string(),
             });
-            continue;
-        };
+            false
+        } else {
+            true
+        }
+    }) {
+        let segment = segments_by_id[route.segment_id.as_str()];
         queried_segment_count += 1;
         shard_completeness
             .successful_segments
@@ -2355,24 +2613,18 @@ fn query_selected_segments_with_enrichment(
                 covered_query_terms.insert(term.clone());
             }
         }
-        let enrichment = segment.enriched_query(query, &query_terms, temporal, corpus_stats);
-        let segment_query_results = segment
-            .index
-            .query_with_temporal_context_at_and_statistics_with_local_terms(
-                query,
-                candidate_limit,
-                temporal,
-                None,
-                Some(global_statistics),
-                &enrichment.added_terms,
-            )
-            .0;
+        let enrichment = enrichments
+            .get(route.segment_id.as_str())
+            .expect("enrichment computed for every routed segment");
+        let segment_query_results = segment_results
+            .get(route.segment_id.as_str())
+            .expect("results computed for every routed segment");
         let max_segment_result_score = segment_query_results
             .iter()
             .map(|result| result.score.max(0.0))
             .fold(0.0f32, f32::max);
         let mut segment_results = 0usize;
-        for mut result in segment_query_results {
+        for mut result in segment_query_results.iter().cloned() {
             if seen_doc_ids.insert(result.doc_id.clone()) {
                 segment_results += 1;
                 if route_aware_rerank {
@@ -2424,11 +2676,11 @@ fn query_selected_segments_with_enrichment(
         enrichment_diagnostics.push(SegmentEnrichedQueryDiagnostics {
             segment_id: segment.segment_id.clone(),
             base_query: query.to_string(),
-            enriched_query: enrichment.enriched_query,
-            added_terms: enrichment.added_terms,
-            evidence_types: enrichment.evidence_types,
-            temporal_added_terms: enrichment.temporal_added_terms,
-            temporal_evidence: enrichment.temporal_evidence,
+            enriched_query: enrichment.enriched_query.clone(),
+            added_terms: enrichment.added_terms.clone(),
+            evidence_types: enrichment.evidence_types.clone(),
+            temporal_added_terms: enrichment.temporal_added_terms.clone(),
+            temporal_evidence: enrichment.temporal_evidence.clone(),
             temporal_signal: enrichment.temporal_signal,
         });
     }
@@ -2438,6 +2690,13 @@ fn query_selected_segments_with_enrichment(
     }
     let (merged, merged_result_count, final_result_count) =
         finalize_segment_results(merged, top_k, session_aggregate);
+    if profile {
+        eprintln!(
+            "query_timing reduction_ms={:.3} coordinator_ms={:.3}",
+            reduction_started.elapsed().as_secs_f64() * 1000.0,
+            coordinator_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     let uncovered_query_terms = query_terms
         .difference(&covered_query_terms)
         .cloned()
@@ -3087,18 +3346,6 @@ fn expand_connected_segments(
         return (routed_segments.to_vec(), Vec::new());
     }
 
-    let profiles = segments
-        .iter()
-        .map(|segment| {
-            let mut profile = corpus_stats
-                .connection_profiles
-                .get(&segment.segment_id)
-                .cloned()
-                .unwrap_or_default();
-            add_query_temporal_connection_signal(&mut profile, segment, temporal);
-            (segment.segment_id.as_str(), profile)
-        })
-        .collect::<HashMap<_, _>>();
     let mut selected = routed_segments.to_vec();
     let mut selected_ids = selected
         .iter()
@@ -3107,11 +3354,58 @@ fn expand_connected_segments(
     let candidate_pool_limit = segment_limit
         .saturating_mul(CONNECTED_EXPANSION_POOL_MULTIPLIER)
         .max(segment_limit + 5)
-        .min(routes.len());
-    let mut expansions = Vec::new();
-    let mut candidates = routes
+        .min(CONNECTED_NEIGHBOR_CANDIDATE_LIMIT);
+    let routes_by_id = routes
+        .iter()
+        .map(|route| (route.segment_id.as_str(), route))
+        .collect::<HashMap<_, _>>();
+    let mut candidate_ids = routes
         .iter()
         .take(candidate_pool_limit)
+        .map(|route| route.segment_id.clone())
+        .collect::<HashSet<_>>();
+    for selected_route in &selected {
+        if let Some(profile) = corpus_stats
+            .connection_profiles
+            .get(&selected_route.segment_id)
+        {
+            candidate_ids.extend(corpus_stats.typed_candidate_segment_ids(profile));
+        }
+    }
+    candidate_ids.retain(|segment_id| !selected_ids.contains(segment_id));
+    let mut candidate_ids = candidate_ids.into_iter().collect::<Vec<_>>();
+    candidate_ids.sort();
+    candidate_ids.truncate(CONNECTED_NEIGHBOR_CANDIDATE_LIMIT);
+    let candidate_routes = candidate_ids
+        .iter()
+        .map(|segment_id| {
+            routes_by_id
+                .get(segment_id.as_str())
+                .map(|route| (*route).clone())
+                .unwrap_or_else(|| SegmentRoute {
+                    segment_id: segment_id.clone(),
+                    score: 0.0,
+                    fallback: false,
+                })
+        })
+        .collect::<Vec<_>>();
+    let profile_ids = selected_ids
+        .iter()
+        .chain(candidate_ids.iter())
+        .collect::<HashSet<_>>();
+    let profiles = profile_ids
+        .into_iter()
+        .filter_map(|segment_id| {
+            let position = corpus_stats.segment_positions.get(segment_id)?;
+            let segment = segments.get(*position)?;
+            let mut profile = corpus_stats.connection_profiles.get(segment_id)?.clone();
+            add_query_temporal_connection_signal(&mut profile, segment, temporal);
+            Some((segment.segment_id.as_str(), profile))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut expansions = Vec::new();
+    let mut candidates = candidate_routes
+        .iter()
         .filter(|route| !selected_ids.contains(route.segment_id.as_str()))
         .filter_map(|route| {
             let candidate_profile = profiles.get(route.segment_id.as_str())?;
@@ -4067,13 +4361,69 @@ impl SegmentCatalog {
                     segment_connection_profile(segment, TemporalQueryContext::default()),
                 )
             })
+            .collect::<HashMap<_, _>>();
+        let mut weighted_term_to_segments: HashMap<String, Vec<(String, f32)>> = HashMap::new();
+        for (segment_id, summary) in &summaries {
+            for term in summary
+                .terms
+                .keys()
+                .chain(summary.entities.keys())
+                .chain(summary.topics.keys())
+                .chain(summary.local_memory.keys())
+            {
+                let postings = weighted_term_to_segments.entry(term.clone()).or_default();
+                if postings.iter().any(|(existing, _)| existing == segment_id) {
+                    continue;
+                }
+                postings.push((segment_id.clone(), summary.local_term_weight(term)));
+            }
+        }
+        for postings in weighted_term_to_segments.values_mut() {
+            postings.sort_by(|left, right| {
+                right
+                    .1
+                    .total_cmp(&left.1)
+                    .then_with(|| left.0.cmp(&right.0))
+            });
+        }
+        let mut typed_evidence_to_segments: HashMap<String, Vec<String>> = HashMap::new();
+        for (segment_id, profile) in &connection_profiles {
+            for (prefix, terms) in [
+                ("person", &profile.people),
+                ("subject", &profile.subjects),
+                ("time", &profile.times),
+                ("action", &profile.actions),
+                ("object", &profile.objects),
+            ] {
+                for term in terms {
+                    typed_evidence_to_segments
+                        .entry(format!("{prefix}:{term}"))
+                        .or_default()
+                        .push(segment_id.clone());
+                }
+            }
+        }
+        for segment_ids in typed_evidence_to_segments.values_mut() {
+            segment_ids.sort();
+            segment_ids.dedup();
+        }
+        let mut ordered_segment_ids = summaries.keys().cloned().collect::<Vec<_>>();
+        ordered_segment_ids.sort();
+        let segment_positions = segments
+            .iter()
+            .enumerate()
+            .map(|(position, segment)| (segment.segment_id.clone(), position))
             .collect();
         Self {
             generation,
             segment_count: segments.len(),
+            ordered_segment_ids,
+            segment_positions,
             summaries,
             term_segment_counts,
             term_to_segments,
+            weighted_term_to_segments,
+            typed_evidence_to_segments,
             connection_profiles,
         }
     }
@@ -4084,13 +4434,49 @@ impl SegmentCatalog {
             .unwrap_or_else(|| panic!("segment catalog missing summary for {segment_id}"))
     }
 
-    fn candidate_segment_ids(&self, query_terms: &HashSet<String>) -> HashSet<String> {
-        query_terms
-            .iter()
-            .filter_map(|term| self.term_to_segments.get(term))
-            .flatten()
-            .cloned()
+    fn bounded_candidate_segment_ids(&self, query_terms: &HashSet<String>) -> Vec<String> {
+        let mut scores = HashMap::<String, f32>::new();
+        for term in query_terms {
+            let Some(postings) = self.weighted_term_to_segments.get(term) else {
+                continue;
+            };
+            for (segment_id, weight) in postings.iter().take(ROUTING_POSTINGS_PER_TERM) {
+                *scores.entry(segment_id.clone()).or_default() += *weight * self.idf(term);
+            }
+        }
+        let mut candidates = scores.into_iter().collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        candidates.truncate(ROUTING_CANDIDATE_POOL_LIMIT);
+        candidates
+            .into_iter()
+            .map(|(segment_id, _)| segment_id)
             .collect()
+    }
+
+    fn typed_candidate_segment_ids(&self, profile: &SegmentConnectionProfile) -> HashSet<String> {
+        let mut candidates = HashSet::new();
+        for (prefix, terms) in [
+            ("person", &profile.people),
+            ("subject", &profile.subjects),
+            ("time", &profile.times),
+            ("action", &profile.actions),
+            ("object", &profile.objects),
+        ] {
+            for term in terms {
+                if let Some(segment_ids) = self
+                    .typed_evidence_to_segments
+                    .get(&format!("{prefix}:{term}"))
+                {
+                    candidates.extend(segment_ids.iter().take(ROUTING_POSTINGS_PER_TERM).cloned());
+                }
+            }
+        }
+        candidates
     }
 
     fn is_unique_to_segment(&self, term: &str, segment_id: &str) -> bool {
@@ -4563,6 +4949,95 @@ mod tests {
     }
 
     #[test]
+    fn raw_constructor_rejects_duplicate_segment_ids() {
+        let segments = vec![
+            build_memory_index_segment(
+                "duplicate".into(),
+                vec![record("doc-a", "a", "alpha", &["alpha"])],
+            ),
+            build_memory_index_segment(
+                "duplicate".into(),
+                vec![record("doc-b", "b", "beta", &["beta"])],
+            ),
+        ];
+        let error = SegmentedMemoryIndex::from_segments(segments).err().unwrap();
+        assert!(error.contains("duplicate segment id"));
+    }
+
+    #[test]
+    fn raw_constructor_rejects_documents_assigned_to_multiple_segments() {
+        let segments = vec![
+            build_memory_index_segment(
+                "segment-a".into(),
+                vec![record("shared", "a", "alpha", &["alpha"])],
+            ),
+            build_memory_index_segment(
+                "segment-b".into(),
+                vec![record("shared", "b", "beta", &["beta"])],
+            ),
+        ];
+        let error = SegmentedMemoryIndex::from_segments(segments).err().unwrap();
+        assert!(error.contains("multiple segments"));
+    }
+
+    #[test]
+    fn raw_constructor_rejects_empty_segments() {
+        let segment = build_memory_index_segment("empty".into(), Vec::new());
+        let error = SegmentedMemoryIndex::from_segments(vec![segment])
+            .err()
+            .unwrap();
+        assert!(error.contains("segment is empty"));
+    }
+
+    #[test]
+    fn raw_constructor_rejects_doc_id_index_mismatch() {
+        let mut segment = build_memory_index_segment(
+            "segment-a".into(),
+            vec![record("doc-a", "a", "alpha", &["alpha"])],
+        );
+        segment.doc_ids = vec!["different-doc".into()];
+        let error = SegmentedMemoryIndex::from_segments(vec![segment])
+            .err()
+            .unwrap();
+        assert!(error.contains("do not match"));
+    }
+
+    #[test]
+    fn bounded_candidate_strategies_do_not_route_the_full_corpus() {
+        let records = (0..100)
+            .map(|index| {
+                record(
+                    &format!("doc-{index:03}"),
+                    &format!("session-{index:03}"),
+                    "Common bought widget",
+                    &["common", "bought", "widget"],
+                )
+            })
+            .collect::<Vec<_>>();
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+
+        for strategy in [
+            SegmentRoutingStrategy::LocalDistinctiveness,
+            SegmentRoutingStrategy::CoverageLocalDistinctiveness,
+            SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness,
+            SegmentRoutingStrategy::CoverageTeamSelection,
+            SegmentRoutingStrategy::TypedEvidence,
+        ] {
+            let routes = segmented.route_with_strategy("Common bought widget", strategy);
+            assert!(!routes.is_empty(), "{strategy:?} returned no candidates");
+            assert!(
+                routes.len() <= ROUTING_CANDIDATE_POOL_LIMIT,
+                "{strategy:?} routed {} candidates",
+                routes.len()
+            );
+            assert!(routes.len() < segmented.len());
+        }
+
+        let exact = segmented.query_all_segments_with_diagnostics("Common bought widget", 5);
+        assert_eq!(exact.diagnostics.queried_segment_count, segmented.len());
+    }
+
+    #[test]
     fn routes_and_queries_one_group_segment() {
         let records = vec![
             record(
@@ -4933,6 +5408,7 @@ mod tests {
                 2,
                 SegmentRoutingStrategy::CoverageLocalDistinctiveness,
                 TemporalQueryContext::default(),
+                None,
             );
         let selected = output
             .diagnostics
@@ -4944,6 +5420,31 @@ mod tests {
         assert_eq!(selected.len(), 2);
         assert!(selected.contains("session-a"));
         assert!(selected.contains("session-b"));
+        assert!(output.diagnostics.uncovered_query_terms.is_empty());
+    }
+
+    #[test]
+    fn adaptive_segment_enrichment_stays_at_base_when_coverage_is_sufficient() {
+        let records = vec![record(
+            "doc-a",
+            "session-a",
+            "GPA undergraduate academic record",
+            &["GPA", "undergraduate"],
+        )];
+        let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+
+        let (output, _) = segmented
+            .query_with_adaptive_segment_enrichment_temporal_context_and_strategy(
+                "GPA undergraduate",
+                5,
+                1,
+                8,
+                SegmentRoutingStrategy::CoverageLocalDistinctiveness,
+                TemporalQueryContext::default(),
+                None,
+            );
+
+        assert_eq!(output.diagnostics.selected_segments.len(), 1);
         assert!(output.diagnostics.uncovered_query_terms.is_empty());
     }
 
@@ -5330,6 +5831,7 @@ mod tests {
         ];
         let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
 
+        assert_eq!(segmented.route("docker").len(), 1);
         let output = segmented.query_with_diagnostics("docker", 5, 3);
 
         assert_eq!(output.diagnostics.selected_segments.len(), 1);
@@ -5338,12 +5840,9 @@ mod tests {
             "session-a"
         );
         assert_eq!(output.diagnostics.queried_segment_count, 1);
-        assert_eq!(output.diagnostics.fallback_segments.len(), 2);
-        assert!(output.diagnostics.routing_fallback);
-        assert_eq!(
-            output.diagnostics.routing_fallback_reason.as_deref(),
-            Some("insufficient_signal_routes")
-        );
+        assert!(output.diagnostics.fallback_segments.is_empty());
+        assert!(!output.diagnostics.routing_fallback);
+        assert_eq!(output.diagnostics.routing_fallback_reason, None);
         assert_eq!(
             output
                 .results
@@ -5360,7 +5859,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_router_reports_no_signal_without_querying_lexicographic_first_segment() {
+    fn sparse_router_executes_bounded_fallback_when_there_is_no_signal() {
         let records = vec![
             record("doc-a", "session-a", "docker install guide", &["docker"]),
             record("doc-b", "session-b", "kubernetes cluster", &["kubernetes"]),
@@ -5371,7 +5870,7 @@ mod tests {
 
         assert!(output.results.is_empty());
         assert!(output.diagnostics.selected_segments.is_empty());
-        assert_eq!(output.diagnostics.queried_segment_count, 0);
+        assert_eq!(output.diagnostics.queried_segment_count, 1);
         assert_eq!(output.diagnostics.fallback_segments.len(), 1);
         assert!(output.diagnostics.routing_fallback);
         assert_eq!(
@@ -5673,7 +6172,7 @@ mod tests {
 
         assert!(output.results.is_empty());
         assert!(output.diagnostics.selected_segments.is_empty());
-        assert_eq!(output.diagnostics.queried_segment_count, 0);
+        assert_eq!(output.diagnostics.queried_segment_count, 2);
         assert!(output.diagnostics.routing_fallback);
         assert_eq!(
             output.diagnostics.routing_fallback_reason.as_deref(),

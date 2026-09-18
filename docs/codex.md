@@ -3,6 +3,9 @@
 Lint-AI can run as a Codex memory layer and provide persistent, segmented
 project memory through Codex lifecycle hooks.
 
+> **New to Lint-AI memory?** Start with [Codex memory](codex-memory.md),
+> the plain-language guide. This page is the technical integration reference.
+
 Codex support is isolated behind a non-default Cargo feature. Build a local
 integration-enabled binary with:
 

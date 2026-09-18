@@ -13,6 +13,10 @@ using the same capture, indexing, and retrieval model.
 | Gemini CLI | [Gemini CLI](gemini-cli.md) | `.lint-ai/gemini-cli-memory` |
 | Antigravity CLI | [Antigravity CLI](agy.md) | `.lint-ai/agy-memory` |
 
+New here? The plain-language guides explain what agent memory does and why it
+matters: [Claude Code memory](claude-code-memory.md) ·
+[Codex memory](codex-memory.md).
+
 ## How an agent uses memory
 
 1. A lifecycle hook receives the agent event and transcript context.

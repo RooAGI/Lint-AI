@@ -3,6 +3,9 @@
 Lint-AI can run as a Claude Code MCP server and provide persistent, segmented
 session memory through Claude Code lifecycle hooks.
 
+> **New to Lint-AI memory?** Start with [Claude Code memory](claude-code-memory.md),
+> the plain-language guide. This page is the technical integration reference.
+
 Claude Code support is isolated behind the non-default `claude-code` Cargo
 feature. Build a local integration-enabled binary with:
 

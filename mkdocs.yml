@@ -42,6 +42,8 @@ theme:
 nav:
   - Home: index.md
   - Agent memory: agent-memory.md
+  - Claude Code memory: claude-code-memory.md
+  - Codex memory: codex-memory.md
   - Stale agent memory: stale-memory.md
   - Get started:
       - Quickstart: quickstart.md

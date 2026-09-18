@@ -1,6 +1,6 @@
 # Lint-AI
 
-**Current-state agent memory for AI coding agents.**
+**Open-source agent memory for coding agents.**
 
 > **AI memory that knows what is still true.** Your agent doesn't just forget; it can confidently remember outdated decisions.
 

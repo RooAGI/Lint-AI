@@ -4,7 +4,7 @@
 
 > **AI memory that knows what is still true.** Your agent doesn't just forget; it can confidently remember outdated decisions.
 
-Lint-AI is an open-source **persistent agent memory** layer for Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY). It turns project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** when an agent needs it.
+Lint-AI is an open-source **persistent agent memory** layer for Claude Code, Codex, Gemini CLI, Antigravity CLI (AGY), and Muse Code. It turns project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** when an agent needs it.
 
 Search can find the right topic. Lint-AI helps an agent answer the harder question: **is this information still true?** It uses relevance, time, and semantic relationships to distinguish the latest truth from old-but-still-relevant history.
 
@@ -136,6 +136,7 @@ Lint-AI provides opt-in integrations for major coding-agent clients.
 | [Codex](docs/codex.md) | Yes | Yes | Yes | Yes |
 | [Gemini CLI](docs/gemini-cli.md) | Yes | Yes | Yes | — |
 | [Antigravity CLI / AGY](docs/agy.md) | Yes | Yes | Yes | — |
+| [Muse Code](docs/muse-code.md) | Yes | — | Yes | — |
 
 Build the Claude Code and Codex integrations:
 

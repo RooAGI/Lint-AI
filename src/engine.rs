@@ -37,6 +37,12 @@ use crate::integrations::gemini_cli::{
     install_user_config as install_gemini_user_config, run_server as run_gemini_server,
     GeminiCliServerOptions,
 };
+#[cfg(feature = "muse-code")]
+use crate::integrations::muse_code::{
+    install_memory_policy as install_muse_memory_policy,
+    install_user_config as install_muse_user_config, run_server as run_muse_server,
+    MuseServerOptions,
+};
 use crate::pipeline::{
     source_documents_to_tier1_inputs, ChunkStrategy, IndexStore, MemoryIndexLayout,
     PipelineOptions, Tier1NerProvider, Tier1TermRankerKind,
@@ -2002,7 +2008,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "claude-code",
             feature = "codex",
             feature = "gemini-cli",
-            feature = "agy"
+            feature = "agy",
+            feature = "muse-code"
         ))]
         {
             let query = args.recall.as_deref().expect("checked above");
@@ -2021,6 +2028,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Codex => "codex-memory",
                 crate::cli::SessionProvider::Gemini => "gemini-cli-memory",
                 crate::cli::SessionProvider::Agy => "agy-memory",
+                crate::cli::SessionProvider::Muse => "muse-memory",
             };
             let output =
                 crate::integrations::recall::recall(&crate::integrations::recall::RecallOptions {
@@ -2041,7 +2049,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "claude-code",
             feature = "codex",
             feature = "gemini-cli",
-            feature = "agy"
+            feature = "agy",
+            feature = "muse-code"
         )))]
         {
             anyhow::bail!("recall requires the Claude Code or Codex feature");
@@ -2053,7 +2062,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "claude-code",
             feature = "codex",
             feature = "gemini-cli",
-            feature = "agy"
+            feature = "agy",
+            feature = "muse-code"
         ))]
         {
             let session_id = args.promote_session.as_deref().expect("checked above");
@@ -2070,6 +2080,9 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Agy => {
                     crate::integrations::session_recording::RecordingProvider::Agy
                 }
+                crate::cli::SessionProvider::Muse => {
+                    crate::integrations::session_recording::RecordingProvider::Muse
+                }
             };
             let report = crate::integrations::session_recording::promote_recorded_session(
                 provider,
@@ -2084,7 +2097,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "claude-code",
             feature = "codex",
             feature = "gemini-cli",
-            feature = "agy"
+            feature = "agy",
+            feature = "muse-code"
         )))]
         {
             anyhow::bail!("session promotion requires the Claude Code or Codex feature");
@@ -2096,7 +2110,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "claude-code",
             feature = "codex",
             feature = "gemini-cli",
-            feature = "agy"
+            feature = "agy",
+            feature = "muse-code"
         ))]
         {
             let session_id = args.replay_session.as_deref().expect("checked above");
@@ -2113,6 +2128,9 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Agy => {
                     crate::integrations::session_recording::RecordingProvider::Agy
                 }
+                crate::cli::SessionProvider::Muse => {
+                    crate::integrations::session_recording::RecordingProvider::Muse
+                }
             };
             let report = crate::integrations::session_recording::replay_recorded_session(
                 provider,
@@ -2128,7 +2146,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "claude-code",
             feature = "codex",
             feature = "gemini-cli",
-            feature = "agy"
+            feature = "agy",
+            feature = "muse-code"
         )))]
         {
             anyhow::bail!("session replay requires the Claude Code or Codex feature");
@@ -2232,6 +2251,16 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         println!("Wrote Codex hook settings to {}", written.display());
         let written = install_codex_memory_policy(Path::new(&args.path))?;
         println!("Wrote Codex memory policy to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "muse-code")]
+    if args.muse_install {
+        let config_path = args.muse_config.as_deref().map(Path::new);
+        let written = install_muse_user_config(Path::new(&args.path), config_path)?;
+        println!("Wrote Muse Code config to {}", written.display());
+        let written = install_muse_memory_policy(Path::new(&args.path))?;
+        println!("Wrote Muse Code memory policy to {}", written.display());
         return Ok(());
     }
 
@@ -2617,6 +2646,38 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         crate::integrations::mcp_health::verify(
             Path::new(&args.path),
             "--codex-serve",
+            args.mcp_timeout_ms,
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "muse-code")]
+    if args.muse_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_muse_server(
+            Path::new(&args.path),
+            MuseServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "muse-code")]
+    if args.muse_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--muse-serve",
             args.mcp_timeout_ms,
         )?;
         return Ok(());

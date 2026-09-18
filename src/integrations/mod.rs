@@ -6,6 +6,8 @@ pub mod claude_code;
 pub mod codex;
 #[cfg(any(feature = "gemini-cli", feature = "agy"))]
 pub mod gemini_cli;
+#[cfg(feature = "muse-code")]
+pub mod muse_code;
 
 const MAX_HOOK_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 

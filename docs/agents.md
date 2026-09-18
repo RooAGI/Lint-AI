@@ -12,6 +12,7 @@ using the same capture, indexing, and retrieval model.
 | Codex | [Codex](codex.md) | `.lint-ai/codex-memory` |
 | Gemini CLI | [Gemini CLI](gemini-cli.md) | `.lint-ai/gemini-cli-memory` |
 | Antigravity CLI | [Antigravity CLI](agy.md) | `.lint-ai/agy-memory` |
+| Muse Code | [Muse Code](muse-code.md) | `.lint-ai/muse-memory` |
 
 ## How an agent uses memory
 

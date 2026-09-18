@@ -1,0 +1,111 @@
+{
+  "report": {
+    "schema_version": 1,
+    "report_id": "019fe4c9-abf8-71e1-b086-b5eb323f3790-1786256704",
+    "generated_at": "2026-08-08T23:25:04.303387-07:00",
+    "status": "complete"
+  },
+  "scenario": {
+    "id": "019fe4c9-abf8-71e1-b086-b5eb323f3790",
+    "source_session_id": "019fe4c9-abf8-71e1-b086-b5eb323f3790"
+  },
+  "sessions": {
+    "baseline": {
+      "session_id": "019fe4c9-abf8-71e1-b086-b5eb323f3790",
+      "session_status": "complete",
+      "quality": {
+        "task_success": null,
+        "expected_facts_passed": null,
+        "expected_facts_total": null,
+        "forbidden_facts_found": null,
+        "validators_passed": null,
+        "validators_total": null
+      },
+      "performance": {
+        "duration_ms": 677000.0,
+        "time_to_first_response_ms": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "cached_input_tokens": null,
+        "total_tokens": null,
+        "estimated_cost_usd": null,
+        "tool_calls": 52,
+        "tool_errors": 0,
+        "tool_retry_count": null
+      },
+      "memory": {
+        "memory_enabled": null,
+        "retrieval_calls": null,
+        "retrieved_documents": null,
+        "injected_context_bytes": null,
+        "injected_context_tokens": null
+      },
+      "reliability": {
+        "recorded_events": 130,
+        "expected_events": null,
+        "recording_completeness": null,
+        "provider_errors": null,
+        "hook_errors": null,
+        "redaction_count": 0
+      },
+      "recording_enabled": true,
+      "model": "gpt-5.6-luna",
+      "validator_results": []
+    },
+    "replay": {
+      "session_id": "replay-1786256153570-019fe4c9-abf8-71e1-b086-b5eb323f3790",
+      "session_status": "complete",
+      "quality": {
+        "task_success": null,
+        "expected_facts_passed": null,
+        "expected_facts_total": null,
+        "forbidden_facts_found": null,
+        "validators_passed": null,
+        "validators_total": null
+      },
+      "performance": {
+        "duration_ms": 225000.0,
+        "time_to_first_response_ms": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "cached_input_tokens": null,
+        "total_tokens": null,
+        "estimated_cost_usd": null,
+        "tool_calls": 19,
+        "tool_errors": 0,
+        "tool_retry_count": null
+      },
+      "memory": {
+        "memory_enabled": true,
+        "retrieval_calls": null,
+        "retrieved_documents": null,
+        "injected_context_bytes": null,
+        "injected_context_tokens": null
+      },
+      "reliability": {
+        "recorded_events": 58,
+        "expected_events": null,
+        "recording_completeness": null,
+        "provider_errors": null,
+        "hook_errors": null,
+        "redaction_count": 0
+      },
+      "recording_enabled": true,
+      "model": "gpt-5.6-luna",
+      "validator_results": []
+    }
+  },
+  "comparison": {
+    "task_success_changed": false,
+    "total_tokens_delta": null,
+    "duration_ms_delta": -452000.0,
+    "tool_calls_delta": -33,
+    "injected_context_bytes_delta": null
+  },
+  "provenance": {
+    "provider": "codex",
+    "model": "gpt-5.6-luna",
+    "repository_revision": null,
+    "settings_root": null
+  }
+}

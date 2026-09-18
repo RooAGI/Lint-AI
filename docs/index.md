@@ -6,9 +6,9 @@ hide:
 
 <div class="hero-stack">
 <section class="hero">
-  <div class="hero__eyebrow">LINT-AI · CURRENT-STATE AGENT MEMORY</div>
-  <h1>AI memory that knows<br><span>what is still true.</span></h1>
-  <p class="hero__lede"><strong>Current-state agent memory for AI coding agents.</strong> Lint-AI works with Claude Code, Codex, Gemini CLI, and other AI agents, turning project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context when an agent needs it.</p>
+  <div class="hero__eyebrow">LINT-AI · RELIABLE MEMORY &amp; INSIGHTS</div>
+  <h1>Reliable AI memory<br><span>with insights you can trust.</span></h1>
+  <p class="hero__lede"><strong>Memory and insights for AI agents.</strong> Lint-AI turns project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context, while showing what changed, what was superseded, and where the answer came from.</p>
 </section>
 
 <section class="scenario" aria-label="Example of an agent retrieving a superseded decision">
@@ -45,61 +45,76 @@ hide:
 </section>
 </div>
 
-<section class="solution-intro">
-  <div class="hero__eyebrow">PERSISTENT MEMORY IS THE FIRST STEP</div>
-  <h2>Move from remembering history to understanding current state.</h2>
-  <p>Traditional agent memory helps an AI agent remember. Lint-AI adds time, supersession, and evidence so the agent can distinguish what is relevant from what is still true.</p>
-  <div class="hero__actions">
-    <a class="md-button md-button--primary" href="quickstart/">Start building</a>
-    <a class="md-button" href="agent-memory/">What is agent memory?</a>
-    <a class="md-button" href="https://github.com/RooAGI/Lint-AI">View on GitHub</a>
-  </div>
-  <div class="install-line">
-    <code>cargo install --git https://github.com/RooAGI/Lint-AI</code>
-  </div>
-</section>
+## What’s new in v0.2.0 {.landing-heading}
 
-## See the reproducible CLI run {.landing-heading}
+Lint-AI v0.2.0 helps AI agents find useful project context faster, keep working
+while memory is updated, and use that memory more safely across different tools.
 
-This is a reproducible **asciinema PTY capture** of the actual `lint-ai` binary running a controlled stale-memory scenario. The workflow sets deterministic file mtimes, runs the neutral retry-policy query, and independently verifies that the current value is `2` while stale value `5` is excluded from LLM context.
+<div class="feature-grid">
+  <article>
+    <span class="feature-number">01</span>
+    <h3>Find the right memory faster</h3>
+    <p>Projects are organized into searchable sections, so a query can start with
+    the most relevant context and expand its search when needed.</p>
+  </article>
+  <article>
+    <span class="feature-number">02</span>
+    <h3>Keep working during updates</h3>
+    <p>Agents can continue searching a trusted snapshot while new memories are
+    written and checked in the background.</p>
+  </article>
+  <article>
+    <span class="feature-number">03</span>
+    <h3>Reliable memory, safer integrations</h3>
+    <p>Validated updates, duplicate protection, and project boundaries keep memory
+    dependable across Claude Code, Codex, Gemini CLI, and Antigravity CLI.</p>
+  </article>
+</div>
 
-![Lint-AI reproducible terminal demo](assets/lint-ai-real-terminal.gif)
+<p class="benchmark-note">Provider integrations remain opt-in. The default build stays lightweight, while <code>agent-integrations</code> enables all supported providers.</p>
+
+[Read the full v0.2.0 release notes](releases/0.2.0.md)
 
 <section class="proof-grid" aria-label="Lint-AI benchmark highlights">
-  <div><strong>95.6%</strong><span>any-hit recall@10</span></div>
-  <div><strong>84.0%</strong><span>MRR</span></div>
-  <div><strong>1.9 ms</strong><span>average query latency</span></div>
-  <div><strong>162/s</strong><span>v0.2.0 HTTP at C=10</span></div>
+  <div><strong>96.24%</strong><span>adaptive any-hit Recall@5</span></div>
+  <div><strong>95.49%</strong><span>fixed any-hit Recall@5</span></div>
+  <div><strong>1.25 ms</strong><span>fixed query latency</span></div>
+  <div><strong>1,512.31/s</strong><span>v0.2.0 routed HTTP at C=10</span></div>
 </section>
 
-<p class="benchmark-note">Heuristic release backend · LongMemEval-S, 500 scoped questions, fair comparison track using any-hit recall · HTTP figure is the v0.2.0 post-refactor run over 23,366 records; 952 req/s is the historical 0.1.9 single-index baseline</p>
+<p class="benchmark-note">v0.2.0 segmented benchmark · 133 multi-session questions · adaptive routing reached 96.24% any-hit Recall@5; fixed routing reached 95.49% at 1.25 ms average latency · Latest throughput is the cold-start median of five runs over 23,366 records on macOS M5 Pro; results vary by hardware and index layout</p>
 
-<p class="benchmark-note">The 500-question aggregate headline and the separate 133-question segmented multi-session comparison use different scopes. Every recall value below is labeled as either fractional (regular) or any-hit, and by its cutoff.</p>
+## See the dashboard {.landing-heading}
 
-<p class="benchmark-note">The single-index value in the segmented table is the controlled global baseline for those same 133 multi-session questions. It is not a second 500-question headline, so the two benchmark tables must not be combined.</p>
+The local dashboard gives operators a live view of project indexes, segment layout, query activity, latency, errors, and provider telemetry across the agent integrations.
 
-### Segmented-index benchmark
-
-On the latest 133-query multi-session comparison, fixed segmented routing
-achieved **95.49% any-hit Recall@5** at **1.25 ms** average latency. Adaptive
-routing (5→12 segments) reached **96.24% any-hit Recall@5** at **4.36 ms**;
-the single-index baseline reached **93.23% any-hit Recall@5** at **6.41 ms**. This
-comparison explicitly used top-5; the server defaults to
-fixed top-3 for predictable latency.
-
-[See the full benchmark comparison](benchmark.md)
-
-## Reproducible performance comparison {.landing-heading}
-
-Lint-AI's retrieval and server-load measurements are published with the exact
-scripts, payloads, corpus sizes, and caveats needed to reproduce them. The
-v0.2.0 23,366-record HTTP run measured **386.55 req/s at concurrency 10**. The
-historical 0.1.9 single-index run sustained **952 req/s**, compared with **171
-req/s** for AgentMemory in keyless BM25
-mode. This baseline predates the 0.2.0 server refactor. It is a service-load
-comparison, not a claim that the two systems have identical retrieval semantics.
-
-[View the comparison methodology and results](comparison.md)
+<section class="dashboard-slideshow" data-dashboard-slideshow aria-label="Lint-AI dashboard screenshots">
+  <div class="dashboard-slideshow__stage">
+    <div class="dashboard-slideshow__track">
+      <figure class="dashboard-slide is-active" data-dashboard-slide>
+        <img src="assets/lint-ai-dashboard-overview.png" alt="Lint-AI dashboard overview showing project health and query activity" loading="eager">
+        <figcaption><strong>Overall</strong><span>Project health, query activity, and recent events</span></figcaption>
+      </figure>
+      <figure class="dashboard-slide" data-dashboard-slide>
+        <img src="assets/lint-ai-dashboard-index.png" alt="Lint-AI dashboard topology showing the routed project segments" loading="lazy">
+        <figcaption><strong>Topology</strong><span>Segment routing and document distribution</span></figcaption>
+      </figure>
+      <figure class="dashboard-slide" data-dashboard-slide>
+        <img src="assets/lint-ai-dashboard-providers.png" alt="Lint-AI dashboard provider telemetry showing Codex activity and token usage" loading="lazy">
+        <figcaption><strong>Provider</strong><span>Provider activity, sessions, and token usage</span></figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="dashboard-slideshow__controls">
+    <button type="button" data-dashboard-prev aria-label="Previous dashboard screenshot">←</button>
+    <div class="dashboard-slideshow__dots" role="tablist" aria-label="Dashboard screenshot views">
+      <button type="button" class="is-active" data-dashboard-dot="0" role="tab" aria-selected="true">Overall</button>
+      <button type="button" data-dashboard-dot="1" role="tab" aria-selected="false">Topology</button>
+      <button type="button" data-dashboard-dot="2" role="tab" aria-selected="false">Provider</button>
+    </div>
+    <button type="button" data-dashboard-next aria-label="Next dashboard screenshot">→</button>
+  </div>
+</section>
 
 ## Prevent confident staleness {.landing-heading}
 

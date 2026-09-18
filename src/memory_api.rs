@@ -127,6 +127,13 @@ impl MemoryService {
         }
     }
 
+    /// Return bounded structural information for operational status views.
+    /// Callers that expose this information should sanitize identifiers and
+    /// persistence paths before sending it outside the process.
+    pub fn inspection(&self) -> crate::pipeline::IndexStoreInspection {
+        self.store.inspection()
+    }
+
     pub fn add(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
         let response = self.add_unpublished(request)?;
         self.store.refresh()?;

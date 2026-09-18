@@ -1,0 +1,55 @@
+{
+  "benchmark": "layout-throughput",
+  "date": "2026-09-17",
+  "records": 23366,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 0,
+  "cache": "disabled",
+  "runner": "uv run --no-project python comparison/throughput.py",
+  "repetitions": 5,
+  "summary": {
+    "single": {
+      "c1_median_req_s": 136.47,
+      "c10_median_req_s": 927.96,
+      "c10_median_p50_ms": 9.472
+    },
+    "global": {
+      "c1_median_req_s": 229.87,
+      "c10_median_req_s": 1480.30,
+      "c10_median_p50_ms": 6.158
+    },
+    "segment": {
+      "c1_median_req_s": 235.30,
+      "c10_median_req_s": 1510.15,
+      "c10_median_p50_ms": 6.165
+    }
+  },
+  "runs": {
+    "single": [
+      {"run": 1, "c1_req_s": 129.55, "c10_req_s": 618.13},
+      {"run": 2, "c1_req_s": 138.44, "c10_req_s": 908.99},
+      {"run": 3, "c1_req_s": 127.83, "c10_req_s": 927.96},
+      {"run": 4, "c1_req_s": 136.47, "c10_req_s": 970.46},
+      {"run": 5, "c1_req_s": 144.79, "c10_req_s": 967.43}
+    ],
+    "global": [
+      {"run": 1, "c1_req_s": 225.71, "c10_req_s": 1325.85},
+      {"run": 2, "c1_req_s": 229.87, "c10_req_s": 1480.30},
+      {"run": 3, "c1_req_s": 217.41, "c10_req_s": 1351.35},
+      {"run": 4, "c1_req_s": 239.90, "c10_req_s": 1575.61},
+      {"run": 5, "c1_req_s": 245.47, "c10_req_s": 1615.94}
+    ],
+    "segment": [
+      {"run": 1, "c1_req_s": 236.19, "c10_req_s": 1510.15},
+      {"run": 2, "c1_req_s": 228.95, "c10_req_s": 1216.74},
+      {"run": 3, "c1_req_s": 239.25, "c10_req_s": 1609.46},
+      {"run": 4, "c1_req_s": 231.40, "c10_req_s": 1462.79},
+      {"run": 5, "c1_req_s": 235.30, "c10_req_s": 1699.20}
+    ]
+  },
+  "notes": [
+    "Cold-start measurements intentionally include server and client initialization.",
+    "The summary uses medians because each cell contains only 100 requests.",
+    "The standalone HTTP benchmark does not initialize provider MCP watchers."
+  ]
+}

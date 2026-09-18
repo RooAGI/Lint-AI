@@ -67,6 +67,7 @@ struct ClaudeMcp {
     max_depth: usize,
     max_total_bytes: usize,
     ignore_paths: Vec<String>,
+    workspace_watcher: Option<mcp_index::WorkspaceWatcher>,
     store: Mutex<Option<IndexStore>>,
 }
 
@@ -232,6 +233,10 @@ pub fn run_server(root: &Path, options: ClaudeCodeServerOptions<'_>) -> Result<(
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
+        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
+            root,
+            options.ignore_paths,
+        )?),
         store: Mutex::new(None),
     };
     mcp.serve()
@@ -243,6 +248,13 @@ impl ClaudeMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        if self
+            .workspace_watcher
+            .as_ref()
+            .is_some_and(mcp_index::WorkspaceWatcher::take_change)
+        {
+            *store = None;
+        }
         if store.is_none() {
             let graph = build_project_graph(&AdapterInput {
                 root: &self.root,
@@ -254,9 +266,8 @@ impl ClaudeMcp {
             let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
             let root = self.root.clone();
-            *store = Some(mcp_index::open_persistent_store(
+            *store = Some(mcp_index::open_workspace_memory_store(
                 &root,
-                "claude-mcp-index",
                 "claude-memory",
                 &self.ignore_paths,
                 || Ok(documents),
@@ -370,7 +381,15 @@ impl ClaudeMcp {
                     &self.root.join(".lint-ai").join("claude-memory"),
                     &mut *store,
                 )?;
-                let results = store.query(query, top_k)?;
+                let started = std::time::Instant::now();
+                let results = store.query(query, top_k);
+                let _ = crate::telemetry::record_project_query(
+                    &self.root,
+                    started.elapsed().as_millis() as u64,
+                    results.is_err(),
+                    results.as_ref().is_ok_and(Vec::is_empty),
+                );
+                let results = results?;
                 let payload = mcp_tools::search_results(store, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
@@ -766,6 +785,7 @@ mod tests {
             max_depth: 0,
             max_total_bytes: 0,
             ignore_paths: Vec::new(),
+            workspace_watcher: None,
             store: Mutex::new(Some(store)),
         }
     }
@@ -996,6 +1016,7 @@ mod tests {
             max_depth: 5,
             max_total_bytes: 2_000_000,
             ignore_paths: Vec::new(),
+            workspace_watcher: None,
             store: Mutex::new(None),
         };
 

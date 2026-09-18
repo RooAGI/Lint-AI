@@ -1,0 +1,15 @@
+.dashboard-slideshow { margin: 2rem 0 4rem; }
+.dashboard-slideshow__stage { position: relative; min-height: clamp(22rem, 56vw, 42rem); border: 1px solid var(--md-default-fg-color--lightest); border-radius: 1.2rem; background: #0b0d12; overflow: hidden; box-shadow: 0 1.5rem 3rem rgba(0,0,0,.18); }
+.dashboard-slideshow__track { display: flex; align-items: stretch; transform: translateX(0); transition: transform 520ms cubic-bezier(.22, .61, .36, 1); will-change: transform; }
+.dashboard-slide { flex: 0 0 100%; box-sizing: border-box; margin: 0; padding: clamp(.8rem, 2vw, 1.5rem); }
+.dashboard-slide img { display: block; width: 100%; height: auto; max-height: clamp(19rem, 52vw, 38rem); object-fit: contain; object-position: center top; border-radius: .7rem; }
+.dashboard-slide figcaption { display: flex; align-items: baseline; gap: .8rem; padding: .9rem .2rem .1rem; color: #a6adbb; font-size: .85rem; }
+.dashboard-slide figcaption strong { color: #f4f5f7; font-size: 1rem; }
+.dashboard-slideshow__controls { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+.dashboard-slideshow__controls > button { width: 2.5rem; height: 2.5rem; border: 1px solid var(--md-default-fg-color--lightest); border-radius: 50%; background: transparent; color: var(--md-default-fg-color); cursor: pointer; font-size: 1.2rem; }
+.dashboard-slideshow__controls > button:hover, .dashboard-slideshow__controls > button:focus-visible { border-color: #6ea8fe; color: #6ea8fe; }
+.dashboard-slideshow__dots { display: flex; gap: .45rem; flex-wrap: wrap; justify-content: center; }
+.dashboard-slideshow__dots button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--md-default-fg-color--light); cursor: pointer; padding: .35rem .5rem; font: inherit; font-size: .8rem; }
+.dashboard-slideshow__dots button.is-active { border-bottom-color: #6ea8fe; color: var(--md-default-fg-color); }
+@media (max-width: 600px) { .dashboard-slide figcaption { display: block; } .dashboard-slide figcaption span { display: block; margin-top: .25rem; } }
+@media (prefers-reduced-motion: reduce) { .dashboard-slideshow__track { transition: none; } }

@@ -6,6 +6,9 @@
 
 pub mod hooks;
 
+use crate::adapters::{
+    apply_ignore_paths, build_project_graph, graph_to_source_documents, AdapterInput,
+};
 use crate::integrations::mcp_index;
 use crate::integrations::mcp_tools;
 use crate::integrations::mcp_transport::{
@@ -52,7 +55,12 @@ struct GeminiMcp {
     provider: RecordingProvider,
     provider_label: &'static str,
     memory_dir: &'static str,
-    index_name: &'static str,
+    max_bytes: usize,
+    max_files: usize,
+    max_depth: usize,
+    max_total_bytes: usize,
+    ignore_paths: Vec<String>,
+    workspace_watcher: Option<mcp_index::WorkspaceWatcher>,
 }
 
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
@@ -113,13 +121,13 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     Ok(path)
 }
 
-pub fn run_server(root: &Path, _options: GeminiCliServerOptions<'_>) -> Result<()> {
+pub fn run_server(root: &Path, options: GeminiCliServerOptions<'_>) -> Result<()> {
     run_server_for(
         root,
         RecordingProvider::Gemini,
         "gemini-cli",
         "gemini-cli-memory",
-        "gemini-mcp-index",
+        options,
     )
 }
 
@@ -128,7 +136,7 @@ pub fn run_server_for(
     provider: RecordingProvider,
     provider_label: &'static str,
     memory_dir: &'static str,
-    index_name: &'static str,
+    options: GeminiCliServerOptions<'_>,
 ) -> Result<()> {
     mcp_index::trace_event("gemini-server-start");
     let server = GeminiMcp {
@@ -137,7 +145,15 @@ pub fn run_server_for(
         provider,
         provider_label,
         memory_dir,
-        index_name,
+        max_bytes: options.max_bytes,
+        max_files: options.max_files,
+        max_depth: options.max_depth,
+        max_total_bytes: options.max_total_bytes,
+        ignore_paths: options.ignore_paths.to_vec(),
+        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
+            root,
+            options.ignore_paths,
+        )?),
     };
     server.serve()
 }
@@ -148,15 +164,31 @@ impl GeminiMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("Gemini MCP store lock poisoned"))?;
+        if self
+            .workspace_watcher
+            .as_ref()
+            .is_some_and(mcp_index::WorkspaceWatcher::take_change)
+        {
+            *store = None;
+        }
         if store.is_none() {
-            *store = Some(mcp_index::open_persistent_store(
+            let input = AdapterInput {
+                root: &self.root,
+                max_bytes: self.max_bytes,
+                max_files: self.max_files,
+                max_depth: self.max_depth,
+                max_total_bytes: self.max_total_bytes,
+            };
+            let ignores = self.ignore_paths.clone();
+            *store = Some(mcp_index::open_workspace_memory_store(
                 &self.root,
-                self.index_name,
                 self.memory_dir,
-                // This server indexes memories only, so no ignore path can
-                // change the corpus it builds.
-                &[],
-                || Ok(Vec::new()),
+                &ignores,
+                || {
+                    let graph = build_project_graph(&input)?;
+                    let graph = apply_ignore_paths(graph, &ignores);
+                    Ok(graph_to_source_documents(&graph))
+                },
             )?);
         }
         Ok(store)
@@ -233,7 +265,15 @@ impl GeminiMcp {
                     store,
                 )?;
                 store.refresh()?;
-                let results = store.query(query, top_k)?;
+                let started = std::time::Instant::now();
+                let results = store.query(query, top_k);
+                let _ = crate::telemetry::record_project_query(
+                    &self.root,
+                    started.elapsed().as_millis() as u64,
+                    results.is_err(),
+                    results.as_ref().is_ok_and(Vec::is_empty),
+                );
+                let results = results?;
                 Ok(text_response(
                     id,
                     &serde_json::to_string_pretty(
@@ -488,14 +528,9 @@ mod tests {
 
     #[test]
     fn gemini_compatible_mcp_contract_applies_to_gemini_and_agy() {
-        for (provider, label, memory_dir, index_name) in [
-            (
-                RecordingProvider::Gemini,
-                "gemini-cli",
-                "gemini-cli-memory",
-                "gemini-mcp-index",
-            ),
-            (RecordingProvider::Agy, "agy", "agy-memory", "agy-mcp-index"),
+        for (provider, label, memory_dir) in [
+            (RecordingProvider::Gemini, "gemini-cli", "gemini-cli-memory"),
+            (RecordingProvider::Agy, "agy", "agy-memory"),
         ] {
             let root = temp_root(label);
             let memory_root = root.join(".lint-ai").join(memory_dir);
@@ -522,7 +557,12 @@ mod tests {
                 provider,
                 provider_label: label,
                 memory_dir,
-                index_name,
+                max_bytes: 5_000_000,
+                max_files: 50_000,
+                max_depth: 20,
+                max_total_bytes: 100_000_000,
+                ignore_paths: vec![],
+                workspace_watcher: None,
             };
             let tools = mcp
                 .handle_request(JsonRpcRequest {

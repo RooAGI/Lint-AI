@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lint-AI Insights</title>
+    <link rel="stylesheet" href="/dashboard/styles.css">
+  </head>
+  <body class="booting">
+    <div class="app">
+      <aside class="rail">
+        <div class="rail__brand">
+          <img class="rail__logo" src="/dashboard/rooagi-logo.png" alt="RooAGI">
+          <div class="rail__wordmark">
+            <strong>Lint-AI</strong>
+            <span>IndexStore Insights</span>
+          </div>
+        </div>
+
+        <nav class="rail__nav" aria-label="Views">
+          <button class="navitem" type="button" data-view="overview" aria-current="page">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.2"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1.2"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1.2"/><rect x="9" y="9" width="5.5" height="5.5" rx="1.2"/></svg>
+            <span>Overview</span>
+          </button>
+          <button class="navitem" type="button" data-view="index">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="3.6" rx="6" ry="2.3"/><path d="M2 3.6v4.8c0 1.3 2.7 2.3 6 2.3s6-1 6-2.3V3.6"/><path d="M2 8.4v3.9c0 1.3 2.7 2.3 6 2.3s6-1 6-2.3V8.4"/></svg>
+            <span>Index</span>
+          </button>
+          <button class="navitem" type="button" data-view="providers">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="3.2" r="2.1"/><circle cx="3.2" cy="12.4" r="2.1"/><circle cx="12.8" cy="12.4" r="2.1"/><path d="M8 5.3v2.4M8 7.7 4.4 10.9M8 7.7l3.6 3.2"/></svg>
+            <span>Providers</span>
+          </button>
+        </nav>
+
+        <div class="rail__section">
+          <p class="eyebrow">Integrations</p>
+          <div id="rail-providers" class="rail__providers">
+            <p class="rail__empty">No provider telemetry yet.</p>
+          </div>
+        </div>
+
+        <div class="rail__foot">
+          <label for="token">API token <span>optional</span></label>
+          <input id="token" type="password" placeholder="Token, without Bearer">
+        </div>
+      </aside>
+
+      <div class="main">
+        <header class="topbar">
+          <div class="topbar__title">
+            <h1 id="view-title">Overview</h1>
+            <p id="view-sub">How the memory index is serving agents right now.</p>
+          </div>
+          <div class="topbar__meta">
+            <div id="status-pill" class="pill" role="status"><i aria-hidden="true"></i><span>Connecting…</span></div>
+            <span id="last-updated" class="topbar__stamp">Waiting for telemetry</span>
+            <button id="refresh" class="btn btn--primary" type="button">Refresh</button>
+          </div>
+        </header>
+
+        <main class="viewport">
+          <section class="view" id="view-overview" aria-label="Overview">
+            <div class="kpis">
+              <article class="kpi"><span>Documents</span><strong id="documents">—</strong><small id="documents-scope">all discovered segment indexes</small></article>
+              <article class="kpi"><span>Records</span><strong id="records">—</strong><small id="records-scope">all discovered segment indexes</small></article>
+              <article class="kpi"><span>Query rate</span><strong id="rps">—</strong><small>requests / second <em class="delta" id="rps-delta"></em></small></article>
+              <article class="kpi"><span>Latency</span><strong id="latency">—</strong><small>p50 / p95 ms <em class="delta" id="latency-delta"></em></small></article>
+              <article class="kpi"><span>Errors</span><strong id="errors">—</strong><small id="errors-scope">rolling window <em class="delta" id="errors-delta"></em></small></article>
+              <article class="kpi"><span>Empty results</span><strong id="empty">—</strong><small id="empty-scope">rolling window <em class="delta" id="empty-delta"></em></small></article>
+            </div>
+
+            <div class="row row--wide-first">
+              <section class="panel">
+                <div class="panel__head">
+                  <div><p class="eyebrow">Query activity</p><h2>Three measures, three scales</h2></div>
+                  <span id="window" class="panel__note"></span>
+                </div>
+                <div id="sparks" class="sparks">
+                  <figure class="spark" data-metric="requests_per_second">
+                    <figcaption><span>Requests / sec</span><b>—</b></figcaption>
+                    <canvas height="86" aria-label="Requests per second over the rolling window"></canvas>
+                    <i class="spark__pulse" aria-hidden="true"></i>
+                  </figure>
+                  <figure class="spark" data-metric="p95_ms">
+                    <figcaption><span>p95 latency</span><b>—</b></figcaption>
+                    <canvas height="86" aria-label="p95 latency in milliseconds over the rolling window"></canvas>
+                    <i class="spark__pulse" aria-hidden="true"></i>
+                  </figure>
+                  <figure class="spark" data-metric="errors">
+                    <figcaption><span>Errors</span><b>—</b></figcaption>
+                    <canvas height="86" aria-label="Query errors over the rolling window"></canvas>
+                    <i class="spark__pulse" aria-hidden="true"></i>
+                  </figure>
+                  <div id="spark-tip" class="spark-tip" hidden></div>
+                </div>
+                <p class="spark__hint">Each measure keeps its own scale. Hover to read a single bucket across all three. Press <kbd>⌘K</kbd> to jump anywhere.</p>
+              </section>
+
+              <section class="panel" id="overview-index">
+                <div class="panel__head">
+                  <div><p class="eyebrow">Primary query index</p><h2>Snapshot</h2></div>
+                  <button class="btn btn--quiet" type="button" data-goto="index">Open</button>
+                </div>
+                <div id="index-brief" class="index-brief"></div>
+              </section>
+            </div>
+
+            <section class="panel">
+              <div class="panel__head">
+                <div><p class="eyebrow">Across all providers</p><h2>Recent activity</h2></div>
+                <span id="feed-note" class="panel__note"></span>
+              </div>
+              <div id="overview-feed" class="feed"></div>
+            </section>
+          </section>
+
+          <section class="view" id="view-index" aria-label="Index" hidden>
+            <div id="index-topology"></div>
+          </section>
+
+          <section class="view" id="view-providers" aria-label="Providers" hidden>
+            <div id="provider-view"></div>
+          </section>
+        </main>
+      </div>
+    </div>
+    <div id="palette" class="palette" hidden>
+      <div class="palette__box" role="dialog" aria-modal="true" aria-label="Jump to">
+        <input id="palette-input" type="text" autocomplete="off" spellcheck="false" placeholder="Jump to a view, provider, or action…">
+        <div id="palette-results" class="palette__results" role="listbox"></div>
+        <div class="palette__foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+      </div>
+    </div>
+    <script type="module" src="/dashboard/app.js"></script>
+  </body>
+</html>

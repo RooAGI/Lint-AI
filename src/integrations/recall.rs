@@ -10,7 +10,6 @@ use crate::adapters::{
 };
 use crate::index::{DocRecord, SearchResult, SectionChunk};
 use crate::integrations::mcp_index;
-use crate::integrations::mcp_index::open_persistent_store;
 use crate::pipeline::IndexStore;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -56,7 +55,6 @@ pub struct RecallOptions<'a> {
     pub max_files: usize,
     pub max_depth: usize,
     pub max_total_bytes: usize,
-    pub index_name: &'a str,
     pub memory_name: &'a str,
 }
 /// The wire contract consumed by lint-service: a `results` array whose every
@@ -152,18 +150,13 @@ pub fn recall(options: &RecallOptions<'_>) -> Result<RecallOutput> {
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
     };
-    let mut store = mcp_index::open_persistent_store(
-        &root,
-        options.index_name,
-        options.memory_name,
-        &ignore_paths,
-        || {
+    let mut store =
+        mcp_index::open_workspace_memory_store(&root, options.memory_name, &ignore_paths, || {
             let graph = build_project_graph(&input)?;
             let graph = apply_ignore_paths(graph, &ignore_paths);
             Ok(graph_to_source_documents(&graph))
-        },
-    )
-    .with_context(|| format!("unable to open the index for {}", root.display()))?;
+        })
+        .with_context(|| format!("unable to open the index for {}", root.display()))?;
 
     let results = store
         .query(options.query, options.result_count)
@@ -252,7 +245,7 @@ pub fn run_recall_server(
             max_total_bytes,
         };
         let ignores = ignore_paths.to_vec();
-        open_persistent_store(
+        mcp_index::open_persistent_store(
             root,
             "desktop-document-index",
             "desktop-empty-memory",
@@ -701,13 +694,13 @@ mod tests {
     #[test]
     fn project_recall_uses_each_provider_store() {
         let providers = [
-            ("claude-code", "claude-mcp-index", "claude-memory"),
-            ("codex", "codex-mcp-index", "codex-memory"),
-            ("gemini-cli", "gemini-mcp-index", "gemini-cli-memory"),
-            ("agy", "agy-mcp-index", "agy-memory"),
+            ("claude-code", "claude-memory"),
+            ("codex", "codex-memory"),
+            ("gemini-cli", "gemini-cli-memory"),
+            ("agy", "agy-memory"),
         ];
 
-        for (provider, index_name, memory_name) in providers {
+        for (provider, memory_name) in providers {
             let temp_base = std::env::temp_dir()
                 .canonicalize()
                 .unwrap_or_else(|_| std::env::temp_dir());
@@ -753,7 +746,6 @@ mod tests {
                 max_files: 50_000,
                 max_depth: 20,
                 max_total_bytes: 100_000_000,
-                index_name,
                 memory_name,
             };
             let output = recall(&options).unwrap();

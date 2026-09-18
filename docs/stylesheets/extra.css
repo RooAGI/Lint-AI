@@ -301,7 +301,7 @@ body {
 .proof-grid div:last-child { border-right: 0; }
 .proof-grid strong, .proof-grid div:nth-child(n) strong { display: block; color: #fff; font-size: clamp(1.8rem, 4vw, 3rem); line-height: 1; letter-spacing: -.05em; }
 .proof-grid span { display: block; margin-top: .6rem; color: #badefb; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
-.benchmark-note { margin: .8rem 0 6rem; color: var(--md-default-fg-color--light); font-size: .66rem; text-align: right; }
+.benchmark-note { margin: .8rem 0 2rem; color: var(--md-default-fg-color--light); font-size: .66rem; text-align: right; }
 
 .md-typeset h2.landing-heading, .solution-intro h2 { margin-top: 4rem; font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.05; letter-spacing: -.05em; font-weight: 750; }
 .feature-grid, .integration-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 2rem 0 6rem; background: var(--theme-border); border: 1px solid var(--theme-border); border-radius: .85rem; box-shadow: 0 1.1rem 3rem var(--theme-shadow); overflow: hidden; }

@@ -2016,11 +2016,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 args.max_config_bytes,
             )
             .map_err(|err| anyhow::anyhow!(err))?;
-            let (index_name, memory_name) = match args.session_provider {
-                crate::cli::SessionProvider::Claude => ("claude-mcp-index", "claude-memory"),
-                crate::cli::SessionProvider::Codex => ("codex-mcp-index", "codex-memory"),
-                crate::cli::SessionProvider::Gemini => ("gemini-mcp-index", "gemini-cli-memory"),
-                crate::cli::SessionProvider::Agy => ("agy-mcp-index", "agy-memory"),
+            let memory_name = match args.session_provider {
+                crate::cli::SessionProvider::Claude => "claude-memory",
+                crate::cli::SessionProvider::Codex => "codex-memory",
+                crate::cli::SessionProvider::Gemini => "gemini-cli-memory",
+                crate::cli::SessionProvider::Agy => "agy-memory",
             };
             let output =
                 crate::integrations::recall::recall(&crate::integrations::recall::RecallOptions {
@@ -2032,7 +2032,6 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     max_files: args.max_files,
                     max_depth: args.max_depth,
                     max_total_bytes: args.max_total_bytes,
-                    index_name,
                     memory_name,
                 })?;
             println!("{}", serde_json::to_string_pretty(&output)?);

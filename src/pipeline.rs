@@ -7,7 +7,9 @@ use crate::index::{
     SearchResult, SemanticAggregate, SemanticDocState,
 };
 use crate::query_plan::PreparedQuery;
-use crate::segments::{SegmentManifest, SegmentRoutingStrategy, SegmentedMemoryIndex};
+use crate::segments::{
+    MemoryIndexSegment, SegmentManifest, SegmentRoutingStrategy, SegmentedMemoryIndex,
+};
 use crate::semantic_relations::{SemanticRelationStore, SupersessionOptions};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
@@ -19,6 +21,10 @@ use crate::tier1::{
 };
 use anyhow::Result;
 use clap::ValueEnum;
+use notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{
+    new_debouncer, DebounceEventResult, Debouncer, RecommendedCache,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -36,6 +42,105 @@ use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::Value;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
+
+/// A debounced project-file change published by the core index layer.
+/// Contents are intentionally excluded; consumers can request bounded,
+/// authorized inspection separately when needed.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceChangeEvent {
+    pub event: String,
+    pub file_path: String,
+    pub timestamp_ms: u64,
+}
+
+/// Debounced project-file changes shared by every long-lived index consumer.
+pub struct WorkspaceWatcher {
+    _watcher: Debouncer<RecommendedWatcher, RecommendedCache>,
+    events: Mutex<Receiver<DebounceEventResult>>,
+    root: PathBuf,
+    ignore_paths: Vec<String>,
+}
+
+impl WorkspaceWatcher {
+    pub fn new(root: &Path, ignore_paths: &[String]) -> Result<Self> {
+        let root = root.canonicalize()?;
+        let (sender, receiver) = mpsc::channel();
+        let mut watcher = new_debouncer(Duration::from_millis(350), None, sender)?;
+        watcher.watch(&root, RecursiveMode::Recursive)?;
+        Ok(Self {
+            _watcher: watcher,
+            events: Mutex::new(receiver),
+            root,
+            ignore_paths: ignore_paths
+                .iter()
+                .map(|path| path.to_lowercase())
+                .collect(),
+        })
+    }
+
+    pub fn take_events(&self) -> Vec<WorkspaceChangeEvent> {
+        let Ok(events) = self.events.lock() else {
+            return vec![WorkspaceChangeEvent {
+                event: "watcher_error".to_string(),
+                file_path: "<watcher-error>".to_string(),
+                timestamp_ms: workspace_now_ms(),
+            }];
+        };
+        let mut changes = Vec::new();
+        loop {
+            match events.try_recv() {
+                Ok(Ok(events)) => {
+                    for event in events {
+                        for path in event.event.paths {
+                            let relative = path.strip_prefix(&self.root).unwrap_or(&path);
+                            if pipeline_workspace_path_is_ignored(relative, &self.ignore_paths) {
+                                continue;
+                            }
+                            let file_path = relative.to_string_lossy().replace('\\', "/");
+                            if !changes
+                                .iter()
+                                .any(|change: &WorkspaceChangeEvent| change.file_path == file_path)
+                            {
+                                changes.push(WorkspaceChangeEvent {
+                                    event: format!("file_{:?}", event.event.kind).to_lowercase(),
+                                    file_path,
+                                    timestamp_ms: workspace_now_ms(),
+                                });
+                            }
+                        }
+                    }
+                }
+                Ok(Err(_)) | Err(TryRecvError::Disconnected) => {
+                    changes.push(WorkspaceChangeEvent {
+                        event: "watcher_error".to_string(),
+                        file_path: "<watcher-error>".to_string(),
+                        timestamp_ms: workspace_now_ms(),
+                    });
+                    return changes;
+                }
+                Err(TryRecvError::Empty) => return changes,
+            }
+        }
+    }
+
+    pub fn take_change(&self) -> bool {
+        !self.take_events().is_empty()
+    }
+}
+
+fn workspace_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn pipeline_workspace_path_is_ignored(relative: &Path, ignore_paths: &[String]) -> bool {
+    let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+    path.split('/')
+        .any(|component| component == ".git" || component == ".lint-ai")
+        || ignore_paths.iter().any(|fragment| path.contains(fragment))
+}
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Tier1NerProvider {
@@ -436,6 +541,38 @@ fn build_memory_index_snapshot(
     }
 }
 
+fn merge_composed_map<T>(
+    target: &mut HashMap<String, T>,
+    additions: HashMap<String, T>,
+    label: &str,
+) -> Result<()> {
+    for (id, value) in additions {
+        if target.insert(id.clone(), value).is_some() {
+            anyhow::bail!("cannot compose stores with duplicate {label} id: {id}");
+        }
+    }
+    Ok(())
+}
+
+fn take_segmented_snapshot(
+    snapshot: Option<Arc<MemoryIndexSnapshot>>,
+    namespace: &str,
+) -> Result<Vec<MemoryIndexSegment>> {
+    let Some(snapshot) = snapshot else {
+        return Ok(Vec::new());
+    };
+    let snapshot = Arc::try_unwrap(snapshot).map_err(|_| {
+        anyhow::anyhow!("cannot compose an index snapshot while it is still shared")
+    })?;
+    let MemoryIndexSnapshot::Segmented(mut segmented) = snapshot else {
+        anyhow::bail!("composed stores require segmented snapshots");
+    };
+    for segment in &mut segmented.segments {
+        segment.segment_id = format!("{namespace}:{}", segment.segment_id);
+    }
+    Ok(segmented.segments)
+}
+
 impl IndexStore {
     pub fn published_snapshot(&self) -> PublishedIndexSnapshot {
         PublishedIndexSnapshot {
@@ -485,6 +622,105 @@ impl IndexStore {
     pub fn in_memory(mut options: PipelineOptions) -> Self {
         options.index_location = IndexLocation::InMemory;
         Self::new(options)
+    }
+
+    /// Compose already-published segmented stores without rebuilding document
+    /// records. This is used by provider MCP servers: the persistent workspace
+    /// and a provider's private memory retain their own storage, while the
+    /// request process gets one in-memory query view with corpus-wide BM25
+    /// statistics.
+    pub fn compose_segmented(workspace: Self, provider_memory: Option<Self>) -> Result<Self> {
+        if !matches!(
+            workspace.options.memory_index_layout,
+            MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+        ) {
+            anyhow::bail!("composed stores require a segmented memory index layout");
+        }
+
+        let IndexStore {
+            mut source_docs,
+            mut records,
+            mut chunk_lifecycle,
+            snapshot: workspace_snapshot,
+            options,
+            ..
+        } = workspace;
+        let mut segments = take_segmented_snapshot(workspace_snapshot, "workspace")?;
+
+        if let Some(provider_memory) = provider_memory {
+            if !matches!(
+                provider_memory.options.memory_index_layout,
+                MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+            ) {
+                anyhow::bail!("provider memory must use a segmented memory index layout");
+            }
+            let IndexStore {
+                source_docs: provider_docs,
+                records: provider_records,
+                chunk_lifecycle: provider_lifecycle,
+                snapshot: provider_snapshot,
+                ..
+            } = provider_memory;
+            merge_composed_map(&mut source_docs, provider_docs, "source document")?;
+            merge_composed_map(&mut records, provider_records, "record")?;
+            merge_composed_map(&mut chunk_lifecycle, provider_lifecycle, "chunk lifecycle")?;
+            segments.extend(take_segmented_snapshot(provider_snapshot, "provider")?);
+        }
+
+        let mut semantic_docs = HashMap::new();
+        let mut semantic_aggregate = SemanticAggregate::default();
+        let mut chunk_latest_by_lineage = HashMap::new();
+        for record in records.values() {
+            let state = build_semantic_doc_state(record, options.claim_extraction);
+            semantic_aggregate.insert_doc_state(&state);
+            semantic_docs.insert(record.doc_id.clone(), state);
+        }
+        for meta in chunk_lifecycle.values().filter(|meta| meta.is_latest) {
+            chunk_latest_by_lineage.insert(meta.lineage_key.clone(), meta.chunk_id.clone());
+        }
+        let temporal_facts = TemporalFactStore::from_records(records.values(), &chunk_lifecycle);
+        let semantic_relations =
+            SemanticRelationStore::try_from_documents(source_docs.values(), options.supersession)?;
+        let mut lexical = LexicalState::new(None)?;
+        for record in records.values() {
+            lexical.upsert_record(record)?;
+        }
+        lexical.commit_reload()?;
+
+        let snapshot = (!segments.is_empty())
+            .then(|| SegmentedMemoryIndex::from_segments_with_generation(segments, 1))
+            .transpose()
+            .map_err(anyhow::Error::msg)?
+            .map(MemoryIndexSnapshot::Segmented)
+            .map(Arc::new);
+        Ok(Self {
+            options: PipelineOptions {
+                index_location: IndexLocation::InMemory,
+                ..options
+            },
+            store_paths: StorePaths {
+                root: None,
+                lexical_dir: None,
+                semantic_dir: None,
+                metadata_path: None,
+            },
+            source_docs,
+            records,
+            semantic_docs,
+            semantic_aggregate,
+            chunk_lifecycle,
+            chunk_latest_by_lineage,
+            temporal_facts,
+            semantic_relations,
+            dirty_docs: HashSet::new(),
+            tombstones: HashSet::new(),
+            lexical,
+            snapshot_revision: usize::from(snapshot.is_some()) as u64,
+            store_revision: usize::from(snapshot.is_some()) as u64,
+            snapshot,
+            background_refresh: None,
+            dirty: false,
+        })
     }
 
     pub fn for_corpus(corpus_root: &Path, mut options: PipelineOptions) -> Result<Self> {
@@ -2455,6 +2691,39 @@ mod tests {
             doc_length: content.len(),
             author_agent: None,
         }
+    }
+
+    #[test]
+    fn workspace_watcher_publishes_relative_file_change_events_without_content() {
+        let root = std::env::temp_dir().join(format!(
+            "lint-ai-workspace-watcher-{}-{}",
+            std::process::id(),
+            workspace_now_ms()
+        ));
+        fs::create_dir_all(root.join(".lint-ai")).unwrap();
+        let watcher = WorkspaceWatcher::new(&root, &[]).unwrap();
+        fs::write(root.join("notes.md"), "private content").unwrap();
+        fs::write(root.join(".lint-ai").join("internal.json"), "internal").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let events = loop {
+            let events = watcher.take_events();
+            if !events.is_empty() || std::time::Instant::now() >= deadline {
+                break events;
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+
+        assert!(
+            events.iter().any(|event| event.file_path == "notes.md"),
+            "unexpected watcher events: {events:?}"
+        );
+        assert!(events
+            .iter()
+            .all(|event| event.file_path != ".lint-ai/internal.json"));
+        assert!(events.iter().all(|event| event.event.starts_with("file_")));
+        drop(watcher);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn sample_doc_with_group(id: &str, group_id: &str, content: &str) -> SourceDocument {

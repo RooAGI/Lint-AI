@@ -160,8 +160,17 @@ fn handle_hook(
     if query.trim().is_empty() {
         return Ok(GeminiHookOutput::default());
     }
+    let started = std::time::Instant::now();
     let memory = _root.join(".lint-ai").join(memory_dir);
     if !memory.exists() {
+        let _ = crate::telemetry::record_memory_retrieval(
+            _root,
+            provider.as_str(),
+            &input.session_id,
+            &query,
+            0,
+            &[],
+        );
         return Ok(GeminiHookOutput::default());
     }
     let options = PipelineOptions {
@@ -173,10 +182,26 @@ fn handle_hook(
     };
     let mut store = IndexStore::at_path(&memory, options)?;
     if store.is_empty() {
+        let _ = crate::telemetry::record_memory_retrieval(
+            _root,
+            provider.as_str(),
+            &input.session_id,
+            &query,
+            started.elapsed().as_millis() as u64,
+            &[],
+        );
         return Ok(GeminiHookOutput::default());
     }
+    let results = store.query(&query, 5);
+    let _ = crate::telemetry::record_project_query(
+        _root,
+        started.elapsed().as_millis() as u64,
+        results.is_err(),
+        results.as_ref().is_ok_and(Vec::is_empty),
+    );
     let mut context = String::new();
-    for result in store.query(&query, 5)? {
+    let mut retrieved_memories = Vec::new();
+    for result in results? {
         if let Some(record) = store.record_by_id(&result.doc_id) {
             let excerpt = record
                 .content
@@ -186,12 +211,26 @@ fn handle_hook(
                 .join("\n");
             if !excerpt.trim().is_empty() {
                 context.push_str(&format!("\n- Source: {}\n  {}\n", record.source, excerpt));
+                retrieved_memories.push(serde_json::json!({
+                    "source": record.source,
+                    "type": record.filters.get("document_type").map(String::as_str).unwrap_or("memory"),
+                    "score": result.score,
+                    "excerpt": excerpt,
+                }));
             }
             if context.len() > 8_000 {
                 break;
             }
         }
     }
+    let _ = crate::telemetry::record_memory_retrieval(
+        _root,
+        provider.as_str(),
+        &input.session_id,
+        &query,
+        started.elapsed().as_millis() as u64,
+        &retrieved_memories,
+    );
     if context.is_empty() {
         return Ok(GeminiHookOutput::default());
     }

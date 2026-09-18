@@ -99,25 +99,27 @@ Core i7-7700K with 8 logical CPUs running Ubuntu 22.04.5 LTS (kernel
 These are local uncached measurements. The `single`, `global`, and `segment`
 runner commands are documented in `comparison/README.md`.
 
-#### macOS rerun
+#### Latest macOS rerun
 
-A fresh rerun was performed on 2026-09-16 against the `release/v0.2.0` build
-at commit `83f0107`. It used the same 23,366-record corpus, 100 requests per
-cell, `top_k: 20`, keyword query, and disabled query cache. The corpus was
-seeded through `POST /add/batch`; the search measurements used the standard
-`comparison/http_latency.py` client.
+A fresh rerun was performed on 2026-09-17 against the current server build. It
+used the same 23,366-record corpus, 100 requests per cell, `top_k: 20`, keyword
+query, and disabled query cache. The corpus was seeded through `POST /add/batch`
+and the search measurements used the standard `comparison/http_latency.py`
+client through `uv`.
 
 | Layout | C=1 req/s | C=10 req/s | C=10 p50 | C=10 p99 |
 |---|---:|---:|---:|---:|
-| Single index | 168.77 | 1,085.93 | 8.16 ms | 15.96 ms |
-| Global segmented | 274.45 | 1,662.27 | 5.65 ms | 10.07 ms |
-| Routed segment | 270.01 | 1,383.66 | 6.32 ms | 11.36 ms |
+| Single index | 148.42 | 997.62 | 8.87 ms | 18.39 ms |
+| Global segmented | 237.82 | 1,306.82 | 6.30 ms | 12.39 ms |
+| Routed segment | 237.84 | 1,512.31 | 5.91 ms | 11.97 ms |
 
 The machine was a MacBook Pro (Mac17,9) with an Apple M5 Pro chip (15 cores)
 and 24 GB RAM, running macOS 26.6.2. The toolchain was Rust 1.96.0, Cargo
-1.96.0, and Python 3.9.6. These results are local uncached measurements and
+1.96.0, and uv 0.12.7. These results are local uncached measurements and
 should not be compared directly with the Ubuntu results above without matching
-the hardware and software environment.
+the hardware and software environment. The provider MCP watcher is not
+initialized by this standalone HTTP benchmark; the run validates the current
+server build but is not an isolated watcher-overhead measurement.
 
 ### Reproduce the comparison
 
@@ -130,3 +132,21 @@ python3 comparison/http_latency.py \
   --url http://127.0.0.1:8080/search \
   --payload '{"query":"deployment configuration system decision","user_id":"bench-user","top_k":20}'
 ```
+
+For the layout throughput run, use `uv` with a repository-local temporary
+directory on macOS. This avoids `/tmp` resolving through a symlink, which the
+server rejects for safety:
+
+```bash
+mkdir -p .benchmark-tmp
+TMPDIR="$PWD/.benchmark-tmp" uv run python comparison/throughput.py \
+  --mode single --no-cache
+```
+
+Repeat with `--mode global` and `--mode segment` for the complete comparison.
+
+The 2026-09-17 rerun is stored in
+[`throughput-layout-watcher-rerun-2026-09-17.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-layout-watcher-rerun-2026-09-17.json).
+It used the 23,366-record uncached workload through `uv`. The standalone HTTP
+server does not initialize provider MCP watchers, so this confirms the current
+server benchmark but is not an isolated watcher-overhead measurement.

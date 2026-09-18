@@ -81,6 +81,7 @@ struct CodexMcp {
     max_depth: usize,
     max_total_bytes: usize,
     ignore_paths: Vec<String>,
+    workspace_watcher: Option<mcp_index::WorkspaceWatcher>,
     store: Mutex<Option<IndexStore>>,
 }
 
@@ -252,6 +253,10 @@ pub fn run_server(root: &Path, options: CodexServerOptions<'_>) -> Result<()> {
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
+        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
+            root,
+            options.ignore_paths,
+        )?),
         store: Mutex::new(None),
     };
     mcp.serve()
@@ -263,6 +268,13 @@ impl CodexMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        if self
+            .workspace_watcher
+            .as_ref()
+            .is_some_and(mcp_index::WorkspaceWatcher::take_change)
+        {
+            *store = None;
+        }
         if store.is_none() {
             let graph = build_project_graph(&AdapterInput {
                 root: &self.root,
@@ -274,9 +286,8 @@ impl CodexMcp {
             let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
             let root = self.root.clone();
-            *store = Some(mcp_index::open_persistent_store(
+            *store = Some(mcp_index::open_workspace_memory_store(
                 &root,
-                "codex-mcp-index",
                 "codex-memory",
                 &self.ignore_paths,
                 || Ok(documents),
@@ -390,7 +401,15 @@ impl CodexMcp {
                     &self.root.join(".lint-ai").join("codex-memory"),
                     &mut *store,
                 )?;
-                let results = store.query(query, top_k)?;
+                let started = std::time::Instant::now();
+                let results = store.query(query, top_k);
+                let _ = crate::telemetry::record_project_query(
+                    &self.root,
+                    started.elapsed().as_millis() as u64,
+                    results.is_err(),
+                    results.as_ref().is_ok_and(Vec::is_empty),
+                );
+                let results = results?;
                 let payload = mcp_tools::search_results(store, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
@@ -736,7 +755,7 @@ mod tests {
     use super::*;
     use crate::source::SourceDocument;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn temp_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -768,6 +787,7 @@ mod tests {
             max_depth: 0,
             max_total_bytes: 0,
             ignore_paths: Vec::new(),
+            workspace_watcher: None,
             store: Mutex::new(Some(store)),
         }
     }
@@ -785,6 +805,84 @@ mod tests {
             .unwrap()
             .to_string();
         serde_json::from_str(&text).unwrap()
+    }
+
+    fn wait_for_workspace_store(mcp: &CodexMcp, predicate: impl Fn(&mut IndexStore) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let mut store = mcp.store().unwrap();
+                if predicate(
+                    store
+                        .as_mut()
+                        .expect("workspace store should be initialized"),
+                ) {
+                    return;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "workspace index did not reflect the filesystem change"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn workspace_document_edits_are_queryable_on_the_next_mcp_operation() {
+        let root = temp_dir("codex-workspace-refresh");
+        let document_path = root.join("architecture.md");
+        fs::write(
+            &document_path,
+            "The workspace uses the original storage design.",
+        )
+        .unwrap();
+
+        let mcp = CodexMcp {
+            root: root.clone(),
+            max_bytes: 5_000_000,
+            max_files: 50_000,
+            max_depth: 20,
+            max_total_bytes: 100_000_000,
+            ignore_paths: Vec::new(),
+            workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(&root, &[]).unwrap()),
+            store: Mutex::new(None),
+        };
+
+        {
+            let store = mcp.store().unwrap();
+            let store = store.as_ref().unwrap();
+            assert!(store
+                .source_documents()
+                .iter()
+                .any(|document| document.content.contains("original storage design")));
+        }
+
+        fs::write(
+            &document_path,
+            "The workspace uses the replacement storage design with segmented indexes.",
+        )
+        .unwrap();
+        wait_for_workspace_store(&mcp, |store| {
+            let results = store.query("segmented indexes", 5).unwrap_or_default();
+            results.iter().any(|result| {
+                store
+                    .record_by_id(&result.doc_id)
+                    .is_some_and(|record| record.content.contains("replacement storage design"))
+            })
+        });
+
+        fs::remove_file(&document_path).unwrap();
+        wait_for_workspace_store(&mcp, |store| {
+            let results = store.query("segmented indexes", 5).unwrap_or_default();
+            !results.iter().any(|result| {
+                store
+                    .record_by_id(&result.doc_id)
+                    .is_some_and(|record| record.content.contains("segmented indexes"))
+            })
+        });
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -985,6 +1083,7 @@ args = ["old"]
             max_depth: 5,
             max_total_bytes: 2_000_000,
             ignore_paths: Vec::new(),
+            workspace_watcher: None,
             store: Mutex::new(None),
         };
 

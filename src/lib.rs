@@ -51,6 +51,7 @@ pub mod segments;
 pub mod semantic_relations;
 pub mod source;
 pub mod symbols;
+pub mod telemetry;
 pub mod temporal;
 pub mod temporal_fact;
 pub mod tier1;

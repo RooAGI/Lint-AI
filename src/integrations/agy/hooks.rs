@@ -378,13 +378,16 @@ fn resolve_transcript_path_with_root(
             transcript_path.display()
         )
     })?;
+    if transcript_path.starts_with(&root) {
+        return Ok(transcript_path);
+    }
     let agy_transcript_root = agy_transcript_root.canonicalize().with_context(|| {
         format!(
             "failed to resolve AGY transcript root {}",
             agy_transcript_root.display()
         )
     })?;
-    if !transcript_path.starts_with(&root) && !transcript_path.starts_with(&agy_transcript_root) {
+    if !transcript_path.starts_with(&agy_transcript_root) {
         anyhow::bail!(
             "AGY transcript path is outside the project root and AGY transcript root: {}",
             transcript_path.display()
@@ -466,6 +469,22 @@ mod tests {
 
         std::fs::remove_file(transcript).unwrap();
         std::fs::remove_dir_all(agy_root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_transcript_does_not_require_an_existing_agy_root() {
+        let nonce = test_nonce();
+        let root = std::env::temp_dir().join(format!("lint-ai-agy-root-{nonce}"));
+        let transcript = root.join("transcript.jsonl");
+        let missing_agy_root = root.join("missing-brain");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&transcript, "{}").unwrap();
+
+        let resolved = resolve_transcript_path_with_root(&root, &transcript, &missing_agy_root);
+        assert_eq!(resolved.unwrap(), transcript.canonicalize().unwrap());
+
+        std::fs::remove_file(transcript).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 

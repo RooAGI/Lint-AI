@@ -7,7 +7,7 @@ hide:
 <div class="hero-stack">
 <section class="hero">
   <div class="hero__eyebrow">LINT-AI · RELIABLE MEMORY &amp; INSIGHTS</div>
-  <h1>Reliable AI memory<br><span>with insights you can trust.</span></h1>
+  <h1>Agent memory that knows what is still true.</h1>
   <p class="hero__lede"><strong>Memory and insights for AI agents.</strong> Lint-AI turns project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context, while showing what changed, what was superseded, and where the answer came from.</p>
 </section>
 

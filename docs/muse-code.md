@@ -25,8 +25,12 @@ From the repository root:
 
 By default this:
 
-- merges a `mcp_servers.lint-ai` entry into `~/.config/muse/settings.json`
+- merges a `mcpServers.lint-ai` entry into `~/.config/muse/settings.json`
   (or `$XDG_CONFIG_HOME/muse/settings.json` when `XDG_CONFIG_HOME` is set)
+- migrates any legacy `mcp_servers` entries into `mcpServers` — Muse ignores
+  the legacy key, and when both keys exist it drops the whole MCP member,
+  disabling every configured server
+- installs capture-only session hooks (see below)
 - preserves `schema_version` and every existing key — other MCP servers,
   hooks, and settings are left untouched
 - merges the Lint-AI memory policy into the project's `AGENTS.md`, which Muse
@@ -39,21 +43,19 @@ The MCP entry looks like this:
 
 ```json
 {
-  "mcp_servers": {
+  "mcpServers": {
     "lint-ai": {
       "transport": "stdio",
       "command": "/path/to/lint-ai",
       "args": ["--muse-serve", "/path/to/repo"],
-      "enabled": true,
-      "mode": "optional"
+      "enabled": true
     }
   }
 }
 ```
 
 The project root is pinned in `args` so the server indexes the right project
-regardless of the client's working directory. `mode` is `optional` (not
-`required`) so a memory-server failure can never abort a coding session.
+regardless of the client's working directory.
 
 Muse Code reads MCP servers only from the user/global `settings.json`; there
 is no project-scoped MCP location. The installer refuses to overwrite a
@@ -99,14 +101,31 @@ Inside Muse Code, call `record_session` with `start`, `stop`, or `status`:
 Recording is independent from retrieval, remains local to the current
 project, and is not promoted into durable memory automatically.
 
-## Lifecycle hooks (not yet wired)
+## Lifecycle hooks
 
-Muse Code exposes lifecycle hook events (`SessionStart`, `SessionEnd`,
-`Stop`, `PreCompact`, and others) that map naturally onto Lint-AI's
-retrieve-on-start / capture-on-stop pattern. The hook entry schema is not yet
-fully documented, so the installer does not write hook configuration today —
-the MCP-server integration ships first, and hooks will follow once the schema
-is validated against a live `muse` binary.
+`--muse-install` wires capture-only session hooks into the same
+`settings.json`. Each event gets a matcher group that runs
+`lint-ai --muse-hook <event>` as a shell command string with a 60-second
+timeout — the entry schema was validated against a live `muse` 1.3.0 binary.
+The hooks record the session lifecycle and tool use into
+`<project>/.lint-ai/muse-sessions/`:
+
+| Event | Captured |
+|---|---|
+| `SessionStart` | session id, model, permission mode |
+| `UserPromptSubmit` | prompt text, turn id |
+| `PreToolUse` / `PostToolUse` / `PostToolUseFailure` | tool use id, input/response, duration |
+| `Stop` | last assistant message, turn id |
+| `SessionEnd` | end reason |
+
+Recording never injects memory into the Muse context and never blocks a
+session: every failure path warns to stderr and exits zero. Existing user
+hooks are preserved, and reinstalling is idempotent. Recording is opt-in —
+enable it with the `record_session` MCP tool (`{"action":"start"}`).
+
+Tool-event payloads (`PreToolUse`/`PostToolUse`) were validated against the
+binary's embedded hook documentation rather than a live tool-calling run, so
+their fields are parsed defensively.
 
 ## Serve
 
@@ -156,6 +175,6 @@ All views emit JSON and can be filtered with `jq`.
 - Existing settings entries are preserved when the installer runs; a
   malformed `settings.json` is never overwritten.
 - Session replay (`--replay-session --session-provider muse`) is not wired
-  yet — it needs the same live-binary hook validation as the hook installer.
+  yet.
 - Muse Code runs on macOS and Linux only; the integration inherits that
   platform scope.

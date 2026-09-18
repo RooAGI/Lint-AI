@@ -24,8 +24,16 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+pub mod hooks;
+
 const SERVER_NAME: &str = "lint-ai";
 const DEFAULT_QUERY_TOP_K: usize = 5;
+
+/// Muse hook entry marker: the validated schema uses matcher groups whose
+/// inner hooks run `<exe> --muse-hook <event>` as a single shell string.
+const HOOK_MARKER: &str = "--muse-hook";
+/// Timeout seconds for hook commands (validated field name: `timeout`).
+const HOOK_TIMEOUT_SECS: u64 = 60;
 
 /// Muse Code requires this schema marker in `settings.json`; a file without it
 /// fails every `muse` command with "malformed settings file". The installer
@@ -48,7 +56,6 @@ struct McpServerEntry {
     command: String,
     args: Vec<String>,
     enabled: bool,
-    mode: String,
 }
 
 struct MuseMcp {
@@ -69,6 +76,12 @@ struct MuseMcp {
 /// location. The entry pins the project root in its args so one install maps to
 /// one project. Every existing key — including `schema_version`, hooks, and
 /// other MCP servers — is preserved untouched.
+///
+/// The key is `mcpServers` (camelCase). Earlier installers wrote the legacy
+/// `mcp_servers` key, which Muse silently ignores — and if both keys exist,
+/// Muse drops the whole MCP member, disabling every configured server. The
+/// installer therefore migrates any legacy `mcp_servers` entries into
+/// `mcpServers` before writing.
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
@@ -93,12 +106,32 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         .entry("schema_version".to_string())
         .or_insert_with(|| json!(SETTINGS_SCHEMA_VERSION));
 
+    // Migrate the legacy snake_case key into the canonical camelCase one.
+    // `mcpServers` entries win on conflict; the legacy key is always removed
+    // so Muse never sees both keys at once.
+    if let Some(legacy) = settings.remove("mcp_servers") {
+        let legacy = legacy
+            .as_object()
+            .context("Muse Code settings 'mcp_servers' must be an object")?;
+        let canonical = settings
+            .entry("mcpServers".to_string())
+            .or_insert_with(|| json!({}));
+        let canonical = canonical
+            .as_object_mut()
+            .context("Muse Code settings 'mcpServers' must be an object")?;
+        for (name, entry) in legacy {
+            canonical
+                .entry(name.clone())
+                .or_insert_with(|| entry.clone());
+        }
+    }
+
     let mcp_servers = settings
-        .entry("mcp_servers".to_string())
+        .entry("mcpServers".to_string())
         .or_insert_with(|| json!({}));
     let mcp_servers = mcp_servers
         .as_object_mut()
-        .context("Muse Code settings 'mcp_servers' must be an object")?;
+        .context("Muse Code settings 'mcpServers' must be an object")?;
     // Pin the project root explicitly so the MCP server does not depend on the
     // client's working directory (which may be the user's home directory).
     let entry = McpServerEntry {
@@ -109,9 +142,6 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
             root.to_string_lossy().into_owned(),
         ],
         enabled: true,
-        // A failing `optional` server does not abort the run; a failing
-        // `required` one does. Memory must never break a coding session.
-        mode: "optional".to_string(),
     };
     mcp_servers.insert(
         "lint-ai".to_string(),
@@ -120,6 +150,94 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 
     write_json_object(&config_path, &settings).context("failed to write Muse Code settings")?;
     Ok(config_path)
+}
+
+/// Install capture-only session hooks into Muse Code's `settings.json`.
+///
+/// Muse reads hooks from the same user/global `settings.json` as the MCP
+/// servers. Each event gets a matcher group that runs
+/// `lint-ai --muse-hook <event>` as a single shell command string (the only
+/// command shape Muse accepts). The hooks record the session lifecycle and
+/// tool use into Lint-AI's session store; they never inject memory into the
+/// context and never block the session. Existing user hooks are preserved and
+/// the install is idempotent.
+pub fn install_hook_settings(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
+    let config_path = match config_path {
+        Some(path) => path.to_path_buf(),
+        None => default_muse_config_path()?,
+    };
+    let _root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+    let executable = env::current_exe()
+        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .to_string_lossy()
+        .into_owned();
+    let mut settings = read_json_object(&config_path).with_context(|| {
+        format!(
+            "failed to parse Muse Code settings at {}; refusing to overwrite a malformed file",
+            config_path.display()
+        )
+    })?;
+
+    settings
+        .entry("schema_version".to_string())
+        .or_insert_with(|| json!(SETTINGS_SCHEMA_VERSION));
+
+    let hooks = settings
+        .entry("hooks".to_string())
+        .or_insert_with(|| json!({}));
+    let hooks = hooks
+        .as_object_mut()
+        .context("Muse Code settings 'hooks' must be an object")?;
+
+    for kind in hooks::HOOK_EVENTS {
+        let event_name = kind.event_name();
+        let entries = hooks
+            .entry(event_name.to_string())
+            .or_insert_with(|| json!([]));
+        let entries = entries
+            .as_array_mut()
+            .with_context(|| format!("Muse Code hook event '{event_name}' must be an array"))?;
+        // Remove our own previous entries so reinstalls stay idempotent;
+        // every other matcher group is preserved untouched.
+        entries.retain(|entry| !contains_lint_ai_hook(entry));
+        entries.push(json!({
+            "matcher": "*",
+            "hooks": [{
+                "type": "command",
+                "command": format!("{} {HOOK_MARKER} {}", shell_quote(&executable), kind.cli_name()),
+                "timeout": HOOK_TIMEOUT_SECS
+            }]
+        }));
+    }
+
+    write_json_object(&config_path, &settings).context("failed to write Muse Code settings")?;
+    Ok(config_path)
+}
+
+fn contains_lint_ai_hook(entry: &Value) -> bool {
+    entry
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|hooks| {
+            hooks.iter().any(|hook| {
+                hook.get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| command.contains(HOOK_MARKER))
+            })
+        })
+}
+
+/// Quote an executable path for embedding in a shell command string.
+fn shell_quote(path: &str) -> String {
+    if path
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '/' | '.' | '-' | '_' | '+'))
+    {
+        return path.to_string();
+    }
+    format!("'{}'", path.replace('\'', "'\\''"))
 }
 
 /// Delimiters so the block can be found and replaced without touching the rest of
@@ -683,6 +801,81 @@ mod tests {
     }
 
     #[test]
+    fn install_user_config_writes_camel_case_mcp_servers() {
+        let dir = temp_dir("muse-config-camel");
+        let config_path = dir.join("settings.json");
+        fs::write(&config_path, r#"{"theme": "light"}"#).unwrap();
+
+        let root = temp_dir("muse-config-camel-root");
+        install_user_config(&root, Some(&config_path)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        // Muse only reads the camelCase key; the legacy key must not exist.
+        assert!(settings.get("mcp_servers").is_none());
+        let entry = &settings["mcpServers"]["lint-ai"];
+        assert_eq!(entry["transport"], json!("stdio"));
+        assert!(entry["enabled"].as_bool().unwrap());
+        assert!(entry.get("mode").is_none());
+        let args = entry["args"].as_array().unwrap();
+        assert_eq!(args[0], json!("--muse-serve"));
+        assert_eq!(args[1].as_str().unwrap(), root.to_string_lossy());
+
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_user_config_migrates_legacy_mcp_servers_key() {
+        let dir = temp_dir("muse-config-migrate");
+        let config_path = dir.join("settings.json");
+        fs::write(
+            &config_path,
+            r#"{
+                "schema_version": 1,
+                "theme": "dark",
+                "mcpServers": {"existing": {"transport": "stdio", "command": "existing", "args": []}},
+                "mcp_servers": {
+                    "other": {"transport": "stdio", "command": "other", "args": []},
+                    "existing": {"transport": "stdio", "command": "stale", "args": []}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let root = temp_dir("muse-config-migrate-root");
+        install_user_config(&root, Some(&config_path)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        // The legacy key is gone entirely; Muse drops the whole MCP member
+        // when both keys exist, so leaving it would disable every server.
+        assert!(settings.get("mcp_servers").is_none());
+        let servers = settings["mcpServers"].as_object().unwrap();
+        // Legacy entries merge in; canonical entries win on conflict.
+        assert!(servers["other"].is_object());
+        assert_eq!(servers["existing"]["command"], json!("existing"));
+        assert!(servers["lint-ai"].is_object());
+
+        // Reinstalling is idempotent: exactly one lint-ai entry.
+        install_user_config(&root, Some(&config_path)).unwrap();
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(
+            settings["mcpServers"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .filter(|key| *key == "lint-ai")
+                .count(),
+            1
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn install_user_config_preserves_existing_settings_and_schema_version() {
         let dir = temp_dir("muse-config-merge");
         let config_path = dir.join("settings.json");
@@ -706,10 +899,12 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
         assert_eq!(settings["schema_version"], json!(1));
         assert_eq!(settings["theme"], json!("dark"));
-        assert!(settings["mcp_servers"]["other"].is_object());
-        let entry = &settings["mcp_servers"]["lint-ai"];
+        // The legacy key is migrated, not preserved in place.
+        assert!(settings.get("mcp_servers").is_none());
+        assert!(settings["mcpServers"]["other"].is_object());
+        let entry = &settings["mcpServers"]["lint-ai"];
         assert_eq!(entry["transport"], json!("stdio"));
-        assert_eq!(entry["mode"], json!("optional"));
+        assert!(entry.get("mode").is_none());
         assert!(entry["enabled"].as_bool().unwrap());
         let args = entry["args"].as_array().unwrap();
         assert_eq!(args[0], json!("--muse-serve"));
@@ -720,7 +915,7 @@ mod tests {
         let settings: Value =
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
         assert_eq!(
-            settings["mcp_servers"]
+            settings["mcpServers"]
                 .as_object()
                 .unwrap()
                 .keys()
@@ -783,6 +978,158 @@ mod tests {
         assert_eq!(once, twice);
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn install_hook_settings_is_idempotent_and_preserves_user_hooks() {
+        let dir = temp_dir("muse-hooks");
+        let config_path = dir.join("settings.json");
+        fs::write(
+            &config_path,
+            r#"{
+                "schema_version": 1,
+                "hooks": {
+                    "Stop": [
+                        {"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool"}]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let root = temp_dir("muse-hooks-root");
+        install_hook_settings(&root, Some(&config_path)).unwrap();
+        install_hook_settings(&root, Some(&config_path)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        let hooks = settings["hooks"].as_object().unwrap();
+        // All seven capture events are wired.
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Stop",
+            "SessionEnd",
+        ] {
+            let entries = hooks[event].as_array().unwrap();
+            let ours: Vec<&Value> = entries
+                .iter()
+                .filter(|entry| contains_lint_ai_hook(entry))
+                .collect();
+            assert_eq!(
+                ours.len(),
+                1,
+                "event {event} should have exactly one lint-ai hook"
+            );
+            let hook = &ours[0]["hooks"][0];
+            assert_eq!(hook["type"], json!("command"));
+            let command = hook["command"].as_str().unwrap();
+            assert!(
+                command.contains("--muse-hook"),
+                "hook command must use the --muse-hook marker: {command}"
+            );
+            assert!(
+                !command.contains('[') && !command.contains('{'),
+                "command must be a shell string, not an argv array: {command}"
+            );
+            assert_eq!(hook["timeout"], json!(60));
+            assert_eq!(ours[0]["matcher"], json!("*"));
+        }
+        // The user's own Stop hook survives.
+        let stop = hooks["Stop"].as_array().unwrap();
+        assert!(stop
+            .iter()
+            .any(|entry| { entry["hooks"][0]["command"].as_str() == Some("other-tool") }));
+
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_tool_returns_invalid_params() {
+        let root = temp_dir("muse-unknown-tool");
+        let mcp = test_mcp(root.clone(), Vec::new());
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(7)),
+                method: "tools/call".to_string(),
+                params: Some(json!({"name": "nope", "arguments": {}})),
+            })
+            .unwrap();
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert_eq!(response.id, Some(json!(7)));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_tool_rejects_empty_query() {
+        let root = temp_dir("muse-empty-search");
+        let mcp = test_mcp(root.clone(), Vec::new());
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(1)),
+                method: "tools/call".to_string(),
+                params: Some(json!({"name": "search", "arguments": {"query": "  "}})),
+            })
+            .unwrap();
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("query is required"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn record_session_rejects_invalid_action() {
+        let root = temp_dir("muse-bad-action");
+        let mcp = test_mcp(root.clone(), Vec::new());
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(1)),
+                method: "tools/call".to_string(),
+                params: Some(json!({"name": "record_session", "arguments": {"action": "explode"}})),
+            })
+            .unwrap();
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("start, stop, or status"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn list_memories_and_info_return_expected_shapes() {
+        let root = temp_dir("muse-shapes");
+        let mcp = test_mcp(
+            root.clone(),
+            vec![SourceDocument {
+                doc_id: "doc-1".to_string(),
+                source: "decisions.md".to_string(),
+                content: "We dropped embeddings because the heuristic backend was faster."
+                    .to_string(),
+                concept: "Decisions".to_string(),
+                group_id: None,
+                headings: Vec::new(),
+                links: Vec::new(),
+                timestamp: None,
+                doc_length: 61,
+                author_agent: None,
+                filters: std::collections::BTreeMap::new(),
+            }],
+        );
+        let list = call_tool(&mcp, "list_memories", json!({"limit": 5}));
+        assert!(list["count"].is_u64());
+        assert!(list["memories"].is_array());
+        let info = call_tool(&mcp, "info", json!({}));
+        assert_eq!(info["docs_count"], json!(1));
+        assert!(info["root"].is_string());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

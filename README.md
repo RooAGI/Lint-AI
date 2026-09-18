@@ -136,7 +136,7 @@ Lint-AI provides opt-in integrations for major coding-agent clients.
 | [Codex](docs/codex.md) | Yes | Yes | Yes | Yes |
 | [Gemini CLI](docs/gemini-cli.md) | Yes | Yes | Yes | — |
 | [Antigravity CLI / AGY](docs/agy.md) | Yes | Yes | Yes | — |
-| [Muse Code](docs/muse-code.md) | Yes | — | Yes | — |
+| [Muse Code](docs/muse-code.md) | Yes | Yes | Yes | — |
 
 Build the Claude Code and Codex integrations:
 

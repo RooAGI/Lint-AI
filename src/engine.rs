@@ -39,6 +39,8 @@ use crate::integrations::gemini_cli::{
 };
 #[cfg(feature = "muse-code")]
 use crate::integrations::muse_code::{
+    hooks::run_hook as run_muse_hook, hooks::MuseHookKind,
+    install_hook_settings as install_muse_hook_settings,
     install_memory_policy as install_muse_memory_policy,
     install_user_config as install_muse_user_config, run_server as run_muse_server,
     MuseServerOptions,
@@ -2259,9 +2261,25 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         let config_path = args.muse_config.as_deref().map(Path::new);
         let written = install_muse_user_config(Path::new(&args.path), config_path)?;
         println!("Wrote Muse Code config to {}", written.display());
+        let written = install_muse_hook_settings(Path::new(&args.path), config_path)?;
+        println!("Wrote Muse Code hook settings to {}", written.display());
         let written = install_muse_memory_policy(Path::new(&args.path))?;
         println!("Wrote Muse Code memory policy to {}", written.display());
         return Ok(());
+    }
+
+    #[cfg(feature = "muse-code")]
+    if let Some(hook) = args.muse_hook {
+        let kind = match hook {
+            crate::cli::MuseHook::SessionStart => MuseHookKind::SessionStart,
+            crate::cli::MuseHook::UserPromptSubmit => MuseHookKind::UserPromptSubmit,
+            crate::cli::MuseHook::PreToolUse => MuseHookKind::PreToolUse,
+            crate::cli::MuseHook::PostToolUse => MuseHookKind::PostToolUse,
+            crate::cli::MuseHook::PostToolUseFailure => MuseHookKind::PostToolUseFailure,
+            crate::cli::MuseHook::Stop => MuseHookKind::Stop,
+            crate::cli::MuseHook::SessionEnd => MuseHookKind::SessionEnd,
+        };
+        return run_muse_hook(kind, Path::new(&args.path));
     }
 
     #[cfg(feature = "gemini-cli")]

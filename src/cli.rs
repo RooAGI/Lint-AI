@@ -44,6 +44,18 @@ pub enum ClaudeCodeHook {
     SubagentStop,
 }
 
+#[cfg(feature = "muse-code")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum MuseHook {
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    Stop,
+    SessionEnd,
+}
+
 #[cfg(feature = "codex")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum CodexHook {
@@ -231,6 +243,9 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "muse-code")]
     pub muse_config: Option<String>,
+    #[arg(long, value_enum, hide = true)]
+    #[cfg(feature = "muse-code")]
+    pub muse_hook: Option<MuseHook>,
     #[arg(long)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_install: bool,

@@ -42,6 +42,7 @@ theme:
 nav:
   - Home: index.md
   - Agent memory: agent-memory.md
+  - Stale agent memory: stale-memory.md
   - Get started:
       - Quickstart: quickstart.md
       - HTTP server: server.md

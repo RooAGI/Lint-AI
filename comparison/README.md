@@ -31,9 +31,37 @@ python3 comparison/seed_lint_ai.py --count 23366 --batch-size 1024 --bulk
 
 ### Layout throughput comparison
 
-`throughput.py` starts the release server, seeds an isolated corpus, runs the
-same C=1/C=10 HTTP workload, and emits JSON. Use `--no-cache` for raw index
-throughput; omit it to measure repeated-query cache throughput.
+The reusable `throughput_harness.py` builds the release server, runs all three
+layouts five times, and reports median results. It uses a cold-start C=1/C=10
+HTTP workload of 100 requests per cell by default. Warm-up is opt-in with
+`--warmup-requests`; increase the measured workload with `--requests` when
+measuring steady-state behavior.
+
+Run the full cold-start harness and optionally save its JSON report:
+
+```bash
+mkdir -p .benchmark-tmp
+TMPDIR="$PWD/.benchmark-tmp" uv run --no-project python comparison/throughput_harness.py \
+  --output comparison/results/throughput-layout-latest.json
+```
+
+Use `--skip-build` when the release binary is already built. Use
+`--repetitions`, `--requests`, and `--warmup-requests` to control the workload.
+The lower-level `throughput.py` remains available for testing one layout.
+
+On macOS, run the Python benchmark through `uv` and provide a real temporary
+directory. Some macOS environments expose `/tmp` through a symlink, while the
+server deliberately rejects symlinked index paths.
+
+```bash
+mkdir -p .benchmark-tmp
+TMPDIR="$PWD/.benchmark-tmp" uv run python comparison/throughput.py \
+  --mode single --no-cache
+```
+
+Repeat the command with `--mode global` and `--mode segment`. The benchmark
+does not require third-party Python packages, but `uv run` keeps the execution
+environment reproducible.
 
 ```bash
 python3 comparison/throughput.py --mode single --no-cache
@@ -45,21 +73,34 @@ python3 comparison/throughput.py --mode segment --no-cache
 queries every segment, and `segment` uses routed segmented execution. The
 three modes use separate temporary indexes and never share persisted state.
 
-The latest full run is recorded in
+The original Linux layout run is recorded in
 [`results/throughput-layout-v0.2.0.json`](results/throughput-layout-v0.2.0.json).
+The latest macOS rerun is recorded in
+[`results/throughput-layout-watcher-rerun-2026-09-17.json`](results/throughput-layout-watcher-rerun-2026-09-17.json).
 It used release mode, 23,366 records, 100 requests per cell, `top_k: 20`, the
-query above, and cache disabled. The machine was an Intel Core i7-7700K with
-8 logical CPUs, Ubuntu 22.04.5 LTS (kernel 5.15.0-177-generic), Rust 1.94.1,
-and Cargo 1.94.1.
+query above, and cache disabled on a MacBook Pro with an Apple M5 Pro chip and
+24 GB RAM.
+
+The five-run cold-start summary is recorded in
+[`results/throughput-layout-cold-start-2026-09-17.json`](results/throughput-layout-cold-start-2026-09-17.json).
+The table below reports the median of those five runs; no warm-up requests were
+used.
 
 | Mode | C=1 req/s | C=10 req/s | C=10 p50 |
 |---|---:|---:|---:|
-| Single index | 50.02 | 261.72 | 38.36 ms |
-| Global segmented | 83.19 | 385.81 | 25.54 ms |
-| Routed segment | 88.10 | 433.32 | 22.28 ms |
+| Single index | 136.47 | 927.96 | 9.47 ms |
+| Global segmented | 229.87 | 1,480.30 | 6.16 ms |
+| Routed segment | 235.30 | 1,510.15 | 6.16 ms |
 
 These are uncached local measurements; they are not directly comparable with
 the historical 0.1.9 result until machine and server-build provenance match.
+
+The watcher dependency rerun is recorded in
+[`results/throughput-layout-watcher-rerun-2026-09-17.json`](results/throughput-layout-watcher-rerun-2026-09-17.json).
+It used the same 23,366-record workload and `uv` runner. Because this is the
+standalone HTTP server benchmark, provider MCP watchers are not initialized;
+the artifact validates the current server build but does not measure watcher
+overhead in an MCP process.
 
 AgentMemory's official load harness seeds one record per request and can be
 run with `BENCH_N=23366 BENCH_C=1,10 BENCH_OPS=100 npx tsx

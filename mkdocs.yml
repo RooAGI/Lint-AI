@@ -125,10 +125,12 @@ plugins:
 
 extra_css:
   - stylesheets/extra.css
+  - stylesheets/dashboard-slideshow.css
 
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
   - javascripts/mermaid.js
+  - javascripts/dashboard-slideshow.js
 
 extra:
   generator: false

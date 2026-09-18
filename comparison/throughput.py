@@ -22,6 +22,7 @@ parser.add_argument("--mode", choices=("single", "global", "segment"), required=
 parser.add_argument("--server-bin", type=Path, default=ROOT / "target/release/server")
 parser.add_argument("--records", type=int, default=23366)
 parser.add_argument("--requests", type=int, default=100)
+parser.add_argument("--warmup-requests", type=int, default=0)
 parser.add_argument("--port", type=int, default=18080)
 parser.add_argument("--no-cache", action="store_true")
 parser.add_argument("--keep-index", action="store_true")
@@ -82,6 +83,8 @@ try:
             payload,
             "--requests",
             str(args.requests),
+            "--warmup-requests",
+            str(args.warmup_requests),
         ],
         check=True,
         capture_output=True,
@@ -92,6 +95,7 @@ try:
         "mode": args.mode,
         "records": args.records,
         "requests_per_cell": args.requests,
+        "warmup_requests_per_cell": args.warmup_requests,
         "cache": "disabled" if args.no_cache else "enabled",
         "server": str(args.server_bin),
         "measurements": [json.loads(line) for line in measured.stdout.splitlines()],

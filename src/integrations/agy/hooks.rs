@@ -1,7 +1,8 @@
 //! Antigravity lifecycle-hook adapter.
 
 use crate::integrations::session_recording::{
-    lint_ai_enabled, record_event_if_enabled, RecordingProvider,
+    lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
+    RecordingProvider,
 };
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
@@ -106,6 +107,18 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
             } else {
                 &input.conversation_id
             };
+            if let Err(error) = record_transcript_usage_if_available(
+                RecordingProvider::Agy,
+                root,
+                session_id,
+                Some(&path),
+                None,
+                None,
+                None,
+                "agy-transcript",
+            ) {
+                eprintln!("warning: AGY transcript usage capture failed open: {error:#}");
+            }
             let _ = capture_transcript(root, session_id, &path);
         }
         return Ok(AgyHookOutput::default());
@@ -161,8 +174,16 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
     if store.is_empty() {
         return Ok(AgyHookOutput::default());
     }
+    let started = std::time::Instant::now();
+    let results = store.query(&query, 5);
+    let _ = crate::telemetry::record_project_query(
+        root,
+        started.elapsed().as_millis() as u64,
+        results.is_err(),
+        results.as_ref().is_ok_and(Vec::is_empty),
+    );
     let mut context = String::new();
-    for result in store.query(&query, 5)? {
+    for result in results? {
         if let Some(record) = store.record_by_id(&result.doc_id) {
             let content = record.content.trim();
             if !content.is_empty() {
@@ -445,6 +466,42 @@ mod tests {
 
         std::fs::remove_file(transcript).unwrap();
         std::fs::remove_dir_all(agy_root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stop_hook_routes_transcript_usage_into_provider_telemetry() {
+        let nonce = test_nonce();
+        let root = std::env::temp_dir().join(format!("lint-ai-agy-usage-root-{nonce}"));
+        let transcript = root.join("transcript.jsonl");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &transcript,
+            r#"{"usage":{"input_tokens":30,"output_tokens":8,"total_tokens":38}}"#,
+        )
+        .unwrap();
+
+        let input = AgyHookInput {
+            conversation_id: "agy-session".to_string(),
+            workspace_paths: vec![],
+            transcript_path: Some(transcript),
+            tool_call: None,
+            extra: Map::new(),
+        };
+        handle_hook(AgyHookKind::Stop, &input, &root).unwrap();
+
+        let status = crate::telemetry::provider_lifecycle_status(&root, "agy")
+            .unwrap()
+            .expect("AGY Stop must emit provider telemetry");
+        let usage = status
+            .events
+            .iter()
+            .find(|event| event.event == "TurnUsage")
+            .expect("AGY Stop must emit TurnUsage");
+        assert_eq!(usage.input_tokens, Some(30));
+        assert_eq!(usage.output_tokens, Some(8));
+        assert_eq!(usage.total_tokens, Some(38));
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }

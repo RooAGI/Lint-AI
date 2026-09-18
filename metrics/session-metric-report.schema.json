@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lint-AI Session Metric Report",
+  "type": "object",
+  "required": ["report", "scenario", "sessions", "provenance"],
+  "properties": {
+    "report": {
+      "type": "object",
+      "required": ["schema_version", "report_id", "generated_at", "status"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "report_id": {"type": "string"},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "status": {"enum": ["complete", "partial", "failed"]}
+      },
+      "additionalProperties": false
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string"},
+        "source_session_id": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "sessions": {
+      "type": "object",
+      "required": ["baseline"],
+      "properties": {
+        "baseline": {"$ref": "#/$defs/session"},
+        "replay": {"anyOf": [{"$ref": "#/$defs/session"}, {"type": "null"}]}
+      },
+      "additionalProperties": false
+    },
+    "comparison": {"anyOf": [{"$ref": "#/$defs/comparison"}, {"type": "null"}]},
+    "provenance": {
+      "type": "object",
+      "required": ["provider"],
+      "properties": {
+        "provider": {"type": "string"},
+        "model": {"type": ["string", "null"]},
+        "repository_revision": {"type": ["string", "null"]},
+        "settings_root": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "number_or_null": {"type": ["number", "null"]},
+    "integer_or_null": {"type": ["integer", "null"]},
+    "quality": {
+      "type": "object",
+      "properties": {
+        "task_success": {"type": ["boolean", "null"]},
+        "expected_facts_passed": {"$ref": "#/$defs/integer_or_null"},
+        "expected_facts_total": {"$ref": "#/$defs/integer_or_null"},
+        "forbidden_facts_found": {"$ref": "#/$defs/integer_or_null"},
+        "validators_passed": {"$ref": "#/$defs/integer_or_null"},
+        "validators_total": {"$ref": "#/$defs/integer_or_null"},
+        "answer_quality_notes": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "duration_ms": {"$ref": "#/$defs/number_or_null"},
+        "time_to_first_response_ms": {"$ref": "#/$defs/number_or_null"},
+        "input_tokens": {"$ref": "#/$defs/integer_or_null"},
+        "output_tokens": {"$ref": "#/$defs/integer_or_null"},
+        "cached_input_tokens": {"$ref": "#/$defs/integer_or_null"},
+        "total_tokens": {"$ref": "#/$defs/integer_or_null"},
+        "estimated_cost_usd": {"$ref": "#/$defs/number_or_null"},
+        "tool_calls": {"$ref": "#/$defs/integer_or_null"},
+        "tool_errors": {"$ref": "#/$defs/integer_or_null"},
+        "tool_retry_count": {"$ref": "#/$defs/integer_or_null"}
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "memory_enabled": {"type": ["boolean", "null"]},
+        "retrieval_calls": {"$ref": "#/$defs/integer_or_null"},
+        "retrieved_documents": {"$ref": "#/$defs/integer_or_null"},
+        "injected_context_bytes": {"$ref": "#/$defs/integer_or_null"},
+        "injected_context_tokens": {"$ref": "#/$defs/integer_or_null"}
+      },
+      "additionalProperties": false
+    },
+    "reliability": {
+      "type": "object",
+      "properties": {
+        "recorded_events": {"$ref": "#/$defs/integer_or_null"},
+        "expected_events": {"$ref": "#/$defs/integer_or_null"},
+        "recording_completeness": {"$ref": "#/$defs/number_or_null"},
+        "provider_errors": {"$ref": "#/$defs/integer_or_null"},
+        "hook_errors": {"$ref": "#/$defs/integer_or_null"},
+        "redaction_count": {"$ref": "#/$defs/integer_or_null"}
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "required": ["session_id", "session_status", "quality", "performance", "memory", "reliability"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "session_status": {"enum": ["active", "complete", "interrupted", "failed"]},
+        "recording_enabled": {"type": ["boolean", "null"]},
+        "model": {"type": ["string", "null"]},
+        "quality": {"$ref": "#/$defs/quality"},
+        "performance": {"$ref": "#/$defs/performance"},
+        "memory": {"$ref": "#/$defs/memory"},
+        "reliability": {"$ref": "#/$defs/reliability"}
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object",
+      "properties": {
+        "task_success_changed": {"type": ["boolean", "null"]},
+        "duration_ms_delta": {"$ref": "#/$defs/number_or_null"},
+        "total_tokens_delta": {"$ref": "#/$defs/integer_or_null"},
+        "tool_calls_delta": {"$ref": "#/$defs/integer_or_null"},
+        "injected_context_bytes_delta": {"$ref": "#/$defs/integer_or_null"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

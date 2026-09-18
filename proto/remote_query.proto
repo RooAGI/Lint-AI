@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+// Transport schema for the typed distributed-query contract. This file is
+// intentionally separate from lint-service's legacy RunLint schema.
+package lintai.remote.v1;
+
+service LintQueryService {
+  rpc QueryStatistics(RemoteStatisticsRequest) returns (RemoteStatisticsResponse);
+  rpc QueryCandidates(RemoteCandidateRequest) returns (RemoteCandidateResponse);
+}
+
+message RemoteQueryRequest {
+  uint32 protocol_version = 1;
+  string request_id = 2;
+  uint64 deadline_unix_ms = 3;
+  uint64 coordinator_generation = 4;
+  string query = 5;
+  uint32 top_k = 6;
+  map<string, string> filters = 7;
+  RemoteTemporalContext temporal = 8;
+  optional string reference_date = 9;
+}
+
+message RemoteTemporalContext {
+  optional string starts_from = 1;
+  optional string ends_at = 2;
+  int64 window_days = 3;
+  bool hard_filter = 4;
+}
+
+message RemoteStatisticsRequest {
+  RemoteQueryRequest base = 1;
+  repeated string terms = 2;
+  repeated string fields = 3;
+}
+
+message RemoteStatisticsResponse {
+  uint32 protocol_version = 1;
+  string request_id = 2;
+  string worker_id = 3;
+  uint64 worker_generation = 4;
+  string statistics_generation = 5;
+  map<string, RemoteFieldStatistics> fields = 6;
+  map<string, RemoteTermStatistics> terms = 7;
+  RemoteQueryCompleteness completeness = 8;
+}
+
+message RemoteFieldStatistics {
+  uint64 documents = 1;
+  uint64 tokens = 2;
+}
+
+message RemoteTermStatistics {
+  map<string, uint64> fields = 1;
+}
+
+message RemoteCandidateRequest {
+  RemoteQueryRequest base = 1;
+  string statistics_generation = 2;
+  RemoteStatisticsSnapshot statistics = 3;
+}
+
+message RemoteStatisticsSnapshot {
+  map<string, RemoteFieldStatistics> fields = 1;
+  map<string, RemoteTermStatistics> terms = 2;
+}
+
+message RemoteCandidateResponse {
+  uint32 protocol_version = 1;
+  string request_id = 2;
+  string worker_id = 3;
+  uint64 worker_generation = 4;
+  string statistics_generation = 5;
+  repeated RemoteSearchResult results = 6;
+  RemoteQueryCompleteness completeness = 7;
+}
+
+message RemoteSearchResult {
+  string doc_id = 1;
+  string source = 2;
+  optional string group_id = 3;
+  float score = 4;
+  map<string, float> score_breakdown = 5;
+}
+
+message RemoteQueryCompleteness {
+  repeated string expected_segments = 1;
+  repeated string successful_segments = 2;
+  repeated RemoteQueryFailure failures = 3;
+}
+
+message RemoteQueryFailure {
+  string segment_id = 1;
+  string message = 2;
+}

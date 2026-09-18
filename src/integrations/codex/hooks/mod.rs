@@ -103,6 +103,8 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
             &input.session_id,
             input.transcript_path.as_deref(),
             input.turn_id.as_deref(),
+            input.agent_id.as_deref(),
+            input.agent_type.as_deref(),
             "codex-transcript",
         ) {
             eprintln!("warning: Codex transcript usage capture failed open: {error:#}");
@@ -214,22 +216,27 @@ fn handle_hook(
         CodexHookKind::SessionStart => retrieve(
             &root,
             kind.event_name(),
+            &input.session_id,
             "decisions unresolved work failures implemented changes",
         ),
         CodexHookKind::UserPromptSubmit => retrieve(
             &root,
             kind.event_name(),
+            &input.session_id,
             input.prompt.as_deref().unwrap_or_default(),
         ),
-        CodexHookKind::PreToolUse | CodexHookKind::PermissionRequest => {
-            retrieve(&root, kind.event_name(), &tool_query(&input))
-        }
+        CodexHookKind::PreToolUse | CodexHookKind::PermissionRequest => retrieve(
+            &root,
+            kind.event_name(),
+            &input.session_id,
+            &tool_query(&input),
+        ),
         CodexHookKind::PostToolUse => {
             let query = tool_query(&input);
             if query_terms(&query).len() < MIN_TOOL_QUERY_TERMS {
                 return Ok(CodexHookOutput::default());
             }
-            retrieve(&root, kind.event_name(), &query)
+            retrieve(&root, kind.event_name(), &input.session_id, &query)
         }
         CodexHookKind::UserPromptExpansion => {
             let query = [
@@ -243,7 +250,7 @@ fn handle_hook(
             .flatten()
             .collect::<Vec<_>>()
             .join(" ");
-            retrieve(&root, kind.event_name(), &query)
+            retrieve(&root, kind.event_name(), &input.session_id, &query)
         }
         CodexHookKind::PreCompact => capture(&root, input, CodexDocumentType::Checkpoint),
         CodexHookKind::PostCompact => capture(&root, input, CodexDocumentType::Checkpoint),
@@ -253,23 +260,50 @@ fn handle_hook(
         CodexHookKind::SubagentStart => retrieve(
             &root,
             kind.event_name(),
+            &input.session_id,
             input.prompt.as_deref().unwrap_or_default(),
         ),
         CodexHookKind::SubagentStop => capture(&root, input, CodexDocumentType::Outcome),
     }
 }
 
-fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<CodexHookOutput> {
-    if query.trim().is_empty() || !memory_root(root).exists() {
+fn retrieve(
+    root: &Path,
+    event_name: &str,
+    session_id: &str,
+    query: &str,
+) -> Result<CodexHookOutput> {
+    if query.trim().is_empty() {
+        return Ok(CodexHookOutput::default());
+    }
+    let started = std::time::Instant::now();
+    if !memory_root(root).exists() {
+        let _ = crate::telemetry::record_memory_retrieval(root, "codex", session_id, query, 0, &[]);
         return Ok(CodexHookOutput::default());
     }
     let mut store = open_store(root)?;
     if store.is_empty() {
+        let _ = crate::telemetry::record_memory_retrieval(
+            root,
+            "codex",
+            session_id,
+            query,
+            started.elapsed().as_millis() as u64,
+            &[],
+        );
         return Ok(CodexHookOutput::default());
     }
-    let results = store.query(query, DEFAULT_TOP_K * 3)?;
+    let results = store.query(query, DEFAULT_TOP_K * 3);
+    let _ = crate::telemetry::record_project_query(
+        root,
+        started.elapsed().as_millis() as u64,
+        results.is_err(),
+        results.as_ref().is_ok_and(Vec::is_empty),
+    );
+    let results = results?;
     let selected = select_session_documents(&store, results, DEFAULT_TOP_K);
     let mut seen = HashSet::new();
+    let mut retrieved_memories = Vec::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
     let current_branch = git_value(root, &["branch", "--show-current"]);
     let mut context = String::new();
@@ -308,7 +342,21 @@ fn retrieve(root: &Path, event_name: &str, query: &str) -> Result<CodexHookOutpu
             break;
         }
         context.push_str(&entry);
+        retrieved_memories.push(serde_json::json!({
+            "source": record.source,
+            "type": record.filters.get("document_type").map(String::as_str).unwrap_or("memory"),
+            "score": result.score,
+            "excerpt": normalized,
+        }));
     }
+    let _ = crate::telemetry::record_memory_retrieval(
+        root,
+        "codex",
+        session_id,
+        query,
+        started.elapsed().as_millis() as u64,
+        &retrieved_memories,
+    );
     if seen.is_empty() {
         return Ok(CodexHookOutput::default());
     }
@@ -1154,7 +1202,7 @@ mod tests {
         );
 
         drop(store);
-        let output = retrieve(&root, "UserPromptSubmit", "durable routing").unwrap();
+        let output = retrieve(&root, "UserPromptSubmit", "session-1", "durable routing").unwrap();
         let context = output
             .hook_specific_output
             .expect("captured memory should be retrieved")

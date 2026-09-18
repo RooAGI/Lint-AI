@@ -18,13 +18,38 @@ Use an explicit index directory for a persistent evaluation instance:
 
 ```bash
 cargo run --release --bin server -- \
-  --bind 0.0.0.0:8080 \
+  --bind 127.0.0.1:8080 \
   --index /var/lib/lint-ai/memory-index \
   --server-token "$SERVER_TOKEN"
 ```
 
 `--bind` defaults to `127.0.0.1:8080`. If `--index` is omitted, the server
-uses an in-memory store; provide `--index` when data must survive a restart.
+discovers indexes under `<project-root>/.lint-ai` and uses the shared
+`workspace-memory` store when present, falling back to a legacy Codex MCP index,
+the first discovered index, or an in-memory store. Use `--index` to select one
+store explicitly.
+Provider lifecycle telemetry is read from `<project-root>/.lint-ai/provider-telemetry`;
+the project root defaults to the server's current directory and can be set with
+`--project-root` or `LINT_AI_PROJECT_ROOT`.
+With only `--project-root`, one server can inspect the shared workspace store
+and all provider-private memory stores in the dashboard. A project now uses this
+layout:
+
+```text
+.lint-ai/
+  workspace-memory/   # code and documentation, indexed once for the project
+  codex-memory/       # Codex session memories
+  claude-memory/      # Claude Code session memories
+  gemini-cli-memory/  # Gemini CLI session memories
+  agy-memory/         # AGY session memories
+```
+
+Each provider's MCP search composes `workspace-memory` with only that provider's
+private memory at query time. HTTP memory operations use the selected primary
+store; the provider tabs show each provider's private store and its individual
+document, record, revision, and segment state. Legacy `*-mcp-index` directories
+are recognized for compatibility but are no longer created.
+
 The server publishes a segmented memory index grouped by `session_id` and routes
 each search to the three most locally distinctive candidate segments.
 Fixed top-3 routing remains the default. To opt into adaptive routing, pass
@@ -34,17 +59,35 @@ expand up to `N` when the initial routes do not cover enough query evidence.
 Use `--single-index` for the non-segmented layout or `--global-index` to query
 every segmented shard. These modes are intended primarily for controlled
 comparisons instead of the default routed segmented layout.
-For non-loopback binds, configure `--server-token` (or `SERVER_TOKEN`) unless
-you explicitly use `--allow-unauthenticated` on a closed network.
+The server is intentionally localhost-only. `--bind` may select a loopback
+address and port, such as `127.0.0.1:8080` or `[::1]:8080`, but non-loopback
+addresses are rejected at startup. Authentication remains available for
+defense in depth; `--allow-unauthenticated` is intended for the local dashboard.
 
 For a single-tenant deployment, also set `--tenant-id TENANT` (or
 `SERVER_TENANT_ID`). Requests whose `user_id` does not match this configured
 tenant are rejected; this prevents a bearer token from being used to select
 another tenant by changing the request body.
 
-The server intentionally speaks plain HTTP. When exposed beyond localhost,
-place it behind a TLS-terminating reverse proxy (or a private encrypted
-network); do not send bearer tokens over an unencrypted network.
+### Run the local dashboard
+
+For local Claude Code and Codex development, build the corresponding provider
+features and let the server discover all provider indexes from the project root:
+
+```bash
+cargo run --release --bin server --features claude-code,codex -- \
+  --project-root /Users/louis/sources/Lint-AI \
+  --bind 127.0.0.1:8080 \
+  --allow-unauthenticated
+```
+
+Then open <http://127.0.0.1:8080/dashboard>. The server discovers indexes under
+`/Users/louis/sources/Lint-AI/.lint-ai/`, while the dashboard separates provider
+stores into tabs. The HTTP API uses the selected primary index; the dashboard
+can inspect the other provider stores without starting additional servers.
+
+The server intentionally speaks plain HTTP because it is restricted to
+localhost. Do not forward the port through a public or network-facing proxy.
 
 Mutations are admitted through a single-writer gate. If a refresh is already in
 progress, additional mutation requests receive `429` rather than queueing
@@ -57,6 +100,56 @@ takes precedence over the legacy shared `SERVER_TOKEN` mode.
 
 The server exposes `GET /health`, `POST /add`, `POST /add/batch`,
 `POST /search`, `POST /delete`, `POST /supersede`, and `POST /expire`.
+
+## Dashboard
+
+Open `http://127.0.0.1:8080/dashboard` for a read-only operational view of
+the running IndexStore. The page shows index freshness, revisions, segment
+counts, rolling query rate, p50/p95 latency, error and empty-result rates, and
+the compiled/provider integration state. It polls every five seconds and keeps
+only bounded aggregate telemetry; query text, identifiers, and memory content
+are never recorded.
+
+The dashboard page and static assets are public so they can load before an API
+token is entered. The data endpoints use the same authentication as the rest
+of the server. The provider workspace is organized into provider tabs; each tab
+shows session history, the latest live session, tool-call frequency cards, and
+filterable tool-call history with bounded argument previews:
+
+* `GET /api/status` returns index state, query summary, and integration cards.
+* `GET /api/timeseries` returns five-second IndexStore query aggregates over
+  the last ten minutes, shared by HTTP and provider MCP processes.
+* `GET /api/integrations` returns provider readiness details.
+* `GET /api/sessions` returns recent sessions and their sanitized lifecycle
+  event counts.
+* `GET /api/events` returns the latest sanitized provider lifecycle events.
+* `GET /api/sessions/:session_key/events` filters that event history by the
+  one-way session key returned by `/api/sessions`.
+* `GET /api/metrics` returns machine-readable query and provider aggregates.
+* `GET /metrics` exposes the same core counters in Prometheus text format.
+
+Provider hooks write a bounded history of the last 500 lifecycle events per
+provider. Events contain only the provider, event name, category, timestamp,
+and a one-way session key. Claude Code and Codex subagent events additionally
+include bounded `agent_id`, `agent_type`, and `turn_id` fields when supplied by
+the provider. Tool events additionally include the tool name and a small
+redacted argument preview. Prompt, tool-response, and final-response events use
+the same bounded preview format; raw provider payloads are not copied into the
+telemetry ledger. Provider cards report `not_observed` until a
+provider hook or MCP process sends explicit lifecycle telemetry. IndexStore
+The HTTP server keeps query aggregates in memory for a low-overhead request
+path. Provider MCP processes persist their query aggregates to
+`.lint-ai/query-telemetry.json`, allowing the dashboard to observe queries
+executed by separate MCP processes. This server does not infer agent
+connectivity from IndexStore health.
+
+An observed provider is `active` when its latest event arrived within the last
+minute and `idle` otherwise. Lifecycle telemetry is local-first: each provider
+uses a bounded JSON ledger under `.lint-ai/provider-telemetry`, so an operator
+can inspect recent sessions and event ordering without retaining provider
+content. Claude Code and Codex token usage is captured from lifecycle payloads
+or provider transcripts when available; cost and productivity accounting still
+require provider-specific contracts.
 
 Search requests use the latest immutable `MemorySearchService` snapshot, so
 multiple searches can run concurrently. A dedicated writer owns mutable
@@ -90,17 +183,22 @@ The first post-refactor v0.2.0 routed-segment run on the same corpus recorded:
 The 0.1.9 table is retained as a historical baseline; it is not a like-for-like
 comparison with the segmented v0.2.0 server.
 
-A fresh uncached v0.2.0 layout comparison was run on 2026-09-16 on a MacBook
+A fresh uncached v0.2.0 layout comparison was run on 2026-09-17 on a MacBook
 Pro (Mac17,9) with an Apple M5 Pro chip (15 cores), 24 GB RAM, macOS 26.6.2,
-Rust 1.96.0, and Cargo 1.96.0. It used the same 23,366 records, 100 requests per
-cell, `top_k: 20`, and query. The results distinguish the server's three index
+Rust 1.96.0, Cargo 1.96.0, and uv 0.12.7. It used the same 23,366 records, 100
+requests per cell, `top_k: 20`, and query, repeated five times with no warm-up
+requests. The table reports medians and distinguishes the server's three index
 layouts:
 
 | Layout | C=1 throughput | C=10 throughput | C=10 p50 | C=10 p99 |
 |---|---:|---:|---:|---:|
-| Single index | 168.77 req/s | 1,085.93 req/s | 8.16 ms | 15.96 ms |
-| Global segmented | 274.45 req/s | 1,662.27 req/s | 5.65 ms | 10.07 ms |
-| Routed segment | 270.01 req/s | 1,383.66 req/s | 6.32 ms | 11.36 ms |
+| Single index | 148.42 req/s | 997.62 req/s | 8.87 ms | 18.39 ms |
+| Global segmented | 237.82 req/s | 1,306.82 req/s | 6.30 ms | 12.39 ms |
+| Routed segment | 237.84 req/s | 1,512.31 req/s | 5.91 ms | 11.97 ms |
+
+The standalone HTTP benchmark does not initialize provider MCP watchers. Query
+telemetry is recorded in memory on this request path; provider MCP telemetry
+continues to use the persisted project ledger.
 
 At the smaller 5,000-record scale, the same test measured 2.06 ms p50 / 2.38
 ms p90 at concurrency 1 and 3.79 ms p50 / 5.21 ms p90 at concurrency 10.
@@ -147,8 +245,8 @@ raw token in `Authorization`. It can also be supplied through
 
 If no token is configured, the server refuses to start on any non-loopback
 bind address (anything other than `127.0.0.1`/`::1`). Pass
-`--allow-unauthenticated` to override this for closed networks; every request
-is then accepted without a token.
+`--allow-unauthenticated` is available for the single-user localhost mode;
+non-loopback binds are rejected regardless of authentication settings.
 
 The server limits request bodies to 16 MiB and concurrent in-flight requests to
 128. Requests time out after 30 seconds.

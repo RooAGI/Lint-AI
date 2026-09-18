@@ -87,11 +87,15 @@ the 133-question multi-session segmented comparison in the benchmark overview;
 combined into one headline.
 | Average in-process query latency | 1.88 ms |
 
-The recorded 0.1.9 HTTP load baseline used 23,366 records and 100 requests per
-cell. At concurrency 10, Lint-AI recorded 952 requests per second in that test.
-It predates the 0.2.0 server refactor. Benchmark conditions, scripts,
-comparison data, and caveats are published in the
-[benchmark overview](benchmark.md) and [comparison](comparison.md).
+The latest v0.2.0 macOS layout comparison used 23,366 records and 100 requests
+per cell across five cold-start repetitions. At concurrency 10, routed segmented
+indexing reached a median 1,512.31 requests per second and global segmented
+indexing reached a median 1,306.82 requests per second on an Apple M5 Pro. These are local uncached measurements, so results
+vary by hardware and index layout. The recorded 952 requests per second result
+is the historical 0.1.9 single-index HTTP baseline and predates the 0.2.0
+server refactor. Benchmark conditions, scripts, comparison data, and caveats
+are published in the [benchmark overview](benchmark.md) and
+[comparison](comparison.md).
 
 ## Claude Code memory, Codex memory, and Gemini CLI memory
 

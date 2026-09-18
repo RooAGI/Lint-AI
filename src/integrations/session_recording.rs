@@ -14,7 +14,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const MAX_EVENT_BYTES: usize = 64 * 1024;
 const MAX_STRING_BYTES: usize = 8 * 1024;
 const MAX_ARRAY_ITEMS: usize = 128;
-const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REPLAY_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REPLAY_EVENTS: usize = 100_000;
 const MAX_REPLAY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
@@ -633,6 +632,16 @@ pub fn record_event_if_enabled(
     event_name: &str,
     payload: Value,
 ) -> Result<()> {
+    // Provider telemetry is intentionally independent from transcript
+    // recording. Operators should be able to see that a hook is alive even
+    // when content recording is disabled.
+    let _ = crate::telemetry::record_provider_lifecycle_event(
+        project_root,
+        provider.as_str(),
+        session_id,
+        event_name,
+        &payload,
+    );
     let state = recording_state(provider, project_root)?;
     if !state["enabled"].as_bool().unwrap_or(false) {
         return Ok(());
@@ -724,7 +733,7 @@ pub fn record_event(
     let sequence = count_complete_lines(&events_path)? + 1;
     let mut redactions = Vec::new();
     let bounded_payload = redact_and_bound(payload, &mut redactions, "payload");
-    let mut usage = extract_usage(&bounded_payload);
+    let mut usage = crate::telemetry::normalize_usage(provider_name, &bounded_payload);
     if let Some(source) = bounded_payload.get("source").and_then(Value::as_str) {
         if let Some(usage_object) = usage.as_mut().and_then(Value::as_object_mut) {
             usage_object.insert("source".to_string(), Value::String(source.to_string()));
@@ -867,14 +876,13 @@ pub fn record_transcript_usage_if_available(
     session_id: &str,
     transcript_path: Option<&Path>,
     turn_id: Option<&str>,
+    agent_id: Option<&str>,
+    agent_type: Option<&str>,
     source: &str,
 ) -> Result<bool> {
-    if !recording_state(provider, project_root)?["enabled"]
+    let recording_enabled = recording_state(provider, project_root)?["enabled"]
         .as_bool()
-        .unwrap_or(false)
-    {
-        return Ok(false);
-    }
+        .unwrap_or(false);
     let Some(path) = transcript_path else {
         return Ok(false);
     };
@@ -885,24 +893,15 @@ pub fn record_transcript_usage_if_available(
     let mut file = fs::File::open(path)
         .with_context(|| format!("failed to open provider transcript {}", path.display()))?;
     let mut bytes = Vec::new();
-    std::io::Read::by_ref(&mut file)
-        .take(MAX_TRANSCRIPT_BYTES + 1)
-        .read_to_end(&mut bytes)
+    file.read_to_end(&mut bytes)
         .with_context(|| format!("failed to read provider transcript {}", path.display()))?;
-    if bytes.len() as u64 > MAX_TRANSCRIPT_BYTES {
-        anyhow::bail!(
-            "provider transcript {} exceeds the {} byte recording limit",
-            path.display(),
-            MAX_TRANSCRIPT_BYTES
-        );
-    }
     let content = String::from_utf8_lossy(&bytes);
     let mut latest_usage = None;
     for line in content.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if let Some(usage) = extract_usage(&value) {
+        if let Some(usage) = crate::telemetry::normalize_usage(provider.as_str(), &value) {
             latest_usage = Some(usage);
         }
     }
@@ -912,69 +911,19 @@ pub fn record_transcript_usage_if_available(
     if let Some(object) = usage.as_object_mut() {
         object.insert("source".to_string(), Value::String(source.to_string()));
     }
-    record_event_if_enabled(
-        provider,
-        project_root,
-        session_id,
-        "TurnUsage",
-        serde_json::json!({
-            "turn_id": turn_id,
-            "source": source,
-            "transcript_path": path,
-            "usage": usage,
-        }),
-    )?;
-    Ok(true)
-}
-
-fn extract_usage(value: &Value) -> Option<Value> {
-    match value {
-        Value::Object(object) => {
-            for key in ["usage", "token_usage", "tokenUsage"] {
-                if let Some(candidate) = object.get(key) {
-                    if let Some(normalized) = normalize_usage(candidate, object) {
-                        return Some(normalized);
-                    }
-                }
-            }
-            object.values().find_map(extract_usage)
-        }
-        Value::Array(values) => values.iter().find_map(extract_usage),
-        _ => None,
-    }
-}
-
-fn normalize_usage(value: &Value, parent: &Map<String, Value>) -> Option<Value> {
-    let object = value.as_object()?;
-    let number = |keys: &[&str]| {
-        keys.iter()
-            .find_map(|key| object.get(*key).and_then(Value::as_u64))
-            .or_else(|| {
-                keys.iter()
-                    .find_map(|key| parent.get(*key).and_then(Value::as_u64))
-            })
-    };
-    let input = number(&["input_tokens", "inputTokens", "prompt_tokens"]);
-    let output = number(&["output_tokens", "outputTokens", "completion_tokens"]);
-    let cache_creation = number(&["cache_creation_input_tokens", "cacheCreationInputTokens"]);
-    let cache_read = number(&["cache_read_input_tokens", "cacheReadInputTokens"]);
-    let total = number(&["total_tokens", "totalTokens"]);
-    if input.is_none()
-        && output.is_none()
-        && cache_creation.is_none()
-        && cache_read.is_none()
-        && total.is_none()
-    {
-        return None;
-    }
-    Some(serde_json::json!({
-        "input_tokens": input,
-        "output_tokens": output,
-        "cache_creation_input_tokens": cache_creation,
-        "cache_read_input_tokens": cache_read,
-        "total_tokens": total.or_else(|| Some(input.unwrap_or(0) + output.unwrap_or(0))),
-        "source": "hook-payload"
-    }))
+    let payload = serde_json::json!({
+        "turn_id": turn_id,
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "source": source,
+        "transcript_path": path,
+        "usage": usage,
+    });
+    // One path owns TurnUsage delivery. It always updates provider telemetry;
+    // record_event_if_enabled additionally persists the event when recording
+    // is enabled.
+    record_event_if_enabled(provider, project_root, session_id, "TurnUsage", payload)?;
+    Ok(recording_enabled)
 }
 
 fn redact_and_bound(value: Value, redactions: &mut Vec<String>, path: &str) -> Value {
@@ -1439,9 +1388,15 @@ mod tests {
             "session-off",
             Some(&transcript),
             Some("turn-1"),
+            None,
+            None,
             "claude-transcript",
         )
         .unwrap());
+        let telemetry =
+            fs::read_to_string(root.join(".lint-ai/provider-telemetry/claude.json")).unwrap();
+        assert!(telemetry.contains("\"event\": \"TurnUsage\""));
+        assert!(telemetry.contains("\"total_tokens\": 29"));
 
         set_recording_state(RecordingProvider::Claude, &root, true).unwrap();
         assert!(record_transcript_usage_if_available(
@@ -1450,6 +1405,8 @@ mod tests {
             "session-1",
             Some(&transcript),
             Some("turn-1"),
+            None,
+            None,
             "claude-transcript",
         )
         .unwrap());
@@ -1460,6 +1417,233 @@ mod tests {
         assert!(events.contains("\"source\":\"claude-transcript\""));
         assert!(events.contains("\"total_tokens\":29"));
         assert!(events.contains("\"turn_id\":\"turn-1\""));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn turn_usage_reaches_telemetry_even_when_recording_is_enabled() {
+        // Isolates the claim that BOTH arms of the branch in
+        // record_transcript_usage_if_available write provider telemetry.
+        // Recording is enabled FIRST on a fresh root, so telemetry cannot have
+        // been populated by an earlier recording-disabled call.
+        let root = temp_root("transcript-usage-enabled-telemetry");
+        let transcript = root.join("provider.jsonl");
+        fs::write(
+            &transcript,
+            "{\"type\":\"assistant\",\"usage\":{\"input_tokens\":22,\"output_tokens\":7,\"total_tokens\":29}}\n",
+        )
+        .unwrap();
+
+        set_recording_state(RecordingProvider::Claude, &root, true).unwrap();
+        let telemetry_path = root.join(".lint-ai/provider-telemetry/claude.json");
+        let before = fs::read_to_string(&telemetry_path).unwrap_or_default();
+        assert!(
+            !before.contains("TurnUsage"),
+            "precondition: telemetry must not already carry TurnUsage"
+        );
+
+        assert!(record_transcript_usage_if_available(
+            RecordingProvider::Claude,
+            &root,
+            "session-enabled",
+            Some(&transcript),
+            Some("turn-1"),
+            None,
+            None,
+            "claude-transcript",
+        )
+        .unwrap());
+
+        let telemetry = fs::read_to_string(&telemetry_path)
+            .expect("telemetry file must exist after a recording-enabled TurnUsage");
+        assert!(
+            telemetry.contains("\"event\": \"TurnUsage\""),
+            "recording-enabled path must still reach telemetry; got: {telemetry}"
+        );
+        assert!(telemetry.contains("\"total_tokens\": 29"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn every_provider_uses_the_shared_turn_usage_telemetry_path() {
+        let cases = [
+            (
+                RecordingProvider::Claude,
+                r#"{"usage":{"input_tokens":10,"output_tokens":4,"total_tokens":14}}"#,
+            ),
+            (
+                RecordingProvider::Codex,
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":12,"cached_input_tokens":5,"output_tokens":3,"total_tokens":15}}}}"#,
+            ),
+            (
+                RecordingProvider::Gemini,
+                r#"{"usage":{"input_tokens":20,"output_tokens":6,"total_tokens":26}}"#,
+            ),
+            (
+                RecordingProvider::Agy,
+                r#"{"usage":{"input_tokens":30,"output_tokens":8,"total_tokens":38}}"#,
+            ),
+        ];
+
+        for (provider, line) in cases {
+            let root = temp_root(&format!("shared-turn-usage-{}", provider.as_str()));
+            let transcript = root.join("provider.jsonl");
+            fs::write(&transcript, format!("{line}\n")).unwrap();
+
+            record_transcript_usage_if_available(
+                provider,
+                &root,
+                "shared-session",
+                Some(&transcript),
+                Some("turn-1"),
+                None,
+                None,
+                "shared-transcript-test",
+            )
+            .unwrap();
+
+            let status = crate::telemetry::provider_lifecycle_status(&root, provider.as_str())
+                .unwrap()
+                .expect("provider telemetry must exist");
+            let usage = status
+                .events
+                .iter()
+                .find(|event| event.event == "TurnUsage")
+                .expect("shared path must emit TurnUsage");
+            assert_eq!(
+                usage.output_tokens,
+                Some(if matches!(provider, RecordingProvider::Codex) {
+                    3
+                } else if matches!(provider, RecordingProvider::Claude) {
+                    4
+                } else if matches!(provider, RecordingProvider::Gemini) {
+                    6
+                } else {
+                    8
+                })
+            );
+            assert_eq!(
+                usage.total_tokens,
+                Some(if matches!(provider, RecordingProvider::Codex) {
+                    15
+                } else if matches!(provider, RecordingProvider::Claude) {
+                    14
+                } else if matches!(provider, RecordingProvider::Gemini) {
+                    26
+                } else {
+                    38
+                })
+            );
+            if matches!(provider, RecordingProvider::Codex) {
+                assert_eq!(usage.input_tokens, Some(7));
+                assert_eq!(usage.cache_read_input_tokens, Some(5));
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn subagent_identity_is_preserved_on_shared_turn_usage_events() {
+        let root = temp_root("subagent-turn-usage");
+        let transcript = root.join("subagent.jsonl");
+        fs::write(
+            &transcript,
+            r#"{"usage":{"input_tokens":18,"output_tokens":5,"total_tokens":23}}"#,
+        )
+        .unwrap();
+
+        record_transcript_usage_if_available(
+            RecordingProvider::Claude,
+            &root,
+            "parent-session",
+            Some(&transcript),
+            Some("subagent-turn"),
+            Some("agent-7"),
+            Some("researcher"),
+            "subagent-transcript",
+        )
+        .unwrap();
+
+        let status = crate::telemetry::provider_lifecycle_status(&root, "claude")
+            .unwrap()
+            .unwrap();
+        let usage = status
+            .events
+            .iter()
+            .find(|event| event.event == "TurnUsage")
+            .expect("subagent TurnUsage must be recorded");
+        assert_eq!(usage.agent_id.as_deref(), Some("agent-7"));
+        assert_eq!(usage.agent_type.as_deref(), Some("researcher"));
+        assert_eq!(usage.turn_id.as_deref(), Some("subagent-turn"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn usage_capture_reads_latest_usage_from_an_oversized_transcript() {
+        let root = temp_root("oversized-transcript-usage");
+        let transcript = root.join("provider.jsonl");
+        let mut content = "x\n".repeat(2 * 1024 * 1024 + 1);
+        content.push('\n');
+        content.push_str(r#"{"usage":{"input_tokens":41,"output_tokens":9,"total_tokens":50}}"#);
+        fs::write(&transcript, content).unwrap();
+
+        record_transcript_usage_if_available(
+            RecordingProvider::Codex,
+            &root,
+            "oversized-session",
+            Some(&transcript),
+            Some("turn-oversized"),
+            None,
+            None,
+            "codex-transcript",
+        )
+        .unwrap();
+
+        let status = crate::telemetry::provider_lifecycle_status(&root, "codex")
+            .unwrap()
+            .unwrap();
+        assert!(status.events.iter().any(|event| {
+            event.event == "TurnUsage"
+                && event.input_tokens == Some(41)
+                && event.output_tokens == Some(9)
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reveals_bug_codex_token_count_usage_is_missing_from_stop_telemetry() {
+        let root = temp_root("codex-token-count-usage");
+        let transcript = root.join("rollout.jsonl");
+        fs::write(
+            &transcript,
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":120,"cached_input_tokens":80,"output_tokens":35,"total_tokens":155},"last_token_usage":{"input_tokens":120,"cached_input_tokens":80,"output_tokens":35,"total_tokens":155}}}}"#,
+        )
+        .unwrap();
+
+        record_transcript_usage_if_available(
+            RecordingProvider::Codex,
+            &root,
+            "codex-session",
+            Some(&transcript),
+            Some("turn-1"),
+            None,
+            None,
+            "codex-transcript",
+        )
+        .unwrap();
+
+        let status = crate::telemetry::provider_lifecycle_status(&root, "codex")
+            .unwrap()
+            .expect("Codex Stop usage must reach dashboard telemetry");
+        let usage = status
+            .events
+            .iter()
+            .find(|event| event.event == "TurnUsage")
+            .expect("Codex token_count must produce TurnUsage");
+        assert_eq!(usage.input_tokens, Some(40));
+        assert_eq!(usage.output_tokens, Some(35));
+        assert_eq!(usage.total_tokens, Some(155));
+        assert_eq!(usage.cache_read_input_tokens, Some(80));
         fs::remove_dir_all(root).unwrap();
     }
 

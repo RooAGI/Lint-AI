@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--url", required=True)
 parser.add_argument("--payload", required=True)
 parser.add_argument("--requests", type=int, default=100)
+parser.add_argument("--warmup-requests", type=int, default=0)
 args = parser.parse_args()
 payload = args.payload.encode()
 
@@ -23,10 +24,15 @@ def request(_):
         response.read()
     return (time.perf_counter() - started) * 1000
 
-for concurrency in (1, 10):
-    batch_started = time.perf_counter()
+def run_requests(concurrency, count, measure):
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-        values = sorted(pool.map(request, range(args.requests)))
+        values = list(pool.map(request, range(count)))
+    return values if measure else None
+
+for concurrency in (1, 10):
+    run_requests(concurrency, args.warmup_requests, measure=False)
+    batch_started = time.perf_counter()
+    values = sorted(run_requests(concurrency, args.requests, measure=True))
     elapsed = time.perf_counter() - batch_started
     percentile = lambda p: values[min(len(values) - 1, int(len(values) * p / 100))]
     print(json.dumps({

@@ -279,6 +279,31 @@ def extract_claude_last_message(stdout_text: str) -> str | None:
     return last_text
 
 
+def extract_muse_last_message(stdout_text: str) -> str | None:
+    """Return the final answer from `muse exec --json` JSONL output.
+
+    Muse's terminal record is `run.terminal.completed` with the answer in
+    `payload.text`. Like the Claude extractor, this keeps scoring on the
+    model's own final answer instead of the full transcript.
+    """
+    last_text: str | None = None
+    for line in stdout_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("payload_type") != "run.terminal.completed":
+            continue
+        payload = record.get("payload")
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if isinstance(text, str) and text:
+            last_text = text
+    return last_text
+
+
 def run_command(
     command: list[str],
     cwd: Path,
@@ -310,6 +335,8 @@ def run_command(
         # --output-last-message does); extract it from stream-json output so
         # scoring never falls back to the raw tool-call transcript.
         last_message = extract_claude_last_message(completed.stdout)
+        if last_message is None:
+            last_message = extract_muse_last_message(completed.stdout)
         if last_message is not None:
             last_path.write_text(last_message, encoding="utf-8")
     return PhaseResult(
@@ -781,7 +808,7 @@ def execute_scenario(
                 if continuation.returncode != 0:
                     invalid_reason = f"continuation command exited {continuation.returncode}"
                 else:
-                    if metrics_mode in ("codex", "claude", "agy"):
+                    if metrics_mode in ("codex", "claude", "agy", "muse"):
                         parser = load_peer_module(
                             "parse_run.py",
                             f"{metrics_mode}_parse_run",
@@ -794,6 +821,8 @@ def execute_scenario(
                                 Path(continuation.stdout_path),
                                 Path(continuation.stdout_path),
                             )
+                        elif metrics_mode == "muse":
+                            metrics = parser.parse_muse_output(Path(continuation.stdout_path))
                         else:
                             metrics = parser.parse_agy_output(Path(continuation.stdout_path))
                         shared_metrics = load_peer_module(
@@ -934,7 +963,7 @@ def main() -> None:
         help="Scenario id to execute; repeat to select multiple scenarios",
     )
     parser.add_argument("--arm", default="lint-ai")
-    parser.add_argument("--metrics", choices=("codex", "claude", "agy", "none"), default="codex")
+    parser.add_argument("--metrics", choices=("codex", "claude", "agy", "muse", "none"), default="codex")
     parser.add_argument("--execution-mode", choices=("pipe", "pty"), default="pipe")
     parser.add_argument("--metrics-root", type=Path, default=None)
     parser.add_argument("--results-dir", type=Path, default=None)

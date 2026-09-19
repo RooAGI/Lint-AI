@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use lint_ai::index::DocRecord;
 use lint_ai::{
-    build_query_snapshot, temporal::parse_temporal_date, PipelineOptions, SourceDocument,
+    build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument,
 };
 use serde::Deserialize;
 use serde_json::json;

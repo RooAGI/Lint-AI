@@ -1,34 +1,45 @@
-//! Lint AI: semantic linting for Markdown documentation and related semantic graphs.
+//! Lint-AI: persistent memory layer for AI coding agents.
 //!
-//! This crate provides the core pipeline for building a concept inventory from
-//! a Markdown corpus, matching mentions, building symbol and ownership graphs,
-//! and reporting missing cross-references and orphan/unreachable pages.
+//! Lint-AI gives coding agents (Claude Code, Codex, Gemini CLI, Muse, Agy)
+//! long-term memory with a property most stores can't offer: retrieval knows
+//! what is *still true*. Memories carry timestamps, and newer memories can
+//! explicitly supersede older ones, so recall returns the current state of
+//! the world instead of a pile of contradictions.
+//!
+//! The core workflow is three steps:
+//!
+//! 1. **Record** — capture session content as [`SourceDocument`]s.
+//! 2. **Index** — build an [`IndexStore`] with [`build_index_store`].
+//! 3. **Recall** — query through [`memory_api::MemoryService`] (`add` /
+//!    `search`) or [`MemoryIndex`] directly; superseded memories are
+//!    filtered automatically.
 //!
 //! Basic usage:
 //! ```no_run
-//! use lint_ai::graph::Graph;
-//! use lint_ai::report::Report;
-//! use lint_ai::rules::{cross_refs::check_cross_refs, orphan_pages::check_orphans};
-//! use lint_ai::config::Config;
+//! use lint_ai::{build_index_store, PipelineOptions, SourceDocument};
 //!
-//! let graph = Graph::build("docs", 5_000_000, 50_000, 20, 100_000_000).unwrap();
-//! let mut report = Report::new();
-//! let cfg = Config::default();
-//! check_orphans(&graph, &mut report);
-//! check_cross_refs(&graph, &mut report, &cfg);
+//! let docs = vec![SourceDocument::with_stable_doc_id_from_source(
+//!     "docs/getting-started.md".to_string(),
+//!     "# Getting started\n\nInstall with `cargo install lint-ai`.".to_string(),
+//!     "getting-started".to_string(),
+//!     None,
+//!     vec!["Getting started".to_string()],
+//!     vec![],
+//!     None,
+//!     None,
+//! )];
+//!
+//! let store = build_index_store(&docs, &PipelineOptions::default()).unwrap();
 //! ```
+//!
+//! Agents usually don't touch this crate directly — they talk to the
+//! `lint-ai` binary over MCP (`--claude-code-serve`, `--codex-serve`, …).
+//! The library API is for embedding: custom hosts, the Python bindings,
+//! and the HTTP server binary.
 
-pub mod adapters;
-pub mod aggregation;
-pub mod chunking;
-pub mod claim_extractor;
 pub mod cli;
-pub mod config;
-pub mod corpus_graph;
-pub mod engine;
-pub mod filters;
-pub mod graph;
-pub mod ids;
+mod config;
+mod ids;
 pub mod index;
 #[cfg(any(
     feature = "claude-code",
@@ -36,37 +47,43 @@ pub mod index;
     feature = "gemini-cli",
     feature = "agy"
 ))]
-pub mod integrations;
+mod integrations;
 pub mod memory_api;
-pub mod ownership;
 pub mod pipeline;
-pub mod query_expansion;
 pub mod query_plan;
-pub mod query_semantics;
-pub mod remote_query;
-pub mod report;
-pub mod review;
-pub mod rules;
+mod remote_query;
 pub mod segments;
 pub mod semantic_relations;
 pub mod source;
-pub mod symbols;
 pub mod telemetry;
-pub mod temporal;
 pub mod temporal_fact;
-pub mod tier1;
-pub mod tokenizer;
-pub mod usage;
 
-pub use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor, ExtractedClaims};
-pub use crate::corpus_graph::CorpusGraph;
+// Internal implementation details. These modules are intentionally not part
+// of the public API; use the re-exports above instead.
+mod adapters;
+mod aggregation;
+mod chunking;
+mod claim_extractor;
+mod corpus_graph;
+mod engine;
+mod filters;
+mod graph;
+mod ownership;
+mod query_expansion;
+mod query_semantics;
+mod report;
+mod review;
+mod rules;
+mod symbols;
+mod temporal;
+mod tokenizer;
+mod tier1;
+mod usage;
+
 pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
 pub use crate::index::{
     GlobalBm25Statistics, MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult,
     TemporalQueryContext,
-};
-pub use crate::ownership::{
-    FlowEdge, FlowEdgeKind, FlowState, LeakFinding, OwnershipKind, OwnershipRecord,
 };
 pub use crate::pipeline::{
     build_index_store, build_query_snapshot, build_query_snapshot_from_source_documents,
@@ -74,17 +91,6 @@ pub use crate::pipeline::{
     MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
     MemoryIndexSnapshotInspection, PipelineOptions, PublishedIndexSnapshot, StorePaths,
     Tier1NerProvider, Tier1TermRankerKind,
-};
-pub use crate::remote_query::{
-    aggregate_statistics, reduce_candidates, RemoteCandidateRequest, RemoteCandidateResponse,
-    RemoteFieldStatistics, RemoteQueryCompleteness, RemoteQueryFailure, RemoteQueryRequest,
-    RemoteSearchResult, RemoteStatisticsRequest, RemoteStatisticsResponse,
-    RemoteStatisticsSnapshot, RemoteTemporalContext, REMOTE_QUERY_PROTOCOL_VERSION,
-};
-pub use crate::review::{
-    DocumentSummary, OwnershipSummary, ReviewCategory, ReviewContext, ReviewDiff,
-    ReviewDiffSummary, ReviewEvidence, ReviewFileChange, ReviewFinding, ReviewHunk, ReviewPacket,
-    ReviewRepoRef, ReviewSeverity, ReviewUsageSummary, SymbolSummary,
 };
 pub use crate::segments::{
     SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,
@@ -94,12 +100,18 @@ pub use crate::semantic_relations::{
     SemanticRelationStore, SemanticStatus, SupersessionOptions,
 };
 pub use crate::source::SourceDocument;
-pub use crate::symbols::{
-    CorpusIndex, IngestBundle, SymbolKind, SymbolLocation, SymbolRecord, SymbolRelationKind,
-    SymbolStore,
-};
 pub use crate::temporal_fact::{TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair};
-pub use crate::usage::{UsageEdge, UsageEdgeKind, UsageGraph, UsageNode, UsageNodeKind};
+// Re-exported so the public `index::DocRecord` struct can be constructed by
+// downstream users (`key_entities` / `important_terms` fields).
+pub use crate::tier1::{RankedTerm, Tier1Entity};
+// Date helper for building timestamped documents (used by benchmarks; also
+// useful for anyone constructing `SourceDocument`s with timestamps).
+pub use crate::temporal::parse_temporal_date;
+// Query-pipeline utilities used by the benchmark binaries and useful for
+// power users driving `MemoryIndex` directly.
+pub use crate::aggregation::{build_aggregate_output, AggregateOutput};
+pub use crate::query_expansion::normalize_for_index;
+pub use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

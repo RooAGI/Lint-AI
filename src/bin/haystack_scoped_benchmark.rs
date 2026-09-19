@@ -2,10 +2,8 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
 use lint_ai::index::TemporalQueryHint;
 use lint_ai::{
-    aggregation::{build_aggregate_output, AggregateOutput},
-    build_index_store, build_query_snapshot_from_source_documents,
-    query_expansion::normalize_for_index,
-    query_semantics::{analyze_query, QueryTimeHint},
+    build_aggregate_output, build_index_store, build_query_snapshot_from_source_documents,
+    normalize_for_index, analyze_query, AggregateOutput, QueryTimeHint,
     segments::{SegmentQueryDiagnostics, SegmentRoutingStrategy, SegmentedMemoryIndex},
     ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimings, SearchResult, SourceDocument,
     TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,

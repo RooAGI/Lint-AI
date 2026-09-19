@@ -28,7 +28,7 @@ pub struct Page {
 
 #[derive(Debug, Clone)]
 pub struct ChunkNode {
-    /// Stable chunk id (<rel_path>::<idx>)
+    /// Stable chunk id (`<rel_path>::<idx>`)
     pub chunk_id: String,
     /// Parent document rel path.
     pub doc_rel_path: String,
@@ -235,8 +235,8 @@ fn extract_doc_entities(content: &str, concept: &str) -> HashSet<String> {
 impl Graph {
     /// Build a graph from the given path, applying size and depth limits.
     ///
-    /// Example:
-    /// ```no_run
+    /// Example (crate-internal; `graph` is not part of the public API):
+    /// ```ignore
     /// use lint_ai::graph::Graph;
     /// let graph = Graph::build("docs", 5_000_000, 50_000, 20, 100_000_000).unwrap();
     /// println!("pages: {}", graph.pages.len());

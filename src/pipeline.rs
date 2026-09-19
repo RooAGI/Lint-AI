@@ -123,7 +123,7 @@ impl WorkspaceWatcher {
         }
     }
 
-    fn take_change(&self) -> bool {
+    pub fn take_change(&self) -> bool {
         !self.take_events().is_empty()
     }
 }

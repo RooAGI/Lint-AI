@@ -111,13 +111,13 @@ pub struct SegmentRoute {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SegmentLocalEvidence {
+struct SegmentLocalEvidence {
     pub segment_id: String,
     pub differentiators: Vec<LocalDifferentiator>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct LocalDifferentiator {
+struct LocalDifferentiator {
     pub term: String,
     pub weight: f32,
     pub evidence_types: Vec<String>,
@@ -270,7 +270,7 @@ pub struct SegmentSpecificEnrichmentDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SegmentEnrichedQueryDiagnostics {
+struct SegmentEnrichedQueryDiagnostics {
     pub segment_id: String,
     pub base_query: String,
     pub enriched_query: String,
@@ -282,7 +282,7 @@ pub struct SegmentEnrichedQueryDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TemporalSegmentExpansion {
+struct TemporalSegmentExpansion {
     pub segment_id: String,
     pub source_segment_id: String,
     pub relation: String,
@@ -292,7 +292,7 @@ pub struct TemporalSegmentExpansion {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ConnectedSegmentExpansion {
+struct ConnectedSegmentExpansion {
     pub segment_id: String,
     pub source_segment_id: String,
     pub score: f32,
@@ -881,7 +881,7 @@ pub enum SegmentRoutingStrategy {
     TypedEvidence,
 }
 
-pub fn build_segments_by_group_id(records: &[DocRecord]) -> Vec<MemoryIndexSegment> {
+fn build_segments_by_group_id(records: &[DocRecord]) -> Vec<MemoryIndexSegment> {
     let mut grouped: HashMap<String, Vec<DocRecord>> = HashMap::new();
     for record in records {
         let segment_id = record
@@ -918,11 +918,11 @@ fn build_memory_index_segment(
     }
 }
 
-pub fn route_segments(query: &str, segments: &[MemoryIndexSegment]) -> Vec<SegmentRoute> {
+fn route_segments(query: &str, segments: &[MemoryIndexSegment]) -> Vec<SegmentRoute> {
     route_segments_with_strategy(query, segments, SegmentRoutingStrategy::SparseOverlap)
 }
 
-pub fn route_segments_with_strategy(
+fn route_segments_with_strategy(
     query: &str,
     segments: &[MemoryIndexSegment],
     strategy: SegmentRoutingStrategy,
@@ -1321,7 +1321,7 @@ fn segment_has_allowed_documents(
     })
 }
 
-pub fn query_top_segment(
+fn query_top_segment(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
@@ -1329,7 +1329,7 @@ pub fn query_top_segment(
     query_top_segments(query, top_k, segments, 1)
 }
 
-pub fn query_top_segments(
+fn query_top_segments(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
@@ -1338,7 +1338,7 @@ pub fn query_top_segments(
     query_top_segments_with_diagnostics(query, top_k, segments, segment_limit).results
 }
 
-pub fn query_all_segments(
+fn query_all_segments(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
@@ -1346,7 +1346,7 @@ pub fn query_all_segments(
     query_all_segments_with_diagnostics(query, top_k, segments).results
 }
 
-pub fn query_top_segments_with_diagnostics(
+fn query_top_segments_with_diagnostics(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
@@ -1368,7 +1368,7 @@ pub fn query_top_segments_with_diagnostics(
     )
 }
 
-pub fn query_top_segments_with_diagnostics_and_strategy(
+fn query_top_segments_with_diagnostics_and_strategy(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
@@ -3760,7 +3760,7 @@ fn retain_hashset(values: &mut HashSet<String>, limit: usize) {
     values.retain(|value| sorted.contains(value));
 }
 
-pub fn query_all_segments_with_diagnostics(
+fn query_all_segments_with_diagnostics(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],

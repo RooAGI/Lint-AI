@@ -38,8 +38,8 @@
 //! and the HTTP server binary.
 
 pub mod cli;
-pub mod config;
-pub mod ids;
+mod config;
+mod ids;
 pub mod index;
 #[cfg(any(
     feature = "claude-code",
@@ -47,11 +47,11 @@ pub mod index;
     feature = "gemini-cli",
     feature = "agy"
 ))]
-pub mod integrations;
+mod integrations;
 pub mod memory_api;
 pub mod pipeline;
 pub mod query_plan;
-pub mod remote_query;
+mod remote_query;
 pub mod segments;
 pub mod semantic_relations;
 pub mod source;
@@ -91,12 +91,6 @@ pub use crate::pipeline::{
     MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
     MemoryIndexSnapshotInspection, PipelineOptions, PublishedIndexSnapshot, StorePaths,
     Tier1NerProvider, Tier1TermRankerKind,
-};
-pub use crate::remote_query::{
-    aggregate_statistics, reduce_candidates, RemoteCandidateRequest, RemoteCandidateResponse,
-    RemoteFieldStatistics, RemoteQueryCompleteness, RemoteQueryFailure, RemoteQueryRequest,
-    RemoteSearchResult, RemoteStatisticsRequest, RemoteStatisticsResponse,
-    RemoteStatisticsSnapshot, RemoteTemporalContext, REMOTE_QUERY_PROTOCOL_VERSION,
 };
 pub use crate::segments::{
     SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,

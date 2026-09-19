@@ -56,6 +56,7 @@ nav:
       - Claude Code: claude-code.md
       - Gemini CLI: gemini-cli.md
       - Antigravity CLI: agy.md
+      - Muse Code: muse-code.md
       - Other agent frameworks: agent-frameworks.md
   - Architecture:
       - Ingestion architecture: ingestion-architecture.md

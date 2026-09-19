@@ -362,6 +362,7 @@ fn memory_corpus_path(source: &str) -> String {
         Some("codex") => "codex-memory",
         Some("gemini-cli") => "gemini-cli-memory",
         Some("agy") => "agy-memory",
+        Some("muse") => "muse-memory",
         _ => "claude-memory",
     };
     format!(".lint-ai/{name}")
@@ -698,6 +699,7 @@ mod tests {
             ("codex", "codex-memory"),
             ("gemini-cli", "gemini-cli-memory"),
             ("agy", "agy-memory"),
+            ("muse", "muse-memory"),
         ];
 
         for (provider, memory_name) in providers {

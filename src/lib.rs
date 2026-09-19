@@ -34,7 +34,8 @@ pub mod index;
     feature = "claude-code",
     feature = "codex",
     feature = "gemini-cli",
-    feature = "agy"
+    feature = "agy",
+    feature = "muse-code"
 ))]
 pub mod integrations;
 pub mod memory_api;

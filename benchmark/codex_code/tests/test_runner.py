@@ -51,6 +51,36 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(plan.repetitions, 3)
             self.assertEqual(plan.scenarios[0].id, "smoke")
 
+    def test_extract_muse_last_message_terminal_answer(self):
+        stdout = "\n".join(
+            [
+                json.dumps({"payload_type": "run.started", "payload": {}}),
+                json.dumps(
+                    {
+                        "payload_type": "run.terminal.completed",
+                        "payload": {"text": "echo: first answer", "turn_id": "t1"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "payload_type": "run.terminal.completed",
+                        "payload": {"text": "echo: final answer", "turn_id": "t2"},
+                    }
+                ),
+            ]
+        )
+        self.assertEqual(runner.extract_muse_last_message(stdout), "echo: final answer")
+
+    def test_extract_muse_last_message_ignores_non_terminal_records(self):
+        stdout = "\n".join(
+            [
+                json.dumps({"payload_type": "run.started", "payload": {}}),
+                json.dumps({"payload_type": "run.message.delta", "payload": {"text": "partial"}}),
+                "not json at all",
+            ]
+        )
+        self.assertIsNone(runner.extract_muse_last_message(stdout))
+
 
 if __name__ == "__main__":
     unittest.main()

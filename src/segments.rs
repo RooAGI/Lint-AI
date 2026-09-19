@@ -111,13 +111,13 @@ pub struct SegmentRoute {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct SegmentLocalEvidence {
+pub struct SegmentLocalEvidence {
     pub segment_id: String,
     pub differentiators: Vec<LocalDifferentiator>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct LocalDifferentiator {
+pub struct LocalDifferentiator {
     pub term: String,
     pub weight: f32,
     pub evidence_types: Vec<String>,

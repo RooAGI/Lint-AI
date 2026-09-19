@@ -491,9 +491,10 @@ pub fn promote_recorded_session(
     let content = fs::read_to_string(&events_path)
         .with_context(|| format!("failed to read recorded session {}", events_path.display()))?;
     let group_id = format!("{}-session:{}", provider.as_str(), session_id);
-    let memory_root = project_root
-        .join(".lint-ai")
-        .join(format!("{}-memory", provider.as_str()));
+    // Promoted sessions land in the shared cross-provider memory store. The
+    // provider stays on the documents themselves (group id, `filters.provider`,
+    // `author_agent`, doc id) so attribution is preserved without a silo.
+    let memory_root = crate::integrations::mcp_index::shared_memory_root(project_root);
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
             query_top_n: 3,
@@ -1760,7 +1761,9 @@ mod tests {
         .unwrap();
         assert_eq!(report.session_id, "baseline");
         assert_eq!(report.imported_document_ids.len(), 2);
-        assert!(project_root.join(".lint-ai/claude-memory").exists());
+        // Promoted sessions land in the shared cross-provider store.
+        assert!(project_root.join(".lint-ai/memory").exists());
+        assert!(!project_root.join(".lint-ai/claude-memory").exists());
         fs::remove_dir_all(project_root).unwrap();
         fs::remove_dir_all(archive_root).unwrap();
     }

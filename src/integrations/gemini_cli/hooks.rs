@@ -79,13 +79,7 @@ pub struct GeminiHookSpecificOutput {
 }
 
 pub fn run_hook(kind: GeminiHookKind, fallback_root: &Path) -> Result<()> {
-    run_hook_for(
-        kind,
-        fallback_root,
-        RecordingProvider::Gemini,
-        "gemini-cli-memory",
-        "Gemini",
-    )
+    run_hook_for(kind, fallback_root, RecordingProvider::Gemini, "Gemini")
 }
 
 /// Run the Gemini-compatible hook protocol for another CLI adapter.
@@ -93,7 +87,6 @@ pub fn run_hook_for(
     kind: GeminiHookKind,
     fallback_root: &Path,
     provider: RecordingProvider,
-    memory_dir: &str,
     provider_label: &str,
 ) -> Result<()> {
     let raw: Value =
@@ -106,8 +99,8 @@ pub fn run_hook_for(
     {
         eprintln!("warning: Lint-AI {provider_label} session recording failed open: {error:#}");
     }
-    let output = handle_hook(kind, &input, &root, provider, memory_dir, provider_label)
-        .unwrap_or_else(|error| {
+    let output =
+        handle_hook(kind, &input, &root, provider, provider_label).unwrap_or_else(|error| {
             eprintln!("warning: Lint-AI {provider_label} hook failed open: {error:#}");
             GeminiHookOutput::default()
         });
@@ -122,7 +115,6 @@ fn handle_hook(
     input: &GeminiHookInput,
     _root: &Path,
     provider: RecordingProvider,
-    memory_dir: &str,
     provider_label: &str,
 ) -> Result<GeminiHookOutput> {
     if input.hook_event_name != kind.event_name() {
@@ -141,15 +133,9 @@ fn handle_hook(
         return Ok(GeminiHookOutput::default());
     }
     match kind {
-        GeminiHookKind::AfterAgent => {
-            return capture(_root, input, provider, memory_dir, "outcome")
-        }
-        GeminiHookKind::PreCompress => {
-            return capture(_root, input, provider, memory_dir, "checkpoint")
-        }
-        GeminiHookKind::SessionEnd => {
-            return capture(_root, input, provider, memory_dir, "session-summary")
-        }
+        GeminiHookKind::AfterAgent => return capture(_root, input, provider, "outcome"),
+        GeminiHookKind::PreCompress => return capture(_root, input, provider, "checkpoint"),
+        GeminiHookKind::SessionEnd => return capture(_root, input, provider, "session-summary"),
         _ => {}
     }
     let query = input
@@ -161,7 +147,7 @@ fn handle_hook(
         return Ok(GeminiHookOutput::default());
     }
     let started = std::time::Instant::now();
-    let memory = _root.join(".lint-ai").join(memory_dir);
+    let memory = crate::integrations::mcp_index::shared_memory_root(_root);
     if !memory.exists() {
         let _ = crate::telemetry::record_memory_retrieval(
             _root,
@@ -247,7 +233,6 @@ fn capture(
     root: &Path,
     input: &GeminiHookInput,
     provider: RecordingProvider,
-    memory_dir: &str,
     document_type: &str,
 ) -> Result<GeminiHookOutput> {
     let content = capture_content(input)?;
@@ -290,7 +275,10 @@ fn capture(
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(&root.join(".lint-ai").join(memory_dir), options)?;
+    let mut store = IndexStore::at_path(
+        &crate::integrations::mcp_index::shared_memory_root(root),
+        options,
+    )?;
     store.upsert(document);
     store.refresh()?;
     Ok(GeminiHookOutput::default())
@@ -421,9 +409,9 @@ mod tests {
 
     #[test]
     fn gemini_compatible_hooks_capture_persist_and_retrieve_for_both_providers() {
-        for (provider, memory_dir, label) in [
-            (RecordingProvider::Gemini, "gemini-cli-memory", "Gemini"),
-            (RecordingProvider::Agy, "agy-memory", "Antigravity"),
+        for (provider, label) in [
+            (RecordingProvider::Gemini, "Gemini"),
+            (RecordingProvider::Agy, "Antigravity"),
         ] {
             let root = temp_root(label);
             let transcript = root.join("transcript.json");
@@ -449,7 +437,6 @@ mod tests {
                 &capture_input,
                 &root,
                 provider,
-                memory_dir,
                 label,
             )
             .unwrap();
@@ -458,12 +445,11 @@ mod tests {
                 &capture_input,
                 &root,
                 provider,
-                memory_dir,
                 label,
             )
             .unwrap();
             let mut store = IndexStore::at_path(
-                &root.join(".lint-ai").join(memory_dir),
+                &crate::integrations::mcp_index::shared_memory_root(&root),
                 crate::integrations::mcp_index::segmented_store_options(),
             )
             .unwrap();
@@ -490,15 +476,8 @@ mod tests {
                 tool_response: None,
                 extra: Map::new(),
             };
-            let output = handle_hook(
-                GeminiHookKind::BeforeAgent,
-                &input,
-                &root,
-                provider,
-                memory_dir,
-                label,
-            )
-            .unwrap();
+            let output =
+                handle_hook(GeminiHookKind::BeforeAgent, &input, &root, provider, label).unwrap();
             assert!(output
                 .hook_specific_output
                 .expect("memory should be injected")
@@ -509,18 +488,16 @@ mod tests {
     }
 
     #[test]
-    fn gemini_and_agy_memory_indexes_are_isolated() {
-        let root = temp_root("provider-index-isolation");
-        for (provider, memory_dir, label, content) in [
+    fn gemini_and_agy_memories_share_one_store_with_provider_attribution() {
+        let root = temp_root("provider-memory-sharing");
+        for (provider, label, content) in [
             (
                 RecordingProvider::Gemini,
-                "gemini-cli-memory",
                 "Gemini",
                 "Gemini-only blue routing decision",
             ),
             (
                 RecordingProvider::Agy,
-                "agy-memory",
                 "Antigravity",
                 "AGY-only green deployment decision",
             ),
@@ -538,35 +515,37 @@ mod tests {
                 tool_response: None,
                 extra,
             };
-            handle_hook(
-                GeminiHookKind::AfterAgent,
-                &input,
-                &root,
-                provider,
-                memory_dir,
-                label,
-            )
-            .unwrap();
+            handle_hook(GeminiHookKind::AfterAgent, &input, &root, provider, label).unwrap();
         }
 
-        let mut gemini = IndexStore::at_path(
-            &root.join(".lint-ai/gemini-cli-memory"),
+        // Both providers land in the shared store; the provider travels on the
+        // documents instead of in the directory layout.
+        let mut shared = IndexStore::at_path(
+            &crate::integrations::mcp_index::shared_memory_root(&root),
             crate::integrations::mcp_index::segmented_store_options(),
         )
         .unwrap();
-        let mut agy = IndexStore::at_path(
-            &root.join(".lint-ai/agy-memory"),
-            crate::integrations::mcp_index::segmented_store_options(),
-        )
-        .unwrap();
-        gemini.refresh().unwrap();
-        agy.refresh().unwrap();
-        assert_eq!(gemini.records().len(), 1);
-        assert_eq!(agy.records().len(), 1);
-        assert!(gemini.records()[0].content.contains("Gemini-only"));
-        assert!(!gemini.records()[0].content.contains("AGY-only"));
-        assert!(agy.records()[0].content.contains("AGY-only"));
-        assert!(!agy.records()[0].content.contains("Gemini-only"));
+        shared.refresh().unwrap();
+        assert_eq!(shared.records().len(), 2);
+        let contents: Vec<&str> = shared
+            .records()
+            .iter()
+            .map(|record| record.content.as_str())
+            .collect();
+        assert!(contents.iter().any(|c| c.contains("Gemini-only")));
+        assert!(contents.iter().any(|c| c.contains("AGY-only")));
+        for document in shared.source_documents() {
+            let provider = document.filters.get("integration").unwrap();
+            assert!(provider == "gemini-cli" || provider == "agy");
+            assert!(document
+                .group_id
+                .as_deref()
+                .unwrap()
+                .starts_with(&format!("{provider}-session:")));
+        }
+        // The legacy per-provider silos are gone.
+        assert!(!root.join(".lint-ai/gemini-cli-memory").exists());
+        assert!(!root.join(".lint-ai/agy-memory").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

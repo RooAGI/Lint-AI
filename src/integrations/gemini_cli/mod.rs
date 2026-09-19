@@ -54,7 +54,6 @@ struct GeminiMcp {
     store: Mutex<Option<IndexStore>>,
     provider: RecordingProvider,
     provider_label: &'static str,
-    memory_dir: &'static str,
     max_bytes: usize,
     max_files: usize,
     max_depth: usize,
@@ -122,20 +121,13 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
 }
 
 pub fn run_server(root: &Path, options: GeminiCliServerOptions<'_>) -> Result<()> {
-    run_server_for(
-        root,
-        RecordingProvider::Gemini,
-        "gemini-cli",
-        "gemini-cli-memory",
-        options,
-    )
+    run_server_for(root, RecordingProvider::Gemini, "gemini-cli", options)
 }
 
 pub fn run_server_for(
     root: &Path,
     provider: RecordingProvider,
     provider_label: &'static str,
-    memory_dir: &'static str,
     options: GeminiCliServerOptions<'_>,
 ) -> Result<()> {
     mcp_index::trace_event("gemini-server-start");
@@ -144,7 +136,6 @@ pub fn run_server_for(
         store: Mutex::new(None),
         provider,
         provider_label,
-        memory_dir,
         max_bytes: options.max_bytes,
         max_files: options.max_files,
         max_depth: options.max_depth,
@@ -182,7 +173,7 @@ impl GeminiMcp {
             let ignores = self.ignore_paths.clone();
             *store = Some(mcp_index::open_workspace_memory_store(
                 &self.root,
-                self.memory_dir,
+                mcp_index::SHARED_MEMORY_DIR,
                 &ignores,
                 || {
                     let graph = build_project_graph(&input)?;
@@ -261,7 +252,7 @@ impl GeminiMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join(self.memory_dir),
+                    &mcp_index::shared_memory_root(&self.root),
                     store,
                 )?;
                 store.refresh()?;
@@ -300,7 +291,7 @@ impl GeminiMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join(self.memory_dir),
+                    &mcp_index::shared_memory_root(&self.root),
                     store,
                 )?;
                 store.refresh()?;
@@ -528,12 +519,12 @@ mod tests {
 
     #[test]
     fn gemini_compatible_mcp_contract_applies_to_gemini_and_agy() {
-        for (provider, label, memory_dir) in [
-            (RecordingProvider::Gemini, "gemini-cli", "gemini-cli-memory"),
-            (RecordingProvider::Agy, "agy", "agy-memory"),
+        for (provider, label) in [
+            (RecordingProvider::Gemini, "gemini-cli"),
+            (RecordingProvider::Agy, "agy"),
         ] {
             let root = temp_root(label);
-            let memory_root = root.join(".lint-ai").join(memory_dir);
+            let memory_root = mcp_index::shared_memory_root(&root);
             let mut memory = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
             memory.upsert(SourceDocument {
                 doc_id: "memory-1".to_string(),
@@ -556,7 +547,6 @@ mod tests {
                 store: Mutex::new(None),
                 provider,
                 provider_label: label,
-                memory_dir,
                 max_bytes: 5_000_000,
                 max_files: 50_000,
                 max_depth: 20,

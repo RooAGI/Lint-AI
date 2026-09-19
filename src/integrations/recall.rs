@@ -195,10 +195,12 @@ fn default_source() -> String {
     "documents".to_string()
 }
 
-/// Open each provider memory index where it already lives. These stores remain
+/// Open each shared memory index where it already lives. All providers read
+/// and write one store per project (`.lint-ai/memory/`); the provider is
+/// attribution on the records, not the directory. These stores remain
 /// project-scoped; the desktop worker never creates a consolidated copy.
-fn open_memory_stores(root: &Path, provider: &str) -> Result<Vec<IndexStore>> {
-    let memory_name = format!("{provider}-memory");
+fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<IndexStore>> {
+    mcp_index::migrate_legacy_provider_memory_dirs(root)?;
     let mut stores = Vec::new();
     for entry in WalkDir::new(root)
         .max_depth(5)
@@ -212,7 +214,19 @@ fn open_memory_stores(root: &Path, provider: &str) -> Result<Vec<IndexStore>> {
         })
         .filter_map(|entry| entry.ok())
     {
-        if !entry.file_type().is_dir() || entry.file_name().to_string_lossy() != memory_name {
+        if !entry.file_type().is_dir()
+            || entry.file_name().to_string_lossy() != mcp_index::SHARED_MEMORY_DIR
+        {
+            continue;
+        }
+        // Only project memory roots count; an unrelated `memory/` directory
+        // elsewhere in the tree is not a Lint-AI store.
+        let is_lint_ai_memory = entry
+            .path()
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == ".lint-ai");
+        if !is_lint_ai_memory {
             continue;
         }
         stores.push(IndexStore::at_path(
@@ -356,16 +370,13 @@ fn hit_from(result: &SearchResult, record: &DocRecord, query: &str) -> RecallHit
     }
 }
 
-/// Return the provider-specific corpus path for a recorded memory.
-fn memory_corpus_path(source: &str) -> String {
-    let name = match source.split_once("://").map(|(provider, _)| provider) {
-        Some("codex") => "codex-memory",
-        Some("gemini-cli") => "gemini-cli-memory",
-        Some("agy") => "agy-memory",
-        Some("muse") => "muse-memory",
-        _ => "claude-memory",
-    };
-    format!(".lint-ai/{name}")
+/// Return the corpus path for a recorded memory. All providers share one
+/// memory store; the provider is attribution on the record, not the path.
+fn memory_corpus_path(_source: &str) -> String {
+    format!(
+        ".lint-ai/{}",
+        crate::integrations::mcp_index::SHARED_MEMORY_DIR
+    )
 }
 
 /// Pick the section chunk that best answers the query and bound its text.
@@ -693,35 +704,31 @@ mod tests {
     }
 
     #[test]
-    fn project_recall_uses_each_provider_store() {
-        let providers = [
-            ("claude-code", "claude-memory"),
-            ("codex", "codex-memory"),
-            ("gemini-cli", "gemini-cli-memory"),
-            ("agy", "agy-memory"),
-            ("muse", "muse-memory"),
-        ];
+    fn project_recall_sees_every_providers_memories_in_the_shared_store() {
+        let providers = ["claude-code", "codex", "gemini-cli", "agy", "muse"];
 
-        for (provider, memory_name) in providers {
-            let temp_base = std::env::temp_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| std::env::temp_dir());
-            let root = temp_base.join(format!(
-                "lint-ai-recall-{provider}-{}",
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            fs::create_dir_all(root.join("docs")).unwrap();
-            fs::write(
-                root.join("docs").join("architecture.md"),
-                "# Architecture\nThe project architecture uses provider-aware recall.",
-            )
-            .unwrap();
+        let temp_base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = temp_base.join(format!(
+            "lint-ai-recall-shared-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(
+            root.join("docs").join("architecture.md"),
+            "# Architecture\nThe project architecture uses provider-aware recall.",
+        )
+        .unwrap();
 
-            let memory_root = root.join(".lint-ai").join(memory_name);
-            let mut memory = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
+        // Every provider writes into the same shared store, keeping its own
+        // attribution on the documents.
+        let memory_root = mcp_index::shared_memory_root(&root);
+        let mut memory = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
+        for provider in providers {
             memory.upsert(SourceDocument {
                 doc_id: format!("{provider}-session-1"),
                 source: format!("{provider}://project/session-1/outcome"),
@@ -736,44 +743,60 @@ mod tests {
                 doc_length: 0,
                 author_agent: Some(provider.to_string()),
             });
-            memory.refresh().unwrap();
-            drop(memory);
-
-            let options = RecallOptions {
-                root: &root,
-                query: "provider-aware recall",
-                result_count: 10,
-                ignore_paths: &[],
-                max_bytes: 5_000_000,
-                max_files: 50_000,
-                max_depth: 20,
-                max_total_bytes: 100_000_000,
-                memory_name,
-            };
-            let output = recall(&options).unwrap();
-
-            assert!(
-                output
-                    .results
-                    .iter()
-                    .any(|hit| hit.kind == RecallKind::Document
-                        && hit.source == "docs/architecture.md"),
-                "{provider} recall did not return the project document: {:?}",
-                output.results
-            );
-            assert!(
-                output.results.iter().any(|hit| {
-                    hit.kind == RecallKind::Memory
-                        && hit.doc_id == format!(".lint-ai/{memory_name}")
-                        && hit.origin.as_deref()
-                            == Some(&format!("{provider}://project/session-1/outcome"))
-                }),
-                "{provider} recall did not return its memory corpus: {:?}",
-                output.results
-            );
-
-            fs::remove_dir_all(root).unwrap();
         }
+        memory.refresh().unwrap();
+        drop(memory);
+
+        let options = RecallOptions {
+            root: &root,
+            query: "provider-aware recall",
+            result_count: 10,
+            ignore_paths: &[],
+            max_bytes: 5_000_000,
+            max_files: 50_000,
+            max_depth: 20,
+            max_total_bytes: 100_000_000,
+            memory_name: mcp_index::SHARED_MEMORY_DIR,
+        };
+        let output = recall(&options).unwrap();
+
+        // The query path sees memories across providers: segment routing
+        // (`query_top_n: 3`) picks the best segments, but the hits must span
+        // more than one provider -- the old per-provider silo would only ever
+        // return one.
+        let hit_providers: std::collections::BTreeSet<&str> = output
+            .results
+            .iter()
+            .filter(|hit| hit.kind == RecallKind::Memory)
+            .filter_map(|hit| hit.origin.as_deref())
+            .filter_map(|origin| origin.split("://").next())
+            .collect();
+        assert!(
+            hit_providers.len() > 1,
+            "recall did not span providers: {:?}",
+            output.results
+        );
+        assert!(
+            output.results.iter().all(|hit| {
+                hit.kind != RecallKind::Memory
+                    || hit.doc_id == format!(".lint-ai/{}", mcp_index::SHARED_MEMORY_DIR)
+            }),
+            "memory hits must come from the shared store: {:?}",
+            output.results
+        );
+
+        // Deterministic: every provider's documents live in the one store.
+        let store = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
+        for provider in providers {
+            assert!(
+                store
+                    .source_document_by_id(&format!("{provider}-session-1"))
+                    .is_some(),
+                "{provider} memory missing from the shared store"
+            );
+        }
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

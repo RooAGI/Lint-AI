@@ -53,6 +53,7 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
         || document.source.starts_with("codex://")
         || document.source.starts_with("gemini-cli://")
         || document.source.starts_with("agy://")
+        || document.source.starts_with("muse://")
         || document.source.starts_with("lint-ai://")
         || document
             .filters
@@ -64,6 +65,7 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
                 "codex-session:",
                 "gemini-cli-session:",
                 "agy-session:",
+                "muse-session:",
             ]
             .iter()
             .any(|prefix| group_id.starts_with(prefix))

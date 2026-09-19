@@ -334,7 +334,7 @@ impl MuseMcp {
             let root = self.root.clone();
             *store = Some(mcp_index::open_workspace_memory_store(
                 &root,
-                "muse-memory",
+                mcp_index::SHARED_MEMORY_DIR,
                 &self.ignore_paths,
                 || Ok(documents),
             )?);
@@ -444,7 +444,7 @@ impl MuseMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("muse-memory"),
+                    &mcp_index::shared_memory_root(&self.root),
                     &mut *store,
                 )?;
                 let started = std::time::Instant::now();
@@ -487,7 +487,7 @@ impl MuseMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("muse-memory"),
+                    &mcp_index::shared_memory_root(&self.root),
                     &mut *store,
                 )?;
                 Ok(text_response(

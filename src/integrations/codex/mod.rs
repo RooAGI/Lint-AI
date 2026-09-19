@@ -288,7 +288,7 @@ impl CodexMcp {
             let root = self.root.clone();
             *store = Some(mcp_index::open_workspace_memory_store(
                 &root,
-                "codex-memory",
+                mcp_index::SHARED_MEMORY_DIR,
                 &self.ignore_paths,
                 || Ok(documents),
             )?);
@@ -398,7 +398,7 @@ impl CodexMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("codex-memory"),
+                    &mcp_index::shared_memory_root(&self.root),
                     &mut *store,
                 )?;
                 let started = std::time::Instant::now();
@@ -441,7 +441,7 @@ impl CodexMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("codex-memory"),
+                    &mcp_index::shared_memory_root(&self.root),
                     &mut *store,
                 )?;
                 Ok(text_response(
@@ -1172,7 +1172,7 @@ args = ["old"]
     fn search_tool_synchronizes_memory_captured_after_startup() {
         let root = temp_dir("mcp-live-memory");
         let mcp = test_mcp(root.clone(), vec![]);
-        let memory_root = root.join(".lint-ai").join("codex-memory");
+        let memory_root = mcp_index::shared_memory_root(&root);
         let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
         memory.upsert(SourceDocument {
             doc_id: "memory-1".to_string(),

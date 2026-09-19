@@ -49,6 +49,84 @@ impl Drop for StoreInitLock {
     }
 }
 
+/// Directory name (under `.lint-ai/`) for the shared cross-provider memory
+/// store. All agents read and write the same memory; the provider is kept as
+/// per-document attribution (`filters.provider`, `author_agent`, and the
+/// `{provider}-session:{id}` group id) rather than as a storage silo.
+pub const SHARED_MEMORY_DIR: &str = "memory";
+
+/// Legacy per-provider memory directories, migrated into [`SHARED_MEMORY_DIR`]
+/// on first use. Kept in sync with the providers that used to own a silo.
+const LEGACY_PROVIDER_MEMORY_DIRS: &[&str] = &[
+    "claude-memory",
+    "codex-memory",
+    "gemini-cli-memory",
+    "agy-memory",
+    "muse-memory",
+];
+
+/// Path to the shared memory store for a workspace root.
+pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
+    root.join(".lint-ai").join(SHARED_MEMORY_DIR)
+}
+
+/// One-time, idempotent migration of legacy per-provider memory stores into
+/// the shared store. Each legacy store's documents are upserted (provider
+/// attribution travels with the documents, so nothing is lost or duplicated),
+/// and the legacy directory is removed only after the shared store refreshes
+/// successfully. Failures leave the legacy directory untouched.
+pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
+    let lint_ai = root.join(".lint-ai");
+    let shared_root = lint_ai.join(SHARED_MEMORY_DIR);
+    let mut migrated_any = false;
+    for legacy in LEGACY_PROVIDER_MEMORY_DIRS {
+        let legacy_root = lint_ai.join(legacy);
+        if !legacy_root.exists() {
+            continue;
+        }
+        let documents: Vec<SourceDocument> =
+            match IndexStore::at_path(&legacy_root, segmented_store_options()) {
+                Ok(legacy_store) => legacy_store
+                    .source_documents()
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+                // A concurrent server migrated and removed the directory first.
+                Err(error) if is_not_found(&error) => continue,
+                Err(error) => return Err(error),
+            };
+        if documents.is_empty() {
+            let _ = fs::remove_dir_all(&legacy_root);
+            continue;
+        }
+        let mut shared = IndexStore::at_path(&shared_root, segmented_store_options())?;
+        for document in documents {
+            shared.upsert(document);
+        }
+        shared.refresh()?;
+        match fs::remove_dir_all(&legacy_root) {
+            Ok(()) => {}
+            // A concurrent server removed it first; the documents are already
+            // in the shared store.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        migrated_any = true;
+    }
+    if migrated_any {
+        trace_event("migrated legacy provider memory stores into shared memory");
+    }
+    Ok(())
+}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
 pub fn segmented_store_options() -> PipelineOptions {
     PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
@@ -119,6 +197,12 @@ pub fn open_workspace_memory_store(
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<IndexStore> {
+    // One-time migration: legacy per-provider silos (e.g. `claude-memory/`)
+    // merge into the shared `memory/` store. New callers pass
+    // `SHARED_MEMORY_DIR`; the parameter is kept for the transition.
+    if memory_name == SHARED_MEMORY_DIR {
+        migrate_legacy_provider_memory_dirs(root)?;
+    }
     let workspace_root = root.join(".lint-ai").join(WORKSPACE_MEMORY_NAME);
     let _init_lock = StoreInitLock::acquire(&workspace_root)?;
     let mut workspace = IndexStore::at_path(&workspace_root, segmented_store_options())?;
@@ -278,6 +362,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
 
+        // Legacy per-provider silos, as written by older Lint-AI versions.
         for (memory_name, id) in [
             ("codex-memory", "codex-session"),
             ("claude-memory", "claude-session"),
@@ -288,7 +373,9 @@ mod tests {
             memory.refresh().unwrap();
         }
 
-        let codex = open_workspace_memory_store(&root, "codex-memory", &[], || {
+        // Opening with the shared dir migrates the silos and composes one
+        // store where every provider's memories are visible.
+        let shared = open_workspace_memory_store(&root, SHARED_MEMORY_DIR, &[], || {
             Ok(vec![document(
                 "workspace-guide",
                 "docs/guide.md",
@@ -296,22 +383,23 @@ mod tests {
             )])
         })
         .unwrap();
-        let claude = open_workspace_memory_store(&root, "claude-memory", &[], || {
-            panic!("the current workspace store must be reused")
-        })
-        .unwrap();
 
         assert!(root
             .join(".lint-ai/workspace-memory/metadata.json")
             .is_file());
-        assert!(!root.join(".lint-ai/codex-mcp-index").exists());
-        assert!(!root.join(".lint-ai/claude-mcp-index").exists());
-        assert!(codex.source_document_by_id("workspace-guide").is_some());
-        assert!(claude.source_document_by_id("workspace-guide").is_some());
-        assert!(codex.source_document_by_id("codex-session").is_some());
-        assert!(codex.source_document_by_id("claude-session").is_none());
-        assert!(claude.source_document_by_id("claude-session").is_some());
-        assert!(claude.source_document_by_id("codex-session").is_none());
+        assert!(!root.join(".lint-ai/codex-memory").exists());
+        assert!(!root.join(".lint-ai/claude-memory").exists());
+        assert!(shared.source_document_by_id("workspace-guide").is_some());
+        assert!(shared.source_document_by_id("codex-session").is_some());
+        assert!(shared.source_document_by_id("claude-session").is_some());
+
+        // Second open reuses the migrated state without re-running migration.
+        let reopened = open_workspace_memory_store(&root, SHARED_MEMORY_DIR, &[], || {
+            panic!("the current workspace store must be reused")
+        })
+        .unwrap();
+        assert!(reopened.source_document_by_id("codex-session").is_some());
+        assert!(reopened.source_document_by_id("claude-session").is_some());
 
         let _ = fs::remove_dir_all(root);
     }

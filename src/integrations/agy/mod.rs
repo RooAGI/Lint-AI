@@ -100,7 +100,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
 }
 
 pub fn run_server(root: &Path, options: AgyServerOptions<'_>) -> Result<()> {
-    gemini_cli::run_server_for(root, RecordingProvider::Agy, "agy", "agy-memory", options)
+    gemini_cli::run_server_for(root, RecordingProvider::Agy, "agy", options)
 }
 
 fn home_dir() -> Result<PathBuf> {

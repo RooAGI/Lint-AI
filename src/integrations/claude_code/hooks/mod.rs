@@ -480,7 +480,7 @@ fn open_store(root: &Path) -> Result<IndexStore> {
 }
 
 fn memory_root(root: &Path) -> PathBuf {
-    root.join(".lint-ai").join("claude-memory")
+    crate::integrations::mcp_index::shared_memory_root(root)
 }
 
 fn resolve_root(cwd: &Path, fallback_root: &Path) -> Result<PathBuf> {

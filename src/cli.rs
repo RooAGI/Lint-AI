@@ -26,6 +26,7 @@ pub enum SessionProvider {
     Codex,
     Gemini,
     Agy,
+    #[cfg(feature = "muse-code")]
     Muse,
 }
 

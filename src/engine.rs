@@ -2030,6 +2030,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Codex => "codex-memory",
                 crate::cli::SessionProvider::Gemini => "gemini-cli-memory",
                 crate::cli::SessionProvider::Agy => "agy-memory",
+                #[cfg(feature = "muse-code")]
                 crate::cli::SessionProvider::Muse => "muse-memory",
             };
             let output =
@@ -2082,6 +2083,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Agy => {
                     crate::integrations::session_recording::RecordingProvider::Agy
                 }
+                #[cfg(feature = "muse-code")]
                 crate::cli::SessionProvider::Muse => {
                     crate::integrations::session_recording::RecordingProvider::Muse
                 }
@@ -2130,6 +2132,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Agy => {
                     crate::integrations::session_recording::RecordingProvider::Agy
                 }
+                #[cfg(feature = "muse-code")]
                 crate::cli::SessionProvider::Muse => {
                     crate::integrations::session_recording::RecordingProvider::Muse
                 }

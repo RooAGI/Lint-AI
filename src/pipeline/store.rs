@@ -1215,8 +1215,21 @@ impl IndexStore {
         }
         self.temporal_facts =
             TemporalFactStore::from_records(self.records.values(), &self.chunk_lifecycle);
-        self.semantic_relations = SemanticRelationStore::try_from_documents(
-            self.source_docs.values(),
+        // Incremental semantic update: only reprocessed documents get fresh
+        // claims and only their canonical-claim neighborhoods get rebuilt
+        // relations. Tombstoned documents drop their claims. Untouched
+        // documents keep their existing claims, chains, and relations, which
+        // is identical to a full rebuild (differential-tested in
+        // semantic_relations::incremental_update_tests).
+        let changed_docs = reprocessed_doc_ids
+            .iter()
+            .filter_map(|doc_id| self.source_docs.get(doc_id))
+            .collect::<Vec<_>>();
+        let removed_docs = self.tombstones.iter().cloned().collect::<Vec<_>>();
+        self.semantic_relations.update_documents(
+            &self.source_docs,
+            &changed_docs,
+            &removed_docs,
             self.options.supersession,
         )?;
         let lexical_upserts = if self.snapshot.is_none() && self.snapshot_revision == 0 {

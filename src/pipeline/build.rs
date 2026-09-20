@@ -284,24 +284,58 @@ fn hash_opt_str(hasher: &mut Sha256, value: &Option<String>) {
     }
 }
 
+/// Schema version of the derived [`DocRecord`] build feeding
+/// [`doc_record_content_hash`].
+///
+/// This pins the *implementation* behind the hashed option identities: it
+/// must be bumped whenever anything that can change a derived record's
+/// content changes without renaming an option — the NER implementation or
+/// model, the term-ranker implementation, the chunking strategy
+/// implementation, claim extraction, key-entity ranking, or the set of
+/// fields fed into the hash.
+///
+/// Bumping it invalidates every stored hash (mismatch → exactly one full
+/// rebuild on the next refresh, after which the new hashes are stamped),
+/// so no separate version field on [`DocRecord`] is needed. Downgrades fail
+/// safe in the same direction (mismatch → rebuild).
+pub const DOC_RECORD_BUILD_VERSION: u32 = 1;
+
 /// Content hash gating the doc-record rebuild short-circuit in
 /// `IndexStore::prepare_pending_changes`.
 ///
 /// The hash covers every input that can change the resulting [`DocRecord`]:
 /// all record-affecting [`SourceDocument`] fields (including `concept`, which
-/// feeds the key-entity ranker, and the ordered `headings`/`links`/`filters`)
-/// plus the extraction-affecting option identities from
-/// [`extraction_identity`] (NER provider + model, term ranker), the chunking
-/// strategy and its numeric settings, and the claim-extraction flag.
+/// feeds the key-entity ranker, and the ordered `headings`/`links`/`filters`),
+/// the extraction-affecting option identities from [`extraction_identity`]
+/// (NER provider + model, term ranker), the chunking strategy and its numeric
+/// settings, the claim-extraction flag, and [`DOC_RECORD_BUILD_VERSION`], which
+/// pins the implementation behind those option identities.
 ///
 /// [`assemble_doc_record`] calls this to stamp each built record, so the
 /// cheap pre-build hash computed here and the hash on a stored record agree
 /// by construction. Keep the hashed field set in sync with
 /// `assemble_doc_record`: any input it starts (or stops) consuming must be
-/// added (or may be dropped) here, and the domain tag bumped.
+/// added (or may be dropped) here, and the domain tag bumped; whenever
+/// derived-record behavior changes without renaming an option, bump
+/// [`DOC_RECORD_BUILD_VERSION`] instead.
 pub(crate) fn doc_record_content_hash(
     source_doc: &SourceDocument,
     options: &PipelineOptions,
+) -> String {
+    doc_record_content_hash_with_version(source_doc, options, DOC_RECORD_BUILD_VERSION)
+}
+
+/// [`doc_record_content_hash`] parameterized by build version.
+///
+/// The version travels as data inside the hash (length-prefixed, like the
+/// other inputs) rather than as a struct field: any bump makes every stored
+/// hash mismatch, forcing exactly one rebuild. The domain tag stays fixed —
+/// it identifies the hash *construction format*, while the version pins the
+/// *build semantics*.
+pub(crate) fn doc_record_content_hash_with_version(
+    source_doc: &SourceDocument,
+    options: &PipelineOptions,
+    build_version: u32,
 ) -> String {
     let (ner_provider_name, term_ranker_name) = extraction_identity(options);
     let chunk_strategy_name = match options.chunk_strategy {
@@ -313,6 +347,9 @@ pub(crate) fn doc_record_content_hash(
     // Domain separator: bump if the hashed field set ever changes, so old
     // hashes never compare equal to new ones.
     hash_len_prefixed(&mut hasher, b"lint-ai-doc-record-content-hash/v1");
+    // Build version pins the implementation behind the option identities;
+    // any bump invalidates every stored hash (mismatch -> rebuild).
+    hash_len_prefixed(&mut hasher, &build_version.to_le_bytes());
     hash_len_prefixed(&mut hasher, source_doc.doc_id.as_bytes());
     hash_len_prefixed(&mut hasher, source_doc.source.as_bytes());
     hash_len_prefixed(&mut hasher, source_doc.content.as_bytes());

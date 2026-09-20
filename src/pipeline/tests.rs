@@ -1350,6 +1350,23 @@ fn doc_record_content_hash_is_stable_and_sensitive() {
 }
 
 #[test]
+fn doc_record_content_hash_build_version_invalidates() {
+    let options = PipelineOptions::default();
+    let doc = sample_doc("doc-1", "hello world");
+    let v1 = doc_record_content_hash_with_version(&doc, &options, 1);
+    let v2 = doc_record_content_hash_with_version(&doc, &options, 2);
+    assert_ne!(
+        v1, v2,
+        "a build version bump must invalidate every stored hash"
+    );
+    assert_eq!(
+        doc_record_content_hash(&doc, &options),
+        doc_record_content_hash_with_version(&doc, &options, DOC_RECORD_BUILD_VERSION),
+        "public wrapper must agree with the versioned core at the current build version"
+    );
+}
+
+#[test]
 fn identical_content_reupsert_skips_record_rebuild() {
     let mut index = IndexStore::new(segmented_test_options());
     let doc = sample_doc_with_group("doc-1", "group-a", "the quick brown fox jumps");

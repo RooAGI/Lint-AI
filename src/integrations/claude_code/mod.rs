@@ -16,6 +16,7 @@ use crate::integrations::session_recording::{
 use crate::pipeline::IndexStore;
 #[cfg(test)]
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+use crate::query_plan::PreparedQuery;
 #[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
@@ -355,7 +356,7 @@ impl ClaudeMcp {
 
         match tool_name {
             "search" => {
-                if let Some(name) = unknown_argument(&arguments, &["query", "top_k"]) {
+                if let Some(name) = unknown_argument(&arguments, &["query", "top_k", "provider"]) {
                     return Ok(error_response(
                         id,
                         -32602,
@@ -375,6 +376,10 @@ impl ClaudeMcp {
                     .and_then(Value::as_u64)
                     .unwrap_or(DEFAULT_QUERY_TOP_K as u64)
                     .clamp(1, 20) as usize;
+                let filters = match mcp_tools::search_provider_filters(&arguments) {
+                    Ok(filters) => filters,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
@@ -382,7 +387,7 @@ impl ClaudeMcp {
                     &mut *store,
                 )?;
                 let started = std::time::Instant::now();
-                let results = store.query(query, top_k);
+                let results = store.query_prepared(&PreparedQuery::new(query), top_k, &filters);
                 let _ = crate::telemetry::record_project_query(
                     &self.root,
                     started.elapsed().as_millis() as u64,
@@ -554,6 +559,7 @@ impl ClaudeMcp {
                     "properties": {
                         "query": { "type": "string" },
                         "top_k": { "type": "integer", "minimum": 1, "maximum": 20, "default": DEFAULT_QUERY_TOP_K },
+                        "provider": mcp_tools::provider_argument_schema(),
                     },
                     "required": ["query"],
                     "additionalProperties": false

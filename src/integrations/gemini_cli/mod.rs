@@ -18,6 +18,7 @@ use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
 use crate::pipeline::IndexStore;
+use crate::query_plan::PreparedQuery;
 use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
 use std::env;
@@ -249,6 +250,10 @@ impl GeminiMcp {
                     .and_then(Value::as_u64)
                     .unwrap_or(5)
                     .clamp(1, 20) as usize;
+                let filters = match mcp_tools::search_provider_filters(&args) {
+                    Ok(filters) => filters,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("initialized");
                 mcp_index::sync_memory_documents(
@@ -257,7 +262,7 @@ impl GeminiMcp {
                 )?;
                 store.refresh()?;
                 let started = std::time::Instant::now();
-                let results = store.query(query, top_k);
+                let results = store.query_prepared(&PreparedQuery::new(query), top_k, &filters);
                 let _ = crate::telemetry::record_project_query(
                     &self.root,
                     started.elapsed().as_millis() as u64,
@@ -344,7 +349,7 @@ fn tool_definitions() -> Vec<ToolDefinition> {
             name: "search".into(),
             description: "Search Gemini project memory.".into(),
             input_schema: schema(
-                json!({"query":{"type":"string"},"top_k":{"type":"integer"}}),
+                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema()}),
                 vec!["query"],
             ),
         },

@@ -47,9 +47,9 @@ Seven tools, same names across every supported agent:
 | `enable_lint_ai` / `disable_lint_ai` | Toggle memory retrieval and capture without touching config. |
 | `lint_ai_status` | Report independent memory and recording state. |
 
-MCP calls are explicit agent actions — the model calls `search` when it needs workspace evidence. (For automatic injection without a tool call, see the [lifecycle hooks](claude-code-memory.md).)
+MCP calls are explicit agent actions — the model calls `search` when it needs workspace evidence. (For automatic injection without a tool call, see the [lifecycle hooks](claude-code.md).)
 
-The memory behind these tools is the real thing, not a demo: the project's replay harnesses measure it end to end — [Claude Code](claude-code-memory.md) sessions continued in 7.05 s vs 22.47 s on native memory, [Codex](codex-memory.md) in 18.53 s vs 38.13 s, both with a fraction of the input tokens. Same index, same ranking, now callable over MCP.
+The memory behind these tools is the real thing, not a demo: the project's replay harnesses measure it end to end — [Claude Code](claude-code.md) sessions continued in 7.05 s vs 22.47 s on native memory, [Codex](codex.md) in 18.53 s vs 38.13 s, both with a fraction of the input tokens. Same index, same ranking, now callable over MCP.
 
 ## How it connects
 
@@ -128,6 +128,6 @@ Memory state is project- and provider-scoped: the same project indexed once serv
 
 - [MCP interface reference](mcp.md) — the complete tool contract and server modes
 - [Stale agent memory](stale-memory.md) — why current-state ranking beats similarity ranking
-- [Claude Code memory](claude-code-memory.md) / [Codex memory](codex-memory.md) — the full agent integrations
+- [Claude Code memory](claude-code.md) / [Codex memory](codex.md) — the full agent integrations
 - [Agent memory guide](agent-memory.md) — the bigger picture on persistent agent memory
 - [Quickstart](quickstart.md) — the five-minute path from zero to indexed

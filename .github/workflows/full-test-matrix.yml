@@ -1,0 +1,46 @@
+name: Full test matrix
+
+# Runs the complete compile+test matrix on every PR so feature-gated code
+# can never again break while default-feature checks stay green.
+# (Formatting is covered by the temporal-fix validation workflow; this job
+# intentionally sticks to compilation and tests.)
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/full-test-matrix.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/full-test-matrix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Test default features (all targets)
+        run: cargo test --all-targets
+
+      - name: Test agent integrations
+        run: cargo test --all-targets --features agent-integrations
+
+      - name: Check all features compile (all targets)
+        run: cargo check --all-features --all-targets
+
+      - name: Check no-default-features compiles
+        run: cargo check --no-default-features --lib

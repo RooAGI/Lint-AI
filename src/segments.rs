@@ -270,7 +270,7 @@ pub struct SegmentSpecificEnrichmentDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct SegmentEnrichedQueryDiagnostics {
+pub struct SegmentEnrichedQueryDiagnostics {
     pub segment_id: String,
     pub base_query: String,
     pub enriched_query: String,
@@ -282,7 +282,7 @@ struct SegmentEnrichedQueryDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct TemporalSegmentExpansion {
+pub struct TemporalSegmentExpansion {
     pub segment_id: String,
     pub source_segment_id: String,
     pub relation: String,
@@ -292,7 +292,7 @@ struct TemporalSegmentExpansion {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ConnectedSegmentExpansion {
+pub struct ConnectedSegmentExpansion {
     pub segment_id: String,
     pub source_segment_id: String,
     pub score: f32,

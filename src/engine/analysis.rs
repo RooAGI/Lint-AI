@@ -1,0 +1,577 @@
+use crate::config::{normalize_list, Config};
+use crate::filters::is_noise_concept;
+use crate::graph::{normalize_concept, Graph};
+use crate::index::MemoryIndex;
+use crate::pipeline::{
+    source_documents_to_tier1_inputs, ChunkStrategy, Tier1NerProvider, Tier1TermRankerKind,
+};
+use crate::source::SourceDocument;
+use crate::tier1::{
+    default_spacy_script_path, HeuristicKeyEntityRanker, ImportantTermRanker, KeyEntityRanker,
+    SpacyKeyEntityRanker, Tier1DocEntities, Tier1DocInput, Tier1DocTerms,
+};
+use aho_corasick::AhoCorasick;
+use anyhow::Result;
+use comrak::{
+    nodes::{AstNode, NodeValue},
+    parse_document, Arena, ComrakOptions,
+};
+use deunicode::deunicode;
+use inflector::Inflector;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use unicode_normalization::UnicodeNormalization;
+
+pub(crate) fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
+    crate::adapters::graph_to_source_documents(graph)
+}
+fn surface_forms(raw: &str) -> Vec<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return vec![];
+    }
+    let mut forms: HashSet<String> = HashSet::new();
+    let lowered = deunicode(&raw.nfc().collect::<String>().to_lowercase()).to_lowercase();
+    forms.insert(lowered.clone());
+    let spaced = lowered.replace(['_', '-'], " ");
+    forms.insert(spaced.clone());
+    forms.insert(lowered.replace(['_', '-'], ""));
+    forms.insert(spaced.to_plural());
+    forms.insert(spaced.to_singular());
+    forms.into_iter().filter(|s| !s.is_empty()).collect()
+}
+
+pub(crate) fn build_matcher(
+    graph: &Graph,
+    cfg: &Config,
+) -> (Option<AhoCorasick>, Vec<String>, HashMap<String, String>) {
+    let mut concept_raw: HashMap<String, String> = HashMap::new();
+    for page in &graph.pages {
+        if is_noise_concept(&page.concept, cfg) {
+            continue;
+        }
+        if let Some(prefix) = cfg.scope_prefix.as_ref() {
+            let rel = page.rel_path.to_lowercase();
+            if !rel.starts_with(&prefix.to_lowercase()) {
+                continue;
+            }
+        }
+        concept_raw
+            .entry(page.concept.clone())
+            .or_insert_with(|| page.raw_concept.clone());
+    }
+
+    let mut forms = Vec::new();
+    let mut form_to_concept: HashMap<String, String> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+
+    for (concept, raw) in &concept_raw {
+        for form in surface_forms(raw) {
+            if let Some(existing) = form_to_concept.get(&form) {
+                if existing != concept {
+                    ambiguous.insert(form.clone());
+                }
+                continue;
+            }
+            form_to_concept.insert(form.clone(), concept.clone());
+            forms.push(form);
+        }
+    }
+
+    forms.retain(|form| !ambiguous.contains(form));
+    if forms.is_empty() {
+        return (None, forms, form_to_concept);
+    }
+    let ac = AhoCorasick::new(&forms).ok();
+    (ac, forms, form_to_concept)
+}
+
+fn heading_text<'a>(node: &'a AstNode<'a>) -> String {
+    let mut text = String::new();
+    for child in node.children() {
+        if let NodeValue::Text(ref t) = child.data.borrow().value {
+            text.push_str(t);
+        }
+    }
+    text.trim().to_string()
+}
+
+fn collect_section_concepts(
+    content: &str,
+    ac: &AhoCorasick,
+    forms: &[String],
+    form_to_concept: &HashMap<String, String>,
+    cfg: &Config,
+) -> Vec<(String, HashSet<String>)> {
+    let arena = Arena::new();
+    let ast = parse_document(&arena, content, &ComrakOptions::default());
+    let mut sections: Vec<(String, HashSet<String>)> = Vec::new();
+    let mut section_index: HashMap<String, usize> = HashMap::new();
+    let mut current = "(unscoped)".to_string();
+
+    let idx = sections.len();
+    sections.push((current.clone(), HashSet::new()));
+    section_index.insert(current.clone(), idx);
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk<'a>(
+        node: &'a AstNode<'a>,
+        in_code: bool,
+        current: &mut String,
+        sections: &mut Vec<(String, HashSet<String>)>,
+        section_index: &mut HashMap<String, usize>,
+        ac: &AhoCorasick,
+        forms: &[String],
+        form_to_concept: &HashMap<String, String>,
+        cfg: &Config,
+    ) {
+        let value = &node.data.borrow().value;
+        let now_in_code = in_code || matches!(value, NodeValue::Code(_) | NodeValue::CodeBlock(_));
+
+        if let NodeValue::Heading(_) = value {
+            let text = heading_text(node);
+            if !text.is_empty() {
+                *current = text;
+            } else {
+                *current = "(untitled section)".to_string();
+            }
+            if !section_index.contains_key(current) {
+                let idx = sections.len();
+                sections.push((current.clone(), HashSet::new()));
+                section_index.insert(current.clone(), idx);
+            }
+            return;
+        }
+
+        if !now_in_code {
+            if let NodeValue::Text(ref t) = value {
+                let content_lower = normalize_concept(t);
+                let mut found: HashSet<String> = HashSet::new();
+                for mat in ac.find_iter(&content_lower) {
+                    let start = mat.start();
+                    let end = mat.end();
+                    let left_ok = if start == 0 {
+                        true
+                    } else {
+                        content_lower[..start]
+                            .chars()
+                            .next_back()
+                            .map(|c| !c.is_ascii_alphanumeric())
+                            .unwrap_or(true)
+                    };
+                    let right_ok = if end >= content_lower.len() {
+                        true
+                    } else {
+                        content_lower[end..]
+                            .chars()
+                            .next()
+                            .map(|c| !c.is_ascii_alphanumeric())
+                            .unwrap_or(true)
+                    };
+                    if !(left_ok && right_ok) {
+                        continue;
+                    }
+                    let form = &forms[mat.pattern()];
+                    if let Some(concept) = form_to_concept.get(form) {
+                        if !is_noise_concept(concept, cfg) {
+                            found.insert(concept.clone());
+                        }
+                    }
+                }
+                if !found.is_empty() {
+                    let idx = *section_index
+                        .get(current)
+                        .unwrap_or_else(|| section_index.get("(unscoped)").unwrap());
+                    let entry = &mut sections[idx].1;
+                    for concept in found {
+                        entry.insert(concept);
+                    }
+                }
+            }
+        }
+
+        for child in node.children() {
+            walk(
+                child,
+                now_in_code,
+                current,
+                sections,
+                section_index,
+                ac,
+                forms,
+                form_to_concept,
+                cfg,
+            );
+        }
+    }
+
+    walk(
+        ast,
+        false,
+        &mut current,
+        &mut sections,
+        &mut section_index,
+        ac,
+        forms,
+        form_to_concept,
+        cfg,
+    );
+
+    sections
+}
+
+pub(crate) fn debug_phrase_matches(
+    content: &str,
+    ac: &AhoCorasick,
+    forms: &[String],
+    form_to_concept: &HashMap<String, String>,
+    cfg: &Config,
+) -> Vec<(String, String, usize, usize)> {
+    let arena = Arena::new();
+    let ast = parse_document(&arena, content, &ComrakOptions::default());
+    let mut out = Vec::new();
+
+    fn walk<'a>(
+        node: &'a AstNode<'a>,
+        in_code: bool,
+        out: &mut Vec<(String, String, usize, usize)>,
+        ac: &AhoCorasick,
+        forms: &[String],
+        form_to_concept: &HashMap<String, String>,
+        cfg: &Config,
+    ) {
+        let value = &node.data.borrow().value;
+        let now_in_code = in_code || matches!(value, NodeValue::Code(_) | NodeValue::CodeBlock(_));
+
+        if !now_in_code {
+            if let NodeValue::Text(ref t) = value {
+                let normalized = normalize_concept(t);
+                for mat in ac.find_iter(&normalized) {
+                    let start = mat.start();
+                    let end = mat.end();
+                    let left_ok = if start == 0 {
+                        true
+                    } else {
+                        normalized[..start]
+                            .chars()
+                            .next_back()
+                            .map(|c| !c.is_ascii_alphanumeric())
+                            .unwrap_or(true)
+                    };
+                    let right_ok = if end >= normalized.len() {
+                        true
+                    } else {
+                        normalized[end..]
+                            .chars()
+                            .next()
+                            .map(|c| !c.is_ascii_alphanumeric())
+                            .unwrap_or(true)
+                    };
+                    if !(left_ok && right_ok) {
+                        continue;
+                    }
+                    let form = &forms[mat.pattern()];
+                    if let Some(concept) = form_to_concept.get(form) {
+                        if is_noise_concept(concept, cfg) {
+                            continue;
+                        }
+                        out.push((t.to_string(), concept.clone(), start, end));
+                    }
+                }
+            }
+        }
+
+        for child in node.children() {
+            walk(child, now_in_code, out, ac, forms, form_to_concept, cfg);
+        }
+    }
+
+    walk(ast, false, &mut out, ac, forms, form_to_concept, cfg);
+    out
+}
+
+/// Normalize a section heading to a stable bucket name.
+pub fn normalize_heading(name: &str) -> String {
+    let lower = name.trim().to_lowercase();
+    if lower.is_empty() || lower == "(unscoped)" || lower == "(untitled section)" {
+        return "unscoped".to_string();
+    }
+    if lower.contains("related") {
+        return "related".to_string();
+    }
+    if lower.contains("troubleshoot") {
+        return "troubleshooting".to_string();
+    }
+    if lower.contains("setup") || lower.contains("quickstart") || lower.contains("quick start") {
+        return "setup".to_string();
+    }
+    if lower.contains("config") {
+        return "configuration".to_string();
+    }
+    if lower.contains("overview") || lower.contains("what it is") || lower.contains("history") {
+        return "overview".to_string();
+    }
+    if lower.contains("security") || lower.contains("access control") || lower.contains("auth") {
+        return "security".to_string();
+    }
+    if lower.contains("routing") || lower.contains("session") {
+        return "routing".to_string();
+    }
+    lower
+}
+
+pub(crate) fn show_concepts_by_section(graph: &Graph, cfg: &Config) {
+    let (ac, forms, form_to_concept) = build_matcher(graph, cfg);
+    let ac = match ac {
+        Some(ac) => ac,
+        None => return,
+    };
+    let ignore_sections = normalize_list(&cfg.ignore_sections);
+    let mut aggregated: BTreeMap<String, HashMap<String, usize>> = BTreeMap::new();
+
+    for page in &graph.pages {
+        let sections = collect_section_concepts(&page.content, &ac, &forms, &form_to_concept, cfg);
+        for (heading, concepts) in sections {
+            if concepts.is_empty() {
+                continue;
+            }
+            let key = normalize_heading(&heading);
+            if ignore_sections.contains(&key) {
+                continue;
+            }
+            let entry = aggregated.entry(key).or_default();
+            for concept in concepts {
+                *entry.entry(concept).or_insert(0) += 1;
+            }
+        }
+    }
+
+    for (section, counts) in aggregated {
+        let mut list: Vec<(String, usize)> = counts.into_iter().collect();
+        list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        println!("Section: {}", section);
+        for (concept, count) in list {
+            println!("- {} ({})", concept, count);
+        }
+    }
+}
+
+pub(crate) fn common_dir_prefix(paths: &[String]) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+    let parts: Vec<Vec<&str>> = paths.iter().map(|p| p.split('/').collect()).collect();
+    let mut prefix: Vec<&str> = Vec::new();
+    'outer: for idx in 0..parts[0].len().saturating_sub(1) {
+        let candidate = parts[0][idx];
+        for path_parts in &parts {
+            if path_parts.get(idx).copied() != Some(candidate) {
+                break 'outer;
+            }
+        }
+        prefix.push(candidate);
+    }
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(format!("{}/", prefix.join("/")))
+    }
+}
+
+/// Generate the `--analyze` output for tests and snapshotting.
+pub fn analyze_for_tests(graph: &Graph, cfg: &Config) -> String {
+    let (ac, forms, form_to_concept) = build_matcher(graph, cfg);
+    let ac = match ac {
+        Some(ac) => ac,
+        None => return "Suggested config:\n{\n  \"stopwords\": [],\n  \"ignore_sections\": [\"unscoped\", \"related\"],\n  \"ignore_crossref_sections\": [\"unscoped\", \"related\"],\n  \"ignore_paths\": [],\n  \"allowlist_concepts\": []\n}\n\nStats:\npages: 0\n".to_string(),
+    };
+    let mut concept_pages: HashMap<String, usize> = HashMap::new();
+    let mut section_counts: HashMap<String, usize> = HashMap::new();
+    let mut page_count = 0usize;
+
+    for page in &graph.pages {
+        page_count += 1;
+        let sections = collect_section_concepts(&page.content, &ac, &forms, &form_to_concept, cfg);
+        let mut page_concepts: HashSet<String> = HashSet::new();
+        for (heading, concepts) in sections {
+            if !heading.trim().is_empty() {
+                let key = normalize_heading(&heading);
+                *section_counts.entry(key).or_insert(0) += 1;
+            }
+            for concept in concepts {
+                page_concepts.insert(concept);
+            }
+        }
+        for concept in page_concepts {
+            *concept_pages.entry(concept).or_insert(0) += 1;
+        }
+    }
+
+    let mut concept_list: Vec<(String, usize)> = concept_pages.into_iter().collect();
+    concept_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut suggested_stopwords = Vec::new();
+    for (concept, count) in &concept_list {
+        if page_count > 0 && (*count as f64 / page_count as f64) >= 0.4 {
+            suggested_stopwords.push(concept.clone());
+        }
+    }
+
+    let mut section_list: Vec<(String, usize)> = section_counts.into_iter().collect();
+    section_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut suggested_ignore_sections = Vec::new();
+    for (section, count) in &section_list {
+        if page_count > 0
+            && (*count as f64 / page_count as f64) >= 0.3
+            && (section == "related" || section == "unscoped")
+        {
+            suggested_ignore_sections.push(section.clone());
+        }
+    }
+
+    let rel_paths: Vec<String> = graph.pages.iter().map(|p| p.rel_path.clone()).collect();
+    let scope_prefix = common_dir_prefix(&rel_paths);
+
+    let mut out = String::new();
+    out.push_str("Suggested config:\n");
+    out.push_str("{\n");
+    out.push_str(&format!("  \"stopwords\": {:?},\n", suggested_stopwords));
+    out.push_str(&format!(
+        "  \"ignore_sections\": {:?},\n",
+        suggested_ignore_sections
+    ));
+    out.push_str(&format!(
+        "  \"ignore_crossref_sections\": {:?},\n",
+        suggested_ignore_sections
+    ));
+    out.push_str("  \"ignore_paths\": [],\n");
+    if let Some(prefix) = scope_prefix {
+        out.push_str("  \"allowlist_concepts\": [],\n");
+        out.push_str(&format!("  \"scope_prefix\": \"{}\"\n", prefix));
+    } else {
+        out.push_str("  \"allowlist_concepts\": []\n");
+    }
+    out.push_str("}\n\n");
+    out.push_str("Stats:\n");
+    out.push_str(&format!("pages: {}\n", page_count));
+    out.push_str("top concepts:\n");
+    for (concept, count) in concept_list.iter().take(15) {
+        out.push_str(&format!("- {} ({})\n", concept, count));
+    }
+    out.push_str("top sections:\n");
+    for (section, count) in section_list.iter().take(10) {
+        out.push_str(&format!("- {} ({})\n", section, count));
+    }
+    out
+}
+
+pub(crate) fn analyze_corpus(graph: &Graph, cfg: &Config) {
+    let out = analyze_for_tests(graph, cfg);
+    print!("{}", out);
+}
+
+pub(crate) fn show_tier1_entities(
+    graph: &Graph,
+    provider: &Tier1NerProvider,
+    spacy_model: &str,
+) -> Result<()> {
+    let source_docs = graph_to_source_documents(graph);
+    let docs: Vec<Tier1DocInput> = source_documents_to_tier1_inputs(&source_docs);
+    let heuristic = HeuristicKeyEntityRanker;
+    let mut heuristic_by_doc = heuristic.rank_docs(&docs)?;
+    let mut by_doc = match provider {
+        Tier1NerProvider::Heuristic => heuristic_by_doc.clone(),
+        Tier1NerProvider::Spacy => {
+            let spacy = SpacyKeyEntityRanker {
+                model: spacy_model.to_string(),
+                script_path: default_spacy_script_path().display().to_string(),
+            };
+            match spacy.rank_docs(&docs) {
+                Ok(out) => out,
+                Err(err) => {
+                    eprintln!(
+                        "warning: {} ranker unavailable ({}), falling back to heuristic",
+                        spacy.name(),
+                        err
+                    );
+                    heuristic_by_doc.clone()
+                }
+            }
+        }
+    };
+
+    let mut docs_out = Vec::new();
+    for doc in docs {
+        let key_entities = by_doc
+            .remove(&doc.id)
+            .or_else(|| heuristic_by_doc.remove(&doc.id))
+            .unwrap_or_default();
+        docs_out.push(Tier1DocEntities {
+            id: doc.id,
+            source: doc.source,
+            key_entities,
+        });
+    }
+    println!("{}", serde_json::to_string_pretty(&docs_out)?);
+    Ok(())
+}
+
+pub(crate) fn show_tier1_terms(graph: &Graph, ranker_kind: &Tier1TermRankerKind) -> Result<()> {
+    let source_docs = graph_to_source_documents(graph);
+    let docs: Vec<Tier1DocInput> = source_documents_to_tier1_inputs(&source_docs);
+
+    let ranker: Box<dyn ImportantTermRanker> = match ranker_kind {
+        Tier1TermRankerKind::Yake => Box::new(crate::tier1::YakeStyleTermRanker),
+        Tier1TermRankerKind::Rake => Box::new(crate::tier1::RakeStyleTermRanker),
+        Tier1TermRankerKind::Cvalue => Box::new(crate::tier1::CValueStyleTermRanker),
+        Tier1TermRankerKind::Textrank => Box::new(crate::tier1::TextRankStyleTermRanker),
+    };
+
+    let mut out = Vec::new();
+    for doc in docs {
+        let important_terms = ranker.rank_terms(&doc);
+        out.push(Tier1DocTerms {
+            id: doc.id,
+            source: doc.source,
+            important_terms,
+        });
+    }
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_memory_index(
+    graph: &Graph,
+    provider: &Tier1NerProvider,
+    spacy_model: &str,
+    ranker_kind: &Tier1TermRankerKind,
+    chunk_strategy: &ChunkStrategy,
+    chunk_lines: usize,
+    chunk_overlap: usize,
+    chunk_target_tokens: usize,
+    chunk_max_tokens: usize,
+    lexical_dir: Option<&Path>,
+) -> Result<MemoryIndex> {
+    let source_docs = graph_to_source_documents(graph);
+    let options = crate::pipeline::PipelineOptions {
+        ner_provider: provider.clone(),
+        spacy_model: spacy_model.to_string(),
+        term_ranker: ranker_kind.clone(),
+        chunk_strategy: chunk_strategy.clone(),
+        chunk_lines,
+        chunk_overlap,
+        chunk_target_tokens,
+        chunk_max_tokens,
+        text_rerank_ngram: false,
+        text_rerank_lcs: false,
+        claim_extraction: false,
+        supersession: crate::semantic_relations::SupersessionOptions::default(),
+        index_location: lexical_dir
+            .map(|path| crate::pipeline::IndexLocation::Explicit(path.to_path_buf()))
+            .unwrap_or(crate::pipeline::IndexLocation::InMemory),
+        memory_index_layout: crate::pipeline::MemoryIndexLayout::Single,
+    };
+    crate::pipeline::build_query_snapshot(&source_docs, &options)
+}

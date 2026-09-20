@@ -246,7 +246,7 @@ fn capture(
         document_type
     );
     let mut filters = BTreeMap::from([
-        ("integration".to_string(), provider.as_str().to_string()),
+        ("provider".to_string(), provider.as_str().to_string()),
         ("session_id".to_string(), input.session_id.clone()),
         ("document_type".to_string(), document_type.to_string()),
     ]);
@@ -535,7 +535,7 @@ mod tests {
         assert!(contents.iter().any(|c| c.contains("Gemini-only")));
         assert!(contents.iter().any(|c| c.contains("AGY-only")));
         for document in shared.source_documents() {
-            let provider = document.filters.get("integration").unwrap();
+            let provider = document.filters.get("provider").unwrap();
             assert!(provider == "gemini-cli" || provider == "agy");
             assert!(document
                 .group_id

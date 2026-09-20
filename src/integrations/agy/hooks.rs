@@ -298,7 +298,7 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
     let body = messages.join("\n\n");
     let source = format!("agy://{session_id}/session-summary");
     let mut filters = std::collections::BTreeMap::new();
-    filters.insert("integration".to_string(), "agy".to_string());
+    filters.insert("provider".to_string(), "agy".to_string());
     filters.insert("session_id".to_string(), session_id.to_string());
     filters.insert("document_type".to_string(), "session-summary".to_string());
     filters.insert("source_type".to_string(), "session-memory".to_string());

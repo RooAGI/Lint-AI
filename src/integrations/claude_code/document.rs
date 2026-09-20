@@ -45,7 +45,7 @@ impl ClaudeCodeDocument {
             project_id, self.session_id, document_type
         );
         let mut filters = BTreeMap::from([
-            ("integration".to_string(), "claude-code".to_string()),
+            ("provider".to_string(), "claude-code".to_string()),
             ("project_id".to_string(), project_id.clone()),
             ("session_id".to_string(), self.session_id.clone()),
             ("document_type".to_string(), document_type.to_string()),

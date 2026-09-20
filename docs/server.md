@@ -32,23 +32,23 @@ Provider lifecycle telemetry is read from `<project-root>/.lint-ai/provider-tele
 the project root defaults to the server's current directory and can be set with
 `--project-root` or `LINT_AI_PROJECT_ROOT`.
 With only `--project-root`, one server can inspect the shared workspace store
-and all provider-private memory stores in the dashboard. A project now uses this
+and the shared memory store in the dashboard. A project now uses this
 layout:
 
 ```text
 .lint-ai/
   workspace-memory/   # code and documentation, indexed once for the project
-  codex-memory/       # Codex session memories
-  claude-memory/      # Claude Code session memories
-  gemini-cli-memory/  # Gemini CLI session memories
-  agy-memory/         # AGY session memories
+  memory/             # session memories, shared by all agents
 ```
 
-Each provider's MCP search composes `workspace-memory` with only that provider's
-private memory at query time. HTTP memory operations use the selected primary
-store; the provider tabs show each provider's private store and its individual
-document, record, revision, and segment state. Legacy `*-mcp-index` directories
-are recognized for compatibility but are no longer created.
+MCP search composes `workspace-memory` with the shared `memory/` store at query
+time; the provider travels on each document (`integration`, `author_agent`,
+`{provider}-session:{id}` group ids) instead of in the directory layout.
+Legacy per-provider stores (`claude-memory/`, `codex-memory/`,
+`gemini-cli-memory/`, `agy-memory/`, `muse-memory/`) are migrated into
+`memory/` on first run and removed once their migration succeeds.
+Legacy `*-mcp-index` directories are recognized for compatibility but are no
+longer created.
 
 The server publishes a segmented memory index grouped by `session_id` and routes
 each search to the three most locally distinctive candidate segments.

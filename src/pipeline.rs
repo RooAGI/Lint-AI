@@ -22,9 +22,7 @@ use crate::tier1::{
 use anyhow::Result;
 use clap::ValueEnum;
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{
-    new_debouncer, DebounceEventResult, Debouncer, RecommendedCache,
-};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;

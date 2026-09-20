@@ -57,18 +57,23 @@ relevant context between agent sessions. It is not the client provider's
 built-in memory layer. The provider's native memory and Lint-AI memory can be
 enabled independently, or both can be enabled for comparison and fallback.
 
-Each provider has an isolated store because its lifecycle payloads and
-transcript formats differ:
+All providers share one memory store per project; only the lifecycle payloads
+and transcript formats differ per provider:
 
 ```text
-<project>/.lint-ai/claude-memory/
-<project>/.lint-ai/codex-memory/
+<project>/.lint-ai/memory/
 ```
 
-The stores share the Rust indexing and retrieval implementation, but records
-are tagged with their provider and session provenance. This prevents Claude
-and Codex hook payloads from being silently treated as the same lifecycle
-format while still allowing common search and index behavior.
+Every record is tagged with its provider and session provenance
+(`integration`, `author_agent`, `{provider}-session:{id}` group ids), so a
+decision recorded by Claude is visible to Codex and vice versa. This keeps
+Claude and Codex hook payloads distinguishable as lifecycle formats while
+letting all agents search the same index.
+
+On first run, legacy per-provider stores (`.lint-ai/claude-memory/`,
+`.lint-ai/codex-memory/`, `.lint-ai/gemini-cli-memory/`,
+`.lint-ai/agy-memory/`, `.lint-ai/muse-memory/`) are migrated into
+`.lint-ai/memory/` and removed once their migration succeeds.
 
 ### Retrieval hooks
 
@@ -173,13 +178,12 @@ The server accepts both newline-delimited JSON-RPC and MCP
 Index state is persisted below the project and synchronized before searches:
 
 ```text
-<project>/.lint-ai/claude-memory/
-<project>/.lint-ai/codex-memory/
+<project>/.lint-ai/memory/
 ```
 
-The stores are separate because Claude and Codex capture different lifecycle
-payloads and document schemas. They use the same indexing and retrieval
-implementation and can be queried through the same MCP tool contract.
+The shared store serves every provider through the same indexing and
+retrieval implementation and the same MCP tool contract; provider
+attribution travels on the documents, not in the directory layout.
 
 ## Session recording and controls
 
@@ -336,5 +340,5 @@ includes model tool selection, prompt interpretation, and client latency.
 - Keep MCP startup observable through health output and optional tracing.
 - Reuse the shared transport, index lifecycle, and health modules.
 - Treat MCP availability and model invocation as separate measurements.
-- Keep provider-specific stores isolated even though their retrieval engine is
-  shared.
+- Keep all providers on the single shared store; provider attribution lives on
+  the documents, not in the directory layout.

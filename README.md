@@ -146,12 +146,17 @@ cargo build --release --features claude-code,codex
 ./target/release/lint-ai --codex-install /path/to/project
 ```
 
-Provider memory remains isolated by project and provider:
+All agents share one project-scoped memory store:
 
 ```text
-/path/to/project/.lint-ai/claude-memory/
-/path/to/project/.lint-ai/codex-memory/
+/path/to/project/.lint-ai/memory/
 ```
+
+Upgrading from an older version? Legacy per-provider stores
+(`.lint-ai/claude-memory/`, `.lint-ai/codex-memory/`,
+`.lint-ai/gemini-cli-memory/`, `.lint-ai/agy-memory/`,
+`.lint-ai/muse-memory/`) are migrated into `.lint-ai/memory/` on first run
+and removed once their migration succeeds.
 
 The shared MCP controls include session recording, memory listing, and runtime enable/disable controls:
 

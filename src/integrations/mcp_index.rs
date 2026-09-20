@@ -1,3 +1,4 @@
+use crate::integrations::session_recording::{provider_state_dir, RecordingProvider};
 pub use crate::pipeline::WorkspaceWatcher;
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
@@ -47,6 +48,120 @@ impl Drop for StoreInitLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+/// Directory name (under `.lint-ai/`) for the shared cross-provider memory
+/// store. All agents read and write the same memory; the provider is kept as
+/// per-document attribution (`filters.provider`, `author_agent`, and the
+/// `{provider}-session:{id}` group id) rather than as a storage silo.
+pub const SHARED_MEMORY_DIR: &str = "memory";
+
+/// Legacy per-provider memory directories, migrated into [`SHARED_MEMORY_DIR`]
+/// on first use. Kept in sync with the providers that used to own a silo.
+const LEGACY_PROVIDERS: &[RecordingProvider] = &[
+    RecordingProvider::Claude,
+    RecordingProvider::Codex,
+    RecordingProvider::Gemini,
+    RecordingProvider::Agy,
+    RecordingProvider::Muse,
+];
+
+/// Directory name (under `.lint-ai/`) of the legacy per-provider memory silo
+/// for `provider`, e.g. `codex-memory`.
+fn legacy_provider_memory_dir(provider: RecordingProvider) -> String {
+    format!("{}-memory", provider.as_str())
+}
+
+/// Path to the shared memory store for a workspace root.
+pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
+    root.join(".lint-ai").join(SHARED_MEMORY_DIR)
+}
+
+/// One-time, idempotent migration of legacy per-provider memory stores into
+/// the shared store. Each legacy store's documents are upserted (provider
+/// attribution travels with the documents, so nothing is lost or duplicated),
+/// and the legacy directory is removed only after the shared store refreshes
+/// successfully. Failures leave the legacy directory untouched.
+pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
+    let lint_ai = root.join(".lint-ai");
+    let shared_root = lint_ai.join(SHARED_MEMORY_DIR);
+    let mut migrated_any = false;
+    for provider in LEGACY_PROVIDERS {
+        let provider = *provider;
+        let legacy_root = lint_ai.join(legacy_provider_memory_dir(provider));
+        if !legacy_root.exists() {
+            continue;
+        }
+        // The per-provider on/off state (`integration.json`) now lives outside
+        // the legacy directory; carry it over before the directory is removed
+        // so a disabled provider is not silently re-enabled by migration.
+        // A state file already at the new location wins (it is fresher).
+        let legacy_state = legacy_root.join("integration.json");
+        if legacy_state.is_file() {
+            let state_dir = provider_state_dir(provider, root);
+            let new_state = state_dir.join("integration.json");
+            if !new_state.exists() {
+                fs::create_dir_all(&state_dir)?;
+                fs::rename(&legacy_state, &new_state)?;
+            }
+        }
+        let documents: Vec<SourceDocument> =
+            match IndexStore::at_path(&legacy_root, segmented_store_options()) {
+                Ok(legacy_store) => legacy_store
+                    .source_documents()
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+                // A concurrent server migrated and removed the directory first.
+                Err(error) if is_not_found(&error) => continue,
+                Err(error) => return Err(error),
+            };
+        if documents.is_empty() {
+            let _ = fs::remove_dir_all(&legacy_root);
+            continue;
+        }
+        let mut shared = IndexStore::at_path(&shared_root, segmented_store_options())?;
+        for mut document in documents {
+            normalize_migrated_document(&mut document, provider);
+            shared.upsert(document);
+        }
+        shared.refresh()?;
+        match fs::remove_dir_all(&legacy_root) {
+            Ok(()) => {}
+            // A concurrent server removed it first; the documents are already
+            // in the shared store.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        migrated_any = true;
+    }
+    if migrated_any {
+        trace_event("migrated legacy provider memory stores into shared memory");
+    }
+    Ok(())
+}
+
+/// Normalize a document copied out of a legacy per-provider silo.
+/// Older Lint-AI versions stamped documents with `filters.integration`
+/// (values like "claude-code", and the key itself is pre-canonicalization);
+/// the shared store and the MCP `provider` search argument use the
+/// canonical `filters.provider` values. The legacy directory is
+/// authoritative for which provider captured a document, so migration
+/// stamps the canonical value and drops the old key. Without this, a
+/// provider-filtered search would miss every migrated memory.
+fn normalize_migrated_document(document: &mut SourceDocument, provider: RecordingProvider) {
+    document.filters.remove("integration");
+    document
+        .filters
+        .insert("provider".to_string(), provider.as_str().to_string());
+}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 pub fn segmented_store_options() -> PipelineOptions {
@@ -119,6 +234,12 @@ pub fn open_workspace_memory_store(
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<IndexStore> {
+    // One-time migration: legacy per-provider silos (e.g. `claude-memory/`)
+    // merge into the shared `memory/` store. New callers pass
+    // `SHARED_MEMORY_DIR`; the parameter is kept for the transition.
+    if memory_name == SHARED_MEMORY_DIR {
+        migrate_legacy_provider_memory_dirs(root)?;
+    }
     let workspace_root = root.join(".lint-ai").join(WORKSPACE_MEMORY_NAME);
     let _init_lock = StoreInitLock::acquire(&workspace_root)?;
     let mut workspace = IndexStore::at_path(&workspace_root, segmented_store_options())?;
@@ -278,6 +399,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
 
+        // Legacy per-provider silos, as written by older Lint-AI versions.
         for (memory_name, id) in [
             ("codex-memory", "codex-session"),
             ("claude-memory", "claude-session"),
@@ -288,7 +410,9 @@ mod tests {
             memory.refresh().unwrap();
         }
 
-        let codex = open_workspace_memory_store(&root, "codex-memory", &[], || {
+        // Opening with the shared dir migrates the silos and composes one
+        // store where every provider's memories are visible.
+        let shared = open_workspace_memory_store(&root, SHARED_MEMORY_DIR, &[], || {
             Ok(vec![document(
                 "workspace-guide",
                 "docs/guide.md",
@@ -296,22 +420,164 @@ mod tests {
             )])
         })
         .unwrap();
-        let claude = open_workspace_memory_store(&root, "claude-memory", &[], || {
-            panic!("the current workspace store must be reused")
-        })
-        .unwrap();
 
         assert!(root
             .join(".lint-ai/workspace-memory/metadata.json")
             .is_file());
-        assert!(!root.join(".lint-ai/codex-mcp-index").exists());
-        assert!(!root.join(".lint-ai/claude-mcp-index").exists());
-        assert!(codex.source_document_by_id("workspace-guide").is_some());
-        assert!(claude.source_document_by_id("workspace-guide").is_some());
-        assert!(codex.source_document_by_id("codex-session").is_some());
-        assert!(codex.source_document_by_id("claude-session").is_none());
-        assert!(claude.source_document_by_id("claude-session").is_some());
-        assert!(claude.source_document_by_id("codex-session").is_none());
+        assert!(!root.join(".lint-ai/codex-memory").exists());
+        assert!(!root.join(".lint-ai/claude-memory").exists());
+        assert!(shared.source_document_by_id("workspace-guide").is_some());
+        assert!(shared.source_document_by_id("codex-session").is_some());
+        assert!(shared.source_document_by_id("claude-session").is_some());
+
+        // Second open reuses the migrated state without re-running migration.
+        let reopened = open_workspace_memory_store(&root, SHARED_MEMORY_DIR, &[], || {
+            panic!("the current workspace store must be reused")
+        })
+        .unwrap();
+        assert!(reopened.source_document_by_id("codex-session").is_some());
+        assert!(reopened.source_document_by_id("claude-session").is_some());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_preserves_provider_integration_state() {
+        use crate::integrations::session_recording::{lint_ai_enabled, set_lint_ai_state};
+
+        let temp_base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = temp_base.join(format!(
+            "lint-ai-migration-state-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        // A provider disabled under the old layout: state file lives in the
+        // legacy directory, which holds no memory documents.
+        let legacy = root.join(".lint-ai").join("codex-memory");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("integration.json"),
+            r#"{"enabled": false, "provider": "codex"}"#,
+        )
+        .unwrap();
+
+        migrate_legacy_provider_memory_dirs(&root).unwrap();
+
+        // The legacy directory is gone, but the disabled state survived at the
+        // new location instead of being silently reset to enabled.
+        assert!(!legacy.exists());
+        assert!(root.join(".lint-ai/codex-state/integration.json").is_file());
+        assert!(!lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
+
+        // The new location round-trips through the public state API.
+        set_lint_ai_state(RecordingProvider::Codex, &root, true).unwrap();
+        assert!(lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_normalizes_legacy_provider_filters() {
+        use crate::integrations::mcp_tools::search_provider_filters;
+        use crate::query_plan::PreparedQuery;
+        use serde_json::json;
+
+        let temp_base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = temp_base.join(format!(
+            "lint-ai-migration-provider-filter-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        // Legacy silos, as written by older Lint-AI versions: documents carry
+        // the old `filters.integration` key (values like "claude-code", not
+        // the canonical "claude") instead of `filters.provider`.
+        fn legacy_document(doc_id: &str, integration: &str) -> SourceDocument {
+            let mut doc = document(
+                doc_id,
+                &format!("{integration}://session"),
+                "The deployment pipeline codename is cobalt",
+            );
+            doc.filters
+                .insert("integration".to_string(), integration.to_string());
+            doc
+        }
+
+        for (memory_name, doc_id, integration) in [
+            ("codex-memory", "legacy-codex-memory", "codex"),
+            ("claude-memory", "legacy-claude-memory", "claude-code"),
+        ] {
+            let memory_root = root.join(".lint-ai").join(memory_name);
+            let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
+            memory.upsert(legacy_document(doc_id, integration));
+            memory.refresh().unwrap();
+        }
+
+        migrate_legacy_provider_memory_dirs(&root).unwrap();
+
+        let shared_root = root.join(".lint-ai").join(SHARED_MEMORY_DIR);
+        let mut shared = IndexStore::at_path(&shared_root, segmented_store_options()).unwrap();
+
+        // Metadata was normalized to the canonical provider values.
+        for (doc_id, provider) in [
+            ("legacy-codex-memory", "codex"),
+            ("legacy-claude-memory", "claude"),
+        ] {
+            let doc = shared.source_document_by_id(doc_id).unwrap();
+            assert_eq!(
+                doc.filters.get("provider").map(String::as_str),
+                Some(provider),
+                "{doc_id} was not stamped with the canonical provider"
+            );
+            assert!(
+                !doc.filters.contains_key("integration"),
+                "{doc_id} still carries the legacy integration filter"
+            );
+        }
+
+        // The MCP provider filter finds the migrated memories.
+        for (provider, doc_id) in [
+            ("codex", "legacy-codex-memory"),
+            ("claude", "legacy-claude-memory"),
+        ] {
+            let filters =
+                search_provider_filters(&json!({"query": "x", "provider": provider})).unwrap();
+            let hits = shared
+                .query_prepared(
+                    &PreparedQuery::new("deployment pipeline codename"),
+                    10,
+                    &filters,
+                )
+                .unwrap();
+            assert_eq!(
+                hits.iter()
+                    .map(|hit| hit.doc_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec![doc_id],
+                "provider filter {provider:?} missed its migrated memory"
+            );
+        }
+
+        // Unfiltered search still sees the whole shared pool.
+        let unfiltered = shared
+            .query_prepared(
+                &PreparedQuery::new("deployment pipeline codename"),
+                10,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        assert_eq!(unfiltered.len(), 2);
 
         let _ = fs::remove_dir_all(root);
     }

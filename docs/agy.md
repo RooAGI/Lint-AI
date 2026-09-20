@@ -20,8 +20,8 @@ intentionally.
 
 AGY receives the same `search`, `info`, `record_session`, `enable_lint_ai`,
 `disable_lint_ai`, and `lint_ai_status` MCP tools as the other integrations.
-AGY sessions are recorded under `.lint-ai/agy-sessions/` and use
-`.lint-ai/agy-memory/` for provider-specific memory hooks.
+AGY sessions are recorded under `.lint-ai/agy-sessions/` and share
+`.lint-ai/memory/` with the other providers.
 
 ## Supported hooks
 

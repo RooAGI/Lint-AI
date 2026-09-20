@@ -44,14 +44,14 @@ once MCP is stripped out of the isolated config. Installing it there only
 confused the model and inflated tokens/latency without helping recall.
 
 Each scenario/arm/repetition worktree persists after the run instead of being
-deleted, so its `.lint-ai/claude-memory` store stays inspectable. A worktree
+deleted, so its `.lint-ai/memory` store stays inspectable. A worktree
 left over from a prior run of the same scenario/arm/repetition is removed
 automatically right before the next run of it starts. Inspect a run's
 captured memory with:
 
 ```bash
 target/release/lint-ai \
-  --inspect-index benchmark/claude_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/claude-memory \
+  --inspect-index benchmark/claude_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/memory \
   --inspect-view source-documents
 ```
 

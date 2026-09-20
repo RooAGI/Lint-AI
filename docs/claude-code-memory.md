@@ -55,7 +55,7 @@ The honest note, straight from the repo: these are **diagnostic one-run measurem
 Lint-AI plugs into Claude Code through its supported extension points — lifecycle hooks and MCP — not hacks:
 
 - **Lifecycle hooks.** `SessionStart`, `UserPromptSubmit`, and `UserPromptExpansion` retrieve relevant project context into the session. `PreCompact`, `Stop`, and `SessionEnd` capture bounded session memory. Hooks are **fail-open** with a 2-second budget: if anything goes wrong, Claude Code just continues without the memory layer.
-- **Project-scoped storage.** Memory lives under `<project>/.lint-ai/claude-memory/` — isolated per project, inspectable as JSON, yours to keep.
+- **Project-scoped storage.** Memory lives under `<project>/.lint-ai/memory/` — isolated per project, inspectable as JSON, yours to keep.
 - **Current-state retrieval.** Retrieved context isn't just topically relevant; it's ranked by what's *still true*. Old decisions are preserved as history, not presented as current guidance. See [stale agent memory](stale-memory.md).
 - **Runtime controls.** MCP tools (`record_session`, `enable_lint_ai`, `disable_lint_ai`, `lint_ai_status`, `list_memories`) let you or the agent start/stop recording and toggle the memory layer without touching config files.
 
@@ -117,7 +117,7 @@ Then just use Claude Code. New sessions automatically pull in relevant, current 
 Want to see what's actually stored? It's all inspectable:
 
 ```bash
-lint-ai --inspect-index .lint-ai/claude-memory
+lint-ai --inspect-index .lint-ai/memory
 ```
 
 And if you ever want it off, the MCP controls or hooks settings disable it without uninstalling anything.
@@ -131,7 +131,7 @@ Only static memory: `CLAUDE.md` and project memory files that you write and main
 The hooks are fail-open with a 2-second budget: if retrieval or capture ever fails or times out, Claude Code just continues without the memory layer. In the measured replay run, hook overhead was 1.40 s — and overall session continuation got *faster* (22.47 s → 7.05 s), because the agent receives the right context instead of burning tool calls re-discovering it.
 
 **Where is the memory stored?**
-Under `<project>/.lint-ai/claude-memory/`, scoped to the project. It's inspectable JSON (`lint-ai --inspect-index .lint-ai/claude-memory`), and it stays on your machine.
+Under `<project>/.lint-ai/memory/`, scoped to the project. It's inspectable JSON (`lint-ai --inspect-index .lint-ai/memory`), and it stays on your machine.
 
 **Can I turn it off?**
 Yes. Use the `disable_lint_ai` MCP tool, or remove the hooks from your Claude settings. Disabling stops retrieval and capture but doesn't delete stored memory or uninstall anything.

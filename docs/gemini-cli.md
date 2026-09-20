@@ -30,7 +30,7 @@ Gemini session events are stored under:
 .lint-ai/gemini-cli-sessions/
 ```
 
-The Gemini memory index is `.lint-ai/gemini-cli-memory/`. The shared recording
+The Gemini memory index is `.lint-ai/memory/`. The shared recording
 controls work with `--session-provider gemini` for promotion and replay. Hook
 execution is fail-open: recording, indexing, or retrieval failures are
 reported diagnostically and do not block Gemini CLI from continuing its

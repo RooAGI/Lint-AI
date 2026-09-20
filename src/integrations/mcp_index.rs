@@ -121,7 +121,8 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
             continue;
         }
         let mut shared = IndexStore::at_path(&shared_root, segmented_store_options())?;
-        for document in documents {
+        for mut document in documents {
+            normalize_migrated_document(&mut document, provider);
             shared.upsert(document);
         }
         shared.refresh()?;
@@ -138,6 +139,21 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
         trace_event("migrated legacy provider memory stores into shared memory");
     }
     Ok(())
+}
+
+/// Normalize a document copied out of a legacy per-provider silo.
+/// Older Lint-AI versions stamped documents with `filters.integration`
+/// (values like "claude-code", and the key itself is pre-canonicalization);
+/// the shared store and the MCP `provider` search argument use the
+/// canonical `filters.provider` values. The legacy directory is
+/// authoritative for which provider captured a document, so migration
+/// stamps the canonical value and drops the old key. Without this, a
+/// provider-filtered search would miss every migrated memory.
+fn normalize_migrated_document(document: &mut SourceDocument, provider: RecordingProvider) {
+    document.filters.remove("integration");
+    document
+        .filters
+        .insert("provider".to_string(), provider.as_str().to_string());
 }
 
 fn is_not_found(error: &anyhow::Error) -> bool {
@@ -462,6 +478,106 @@ mod tests {
         // The new location round-trips through the public state API.
         set_lint_ai_state(RecordingProvider::Codex, &root, true).unwrap();
         assert!(lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_normalizes_legacy_provider_filters() {
+        use crate::integrations::mcp_tools::search_provider_filters;
+        use crate::query_plan::PreparedQuery;
+        use serde_json::json;
+
+        let temp_base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = temp_base.join(format!(
+            "lint-ai-migration-provider-filter-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        // Legacy silos, as written by older Lint-AI versions: documents carry
+        // the old `filters.integration` key (values like "claude-code", not
+        // the canonical "claude") instead of `filters.provider`.
+        fn legacy_document(doc_id: &str, integration: &str) -> SourceDocument {
+            let mut doc = document(
+                doc_id,
+                &format!("{integration}://session"),
+                "The deployment pipeline codename is cobalt",
+            );
+            doc.filters
+                .insert("integration".to_string(), integration.to_string());
+            doc
+        }
+
+        for (memory_name, doc_id, integration) in [
+            ("codex-memory", "legacy-codex-memory", "codex"),
+            ("claude-memory", "legacy-claude-memory", "claude-code"),
+        ] {
+            let memory_root = root.join(".lint-ai").join(memory_name);
+            let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
+            memory.upsert(legacy_document(doc_id, integration));
+            memory.refresh().unwrap();
+        }
+
+        migrate_legacy_provider_memory_dirs(&root).unwrap();
+
+        let shared_root = root.join(".lint-ai").join(SHARED_MEMORY_DIR);
+        let mut shared = IndexStore::at_path(&shared_root, segmented_store_options()).unwrap();
+
+        // Metadata was normalized to the canonical provider values.
+        for (doc_id, provider) in [
+            ("legacy-codex-memory", "codex"),
+            ("legacy-claude-memory", "claude"),
+        ] {
+            let doc = shared.source_document_by_id(doc_id).unwrap();
+            assert_eq!(
+                doc.filters.get("provider").map(String::as_str),
+                Some(provider),
+                "{doc_id} was not stamped with the canonical provider"
+            );
+            assert!(
+                !doc.filters.contains_key("integration"),
+                "{doc_id} still carries the legacy integration filter"
+            );
+        }
+
+        // The MCP provider filter finds the migrated memories.
+        for (provider, doc_id) in [
+            ("codex", "legacy-codex-memory"),
+            ("claude", "legacy-claude-memory"),
+        ] {
+            let filters =
+                search_provider_filters(&json!({"query": "x", "provider": provider})).unwrap();
+            let hits = shared
+                .query_prepared(
+                    &PreparedQuery::new("deployment pipeline codename"),
+                    10,
+                    &filters,
+                )
+                .unwrap();
+            assert_eq!(
+                hits.iter()
+                    .map(|hit| hit.doc_id.as_str())
+                    .collect::<Vec<_>>(),
+                vec![doc_id],
+                "provider filter {provider:?} missed its migrated memory"
+            );
+        }
+
+        // Unfiltered search still sees the whole shared pool.
+        let unfiltered = shared
+            .query_prepared(
+                &PreparedQuery::new("deployment pipeline codename"),
+                10,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        assert_eq!(unfiltered.len(), 2);
 
         let _ = fs::remove_dir_all(root);
     }

@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 const KL_SMOOTHING: f32 = 1.0e-6;
 const LOCAL_IDF_FLOOR: f32 = 1.0;
@@ -57,7 +58,9 @@ fn segment_candidate_limit(top_k: usize) -> usize {
 pub struct MemoryIndexSegment {
     pub segment_id: String,
     pub doc_ids: Vec<String>,
-    pub index: MemoryIndex,
+    /// Shared by value across snapshots: a segment's index is immutable once
+    /// built, so refreshes reuse unchanged segments instead of rebuilding them.
+    pub index: Arc<MemoryIndex>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,7 +377,7 @@ impl SegmentedMemoryIndex {
         validate_segments(&segments)?;
         let catalog = SegmentCatalog::from_segments(&segments, generation);
         let global_statistics = GlobalBm25Statistics::from_indexes_with_generation(
-            segments.iter().map(|segment| &segment.index),
+            segments.iter().map(|segment| segment.index.as_ref()),
             generation,
         );
         Ok(Self {
@@ -441,6 +444,80 @@ impl SegmentedMemoryIndex {
             return Err("manifest does not assign every document".to_string());
         }
         Self::from_segments_with_generation(segments, generation)
+    }
+
+    /// Rebuild a snapshot from the previous one, reusing every segment whose
+    /// document set is unchanged and none of whose documents were
+    /// re-processed since the previous snapshot. Reuse clones the segment's
+    /// shared index, so it is O(1) per segment regardless of readers.
+    ///
+    /// Correctness rests on one invariant: a segment's index is a pure
+    /// function of its documents' records, and records only change for
+    /// re-processed documents. A segment is therefore reusable exactly when
+    /// its document id set is unchanged and none of its documents appear in
+    /// `reprocessed_doc_ids`.
+    pub fn refresh_incremental(
+        previous: &Self,
+        records: &[DocRecord],
+        reprocessed_doc_ids: &HashSet<String>,
+        generation: u64,
+    ) -> Result<Self, String> {
+        let mut grouped: HashMap<String, Vec<DocRecord>> = HashMap::new();
+        for record in records {
+            let segment_id = record
+                .group_id
+                .clone()
+                .unwrap_or_else(|| "ungrouped".to_string());
+            grouped.entry(segment_id).or_default().push(record.clone());
+        }
+
+        let mut segment_ids: Vec<String> = grouped.keys().cloned().collect();
+        segment_ids.sort();
+        let mut segments = Vec::with_capacity(segment_ids.len());
+        for segment_id in segment_ids {
+            let mut segment_records = grouped.remove(&segment_id).unwrap_or_default();
+            segment_records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
+            let new_doc_ids: Vec<String> = segment_records
+                .iter()
+                .map(|record| record.doc_id.clone())
+                .collect();
+            let reusable = previous
+                .segments
+                .iter()
+                .find(|segment| segment.segment_id == segment_id)
+                .filter(|segment| {
+                    segment.doc_ids == new_doc_ids
+                        && !segment
+                            .doc_ids
+                            .iter()
+                            .any(|doc_id| reprocessed_doc_ids.contains(doc_id))
+                });
+            match reusable {
+                Some(previous_segment) => segments.push(MemoryIndexSegment {
+                    segment_id,
+                    doc_ids: previous_segment.doc_ids.clone(),
+                    index: Arc::clone(&previous_segment.index),
+                }),
+                None => segments.push(build_memory_index_segment(segment_id, segment_records)),
+            }
+        }
+        validate_segments(&segments)?;
+        let catalog = SegmentCatalog::refresh_incremental(
+            &previous.catalog,
+            &previous.segments,
+            &segments,
+            generation,
+        );
+        let global_statistics = GlobalBm25Statistics::from_indexes_with_generation(
+            segments.iter().map(|segment| segment.index.as_ref()),
+            generation,
+        );
+        Ok(Self {
+            segments,
+            catalog,
+            global_statistics,
+            generation,
+        })
     }
 
     pub fn manifest(&self) -> SegmentManifest {
@@ -910,7 +987,7 @@ fn build_memory_index_segment(
         .iter()
         .map(|record| record.doc_id.clone())
         .collect::<Vec<_>>();
-    let index = MemoryIndex::from_records(segment_records);
+    let index = Arc::new(MemoryIndex::from_records(segment_records));
     MemoryIndexSegment {
         segment_id,
         doc_ids,
@@ -1524,8 +1601,9 @@ fn query_top_segments_with_corpus_stats_and_strategy(
         debug_assert_eq!(cached_statistics.generation(), snapshot_generation);
         cached_statistics
     } else {
-        computed_statistics =
-            GlobalBm25Statistics::from_indexes(segments.iter().map(|segment| &segment.index));
+        computed_statistics = GlobalBm25Statistics::from_indexes(
+            segments.iter().map(|segment| segment.index.as_ref()),
+        );
         &computed_statistics
     };
     let candidate_limit = segment_candidate_limit(top_k);
@@ -2534,8 +2612,9 @@ fn query_selected_segments_with_enrichment(
         debug_assert_eq!(cached_statistics.generation(), snapshot_generation);
         cached_statistics
     } else {
-        computed_statistics =
-            GlobalBm25Statistics::from_indexes(segments.iter().map(|segment| &segment.index));
+        computed_statistics = GlobalBm25Statistics::from_indexes(
+            segments.iter().map(|segment| segment.index.as_ref()),
+        );
         &computed_statistics
     };
     let candidate_limit = segment_candidate_limit(top_k);
@@ -3783,7 +3862,11 @@ pub fn query_all_segments_with_diagnostics(
 
 impl SegmentRoutingSummary {
     fn from_index(index: &MemoryIndex) -> Self {
-        let records = index.docs.values().cloned().collect::<Vec<_>>();
+        // Sorted: docs is a HashMap, and float weight accumulation is
+        // order-sensitive at the last ULP. Deterministic input order keeps
+        // summaries bit-identical across builds from the same records.
+        let mut records = index.docs.values().cloned().collect::<Vec<_>>();
+        records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
         Self::from_records(&records)
     }
 
@@ -4334,6 +4417,78 @@ impl SegmentCatalog {
                 )
             })
             .collect::<HashMap<_, _>>();
+        let connection_profiles = segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment.segment_id.clone(),
+                    segment_connection_profile(segment, TemporalQueryContext::default()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        Self::from_parts(segments, summaries, connection_profiles, generation)
+    }
+
+    /// Rebuild the catalog reusing per-segment summaries and connection
+    /// profiles for segments whose index object is shared with the previous
+    /// snapshot (detected by `Arc` identity — a shared index means identical
+    /// records, so its summary cannot have changed). Only new or rebuilt
+    /// segments pay for summary construction; the term-level aggregations are
+    /// recomputed from the summaries, which is O(distinct terms).
+    fn refresh_incremental(
+        previous: &Self,
+        previous_segments: &[MemoryIndexSegment],
+        segments: &[MemoryIndexSegment],
+        generation: u64,
+    ) -> Self {
+        let previous_by_id: HashMap<&str, &MemoryIndexSegment> = previous_segments
+            .iter()
+            .map(|segment| (segment.segment_id.as_str(), segment))
+            .collect();
+        let mut summaries = HashMap::with_capacity(segments.len());
+        let mut connection_profiles = HashMap::with_capacity(segments.len());
+        for segment in segments {
+            let shared = previous_by_id
+                .get(segment.segment_id.as_str())
+                .map(|previous_segment| Arc::ptr_eq(&previous_segment.index, &segment.index))
+                .unwrap_or(false);
+            if shared {
+                summaries.insert(
+                    segment.segment_id.clone(),
+                    previous
+                        .summaries
+                        .get(&segment.segment_id)
+                        .expect("reused segment must have a catalog summary")
+                        .clone(),
+                );
+                connection_profiles.insert(
+                    segment.segment_id.clone(),
+                    previous
+                        .connection_profiles
+                        .get(&segment.segment_id)
+                        .expect("reused segment must have a connection profile")
+                        .clone(),
+                );
+            } else {
+                summaries.insert(
+                    segment.segment_id.clone(),
+                    SegmentRoutingSummary::from_index(&segment.index),
+                );
+                connection_profiles.insert(
+                    segment.segment_id.clone(),
+                    segment_connection_profile(segment, TemporalQueryContext::default()),
+                );
+            }
+        }
+        Self::from_parts(segments, summaries, connection_profiles, generation)
+    }
+
+    fn from_parts(
+        segments: &[MemoryIndexSegment],
+        summaries: HashMap<String, SegmentRoutingSummary>,
+        connection_profiles: HashMap<String, SegmentConnectionProfile>,
+        generation: u64,
+    ) -> Self {
         let mut term_segment_counts = HashMap::new();
         let mut term_to_segments: HashMap<String, Vec<String>> = HashMap::new();
         for (segment_id, summary) in &summaries {
@@ -4353,15 +4508,6 @@ impl SegmentCatalog {
         for segment_ids in term_to_segments.values_mut() {
             segment_ids.sort();
         }
-        let connection_profiles = segments
-            .iter()
-            .map(|segment| {
-                (
-                    segment.segment_id.clone(),
-                    segment_connection_profile(segment, TemporalQueryContext::default()),
-                )
-            })
-            .collect::<HashMap<_, _>>();
         let mut weighted_term_to_segments: HashMap<String, Vec<(String, f32)>> = HashMap::new();
         for (segment_id, summary) in &summaries {
             for term in summary
@@ -4776,7 +4922,11 @@ fn ordered_tokens(text: &str) -> Vec<String> {
 }
 
 fn normalize_distribution(distribution: &mut HashMap<String, f32>) {
-    let total = distribution.values().copied().sum::<f32>();
+    // Summed in sorted-key order: HashMap iteration order is nondeterministic
+    // and float summation is order-sensitive at the last ULP.
+    let mut keys: Vec<&String> = distribution.keys().collect();
+    keys.sort();
+    let total: f32 = keys.iter().map(|key| distribution[*key]).sum();
     if total <= f32::EPSILON {
         return;
     }
@@ -4946,6 +5096,145 @@ mod tests {
             relation_confidence: None,
             relation_evidence: vec![],
         }
+    }
+
+    /// Deterministic projection of a routing catalog: sorted so HashMap
+    /// iteration order cannot affect the comparison.
+    fn normalized_catalog(catalog: &SegmentCatalog) -> String {
+        let mut segment_ids = catalog.ordered_segment_ids.clone();
+        segment_ids.sort();
+        let mut parts = Vec::new();
+        for segment_id in segment_ids {
+            let summary = &catalog.summaries[&segment_id];
+            let mut terms: Vec<(String, u32)> = summary
+                .terms
+                .iter()
+                .chain(summary.entities.iter())
+                .chain(summary.topics.iter())
+                .chain(summary.local_memory.iter())
+                .map(|(term, weight)| (term.clone(), weight.to_bits()))
+                .collect();
+            terms.sort();
+            let profile = &catalog.connection_profiles[&segment_id];
+            let mut evidence: Vec<String> = profile
+                .people
+                .iter()
+                .chain(profile.subjects.iter())
+                .chain(profile.times.iter())
+                .chain(profile.actions.iter())
+                .chain(profile.objects.iter())
+                .cloned()
+                .collect();
+            evidence.sort();
+            parts.push(format!("{segment_id}|{terms:?}|{evidence:?}"));
+        }
+        let mut term_map: Vec<(String, Vec<String>)> = catalog
+            .term_to_segments
+            .iter()
+            .map(|(term, ids)| {
+                let mut sorted_ids = ids.clone();
+                sorted_ids.sort();
+                (term.clone(), sorted_ids)
+            })
+            .collect();
+        term_map.sort();
+        parts.push(format!("{term_map:?}"));
+        parts.join("\n")
+    }
+
+    #[test]
+    fn refresh_incremental_reuses_only_untouched_segments() {
+        let records = vec![
+            record("keep-1", "keep", "keep alpha", &["alpha"]),
+            record("keep-2", "keep", "keep beta", &["beta"]),
+            record("grow-1", "grow", "grow gamma", &["gamma"]),
+            record("drop-1", "drop", "drop delta", &["delta"]),
+        ];
+        let previous = SegmentedMemoryIndex::from_records_by_group_id(&records);
+        let previous_index = |id: &str| {
+            Arc::as_ptr(
+                &previous
+                    .segments
+                    .iter()
+                    .find(|segment| segment.segment_id == id)
+                    .unwrap()
+                    .index,
+            )
+        };
+
+        // "grow" gains a document, "drop" loses its only document, and one
+        // document of "keep" is re-processed: only an untouched "keep" copy
+        // would be reusable, so nothing is reused here.
+        let mut next_records: Vec<DocRecord> = records
+            .into_iter()
+            .filter(|record| record.doc_id != "drop-1")
+            .collect();
+        next_records.push(record("grow-2", "grow", "grow epsilon", &["epsilon"]));
+        let reprocessed: HashSet<String> = ["keep-1".to_string()].into_iter().collect();
+        let next =
+            SegmentedMemoryIndex::refresh_incremental(&previous, &next_records, &reprocessed, 1)
+                .expect("incremental refresh should succeed");
+
+        let next_index = |snapshot: &SegmentedMemoryIndex, id: &str| {
+            Arc::as_ptr(
+                &snapshot
+                    .segments
+                    .iter()
+                    .find(|segment| segment.segment_id == id)
+                    .unwrap()
+                    .index,
+            )
+        };
+        assert_eq!(next.segments.len(), 2);
+        assert!(next
+            .segments
+            .iter()
+            .all(|segment| segment.segment_id != "drop"));
+        // Every surviving segment changed, so every index is rebuilt.
+        assert_ne!(next_index(&next, "keep"), previous_index("keep"));
+        assert_ne!(next_index(&next, "grow"), previous_index("grow"));
+
+        // A refresh with no changes reuses every segment's index by pointer.
+        let idle =
+            SegmentedMemoryIndex::refresh_incremental(&next, &next_records, &HashSet::new(), 2)
+                .expect("idle incremental refresh should succeed");
+        assert_eq!(idle.segments.len(), 2);
+        assert!(Arc::ptr_eq(
+            &idle
+                .segments
+                .iter()
+                .find(|segment| segment.segment_id == "keep")
+                .unwrap()
+                .index,
+            &next
+                .segments
+                .iter()
+                .find(|segment| segment.segment_id == "keep")
+                .unwrap()
+                .index
+        ));
+        assert!(Arc::ptr_eq(
+            &idle
+                .segments
+                .iter()
+                .find(|segment| segment.segment_id == "grow")
+                .unwrap()
+                .index,
+            &next
+                .segments
+                .iter()
+                .find(|segment| segment.segment_id == "grow")
+                .unwrap()
+                .index
+        ));
+
+        // Differential: the incremental catalog must equal a clean full
+        // rebuild's catalog, or query routing would diverge.
+        let rebuilt = SegmentedMemoryIndex::from_records_by_group_id(&next_records);
+        assert_eq!(
+            normalized_catalog(&next.catalog),
+            normalized_catalog(&rebuilt.catalog)
+        );
     }
 
     #[test]
@@ -6002,7 +6291,10 @@ mod tests {
         let global = MemoryIndex::from_records(records.clone());
         let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
         let statistics = GlobalBm25Statistics::from_indexes(
-            segmented.segments.iter().map(|segment| &segment.index),
+            segmented
+                .segments
+                .iter()
+                .map(|segment| segment.index.as_ref()),
         );
 
         assert_eq!(statistics.shard_count(), 2);
@@ -6052,7 +6344,7 @@ mod tests {
         let rebuilt = SegmentedMemoryIndex {
             catalog: SegmentCorpusStats::from_segments(&segments, 0),
             global_statistics: GlobalBm25Statistics::from_indexes(
-                segments.iter().map(|segment| &segment.index),
+                segments.iter().map(|segment| segment.index.as_ref()),
             ),
             generation: 0,
             segments,

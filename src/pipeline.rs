@@ -1172,24 +1172,61 @@ impl IndexStore {
     pub fn refresh(&mut self) -> Result<()> {
         self.poll_background_refresh()?;
         if self.dirty || self.snapshot.is_none() {
+            // Captured before staging consumes it: these documents get fresh
+            // records, so any segment containing one must be rebuilt.
+            let reprocessed_doc_ids: HashSet<String> = self.dirty_docs.clone();
             self.prepare_pending_changes()?;
             let mut records = self.records.values().cloned().collect::<Vec<DocRecord>>();
             records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-            let global_index =
-                matches!(self.options.memory_index_layout, MemoryIndexLayout::Single)
-                    .then(|| self.build_compatibility_index());
-            self.snapshot = Some(Arc::new(build_memory_index_snapshot(
-                records,
-                global_index,
-                &self.options.memory_index_layout,
-                self.store_revision,
-            )));
+            if !self.try_refresh_incremental(&records, &reprocessed_doc_ids)? {
+                let global_index =
+                    matches!(self.options.memory_index_layout, MemoryIndexLayout::Single)
+                        .then(|| self.build_compatibility_index());
+                self.snapshot = Some(Arc::new(build_memory_index_snapshot(
+                    records,
+                    global_index,
+                    &self.options.memory_index_layout,
+                    self.store_revision,
+                )));
+            }
             self.snapshot_revision = self.store_revision;
             persist_store_metadata(&self.store_paths, &self.options)?;
             self.persist_compatibility_state()?;
             self.dirty = false;
         }
         Ok(())
+    }
+
+    /// Rebuild only the segments touched by staged changes, sharing the rest
+    /// with the previous snapshot. Returns `Ok(true)` when the incremental
+    /// path ran; `Ok(false)` means the caller must do a full rebuild (first
+    /// build, or a non-segmented layout). Sharing is structural — segments
+    /// hold their index behind `Arc` — so there is no ownership dance and no
+    /// silent fallback: a concurrent reader simply keeps the old snapshot.
+    fn try_refresh_incremental(
+        &mut self,
+        records: &[DocRecord],
+        reprocessed_doc_ids: &HashSet<String>,
+    ) -> Result<bool> {
+        if !matches!(
+            self.options.memory_index_layout,
+            MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+        ) {
+            return Ok(false);
+        }
+        let previous = match self.snapshot.as_deref() {
+            Some(MemoryIndexSnapshot::Segmented(previous)) => previous,
+            _ => return Ok(false),
+        };
+        let next = SegmentedMemoryIndex::refresh_incremental(
+            previous,
+            records,
+            reprocessed_doc_ids,
+            self.store_revision,
+        )
+        .map_err(|error| anyhow::anyhow!("incremental segment refresh failed: {error}"))?;
+        self.snapshot = Some(Arc::new(MemoryIndexSnapshot::Segmented(next)));
+        Ok(true)
     }
 
     #[allow(dead_code)]
@@ -3209,6 +3246,151 @@ mod tests {
         assert_eq!(index.snapshot_revision(), snapshot_revision);
         assert_eq!(index.store_revision(), store_revision);
         assert!(!index.is_dirty());
+    }
+
+    #[test]
+    fn incremental_refresh_matches_full_rebuild() {
+        fn segmented_options() -> PipelineOptions {
+            PipelineOptions {
+                memory_index_layout: MemoryIndexLayout::Segmented {
+                    query_top_n: 8,
+                    routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+                },
+                ..PipelineOptions::default()
+            }
+        }
+        fn manifest_of(store: &IndexStore) -> Vec<(String, Vec<String>)> {
+            match store.memory_index_snapshot() {
+                Some(MemoryIndexSnapshot::Segmented(segmented)) => {
+                    let mut entries: Vec<(String, Vec<String>)> = segmented
+                        .manifest()
+                        .segments
+                        .into_iter()
+                        .map(|entry| {
+                            let mut doc_ids = entry.doc_ids;
+                            doc_ids.sort();
+                            (entry.segment_id, doc_ids)
+                        })
+                        .collect();
+                    entries.sort();
+                    entries
+                }
+                other => panic!(
+                    "expected segmented snapshot, got {}",
+                    if other.is_some() {
+                        "a non-segmented snapshot"
+                    } else {
+                        "no snapshot"
+                    }
+                ),
+            }
+        }
+        fn segment_records(store: &IndexStore) -> Vec<(String, serde_json::Value)> {
+            // Record-level comparison, not query results: the query path has
+            // pre-existing nondeterministic top-k tie-breaking (two identical
+            // full rebuilds can select different tied documents), while the
+            // stored records are exactly deterministic. Scores are a pure
+            // function of these records plus the global statistics, which are
+            // rebuilt from the same segment searchers on both paths.
+            match store.memory_index_snapshot() {
+                Some(MemoryIndexSnapshot::Segmented(segmented)) => {
+                    let mut out: Vec<(String, serde_json::Value)> = segmented
+                        .segments
+                        .iter()
+                        .map(|segment| {
+                            let records = serde_json::to_value(&segment.index.docs)
+                                .expect("records should serialize");
+                            (segment.segment_id.clone(), records)
+                        })
+                        .collect();
+                    out.sort_by(|left, right| left.0.cmp(&right.0));
+                    out
+                }
+                other => panic!(
+                    "expected segmented snapshot, got {}",
+                    if other.is_some() {
+                        "a non-segmented snapshot"
+                    } else {
+                        "no snapshot"
+                    }
+                ),
+            }
+        }
+
+        // Six segments of eight documents; the first refresh is a full build.
+        let mut store = IndexStore::new(segmented_options());
+        let mut final_docs = std::collections::HashMap::new();
+        for segment in 0..6 {
+            for doc in 0..8 {
+                let id = format!("doc-{segment}-{doc}");
+                let document = sample_doc_with_group(
+                    &id,
+                    &format!("session-{segment}"),
+                    &format!("segment {segment} document {doc} about rust testing pipelines"),
+                );
+                final_docs.insert(id, document.clone());
+                store.upsert(document);
+            }
+        }
+        store.refresh().expect("initial refresh should succeed");
+
+        // Mutations covering every incremental case: re-processed content in
+        // an existing segment, a new document in an existing segment, a brand
+        // new segment, a removed document, and a removed segment.
+        let updated = sample_doc_with_group(
+            "doc-0-0",
+            "session-0",
+            "segment 0 document 0 rewritten about migration",
+        );
+        final_docs.insert("doc-0-0".to_string(), updated.clone());
+        store.upsert(updated);
+        let added = sample_doc_with_group(
+            "doc-0-8",
+            "session-0",
+            "segment 0 document 8 about rust testing",
+        );
+        final_docs.insert("doc-0-8".to_string(), added.clone());
+        store.upsert(added);
+        let new_segment = sample_doc_with_group(
+            "doc-6-0",
+            "session-6",
+            "segment 6 document 0 about pipelines",
+        );
+        final_docs.insert("doc-6-0".to_string(), new_segment.clone());
+        store.upsert(new_segment);
+        final_docs.remove("doc-1-0");
+        store.remove("doc-1-0");
+        for doc in 0..8 {
+            let id = format!("doc-5-{doc}");
+            final_docs.remove(&id);
+            store.remove(&id);
+        }
+        store.refresh().expect("incremental refresh should succeed");
+
+        let incremental_manifest = manifest_of(&store);
+        let incremental_records = segment_records(&store);
+
+        // Same final documents in a fresh store: full rebuild, no reuse.
+        let mut fresh = IndexStore::new(segmented_options());
+        let mut ids: Vec<String> = final_docs.keys().cloned().collect();
+        ids.sort();
+        for id in ids.iter() {
+            fresh.upsert(final_docs[id].clone());
+        }
+        fresh.refresh().expect("full rebuild should succeed");
+
+        // Control experiment: two identical full rebuilds must agree exactly.
+        let mut fresh2 = IndexStore::new(segmented_options());
+        for id in ids.iter() {
+            fresh2.upsert(final_docs[id].clone());
+        }
+        fresh2
+            .refresh()
+            .expect("second full rebuild should succeed");
+        assert_eq!(segment_records(&fresh), segment_records(&fresh2));
+
+        assert_eq!(incremental_manifest, manifest_of(&fresh));
+        assert_eq!(incremental_records, segment_records(&fresh));
     }
 
     #[test]

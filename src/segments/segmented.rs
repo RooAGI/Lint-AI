@@ -405,7 +405,7 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
@@ -415,6 +415,7 @@ impl SegmentedMemoryIndex {
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::Segment,
         )
     }
 
@@ -426,7 +427,7 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_route_aware_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
@@ -436,6 +437,7 @@ impl SegmentedMemoryIndex {
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::RouteAware,
         )
     }
 
@@ -447,7 +449,7 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_session_aggregated_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
@@ -457,6 +459,7 @@ impl SegmentedMemoryIndex {
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::SessionAggregated,
         )
     }
 
@@ -470,18 +473,21 @@ impl SegmentedMemoryIndex {
         temporal: TemporalQueryContext<'_>,
         reference_date: Option<&str>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_adaptive_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
-            base_segment_limit,
             max_segment_limit,
             strategy,
             temporal,
-            reference_date,
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::Adaptive {
+                base_segment_limit,
+                max_segment_limit,
+                reference_date,
+            },
         )
     }
 
@@ -495,18 +501,21 @@ impl SegmentedMemoryIndex {
         temporal: TemporalQueryContext<'_>,
         reference_date: Option<&str>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_adaptive_route_aware_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
-            base_segment_limit,
             max_segment_limit,
             strategy,
             temporal,
-            reference_date,
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::AdaptiveRouteAware {
+                base_segment_limit,
+                max_segment_limit,
+                reference_date,
+            },
         )
     }
 
@@ -518,7 +527,7 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_temporal_path_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
@@ -528,6 +537,7 @@ impl SegmentedMemoryIndex {
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::TemporalPath,
         )
     }
 
@@ -539,7 +549,7 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_connected_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
@@ -549,6 +559,7 @@ impl SegmentedMemoryIndex {
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::ConnectedSegment,
         )
     }
 
@@ -560,7 +571,7 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-        query_top_segments_with_missing_coverage_recovery_segment_enrichment_and_strategy(
+        query_top_segments_with_enrichment_and_strategy(
             query,
             top_k,
             &self.segments,
@@ -570,6 +581,7 @@ impl SegmentedMemoryIndex {
             &self.catalog,
             Some(&self.global_statistics),
             self.generation,
+            SegmentEnrichmentKind::MissingCoverageRecovery,
         )
     }
 

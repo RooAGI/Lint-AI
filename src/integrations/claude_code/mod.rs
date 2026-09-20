@@ -1118,7 +1118,7 @@ mod tests {
             links: vec![],
             timestamp: None,
             doc_length: 38,
-            author_agent: Some("claude-code".to_string()),
+            author_agent: Some(RecordingProvider::Claude.as_str().to_string()),
         });
         memory.refresh().unwrap();
         drop(memory);

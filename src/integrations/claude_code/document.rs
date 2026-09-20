@@ -1,4 +1,5 @@
 use crate::ids::stable_doc_id_from_source;
+use crate::integrations::session_recording::RecordingProvider;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
@@ -45,7 +46,10 @@ impl ClaudeCodeDocument {
             project_id, self.session_id, document_type
         );
         let mut filters = BTreeMap::from([
-            ("provider".to_string(), "claude-code".to_string()),
+            (
+                "provider".to_string(),
+                RecordingProvider::Claude.as_str().to_string(),
+            ),
             ("project_id".to_string(), project_id.clone()),
             ("session_id".to_string(), self.session_id.clone()),
             ("document_type".to_string(), document_type.to_string()),
@@ -67,7 +71,7 @@ impl ClaudeCodeDocument {
             links: self.affected_paths,
             timestamp: self.timestamp,
             doc_length,
-            author_agent: Some("claude-code".to_string()),
+            author_agent: Some(RecordingProvider::Claude.as_str().to_string()),
             filters,
         })
     }
@@ -115,7 +119,7 @@ mod tests {
         .unwrap();
 
         assert!(source.group_id.unwrap().contains(":session-1"));
-        assert_eq!(source.author_agent.as_deref(), Some("claude-code"));
+        assert_eq!(source.author_agent.as_deref(), Some("claude"));
         assert_eq!(source.filters["document_type"], "outcome");
         assert_eq!(source.filters["command_name"], "review");
         assert_eq!(source.links, vec!["src/pipeline.rs"]);

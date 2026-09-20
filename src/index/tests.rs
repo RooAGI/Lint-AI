@@ -53,6 +53,7 @@ fn timestamped_chunk_detects_chunk_level_temporal_anchor() {
             term_ranker: "yake".to_string(),
             index_version: "v1".to_string(),
         },
+        content_hash: String::new(),
     };
 
     assert!(doc_has_timestamped_chunk(&doc));

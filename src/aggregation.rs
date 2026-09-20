@@ -277,6 +277,7 @@ mod tests {
                 term_ranker: "yake".to_string(),
                 index_version: "v1".to_string(),
             },
+            content_hash: String::new(),
         }
     }
 

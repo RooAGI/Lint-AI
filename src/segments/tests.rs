@@ -58,6 +58,7 @@ fn record(doc_id: &str, group_id: &str, content: &str, terms: &[&str]) -> DocRec
             term_ranker: "test".to_string(),
             index_version: "test".to_string(),
         },
+        content_hash: String::new(),
     }
 }
 

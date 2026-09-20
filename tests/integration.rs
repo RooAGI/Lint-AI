@@ -42,6 +42,7 @@ fn query_baseline_still_works_without_semantic_match() {
             term_ranker: "test".to_string(),
             index_version: "test".to_string(),
         },
+        content_hash: String::new(),
     }]);
 
     let results = index.query("docker", 10);
@@ -223,6 +224,7 @@ fn semantic_expansion_improves_recall_for_synonyms() {
             term_ranker: "test".to_string(),
             index_version: "test".to_string(),
         },
+        content_hash: String::new(),
     }]);
 
     // "occupation" expands to "job" in bundled lexical subsets.

@@ -1,9 +1,9 @@
 use super::{
-    build_doc_record, chunk_lineage_key, current_time_ms, ensure_store_metadata,
-    execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot, load_segment_manifest,
-    load_semantic_state, persist_segment_manifest, persist_semantic_state, persist_store_metadata,
-    source_document_from_record, IndexLocation, IndexStoreInspection, LexicalState,
-    MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
+    build_doc_record, chunk_lineage_key, current_time_ms, doc_record_content_hash,
+    ensure_store_metadata, execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot,
+    load_segment_manifest, load_semantic_state, persist_segment_manifest, persist_semantic_state,
+    persist_store_metadata, source_document_from_record, IndexLocation, IndexStoreInspection,
+    LexicalState, MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
 };
 use crate::index::{
     build_semantic_doc_state, DocRecord, MemoryIndex, Provenance, QueryDiagnostics, QueryTimings,
@@ -100,6 +100,8 @@ pub(crate) struct PersistedDocRecord {
     embedding: Option<Vec<f32>>,
     top_claims: Vec<crate::index::Claim>,
     provenance: Provenance,
+    #[serde(default)]
+    content_hash: String,
 }
 
 impl From<DocRecord> for PersistedDocRecord {
@@ -124,6 +126,7 @@ impl From<DocRecord> for PersistedDocRecord {
             embedding: record.embedding,
             top_claims: record.top_claims,
             provenance: record.provenance,
+            content_hash: record.content_hash,
         }
     }
 }
@@ -150,6 +153,7 @@ impl From<PersistedDocRecord> for DocRecord {
             embedding: record.embedding,
             top_claims: record.top_claims,
             provenance: record.provenance,
+            content_hash: record.content_hash,
         }
     }
 }
@@ -806,6 +810,15 @@ impl IndexStore {
         self.records.get(doc_id)
     }
 
+    /// Test-only: wipes a stored record's content hash to simulate a legacy
+    /// persisted record (written before hashing existed).
+    #[cfg(test)]
+    pub(crate) fn clear_record_content_hash_for_test(&mut self, doc_id: &str) {
+        if let Some(record) = self.records.get_mut(doc_id) {
+            record.content_hash.clear();
+        }
+    }
+
     pub fn memory_index_snapshot(&self) -> Option<&MemoryIndexSnapshot> {
         self.snapshot.as_deref()
     }
@@ -914,10 +927,10 @@ impl IndexStore {
     pub fn refresh(&mut self) -> Result<()> {
         self.poll_background_refresh()?;
         if self.dirty || self.snapshot.is_none() {
-            // Captured before staging consumes it: these documents get fresh
-            // records, so any segment containing one must be rebuilt.
-            let reprocessed_doc_ids: HashSet<String> = self.dirty_docs.clone();
-            self.prepare_pending_changes()?;
+            // Only documents whose content actually changed get fresh
+            // records (see prepare_pending_changes), so only segments
+            // containing one of the returned ids must be rebuilt.
+            let reprocessed_doc_ids = self.prepare_pending_changes()?;
             let mut records = self.records.values().cloned().collect::<Vec<DocRecord>>();
             records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
             if !self.try_refresh_incremental(&records, &reprocessed_doc_ids)? {
@@ -1148,9 +1161,34 @@ impl IndexStore {
             .collect()
     }
 
-    fn prepare_pending_changes(&mut self) -> Result<()> {
+    /// Stages pending source changes into records and derived state.
+    ///
+    /// Returns the ids of the documents whose records were actually rebuilt.
+    /// A dirty document re-upserted with byte-identical content reuses its
+    /// stored record (gated by `content_hash`): its segments, lexical
+    /// entries, semantic state, and chunk lifecycle are already correct, so
+    /// the rebuild is skipped entirely. Skipped docs are still cleared from
+    /// `dirty_docs`.
+    fn prepare_pending_changes(&mut self) -> Result<HashSet<String>> {
         let dirty_doc_ids = self.dirty_docs.iter().cloned().collect::<Vec<String>>();
+        let mut reprocessed_doc_ids = HashSet::new();
         for doc_id in &dirty_doc_ids {
+            let incoming_hash = {
+                let source_doc = self
+                    .source_docs
+                    .get(doc_id)
+                    .expect("dirty doc should still exist in source docs");
+                doc_record_content_hash(source_doc, &self.options)
+            };
+            let stored_hash = self
+                .records
+                .get(doc_id)
+                .map(|record| record.content_hash.clone())
+                .unwrap_or_default();
+            if !stored_hash.is_empty() && stored_hash == incoming_hash {
+                self.dirty_docs.remove(doc_id);
+                continue;
+            }
             let source_doc = self
                 .source_docs
                 .get(doc_id)
@@ -1166,6 +1204,7 @@ impl IndexStore {
                 self.update_chunk_lifecycle_for_doc(doc_id, previous.as_ref(), &current);
             }
             self.dirty_docs.remove(doc_id);
+            reprocessed_doc_ids.insert(doc_id.clone());
         }
         let tombstoned = self.tombstones.iter().cloned().collect::<Vec<_>>();
         for doc_id in tombstoned {
@@ -1188,7 +1227,9 @@ impl IndexStore {
                 .map(|(_, record)| record)
                 .collect::<Vec<_>>()
         } else {
-            dirty_doc_ids
+            // Only actually-rebuilt docs need lexical upserts: skipped docs
+            // already have correct lexical entries from their last build.
+            reprocessed_doc_ids
                 .iter()
                 .filter_map(|doc_id| self.records.get(doc_id))
                 .collect::<Vec<_>>()
@@ -1197,7 +1238,7 @@ impl IndexStore {
             self.lexical.upsert_record(record)?;
         }
         self.lexical.commit_reload()?;
-        Ok(())
+        Ok(reprocessed_doc_ids)
     }
 
     fn poll_background_refresh(&mut self) -> Result<()> {

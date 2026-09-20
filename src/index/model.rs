@@ -65,6 +65,11 @@ pub struct DocRecord {
     pub embedding: Option<Vec<f32>>,
     pub top_claims: Vec<Claim>,
     pub provenance: Provenance,
+    /// SHA-256 over every input that can change the record (source fields +
+    /// extraction option identities). Empty means "unknown" (legacy persisted
+    /// records) and forces a rebuild. See `doc_record_content_hash`.
+    #[serde(default)]
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

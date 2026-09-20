@@ -134,14 +134,14 @@ retrieval fields match the Claude parser. Codex cached input is converted to
 separate uncached-input and cache-read fields so totals do not double-count it.
 
 Each scenario/arm/repetition worktree persists after the run instead of being
-deleted, so its `.lint-ai/codex-memory` store stays inspectable. A worktree
+deleted, so its `.lint-ai/memory` store stays inspectable. A worktree
 left over from a prior run of the same scenario/arm/repetition is removed
 automatically right before the next run of it starts. Inspect a run's
 captured memory with:
 
 ```bash
 target/release/lint-ai \
-  --inspect-index benchmark/codex_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/codex-memory \
+  --inspect-index benchmark/codex_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/memory \
   --inspect-view source-documents
 ```
 

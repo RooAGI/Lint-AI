@@ -427,7 +427,7 @@ candidate's results, and record the rationale in this document.
 Every run includes synthetic canaries for API keys, bearer tokens, passwords,
 and PEM private keys. After capture, scan:
 
-- `.lint-ai/codex-memory`
+- `.lint-ai/memory`
 - Lint-AI measurement JSONL
 - benchmark result records
 - generated reports

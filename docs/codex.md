@@ -44,7 +44,7 @@ terminal/status-bar integrations can use the provider-owned
 Codex project memory should be persisted under:
 
 ```text
-<project>/.lint-ai/codex-memory/
+<project>/.lint-ai/memory/
 ```
 
 Hook execution is fail-open: recording, indexing, or retrieval failures are
@@ -131,7 +131,7 @@ lint-ai --replay-session <session-id> \
 Each replay creates a fresh recorded `replay-*` session. Codex starts a new
 conversation for the first prompt and resumes it for subsequent prompts. The
 baseline archive is not modified. Use `--promote-session` to load selected
-recorded events into `.lint-ai/codex-memory/`.
+recorded events into `.lint-ai/memory/`.
 
 Generate a report from a session archive, or compare baseline and replay:
 
@@ -162,15 +162,15 @@ measured run artifacts.
 Inspect the persisted store summary:
 
 ```bash
-lint-ai --inspect-index .lint-ai/codex-memory
+lint-ai --inspect-index .lint-ai/memory
 ```
 
 Inspect the documents at each indexing stage:
 
 ```bash
-lint-ai --inspect-index .lint-ai/codex-memory --inspect-view source-documents
-lint-ai --inspect-index .lint-ai/codex-memory --inspect-view records
-lint-ai --inspect-index .lint-ai/codex-memory --inspect-view segments
+lint-ai --inspect-index .lint-ai/memory --inspect-view source-documents
+lint-ai --inspect-index .lint-ai/memory --inspect-view records
+lint-ai --inspect-index .lint-ai/memory --inspect-view segments
 ```
 
 - `source-documents` should show the reconstructed public ingestion objects.

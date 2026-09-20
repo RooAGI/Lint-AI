@@ -47,7 +47,7 @@ intentionally want to replace that file.
 Claude session memory is persisted under:
 
 ```text
-<project>/.lint-ai/claude-memory/
+<project>/.lint-ai/memory/
 ```
 
 Hook execution is fail-open: recording, indexing, or retrieval failures are
@@ -143,15 +143,15 @@ A/B protocol and measured run artifacts.
 Inspect the persisted store summary:
 
 ```bash
-lint-ai --inspect-index .lint-ai/claude-memory
+lint-ai --inspect-index .lint-ai/memory
 ```
 
 Inspect the documents at each indexing stage:
 
 ```bash
-lint-ai --inspect-index .lint-ai/claude-memory --inspect-view source-documents
-lint-ai --inspect-index .lint-ai/claude-memory --inspect-view records
-lint-ai --inspect-index .lint-ai/claude-memory --inspect-view segments
+lint-ai --inspect-index .lint-ai/memory --inspect-view source-documents
+lint-ai --inspect-index .lint-ai/memory --inspect-view records
+lint-ai --inspect-index .lint-ai/memory --inspect-view segments
 ```
 
 - `source-documents` shows the reconstructed public ingestion objects.

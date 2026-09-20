@@ -157,7 +157,7 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
     if query.trim().is_empty() {
         return Ok(AgyHookOutput::default());
     }
-    let memory = root.join(".lint-ai/agy-memory");
+    let memory = crate::integrations::mcp_index::shared_memory_root(root);
     if !memory.exists() {
         return Ok(AgyHookOutput::default());
     }
@@ -323,7 +323,10 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(&root.join(".lint-ai/agy-memory"), options)?;
+    let mut store = IndexStore::at_path(
+        &crate::integrations::mcp_index::shared_memory_root(root),
+        options,
+    )?;
     store.upsert(document);
     store.refresh()?;
     Ok(())

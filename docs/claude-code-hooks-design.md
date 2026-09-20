@@ -157,7 +157,7 @@ allows relevant older sessions to be selected.
 Claude interaction memory uses a dedicated persistent store:
 
 ```text
-<project>/.lint-ai/claude-memory/
+<project>/.lint-ai/memory/
   lexical/
   semantic/
   metadata.json
@@ -194,10 +194,10 @@ let results = store.query(&retrieval_query, top_k)?;
 The same store can be inspected without reading internal persistence files:
 
 ```text
-lint-ai --inspect-index <project>/.lint-ai/claude-memory
-lint-ai --inspect-index <project>/.lint-ai/claude-memory --inspect-view source-documents
-lint-ai --inspect-index <project>/.lint-ai/claude-memory --inspect-view records
-lint-ai --inspect-index <project>/.lint-ai/claude-memory --inspect-view segments
+lint-ai --inspect-index <project>/.lint-ai/memory
+lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view source-documents
+lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view records
+lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view segments
 ```
 
 With segmented layout, `IndexStore::query()` routes over the configured top-N

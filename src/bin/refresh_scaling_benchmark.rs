@@ -232,23 +232,22 @@ fn main() -> Result<()> {
     );
     for &size in &args.sizes {
         let mut store = IndexStore::new(options());
-        let mut segments = 0usize;
-        if let Some(sessions) = &lm_sessions {
+        let segments = if let Some(sessions) = &lm_sessions {
             // One document per session; tile with replica suffixes past the dataset size.
             for doc_idx in 0..size {
                 let session = &sessions[doc_idx % sessions.len()];
                 let replica = doc_idx / sessions.len();
                 store.upsert(make_longmemeval_doc(session, replica));
             }
-            segments = size; // one segment per document
+            size // one segment per document
         } else {
-            segments = size.div_ceil(args.docs_per_session);
             for doc_idx in 0..size {
                 let session_idx = doc_idx / args.docs_per_session;
                 let provider = PROVIDERS[session_idx % PROVIDERS.len()];
                 store.upsert(make_synthetic_doc(doc_idx, session_idx, provider));
             }
-        }
+            size.div_ceil(args.docs_per_session)
+        };
 
         let t = Instant::now();
         store.refresh()?;

@@ -1,3 +1,4 @@
+use crate::integrations::session_recording::{provider_state_dir, RecordingProvider};
 pub use crate::pipeline::WorkspaceWatcher;
 use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
@@ -57,13 +58,19 @@ pub const SHARED_MEMORY_DIR: &str = "memory";
 
 /// Legacy per-provider memory directories, migrated into [`SHARED_MEMORY_DIR`]
 /// on first use. Kept in sync with the providers that used to own a silo.
-const LEGACY_PROVIDER_MEMORY_DIRS: &[&str] = &[
-    "claude-memory",
-    "codex-memory",
-    "gemini-cli-memory",
-    "agy-memory",
-    "muse-memory",
+const LEGACY_PROVIDERS: &[RecordingProvider] = &[
+    RecordingProvider::Claude,
+    RecordingProvider::Codex,
+    RecordingProvider::Gemini,
+    RecordingProvider::Agy,
+    RecordingProvider::Muse,
 ];
+
+/// Directory name (under `.lint-ai/`) of the legacy per-provider memory silo
+/// for `provider`, e.g. `codex-memory`.
+fn legacy_provider_memory_dir(provider: RecordingProvider) -> String {
+    format!("{}-memory", provider.as_str())
+}
 
 /// Path to the shared memory store for a workspace root.
 pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
@@ -79,10 +86,24 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
     let lint_ai = root.join(".lint-ai");
     let shared_root = lint_ai.join(SHARED_MEMORY_DIR);
     let mut migrated_any = false;
-    for legacy in LEGACY_PROVIDER_MEMORY_DIRS {
-        let legacy_root = lint_ai.join(legacy);
+    for provider in LEGACY_PROVIDERS {
+        let provider = *provider;
+        let legacy_root = lint_ai.join(legacy_provider_memory_dir(provider));
         if !legacy_root.exists() {
             continue;
+        }
+        // The per-provider on/off state (`integration.json`) now lives outside
+        // the legacy directory; carry it over before the directory is removed
+        // so a disabled provider is not silently re-enabled by migration.
+        // A state file already at the new location wins (it is fresher).
+        let legacy_state = legacy_root.join("integration.json");
+        if legacy_state.is_file() {
+            let state_dir = provider_state_dir(provider, root);
+            let new_state = state_dir.join("integration.json");
+            if !new_state.exists() {
+                fs::create_dir_all(&state_dir)?;
+                fs::rename(&legacy_state, &new_state)?;
+            }
         }
         let documents: Vec<SourceDocument> =
             match IndexStore::at_path(&legacy_root, segmented_store_options()) {
@@ -400,6 +421,47 @@ mod tests {
         .unwrap();
         assert!(reopened.source_document_by_id("codex-session").is_some());
         assert!(reopened.source_document_by_id("claude-session").is_some());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_preserves_provider_integration_state() {
+        use crate::integrations::session_recording::{lint_ai_enabled, set_lint_ai_state};
+
+        let temp_base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = temp_base.join(format!(
+            "lint-ai-migration-state-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+
+        // A provider disabled under the old layout: state file lives in the
+        // legacy directory, which holds no memory documents.
+        let legacy = root.join(".lint-ai").join("codex-memory");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(
+            legacy.join("integration.json"),
+            r#"{"enabled": false, "provider": "codex"}"#,
+        )
+        .unwrap();
+
+        migrate_legacy_provider_memory_dirs(&root).unwrap();
+
+        // The legacy directory is gone, but the disabled state survived at the
+        // new location instead of being silently reset to enabled.
+        assert!(!legacy.exists());
+        assert!(root.join(".lint-ai/codex-state/integration.json").is_file());
+        assert!(!lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
+
+        // The new location round-trips through the public state API.
+        set_lint_ai_state(RecordingProvider::Codex, &root, true).unwrap();
+        assert!(lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
 
         let _ = fs::remove_dir_all(root);
     }

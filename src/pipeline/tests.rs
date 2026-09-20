@@ -1269,3 +1269,184 @@ fn chunk_lifecycle_is_removed_when_doc_is_removed() {
         .into_iter()
         .any(|meta| meta.doc_id == "doc-1"));
 }
+
+fn segmented_test_options() -> PipelineOptions {
+    PipelineOptions {
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: 1,
+            routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+        },
+        ..PipelineOptions::default()
+    }
+}
+
+/// Raw pointers to each segment's shared index: stable across refreshes only
+/// when the segment is reused rather than rebuilt.
+fn segment_index_ptrs(index: &IndexStore) -> Vec<*const crate::index::MemoryIndex> {
+    use std::sync::Arc;
+    match index
+        .memory_index_snapshot()
+        .expect("snapshot should exist")
+    {
+        MemoryIndexSnapshot::Segmented(segmented) => segmented
+            .segments
+            .iter()
+            .map(|segment| Arc::as_ptr(&segment.index))
+            .collect(),
+        MemoryIndexSnapshot::Single(_) => panic!("expected a segmented snapshot"),
+    }
+}
+
+#[test]
+fn doc_record_content_hash_matches_built_record() {
+    let options = PipelineOptions::default();
+    let doc = sample_doc("doc-1", "hash agreement probe");
+    let record = build_doc_record(&doc, &options).expect("build should succeed");
+    assert_eq!(record.content_hash.len(), 64);
+    assert_eq!(
+        record.content_hash,
+        doc_record_content_hash(&doc, &options),
+        "stamped hash must equal the cheap pre-build hash"
+    );
+}
+
+#[test]
+fn doc_record_content_hash_is_stable_and_sensitive() {
+    let options = PipelineOptions::default();
+    let doc = sample_doc("doc-1", "hello world");
+    let baseline = doc_record_content_hash(&doc, &options);
+    assert_eq!(baseline, doc_record_content_hash(&doc, &options));
+
+    let mut changed = doc.clone();
+    changed.content = "hello mars".to_string();
+    changed.doc_length = changed.content.len();
+    assert_ne!(baseline, doc_record_content_hash(&changed, &options));
+
+    let mut filtered = doc.clone();
+    filtered
+        .filters
+        .insert("team".to_string(), "infra".to_string());
+    assert_ne!(baseline, doc_record_content_hash(&filtered, &options));
+
+    let mut concept = doc.clone();
+    concept.concept = "different concept".to_string();
+    assert_ne!(
+        baseline,
+        doc_record_content_hash(&concept, &options),
+        "concept feeds the key-entity ranker"
+    );
+
+    let mut headed = doc.clone();
+    headed.headings = vec!["Changed".to_string()];
+    assert_ne!(baseline, doc_record_content_hash(&headed, &options));
+
+    let mut claim_options = PipelineOptions::default();
+    claim_options.claim_extraction = true;
+    assert_ne!(
+        baseline,
+        doc_record_content_hash(&doc, &claim_options),
+        "extraction options must invalidate the hash"
+    );
+}
+
+#[test]
+fn identical_content_reupsert_skips_record_rebuild() {
+    let mut index = IndexStore::new(segmented_test_options());
+    let doc = sample_doc_with_group("doc-1", "group-a", "the quick brown fox jumps");
+    index.upsert(doc.clone());
+    index.refresh().expect("initial refresh should succeed");
+    let before_ptrs = segment_index_ptrs(&index);
+    let before_hash = index
+        .record_by_id("doc-1")
+        .expect("record should exist")
+        .content_hash
+        .clone();
+    assert!(!before_hash.is_empty());
+
+    // Re-upsert byte-identical content: the record rebuild is skipped, so all
+    // segments are shared with the previous snapshot.
+    index.upsert(doc);
+    index.refresh().expect("refresh should succeed");
+    assert_eq!(
+        before_ptrs,
+        segment_index_ptrs(&index),
+        "identical re-upsert must not rebuild any segment"
+    );
+    assert_eq!(
+        index
+            .record_by_id("doc-1")
+            .expect("record should exist")
+            .content_hash,
+        before_hash
+    );
+    assert!(
+        !index.inspection().dirty,
+        "skipped doc must be cleared from dirty state"
+    );
+    let results = index
+        .query("quick brown fox", 5)
+        .expect("query should succeed");
+    assert!(results.iter().any(|result| result.doc_id == "doc-1"));
+}
+
+#[test]
+fn changed_content_reupsert_rebuilds_record() {
+    let mut index = IndexStore::new(segmented_test_options());
+    index.upsert(sample_doc_with_group(
+        "doc-1",
+        "group-a",
+        "the quick brown fox jumps",
+    ));
+    index.refresh().expect("initial refresh should succeed");
+    let before_ptrs = segment_index_ptrs(&index);
+    let before_hash = index
+        .record_by_id("doc-1")
+        .expect("record should exist")
+        .content_hash
+        .clone();
+
+    index.upsert(sample_doc_with_group(
+        "doc-1",
+        "group-a",
+        "a completely different sentence about databases",
+    ));
+    index.refresh().expect("refresh should succeed");
+    assert_ne!(
+        before_ptrs,
+        segment_index_ptrs(&index),
+        "changed content must rebuild the segment"
+    );
+    let record = index.record_by_id("doc-1").expect("record should exist");
+    assert_ne!(record.content_hash, before_hash);
+    assert_eq!(
+        record.content,
+        "a completely different sentence about databases"
+    );
+}
+
+#[test]
+fn legacy_record_without_content_hash_is_rebuilt() {
+    let mut index = IndexStore::new(segmented_test_options());
+    let doc = sample_doc_with_group("doc-1", "group-a", "legacy hash simulation");
+    index.upsert(doc.clone());
+    index.refresh().expect("initial refresh should succeed");
+    let before_ptrs = segment_index_ptrs(&index);
+
+    // Simulate a record persisted before hashing existed.
+    index.clear_record_content_hash_for_test("doc-1");
+    index.upsert(doc);
+    index.refresh().expect("refresh should succeed");
+    assert_ne!(
+        before_ptrs,
+        segment_index_ptrs(&index),
+        "empty content hash must force a rebuild, never a reuse"
+    );
+    assert!(
+        !index
+            .record_by_id("doc-1")
+            .expect("record should exist")
+            .content_hash
+            .is_empty(),
+        "rebuilt record must carry a fresh hash"
+    );
+}

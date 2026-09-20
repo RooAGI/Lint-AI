@@ -673,6 +673,7 @@ mod tests {
             embedding: None,
             top_claims: Vec::new(),
             provenance: provenance(),
+            content_hash: String::new(),
         }
     }
 

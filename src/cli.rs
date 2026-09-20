@@ -324,6 +324,12 @@ pub fn parse() -> Args {
     Args::parse()
 }
 
+/// Run the CLI: parse args from the environment and execute.
+pub fn run() -> anyhow::Result<()> {
+    let args = parse();
+    crate::engine::run(args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

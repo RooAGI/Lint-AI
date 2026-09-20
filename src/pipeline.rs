@@ -47,7 +47,7 @@ use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
 /// Contents are intentionally excluded; consumers can request bounded,
 /// authorized inspection separately when needed.
 #[derive(Debug, Clone, Serialize)]
-pub struct WorkspaceChangeEvent {
+struct WorkspaceChangeEvent {
     pub event: String,
     pub file_path: String,
     pub timestamp_ms: u64,
@@ -78,7 +78,7 @@ impl WorkspaceWatcher {
         })
     }
 
-    pub fn take_events(&self) -> Vec<WorkspaceChangeEvent> {
+    fn take_events(&self) -> Vec<WorkspaceChangeEvent> {
         let Ok(events) = self.events.lock() else {
             return vec![WorkspaceChangeEvent {
                 event: "watcher_error".to_string(),
@@ -310,7 +310,7 @@ pub struct ChunkLifecycleMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DocumentLifecycleMeta {
+struct DocumentLifecycleMeta {
     pub doc_id: String,
     pub version: u32,
     pub is_latest: bool,
@@ -861,7 +861,7 @@ impl IndexStore {
     /// Serialize the current index state to a pair of opaque byte buffers suitable
     /// for storage in an external system (e.g. Postgres BYTEA / JSONB columns).
     /// Call `load_from_dump` to restore.
-    pub fn dump(&mut self) -> Result<IndexDump> {
+    fn dump(&mut self) -> Result<IndexDump> {
         self.refresh()?;
         let compatibility_index = self.build_compatibility_index();
         let core_bytes = compatibility_index.to_bytes()?;
@@ -888,7 +888,7 @@ impl IndexStore {
 
     /// Restore an `IndexStore` from a dump produced by `dump()`.
     /// Returns an error if the schema version does not match.
-    pub fn load_from_dump(dump: IndexDump, options: PipelineOptions) -> Result<Self> {
+    fn load_from_dump(dump: IndexDump, options: PipelineOptions) -> Result<Self> {
         let persisted: PersistedSemanticRecords = serde_json::from_slice(&dump.records_json)?;
         if persisted.schema_version != STORE_SCHEMA_VERSION {
             anyhow::bail!(
@@ -1088,7 +1088,7 @@ impl IndexStore {
         entries
     }
 
-    pub fn document_lifecycle(&self) -> Vec<DocumentLifecycleMeta> {
+    fn document_lifecycle(&self) -> Vec<DocumentLifecycleMeta> {
         let mut entries = Vec::new();
         for record in self.records.values() {
             let mut version = 0u32;
@@ -2604,7 +2604,7 @@ fn assemble_doc_record(
     record
 }
 
-pub fn build_query_snapshot_from_records(
+fn build_query_snapshot_from_records(
     records: &[DocRecord],
     options: &PipelineOptions,
 ) -> Result<MemoryIndex> {

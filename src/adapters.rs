@@ -149,4 +149,50 @@ mod tests {
 
         fs::remove_dir_all(&root).unwrap();
     }
+
+    #[test]
+    fn markdown_supersession_metadata_hides_replaced_guidance_from_default_search() {
+        let root = temp_dir("temporal-markdown");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("legacy.md"),
+            "# Legacy ownership\nThe old team owns the control surface.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("current.md"),
+            "---\nsupersedes: legacy.md\n---\n# Current ownership\nThe new team is responsible for the control surface.\n",
+        )
+        .unwrap();
+
+        let input = AdapterInput {
+            root: &root,
+            max_bytes: 5_000_000,
+            max_files: 50_000,
+            max_depth: 20,
+            max_total_bytes: 50_000_000,
+        };
+        let graph = build_project_graph(&input).unwrap();
+        let documents = graph_to_source_documents(&graph);
+        let current = documents
+            .iter()
+            .find(|doc| doc.doc_id == "current.md")
+            .expect("current Markdown document should be indexed");
+        assert_eq!(
+            current.filters.get("supersedes_id").map(String::as_str),
+            Some("legacy.md")
+        );
+
+        let mut index =
+            crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
+        let results = index
+            .query("who is responsible for the control surface", 5)
+            .unwrap();
+        assert!(
+            results.iter().all(|result| result.doc_id != "legacy.md"),
+            "replaced Markdown guidance should not be returned by default: {results:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

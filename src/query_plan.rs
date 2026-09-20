@@ -49,7 +49,7 @@ impl PreparedQuery {
 
     /// Reuses an analysis the caller already computed, so no query is analyzed
     /// twice on paths that need the analysis for other reasons too.
-    pub fn from_analysis(analysis: QueryAnalysis) -> Self {
+    fn from_analysis(analysis: QueryAnalysis) -> Self {
         Self {
             analysis,
             reference_date: None,
@@ -60,7 +60,7 @@ impl PreparedQuery {
         &self.analysis
     }
 
-    pub fn into_analysis(self) -> QueryAnalysis {
+    fn into_analysis(self) -> QueryAnalysis {
         self.analysis
     }
 

@@ -26,6 +26,7 @@ pub enum RecordingProvider {
     Codex,
     Gemini,
     Agy,
+    Muse,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -378,6 +379,12 @@ fn run_provider_process(
                 command.args(["-p", prompt, "--output-format", "stream-json"]);
                 command
             }
+            RecordingProvider::Muse => {
+                // Muse Code replay is not wired yet: the hook payload schema
+                // and resume API are still being validated against a live
+                // binary, so the MCP-server integration ships first.
+                anyhow::bail!("session replay is not yet supported for Muse Code");
+            }
         };
         let mut child = command
             .current_dir(project_root)
@@ -688,6 +695,7 @@ impl RecordingProvider {
             Self::Codex => "codex",
             Self::Gemini => "gemini-cli",
             Self::Agy => "agy",
+            Self::Muse => "muse",
         }
     }
 }

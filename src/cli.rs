@@ -26,6 +26,8 @@ pub enum SessionProvider {
     Codex,
     Gemini,
     Agy,
+    #[cfg(feature = "muse-code")]
+    Muse,
 }
 
 #[cfg(feature = "claude-code")]
@@ -41,6 +43,18 @@ pub enum ClaudeCodeHook {
     SessionEnd,
     SubagentStart,
     SubagentStop,
+}
+
+#[cfg(feature = "muse-code")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum MuseHook {
+    SessionStart,
+    UserPromptSubmit,
+    PreToolUse,
+    PostToolUse,
+    PostToolUseFailure,
+    Stop,
+    SessionEnd,
 }
 
 #[cfg(feature = "codex")]
@@ -219,6 +233,21 @@ pub struct Args {
     #[cfg(feature = "codex")]
     pub codex_settings: Option<String>,
     #[arg(long)]
+    #[cfg(feature = "muse-code")]
+    pub muse_install: bool,
+    #[arg(long)]
+    #[cfg(feature = "muse-code")]
+    pub muse_serve: bool,
+    #[arg(long)]
+    #[cfg(feature = "muse-code")]
+    pub muse_verify_mcp: bool,
+    #[arg(long)]
+    #[cfg(feature = "muse-code")]
+    pub muse_config: Option<String>,
+    #[arg(long, value_enum, hide = true)]
+    #[cfg(feature = "muse-code")]
+    pub muse_hook: Option<MuseHook>,
+    #[arg(long)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_install: bool,
     #[arg(long)]
@@ -384,5 +413,26 @@ mod tests {
         let help = Args::command().render_long_help().to_string();
         assert!(help.contains("--codex-install"));
         assert!(help.contains("--codex-verify-mcp"));
+    }
+
+    #[cfg(not(feature = "muse-code"))]
+    #[test]
+    fn default_help_hides_muse_code_feature_flags() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(!help.contains("--muse-install"));
+        assert!(!help.contains("--muse-verify-mcp"));
+
+        let error = Args::try_parse_from(["lint-ai", "--muse-install"])
+            .expect_err("Muse Code install should be unavailable without the feature")
+            .to_string();
+        assert!(!error.contains("--muse-verify-mcp"));
+    }
+
+    #[cfg(feature = "muse-code")]
+    #[test]
+    fn muse_code_help_exposes_feature_flags_when_enabled() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("--muse-install"));
+        assert!(help.contains("--muse-verify-mcp"));
     }
 }

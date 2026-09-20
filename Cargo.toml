@@ -52,11 +52,12 @@ pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 [features]
 default = ["heuristic-query-semantics"]
 heuristic-query-semantics = []
-agent-integrations = ["claude-code", "codex", "gemini-cli", "agy"]
+agent-integrations = ["claude-code", "codex", "gemini-cli", "agy", "muse-code"]
 claude-code = []
 codex = []
 gemini-cli = []
 agy = []
+muse-code = []
 python = ["dep:pyo3"]
 experimental = []
 

@@ -931,9 +931,24 @@ impl IndexStore {
             // records (see prepare_pending_changes), so only segments
             // containing one of the returned ids must be rebuilt.
             let reprocessed_doc_ids = self.prepare_pending_changes()?;
-            let mut records = self.records.values().cloned().collect::<Vec<DocRecord>>();
-            records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-            if !self.try_refresh_incremental(&records, &reprocessed_doc_ids)? {
+            // The incremental path borrows the record map and never clones
+            // it; only the full-rebuild fallback materializes a sorted Vec.
+            let incremental = {
+                let snapshot = &mut self.snapshot;
+                let records = &self.records;
+                let layout = &self.options.memory_index_layout;
+                let store_revision = self.store_revision;
+                Self::try_refresh_incremental(
+                    snapshot,
+                    records,
+                    &reprocessed_doc_ids,
+                    store_revision,
+                    layout,
+                )?
+            };
+            if !incremental {
+                let mut records = self.records.values().cloned().collect::<Vec<DocRecord>>();
+                records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
                 let global_index =
                     matches!(self.options.memory_index_layout, MemoryIndexLayout::Single)
                         .then(|| self.build_compatibility_index());
@@ -958,18 +973,24 @@ impl IndexStore {
     /// build, or a non-segmented layout). Sharing is structural — segments
     /// hold their index behind `Arc` — so there is no ownership dance and no
     /// silent fallback: a concurrent reader simply keeps the old snapshot.
+    ///
+    /// Takes the record map by reference and never clones it: grouping and
+    /// the reuse check work on borrowed ids, and only rebuilt segments
+    /// materialize owned records.
     fn try_refresh_incremental(
-        &mut self,
-        records: &[DocRecord],
+        snapshot: &mut Option<Arc<MemoryIndexSnapshot>>,
+        records: &HashMap<String, DocRecord>,
         reprocessed_doc_ids: &HashSet<String>,
+        store_revision: u64,
+        layout: &MemoryIndexLayout,
     ) -> Result<bool> {
         if !matches!(
-            self.options.memory_index_layout,
+            layout,
             MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
         ) {
             return Ok(false);
         }
-        let previous = match self.snapshot.as_deref() {
+        let previous = match snapshot.as_deref() {
             Some(MemoryIndexSnapshot::Segmented(previous)) => previous,
             _ => return Ok(false),
         };
@@ -977,10 +998,10 @@ impl IndexStore {
             previous,
             records,
             reprocessed_doc_ids,
-            self.store_revision,
+            store_revision,
         )
         .map_err(|error| anyhow::anyhow!("incremental segment refresh failed: {error}"))?;
-        self.snapshot = Some(Arc::new(MemoryIndexSnapshot::Segmented(next)));
+        *snapshot = Some(Arc::new(MemoryIndexSnapshot::Segmented(next)));
         Ok(true)
     }
 

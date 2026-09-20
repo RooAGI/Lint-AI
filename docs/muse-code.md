@@ -67,7 +67,7 @@ a malformed settings file fails every `muse` command.
 Muse Code project memory is persisted under:
 
 ```text
-<project>/.lint-ai/muse-memory/
+<project>/.lint-ai/memory/
 ```
 
 Note that Muse Code also ships native project memory under
@@ -155,15 +155,15 @@ repository because the persistent index may need to be built.
 Inspect the persisted store summary:
 
 ```bash
-lint-ai --inspect-index .lint-ai/muse-memory
+lint-ai --inspect-index .lint-ai/memory
 ```
 
 Inspect the documents at each indexing stage:
 
 ```bash
-lint-ai --inspect-index .lint-ai/muse-memory --inspect-view source-documents
-lint-ai --inspect-index .lint-ai/muse-memory --inspect-view records
-lint-ai --inspect-index .lint-ai/muse-memory --inspect-view segments
+lint-ai --inspect-index .lint-ai/memory --inspect-view source-documents
+lint-ai --inspect-index .lint-ai/memory --inspect-view records
+lint-ai --inspect-index .lint-ai/memory --inspect-view segments
 ```
 
 All views emit JSON and can be filtered with `jq`.

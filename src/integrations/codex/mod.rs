@@ -16,6 +16,7 @@ use crate::integrations::session_recording::{
 use crate::pipeline::IndexStore;
 #[cfg(test)]
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+use crate::query_plan::PreparedQuery;
 #[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
@@ -288,7 +289,7 @@ impl CodexMcp {
             let root = self.root.clone();
             *store = Some(mcp_index::open_workspace_memory_store(
                 &root,
-                "codex-memory",
+                mcp_index::SHARED_MEMORY_DIR,
                 &self.ignore_paths,
                 || Ok(documents),
             )?);
@@ -335,7 +336,8 @@ impl CodexMcp {
                 error: None,
             }),
             "tools/list" => {
-                let _store = self.store()?;
+                // Tool definitions are static; the store initializes lazily
+                // on the first real tool call (search, list_memories, info).
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -375,7 +377,7 @@ impl CodexMcp {
 
         match tool_name {
             "search" => {
-                if let Some(name) = unknown_argument(&arguments, &["query", "top_k"]) {
+                if let Some(name) = unknown_argument(&arguments, &["query", "top_k", "provider"]) {
                     return Ok(error_response(
                         id,
                         -32602,
@@ -395,14 +397,18 @@ impl CodexMcp {
                     .and_then(Value::as_u64)
                     .unwrap_or(DEFAULT_QUERY_TOP_K as u64)
                     .clamp(1, 20) as usize;
+                let filters = match mcp_tools::search_provider_filters(&arguments) {
+                    Ok(filters) => filters,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("codex-memory"),
+                    &mcp_index::shared_memory_root(&self.root),
                     &mut *store,
                 )?;
                 let started = std::time::Instant::now();
-                let results = store.query(query, top_k);
+                let results = store.query_prepared(&PreparedQuery::new(query), top_k, &filters);
                 let _ = crate::telemetry::record_project_query(
                     &self.root,
                     started.elapsed().as_millis() as u64,
@@ -441,7 +447,7 @@ impl CodexMcp {
                 let mut store = self.store()?;
                 let store = store.as_mut().expect("MCP store initialized");
                 mcp_index::sync_memory_documents(
-                    &self.root.join(".lint-ai").join("codex-memory"),
+                    &mcp_index::shared_memory_root(&self.root),
                     &mut *store,
                 )?;
                 Ok(text_response(
@@ -573,6 +579,7 @@ impl CodexMcp {
                     "properties": {
                         "query": { "type": "string" },
                         "top_k": { "type": "integer", "minimum": 1, "maximum": 20, "default": DEFAULT_QUERY_TOP_K },
+                        "provider": mcp_tools::provider_argument_schema(),
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -1074,7 +1081,7 @@ args = ["old"]
     }
 
     #[test]
-    fn tools_list_requires_store_initialization() {
+    fn tools_list_does_not_initialize_store() {
         let root = temp_dir("mcp-lazy-store");
         let mcp = CodexMcp {
             root: root.clone(),
@@ -1097,7 +1104,9 @@ args = ["old"]
             .unwrap();
 
         assert!(response.error.is_none());
-        assert!(mcp.store.lock().unwrap().is_some());
+        // tools/list is a lightweight metadata call; the heavy store
+        // initialization waits for the first real tool call.
+        assert!(mcp.store.lock().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1172,7 +1181,7 @@ args = ["old"]
     fn search_tool_synchronizes_memory_captured_after_startup() {
         let root = temp_dir("mcp-live-memory");
         let mcp = test_mcp(root.clone(), vec![]);
-        let memory_root = root.join(".lint-ai").join("codex-memory");
+        let memory_root = mcp_index::shared_memory_root(&root);
         let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
         memory.upsert(SourceDocument {
             doc_id: "memory-1".to_string(),

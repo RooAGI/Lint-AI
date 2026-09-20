@@ -355,16 +355,13 @@ mod tests {
         let args = Args::try_parse_from([
             "lint-ai",
             "--inspect-index",
-            ".lint-ai/claude-memory",
+            ".lint-ai/memory",
             "--inspect-view",
             "source-documents",
         ])
         .unwrap();
 
-        assert_eq!(
-            args.inspect_index.as_deref(),
-            Some(".lint-ai/claude-memory")
-        );
+        assert_eq!(args.inspect_index.as_deref(), Some(".lint-ai/memory"));
         assert!(matches!(
             args.inspect_view,
             IndexInspectView::SourceDocuments

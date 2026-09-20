@@ -27,7 +27,7 @@ To evaluate the real persisted Lint-AI project memory corpus instead:
 
 ```bash
 cargo run --bin project_memory_recency_benchmark -- \
-  --records .lint-ai/codex-memory/semantic/records.json
+  --records .lint-ai/memory/semantic/records.json
 ```
 
 This reports the corpus freshness distribution and the freshness distribution

@@ -2025,14 +2025,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 args.max_config_bytes,
             )
             .map_err(|err| anyhow::anyhow!(err))?;
-            let memory_name = match args.session_provider {
-                crate::cli::SessionProvider::Claude => "claude-memory",
-                crate::cli::SessionProvider::Codex => "codex-memory",
-                crate::cli::SessionProvider::Gemini => "gemini-cli-memory",
-                crate::cli::SessionProvider::Agy => "agy-memory",
-                #[cfg(feature = "muse-code")]
-                crate::cli::SessionProvider::Muse => "muse-memory",
-            };
+            let memory_name = crate::integrations::mcp_index::SHARED_MEMORY_DIR;
             let output =
                 crate::integrations::recall::recall(&crate::integrations::recall::RecallOptions {
                     root: Path::new(&args.path),

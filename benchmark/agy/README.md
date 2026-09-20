@@ -91,10 +91,10 @@ A scenario's `setup_messages` array controls the continuous chat lifecycle:
 
 ### Cross-Session Continuation Boundary
 To strictly measure cross-session memory retrieval (matching Claude Code and Codex harness methodology):
-* **Setup Phase**: Runs the setup message sequence (single-turn or multi-turn). When setup terminates, Lint-AI's `Stop` hook extracts and indexes the full conversation transcript into `.lint-ai/agy-memory`.
+* **Setup Phase**: Runs the setup message sequence (single-turn or multi-turn). When setup terminates, Lint-AI's `Stop` hook extracts and indexes the full conversation transcript into `.lint-ai/memory`.
 * **Continuation Phase (Fresh Session)**: Continuation always executes as a **brand new session** with **no prior conversation history** passed in its prompt context.
   * In `agy-native`, the model receives only the continuation prompt without conversation history, requiring it to answer from pre-training or hallucinate.
-  * In `agy-lint-ai`, the `PreInvocation` hook intercepts the continuation turn, queries `.lint-ai/agy-memory`, and injects the indexed setup decision as an `EPHEMERAL_MESSAGE`.
+  * In `agy-lint-ai`, the `PreInvocation` hook intercepts the continuation turn, queries `.lint-ai/memory`, and injects the indexed setup decision as an `EPHEMERAL_MESSAGE`.
 
 ---
 
@@ -137,11 +137,11 @@ One repetition each on AGY with Gemini 3.7 Flash. `setup_messages` has 2 entries
 
 ## Memory Store Inspection
 
-Each scenario/arm worktree persists after the run so its `.lint-ai/agy-memory` store remains inspectable. Inspect a run's captured memory with:
+Each scenario/arm worktree persists after the run so its `.lint-ai/memory` store remains inspectable. Inspect a run's captured memory with:
 
 ```bash
 target/debug/lint-ai \
-  --inspect-index benchmark/agy/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/agy-memory \
+  --inspect-index benchmark/agy/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/memory \
   --inspect-view source-documents
 ```
 

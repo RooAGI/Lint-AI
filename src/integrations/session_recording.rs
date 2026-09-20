@@ -491,9 +491,10 @@ pub fn promote_recorded_session(
     let content = fs::read_to_string(&events_path)
         .with_context(|| format!("failed to read recorded session {}", events_path.display()))?;
     let group_id = format!("{}-session:{}", provider.as_str(), session_id);
-    let memory_root = project_root
-        .join(".lint-ai")
-        .join(format!("{}-memory", provider.as_str()));
+    // Promoted sessions land in the shared cross-provider memory store. The
+    // provider stays on the documents themselves (group id, `filters.provider`,
+    // `author_agent`, doc id) so attribution is preserved without a silo.
+    let memory_root = crate::integrations::mcp_index::shared_memory_root(project_root);
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
             query_top_n: 3,
@@ -607,7 +608,7 @@ pub fn set_lint_ai_state(
     project_root: &Path,
     enabled: bool,
 ) -> Result<Value> {
-    let root = memory_root(provider, project_root);
+    let root = provider_state_dir(provider, project_root);
     fs::create_dir_all(&root)?;
     let state = serde_json::json!({
         "schema_version": 1,
@@ -621,7 +622,7 @@ pub fn set_lint_ai_state(
 }
 
 pub fn lint_ai_enabled(provider: RecordingProvider, project_root: &Path) -> Result<bool> {
-    let path = memory_root(provider, project_root).join("integration.json");
+    let path = provider_state_dir(provider, project_root).join("integration.json");
     if !path.exists() {
         return Ok(true);
     }
@@ -682,10 +683,14 @@ fn session_root(provider: RecordingProvider, project_root: &Path) -> PathBuf {
         .join(format!("{}-sessions", provider.as_str()))
 }
 
-fn memory_root(provider: RecordingProvider, project_root: &Path) -> PathBuf {
+/// Directory for per-provider integration state (`integration.json`, the
+/// lint-ai on/off flag). This intentionally avoids the legacy
+/// `{provider}-memory` name: those directories are migrated into the shared
+/// store and removed on first use, which would silently delete the state file.
+pub(crate) fn provider_state_dir(provider: RecordingProvider, project_root: &Path) -> PathBuf {
     project_root
         .join(".lint-ai")
-        .join(format!("{}-memory", provider.as_str()))
+        .join(format!("{}-state", provider.as_str()))
 }
 
 impl RecordingProvider {
@@ -1760,7 +1765,9 @@ mod tests {
         .unwrap();
         assert_eq!(report.session_id, "baseline");
         assert_eq!(report.imported_document_ids.len(), 2);
-        assert!(project_root.join(".lint-ai/claude-memory").exists());
+        // Promoted sessions land in the shared cross-provider store.
+        assert!(project_root.join(".lint-ai/memory").exists());
+        assert!(!project_root.join(".lint-ai/claude-memory").exists());
         fs::remove_dir_all(project_root).unwrap();
         fs::remove_dir_all(archive_root).unwrap();
     }

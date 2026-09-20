@@ -16,7 +16,7 @@ use std::time::SystemTime;
 #[command(about = "Evaluate freshness on a persisted Lint-AI project memory corpus")]
 struct Args {
     /// Path to semantic/records.json produced by IndexStore.
-    #[arg(long, default_value = ".lint-ai/codex-memory/semantic/records.json")]
+    #[arg(long, default_value = ".lint-ai/memory/semantic/records.json")]
     records: PathBuf,
 }
 

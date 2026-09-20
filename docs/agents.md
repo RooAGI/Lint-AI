@@ -8,11 +8,23 @@ using the same capture, indexing, and retrieval model.
 
 | Agent | Integration guide | Memory store |
 |---|---|---|
-| Claude Code | [Claude Code](claude-code.md) | `.lint-ai/claude-memory` |
-| Codex | [Codex](codex.md) | `.lint-ai/codex-memory` |
-| Gemini CLI | [Gemini CLI](gemini-cli.md) | `.lint-ai/gemini-cli-memory` |
-| Antigravity CLI | [Antigravity CLI](agy.md) | `.lint-ai/agy-memory` |
-| Muse Code | [Muse Code](muse-code.md) | `.lint-ai/muse-memory` |
+| Claude Code | [Claude Code](claude-code.md) | `.lint-ai/memory` |
+| Codex | [Codex](codex.md) | `.lint-ai/memory` |
+| Gemini CLI | [Gemini CLI](gemini-cli.md) | `.lint-ai/memory` |
+| Antigravity CLI | [Antigravity CLI](agy.md) | `.lint-ai/memory` |
+| Muse Code | [Muse Code](muse-code.md) | `.lint-ai/memory` |
+
+All agents share the single project store at `.lint-ai/memory/` — a decision
+recorded by Claude is visible to Codex, and vice versa. Provider attribution
+travels on each document (`integration`, `author_agent`,
+`{provider}-session:{id}` group ids), not in the directory layout.
+
+Upgrading from an older version? Legacy per-provider stores
+(`.lint-ai/claude-memory/`, `.lint-ai/codex-memory/`,
+`.lint-ai/gemini-cli-memory/`, `.lint-ai/agy-memory/`,
+`.lint-ai/muse-memory/`) are migrated into `.lint-ai/memory/` automatically on
+first run and removed once their migration succeeds. A failed migration leaves
+the legacy directory untouched, so no memory is lost.
 
 ## How an agent uses memory
 
@@ -154,10 +166,10 @@ not update the searchable `IndexStore`:
 
 | Provider | Capture-attempt events | Searchable store |
 |---|---|---|
-| Claude Code | `PreCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.lint-ai/claude-memory` |
-| Codex | `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.lint-ai/codex-memory` |
-| Gemini CLI | `AfterAgent`, `PreCompress`, `SessionEnd` | `.lint-ai/gemini-cli-memory` |
-| Antigravity CLI | `Stop` (transcript capture) | `.lint-ai/agy-memory` |
+| Claude Code | `PreCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.lint-ai/memory` |
+| Codex | `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.lint-ai/memory` |
+| Gemini CLI | `AfterAgent`, `PreCompress`, `SessionEnd` | `.lint-ai/memory` |
+| Antigravity CLI | `Stop` (transcript capture) | `.lint-ai/memory` |
 
 At a capture event, the adapter reads the transcript, extracts structured
 memory, calls `IndexStore::upsert`, and then calls `refresh`. This makes the

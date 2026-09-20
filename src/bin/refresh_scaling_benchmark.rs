@@ -195,6 +195,20 @@ fn median(mut xs: Vec<u128>) -> u128 {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.sizes.is_empty() {
+        anyhow::bail!("--sizes must list at least one corpus size");
+    }
+    if args.sizes.iter().any(|&size| size == 0) {
+        anyhow::bail!(
+            "--sizes entries must be at least 1 (0 would divide by zero when assigning sessions)"
+        );
+    }
+    if args.docs_per_session == 0 {
+        anyhow::bail!("--docs-per-session must be at least 1");
+    }
+    if args.reps == 0 {
+        anyhow::bail!("--reps must be at least 1 (the median of zero runs is undefined)");
+    }
     const PROVIDERS: &[&str] = &["claude", "codex", "gemini-cli", "agy", "muse"];
 
     let lm_sessions: Option<Vec<SessionText>> = args

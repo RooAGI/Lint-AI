@@ -61,7 +61,7 @@ fn index_store_convenience_queries_share_the_prepared_path() {
 
 #[test]
 fn cli_uses_the_canonical_semantic_executor() {
-    let engine = include_str!("../src/engine.rs");
+    let engine = include_str!("../src/engine/run.rs");
     assert!(engine.contains("execute_on_index_with_semantics"));
     assert!(!engine.contains("semantic_relations::is_historical_query(query)"));
     assert!(!engine.contains("crate::semantic_relations::SemanticStatus::Superseded"));

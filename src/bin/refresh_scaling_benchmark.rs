@@ -217,6 +217,9 @@ fn main() -> Result<()> {
         .map(load_longmemeval)
         .transpose()?;
     if let Some(sessions) = &lm_sessions {
+        if sessions.is_empty() {
+            anyhow::bail!("--longmemeval contains no unique haystack sessions");
+        }
         eprintln!(
             "loaded {} unique LongMemEval-S sessions (sizes beyond this tile with replica ids)",
             sessions.len()

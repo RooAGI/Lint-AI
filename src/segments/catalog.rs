@@ -650,11 +650,11 @@ impl SegmentRoutingSummary {
         }
 
         let query_probability = 1.0 / query_terms.len() as f32;
-        let divergence = query_terms
+        let divergence = sorted_query_terms(query_terms)
             .iter()
             .map(|term| {
                 let segment_probability = segment_distribution
-                    .get(term)
+                    .get(term.as_str())
                     .copied()
                     .unwrap_or(KL_SMOOTHING)
                     .max(KL_SMOOTHING);
@@ -694,7 +694,7 @@ impl SegmentRoutingSummary {
             return 0.0;
         }
 
-        let total_query_idf = query_terms
+        let total_query_idf = sorted_query_terms(query_terms)
             .iter()
             .map(|term| corpus_stats.idf(term))
             .sum::<f32>()
@@ -740,7 +740,7 @@ impl SegmentRoutingSummary {
             return 0.0;
         }
 
-        let total_query_idf = query_terms
+        let total_query_idf = sorted_query_terms(query_terms)
             .iter()
             .map(|term| corpus_stats.idf(term))
             .sum::<f32>()
@@ -1354,6 +1354,16 @@ pub(crate) fn query_tokens(query: &str) -> HashSet<String> {
         .into_iter()
         .filter(|token| !is_routing_stopword(token))
         .collect()
+}
+
+/// Query terms in sorted order, for order-independent float summation:
+/// HashSet iteration order is nondeterministic and float summation is
+/// order-sensitive at the last ULP, which would otherwise make route scores
+/// (and therefore top-k selection) differ between identical builds.
+pub(crate) fn sorted_query_terms(query_terms: &HashSet<String>) -> Vec<&String> {
+    let mut terms: Vec<&String> = query_terms.iter().collect();
+    terms.sort();
+    terms
 }
 
 fn add_weight(distribution: &mut HashMap<String, f32>, text: &str, weight: f32) {

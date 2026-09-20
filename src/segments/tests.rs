@@ -222,9 +222,9 @@ fn refresh_incremental_reuses_only_untouched_segments() {
 }
 
 /// Differential oracle for incremental refresh: the incremental result must
-/// be indistinguishable from a full rebuild — same segment membership and
-/// same catalog (including postings order of every derived map). Query
-/// results are intentionally not compared (see below).
+/// be indistinguishable from a full rebuild — same segment membership, same
+/// catalog (including postings order of every derived map), and bit-identical
+/// query results.
 fn assert_incremental_matches_full_rebuild(
     base: Vec<DocRecord>,
     mutate: impl FnOnce(Vec<DocRecord>) -> (Vec<DocRecord>, HashSet<String>),
@@ -255,14 +255,25 @@ fn assert_incremental_matches_full_rebuild(
         "derived routing maps diverged"
     );
 
-    // Query results are intentionally NOT compared here: the query path has
-    // pre-existing nondeterministic top-k tie-breaking (two identical full
-    // rebuilds can select different tied documents; see
-    // pipeline::tests::incremental_refresh_matches_full_rebuild). The
-    // deterministic routing inputs — segment manifest, catalog summaries,
-    // connection profiles, and every derived routing map bit-for-bit — are
-    // asserted above, which is the complete input surface this incremental
-    // refresh is responsible for.
+    // Query results must match bit-for-bit: the query path is fully
+    // deterministic (float sums run in sorted-key order and top-k
+    // tie-breaking falls back to doc_id), so any divergence here is a real
+    // incremental-refresh bug, not test flakiness.
+    for query in ["alpha", "beta one two", "gamma three four", "one two"] {
+        assert_eq!(
+            projected_results(&next.query(query, 5, 8)),
+            projected_results(&oracle.query(query, 5, 8)),
+            "query results diverged for query {query:?}"
+        );
+    }
+}
+
+/// (doc_id, score bits) projection of query results for bit-for-bit comparison.
+fn projected_results(results: &[SearchResult]) -> Vec<(String, u32)> {
+    results
+        .iter()
+        .map(|result| (result.doc_id.clone(), result.score.to_bits()))
+        .collect()
 }
 
 fn differential_base_records() -> Vec<DocRecord> {

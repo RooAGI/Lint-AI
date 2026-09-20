@@ -382,7 +382,8 @@ impl MuseMcp {
                 error: None,
             }),
             "tools/list" => {
-                let _store = self.store()?;
+                // Tool definitions are static; the store initializes lazily
+                // on the first real tool call (search, list_memories, info).
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,

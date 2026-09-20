@@ -316,7 +316,8 @@ impl ClaudeMcp {
                 error: None,
             }),
             "tools/list" => {
-                let _store = self.store()?;
+                // Tool definitions are static; the store initializes lazily
+                // on the first real tool call (search, list_memories, info).
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -1013,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_requires_store_initialization() {
+    fn tools_list_does_not_initialize_store() {
         let root = temp_dir("mcp-lazy-store");
         let mcp = ClaudeMcp {
             root: root.clone(),
@@ -1036,7 +1037,9 @@ mod tests {
             .unwrap();
 
         assert!(response.error.is_none());
-        assert!(mcp.store.lock().unwrap().is_some());
+        // tools/list is a lightweight metadata call; the heavy store
+        // initialization waits for the first real tool call.
+        assert!(mcp.store.lock().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

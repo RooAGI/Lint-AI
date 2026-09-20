@@ -415,8 +415,30 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
     }
 }
 
+/// Selects which enrichment behavior `query_top_segments_with_enrichment_and_strategy`
+/// applies: the segment selection/expansion logic plus the delegate-call flags.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_segment_enrichment_and_strategy(
+pub(crate) enum SegmentEnrichmentKind<'a> {
+    Segment,
+    RouteAware,
+    SessionAggregated,
+    TemporalPath,
+    ConnectedSegment,
+    MissingCoverageRecovery,
+    Adaptive {
+        base_segment_limit: usize,
+        max_segment_limit: usize,
+        reference_date: Option<&'a str>,
+    },
+    AdaptiveRouteAware {
+        base_segment_limit: usize,
+        max_segment_limit: usize,
+        reference_date: Option<&'a str>,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn query_top_segments_with_enrichment_and_strategy(
     query: &str,
     top_k: usize,
     segments: &[MemoryIndexSegment],
@@ -426,9 +448,26 @@ pub(crate) fn query_top_segments_with_segment_enrichment_and_strategy(
     corpus_stats: &SegmentCorpusStats,
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
+    kind: SegmentEnrichmentKind<'_>,
 ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
     let query_terms = query_tokens(query);
-    if top_k == 0 || segment_limit == 0 {
+    // Adaptive variants use base/max limits instead of `segment_limit`; the
+    // adaptive call sites pass `max_segment_limit` positionally for `segment_limit`,
+    // which the adaptive arms below ignore.
+    let limit_is_zero = match &kind {
+        SegmentEnrichmentKind::Adaptive {
+            base_segment_limit,
+            max_segment_limit,
+            ..
+        }
+        | SegmentEnrichmentKind::AdaptiveRouteAware {
+            base_segment_limit,
+            max_segment_limit,
+            ..
+        } => *base_segment_limit == 0 || *max_segment_limit == 0,
+        _ => segment_limit == 0,
+    };
+    if top_k == 0 || limit_is_zero {
         return (
             SegmentQueryOutput {
                 results: Vec::new(),
@@ -448,482 +487,211 @@ pub(crate) fn query_top_segments_with_segment_enrichment_and_strategy(
         );
     }
 
-    let selected_segments = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    )
-    .into_iter()
-    .take(segment_limit)
-    .collect::<Vec<_>>();
+    let (
+        selected_segments,
+        temporal_expanded_segments,
+        connected_expanded_segments,
+        route_aware_rerank,
+        session_aggregate,
+        reference_date,
+    ) = match kind {
+        SegmentEnrichmentKind::Segment => {
+            let selected_segments = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            )
+            .into_iter()
+            .take(segment_limit)
+            .collect::<Vec<_>>();
+            (
+                selected_segments,
+                Vec::new(),
+                Vec::new(),
+                false,
+                false,
+                None,
+            )
+        }
+        SegmentEnrichmentKind::RouteAware => {
+            let selected_segments = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            )
+            .into_iter()
+            .take(segment_limit)
+            .collect::<Vec<_>>();
+            (selected_segments, Vec::new(), Vec::new(), true, false, None)
+        }
+        SegmentEnrichmentKind::SessionAggregated => {
+            let selected_segments = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            )
+            .into_iter()
+            .take(segment_limit)
+            .collect::<Vec<_>>();
+            (selected_segments, Vec::new(), Vec::new(), false, true, None)
+        }
+        SegmentEnrichmentKind::TemporalPath => {
+            let routed_segments = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            )
+            .into_iter()
+            .take(segment_limit)
+            .collect::<Vec<_>>();
+            let (expanded_segments, temporal_expanded_segments) =
+                expand_temporal_path_segments(&routed_segments, segments, segment_limit, temporal);
+            (
+                expanded_segments,
+                temporal_expanded_segments,
+                Vec::new(),
+                false,
+                false,
+                None,
+            )
+        }
+        SegmentEnrichmentKind::ConnectedSegment => {
+            let routes = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            );
+            let routed_segments = routes
+                .iter()
+                .take(segment_limit)
+                .cloned()
+                .collect::<Vec<_>>();
+            let (expanded_segments, connected_expanded_segments) = expand_connected_segments(
+                &routed_segments,
+                &routes,
+                segments,
+                segment_limit,
+                temporal,
+                corpus_stats,
+            );
+            (
+                expanded_segments,
+                Vec::new(),
+                connected_expanded_segments,
+                false,
+                true,
+                None,
+            )
+        }
+        SegmentEnrichmentKind::MissingCoverageRecovery => {
+            let routes = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            );
+            let routed_segments = routes
+                .iter()
+                .take(segment_limit)
+                .cloned()
+                .collect::<Vec<_>>();
+            let (recovered_segments, recovery_events) = recover_missing_coverage_segments(
+                &query_terms,
+                &routed_segments,
+                &routes,
+                segments,
+                corpus_stats,
+            );
+            (
+                recovered_segments,
+                Vec::new(),
+                recovery_events,
+                false,
+                false,
+                None,
+            )
+        }
+        SegmentEnrichmentKind::Adaptive {
+            base_segment_limit,
+            max_segment_limit,
+            reference_date,
+        } => {
+            let routes = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            );
+            let selected_segments = adaptive_segment_routes(
+                &query_terms,
+                &routes,
+                segments,
+                corpus_stats,
+                base_segment_limit,
+                max_segment_limit,
+            );
+            (
+                selected_segments,
+                Vec::new(),
+                Vec::new(),
+                false,
+                false,
+                reference_date,
+            )
+        }
+        SegmentEnrichmentKind::AdaptiveRouteAware {
+            base_segment_limit,
+            max_segment_limit,
+            reference_date,
+        } => {
+            let routes = route_segments_with_temporal_context_and_corpus_stats(
+                query,
+                segments,
+                strategy,
+                temporal,
+                corpus_stats,
+            );
+            let selected_segments = adaptive_segment_routes(
+                &query_terms,
+                &routes,
+                segments,
+                corpus_stats,
+                base_segment_limit,
+                max_segment_limit,
+            );
+            (
+                selected_segments,
+                Vec::new(),
+                Vec::new(),
+                true,
+                false,
+                reference_date,
+            )
+        }
+    };
     query_selected_segments_with_enrichment(
         query,
         top_k,
         segments,
         selected_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
-        Vec::new(),
-        false,
-        false,
-        None,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_route_aware_segment_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let selected_segments = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    )
-    .into_iter()
-    .take(segment_limit)
-    .collect::<Vec<_>>();
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        selected_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
-        Vec::new(),
-        true,
-        false,
-        None,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_session_aggregated_segment_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let selected_segments = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    )
-    .into_iter()
-    .take(segment_limit)
-    .collect::<Vec<_>>();
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        selected_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
-        Vec::new(),
-        false,
-        true,
-        None,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_temporal_path_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let routed_segments = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    )
-    .into_iter()
-    .take(segment_limit)
-    .collect::<Vec<_>>();
-    let (expanded_segments, temporal_expanded_segments) =
-        expand_temporal_path_segments(&routed_segments, segments, segment_limit, temporal);
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        expanded_segments,
         temporal,
         corpus_stats,
         temporal_expanded_segments,
-        Vec::new(),
-        false,
-        false,
-        None,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_connected_segment_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let routes = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    );
-    let routed_segments = routes
-        .iter()
-        .take(segment_limit)
-        .cloned()
-        .collect::<Vec<_>>();
-    let (expanded_segments, connected_expanded_segments) = expand_connected_segments(
-        &routed_segments,
-        &routes,
-        segments,
-        segment_limit,
-        temporal,
-        corpus_stats,
-    );
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        expanded_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
         connected_expanded_segments,
-        false,
-        true,
-        None,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_missing_coverage_recovery_segment_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let routes = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    );
-    let routed_segments = routes
-        .iter()
-        .take(segment_limit)
-        .cloned()
-        .collect::<Vec<_>>();
-    let (recovered_segments, recovery_events) = recover_missing_coverage_segments(
-        &query_terms,
-        &routed_segments,
-        &routes,
-        segments,
-        corpus_stats,
-    );
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        recovered_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
-        recovery_events,
-        false,
-        false,
-        None,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_adaptive_segment_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    base_segment_limit: usize,
-    max_segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    reference_date: Option<&str>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || base_segment_limit == 0 || max_segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let routes = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    );
-    let selected_segments = adaptive_segment_routes(
-        &query_terms,
-        &routes,
-        segments,
-        corpus_stats,
-        base_segment_limit,
-        max_segment_limit,
-    );
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        selected_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
-        Vec::new(),
-        false,
-        false,
-        reference_date,
-        cached_statistics,
-        snapshot_generation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn query_top_segments_with_adaptive_route_aware_segment_enrichment_and_strategy(
-    query: &str,
-    top_k: usize,
-    segments: &[MemoryIndexSegment],
-    base_segment_limit: usize,
-    max_segment_limit: usize,
-    strategy: SegmentRoutingStrategy,
-    temporal: TemporalQueryContext<'_>,
-    reference_date: Option<&str>,
-    corpus_stats: &SegmentCorpusStats,
-    cached_statistics: Option<&GlobalBm25Statistics>,
-    snapshot_generation: u64,
-) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
-    if top_k == 0 || base_segment_limit == 0 || max_segment_limit == 0 {
-        return (
-            SegmentQueryOutput {
-                results: Vec::new(),
-                diagnostics: SegmentQueryDiagnostics {
-                    snapshot_generation,
-                    query_terms: sorted_terms(&query_terms),
-                    uncovered_query_terms: sorted_terms(&query_terms),
-                    ..SegmentQueryDiagnostics::default()
-                },
-            },
-            SegmentSpecificEnrichmentDiagnostics {
-                selected_segments: Vec::new(),
-                average_added_terms: 0.0,
-                temporal_expanded_segments: Vec::new(),
-                connected_expanded_segments: Vec::new(),
-            },
-        );
-    }
-
-    let routes = route_segments_with_temporal_context_and_corpus_stats(
-        query,
-        segments,
-        strategy,
-        temporal,
-        corpus_stats,
-    );
-    let selected_segments = adaptive_segment_routes(
-        &query_terms,
-        &routes,
-        segments,
-        corpus_stats,
-        base_segment_limit,
-        max_segment_limit,
-    );
-    query_selected_segments_with_enrichment(
-        query,
-        top_k,
-        segments,
-        selected_segments,
-        temporal,
-        corpus_stats,
-        Vec::new(),
-        Vec::new(),
-        true,
-        false,
+        route_aware_rerank,
+        session_aggregate,
         reference_date,
         cached_statistics,
         snapshot_generation,

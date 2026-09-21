@@ -165,37 +165,42 @@ impl SegmentedMemoryIndex {
     /// re-processed documents. A segment is therefore reusable exactly when
     /// its document id set is unchanged and none of its documents appear in
     /// `reprocessed_doc_ids`.
+    ///
+    /// Only segments that are actually rebuilt pay for record clones: the
+    /// grouping and the reuse check work on borrowed document ids, so a
+    /// single-write refresh never clones the corpus.
     pub fn refresh_incremental(
         previous: &Self,
-        records: &[DocRecord],
+        records: &HashMap<String, DocRecord>,
         reprocessed_doc_ids: &HashSet<String>,
         generation: u64,
     ) -> Result<Self, String> {
-        let mut grouped: HashMap<String, Vec<DocRecord>> = HashMap::new();
-        for record in records {
-            let segment_id = record
-                .group_id
-                .clone()
-                .unwrap_or_else(|| "ungrouped".to_string());
-            grouped.entry(segment_id).or_default().push(record.clone());
+        let mut grouped: HashMap<&str, Vec<&str>> = HashMap::new();
+        for record in records.values() {
+            let segment_id = record.group_id.as_deref().unwrap_or("ungrouped");
+            grouped
+                .entry(segment_id)
+                .or_default()
+                .push(record.doc_id.as_str());
         }
 
-        let mut segment_ids: Vec<String> = grouped.keys().cloned().collect();
-        segment_ids.sort();
+        let mut segment_ids: Vec<&str> = grouped.keys().copied().collect();
+        segment_ids.sort_unstable();
         let mut segments = Vec::with_capacity(segment_ids.len());
         for segment_id in segment_ids {
-            let mut segment_records = grouped.remove(&segment_id).unwrap_or_default();
-            segment_records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-            let new_doc_ids: Vec<String> = segment_records
-                .iter()
-                .map(|record| record.doc_id.clone())
-                .collect();
+            let mut new_doc_ids = grouped.remove(segment_id).unwrap_or_default();
+            new_doc_ids.sort_unstable();
             let reusable = previous
                 .segments
                 .iter()
-                .find(|segment| segment.segment_id == segment_id)
+                .find(|segment| segment.segment_id.as_str() == segment_id)
                 .filter(|segment| {
-                    segment.doc_ids == new_doc_ids
+                    segment.doc_ids.len() == new_doc_ids.len()
+                        && segment
+                            .doc_ids
+                            .iter()
+                            .map(String::as_str)
+                            .eq(new_doc_ids.iter().copied())
                         && !segment
                             .doc_ids
                             .iter()
@@ -203,11 +208,22 @@ impl SegmentedMemoryIndex {
                 });
             match reusable {
                 Some(previous_segment) => segments.push(MemoryIndexSegment {
-                    segment_id,
+                    segment_id: segment_id.to_string(),
                     doc_ids: previous_segment.doc_ids.clone(),
                     index: Arc::clone(&previous_segment.index),
                 }),
-                None => segments.push(build_memory_index_segment(segment_id, segment_records)),
+                None => {
+                    let mut segment_records = Vec::with_capacity(new_doc_ids.len());
+                    for doc_id in &new_doc_ids {
+                        segment_records.push(records.get(*doc_id).cloned().ok_or_else(|| {
+                            format!("grouped document missing from records: {doc_id}")
+                        })?);
+                    }
+                    segments.push(build_memory_index_segment(
+                        segment_id.to_string(),
+                        segment_records,
+                    ))
+                }
             }
         }
         validate_segments(&segments)?;

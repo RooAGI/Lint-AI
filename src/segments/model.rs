@@ -197,7 +197,7 @@ impl MemoryIndexSegment {
             return 0.0;
         }
 
-        let total_query_idf = query_terms
+        let total_query_idf = sorted_query_terms(query_terms)
             .iter()
             .map(|term| corpus_stats.idf(term))
             .sum::<f32>()

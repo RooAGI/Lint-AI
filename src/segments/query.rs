@@ -899,7 +899,13 @@ fn weak_segment_score(
                 .len()
         })
         .sum::<usize>();
-    let local_score = covered_terms
+    // Sum in sorted-term order: HashSet iteration order is nondeterministic
+    // and float summation is order-sensitive at the last ULP (same fix as
+    // normalize_distribution in catalog.rs). A 1-ULP wobble here would
+    // reorder routes and defeat the deterministic tie-breaks downstream.
+    let mut sorted_covered_terms: Vec<&String> = covered_terms.iter().collect();
+    sorted_covered_terms.sort();
+    let local_score = sorted_covered_terms
         .iter()
         .map(|term| {
             corpus_stats

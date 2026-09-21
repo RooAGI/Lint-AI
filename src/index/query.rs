@@ -224,6 +224,9 @@ impl MemoryIndex {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic tie-break on doc id; equal scores must not
+                // fall back to HashMap iteration order.
+                .then_with(|| a.doc_id.cmp(&b.doc_id))
         });
         rescored.truncate(top_k);
         timings.total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
@@ -848,7 +851,18 @@ impl MemoryIndex {
             .iter()
             .map(|(doc_u32, state)| (*doc_u32, state.score))
             .collect();
-        ranked_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked_docs.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic tie-break: `candidates` is a HashMap, so equal
+                // scores must not fall back to input (iteration) order, which
+                // differs between index builds.
+                .then_with(|| {
+                    self.doc_u32_to_id
+                        .get(a.0)
+                        .cmp(&self.doc_u32_to_id.get(b.0))
+                })
+        });
         let candidate_rank_ms = candidate_rank_start.elapsed().as_secs_f64() * 1000.0;
 
         // Graph-aware rerank features with bounded contribution.
@@ -1015,7 +1029,18 @@ impl MemoryIndex {
                 }
             })
             .collect();
-        ranked_docs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked_docs.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic tie-break: `candidates` is a HashMap, so equal
+                // scores must not fall back to input (iteration) order, which
+                // differs between index builds.
+                .then_with(|| {
+                    self.doc_u32_to_id
+                        .get(a.0)
+                        .cmp(&self.doc_u32_to_id.get(b.0))
+                })
+        });
         let ranking_start = Instant::now();
         let ranked_docs = ranked_docs
             .into_iter()
@@ -1048,7 +1073,17 @@ impl MemoryIndex {
         let mut ranked_groups: Vec<RankedGroup> = grouped_ranked_docs
             .into_iter()
             .map(|(group_key, mut items)| {
-                items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                items.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        // Deterministic tie-break on doc id; see ranked_docs
+                        // above.
+                        .then_with(|| {
+                            self.doc_u32_to_id
+                                .get(a.0)
+                                .cmp(&self.doc_u32_to_id.get(b.0))
+                        })
+                });
                 let mut unique_entities: HashSet<String> = HashSet::new();
                 let mut unique_terms: HashSet<String> = HashSet::new();
                 let mut dates: Vec<NaiveDate> = Vec::new();
@@ -1125,7 +1160,13 @@ impl MemoryIndex {
             .collect();
         let mut group_sort_ms = 0.0;
         let group_sort_start = Instant::now();
-        ranked_groups.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked_groups.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                // Deterministic tie-break on the session key; group order
+                // feeds result assembly and truncation.
+                .then_with(|| a.0.cmp(&b.0))
+        });
         group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
         let evidence_start = Instant::now();
         if let Some(intent) = query_routing_intent {
@@ -1174,8 +1215,12 @@ impl MemoryIndex {
                 *score = *score * 0.80 + evidence_boost;
             }
             let group_sort_start = Instant::now();
-            ranked_groups
-                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            ranked_groups.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    // Deterministic tie-break on the session key; see above.
+                    .then_with(|| a.0.cmp(&b.0))
+            });
             group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
         }
         let evidence_ms = evidence_start.elapsed().as_secs_f64() * 1000.0;

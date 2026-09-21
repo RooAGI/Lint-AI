@@ -531,7 +531,12 @@ impl RouteAwareCandidate {
             .iter()
             .filter(|term| result_terms.contains(*term))
             .count() as f32;
-        let local_evidence_score = result_terms
+        // Sum in sorted-term order via sorted_query_terms: HashSet iteration
+        // order is nondeterministic and float summation is order-sensitive at
+        // the last ULP. Without this, two identical rebuilds can produce
+        // base_scores differing by 1 ULP, which defeats the doc_id tie-break
+        // in select_route_aware_top_k and makes query results nondeterministic.
+        let local_evidence_score = sorted_query_terms(&result_terms)
             .iter()
             .map(|term| {
                 let local_weight = corpus_stats

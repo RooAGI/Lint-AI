@@ -152,8 +152,12 @@ fn refresh_incremental_reuses_only_untouched_segments() {
         .filter(|record| record.doc_id != "drop-1")
         .collect();
     next_records.push(record("grow-2", "grow", "grow epsilon", &["epsilon"]));
+    let next_map: HashMap<String, DocRecord> = next_records
+        .iter()
+        .map(|record| (record.doc_id.clone(), record.clone()))
+        .collect();
     let reprocessed: HashSet<String> = ["keep-1".to_string()].into_iter().collect();
-    let next = SegmentedMemoryIndex::refresh_incremental(&previous, &next_records, &reprocessed, 1)
+    let next = SegmentedMemoryIndex::refresh_incremental(&previous, &next_map, &reprocessed, 1)
         .expect("incremental refresh should succeed");
 
     let next_index = |snapshot: &SegmentedMemoryIndex, id: &str| {
@@ -176,7 +180,7 @@ fn refresh_incremental_reuses_only_untouched_segments() {
     assert_ne!(next_index(&next, "grow"), previous_index("grow"));
 
     // A refresh with no changes reuses every segment's index by pointer.
-    let idle = SegmentedMemoryIndex::refresh_incremental(&next, &next_records, &HashSet::new(), 2)
+    let idle = SegmentedMemoryIndex::refresh_incremental(&next, &next_map, &HashSet::new(), 2)
         .expect("idle incremental refresh should succeed");
     assert_eq!(idle.segments.len(), 2);
     assert!(Arc::ptr_eq(
@@ -215,6 +219,146 @@ fn refresh_incremental_reuses_only_untouched_segments() {
         normalized_catalog(&next.catalog),
         normalized_catalog(&rebuilt.catalog)
     );
+}
+
+/// Differential oracle for incremental refresh: the incremental result must
+/// be indistinguishable from a full rebuild — same segment membership, same
+/// catalog (including postings order of every derived map), and bit-identical
+/// query results.
+fn assert_incremental_matches_full_rebuild(
+    base: Vec<DocRecord>,
+    mutate: impl FnOnce(Vec<DocRecord>) -> (Vec<DocRecord>, HashSet<String>),
+) {
+    let previous = SegmentedMemoryIndex::from_records_by_group_id_with_generation(&base, 7);
+    let (next_records, reprocessed) = mutate(base);
+    let next_map: HashMap<String, DocRecord> = next_records
+        .iter()
+        .map(|record| (record.doc_id.clone(), record.clone()))
+        .collect();
+    let next = SegmentedMemoryIndex::refresh_incremental(&previous, &next_map, &reprocessed, 8)
+        .expect("incremental refresh should succeed");
+    let oracle = SegmentedMemoryIndex::from_records_by_group_id_with_generation(&next_records, 8);
+
+    assert_eq!(
+        format!("{:?}", next.manifest()),
+        format!("{:?}", oracle.manifest()),
+        "segment membership diverged"
+    );
+    assert_eq!(
+        normalized_catalog(&next.catalog),
+        normalized_catalog(&oracle.catalog),
+        "catalog summaries/profiles diverged"
+    );
+    assert_eq!(
+        next.catalog.derived_maps_snapshot(),
+        oracle.catalog.derived_maps_snapshot(),
+        "derived routing maps diverged"
+    );
+
+    // Query results must match bit-for-bit: the query path is fully
+    // deterministic (float sums run in sorted-key order and top-k
+    // tie-breaking falls back to doc_id), so any divergence here is a real
+    // incremental-refresh bug, not test flakiness.
+    for query in ["alpha", "beta one two", "gamma three four", "one two"] {
+        assert_eq!(
+            projected_results(&next.query(query, 5, 8)),
+            projected_results(&oracle.query(query, 5, 8)),
+            "query results diverged for query {query:?}"
+        );
+    }
+}
+
+/// (doc_id, score bits) projection of query results for bit-for-bit comparison.
+fn projected_results(results: &[SearchResult]) -> Vec<(String, u32)> {
+    results
+        .iter()
+        .map(|result| (result.doc_id.clone(), result.score.to_bits()))
+        .collect()
+}
+
+fn differential_base_records() -> Vec<DocRecord> {
+    vec![
+        record("a-1", "alpha", "alpha one two", &["alpha"]),
+        record("a-2", "alpha", "alpha three four", &["bravo"]),
+        record("b-1", "beta", "beta one two", &["charlie"]),
+        record("b-2", "beta", "beta three four", &["delta"]),
+        record("c-1", "gamma", "gamma one two", &["echo"]),
+        record("c-2", "gamma", "gamma three four", &["foxtrot"]),
+    ]
+}
+
+#[test]
+fn incremental_refresh_matches_full_rebuild_across_mutations() {
+    // Insert into an existing segment.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        records.push(record("a-3", "alpha", "alpha five six", &["golf"]));
+        (records, HashSet::new())
+    });
+
+    // Insert creating a brand-new segment.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        records.push(record("d-1", "delta-seg", "hotel india", &["hotel"]));
+        (records, HashSet::new())
+    });
+
+    // Edit within a segment (content changes, membership does not).
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        let edited = record("a-1", "alpha", "alpha one two JULIET", &["juliet"]);
+        let slot = records
+            .iter_mut()
+            .find(|record| record.doc_id == "a-1")
+            .unwrap();
+        *slot = edited;
+        (records, HashSet::from(["a-1".to_string()]))
+    });
+
+    // Document moves between groups.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        let moved = record("b-1", "alpha", "beta one two", &["charlie"]);
+        let slot = records
+            .iter_mut()
+            .find(|record| record.doc_id == "b-1")
+            .unwrap();
+        *slot = moved;
+        (records, HashSet::from(["b-1".to_string()]))
+    });
+
+    // Deletion that keeps the segment alive.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        records.retain(|record| record.doc_id != "b-2");
+        (records, HashSet::new())
+    });
+
+    // Deletion removing the segment's last document.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        records.retain(|record| !record.doc_id.starts_with("c-"));
+        (records, HashSet::new())
+    });
+
+    // No-op refresh: identical records, nothing reprocessed.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |records| {
+        (records, HashSet::new())
+    });
+
+    // Multiple affected segments at once: insert, edit, move, and delete.
+    assert_incremental_matches_full_rebuild(differential_base_records(), |mut records| {
+        records.push(record("a-3", "alpha", "alpha five six", &["golf"]));
+        records.retain(|record| record.doc_id != "b-2");
+        let moved = record("c-1", "beta", "gamma one two", &["echo"]);
+        *records
+            .iter_mut()
+            .find(|record| record.doc_id == "c-1")
+            .unwrap() = moved;
+        let edited = record("a-2", "alpha", "alpha three four KILO", &["kilo"]);
+        *records
+            .iter_mut()
+            .find(|record| record.doc_id == "a-2")
+            .unwrap() = edited;
+        (
+            records,
+            HashSet::from(["c-1".to_string(), "a-2".to_string()]),
+        )
+    });
 }
 
 #[test]

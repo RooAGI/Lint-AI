@@ -583,12 +583,12 @@ fn incremental_refresh_matches_full_rebuild() {
         }
     }
     fn segment_records(store: &IndexStore) -> Vec<(String, serde_json::Value)> {
-        // Record-level comparison, not query results: the query path has
-        // pre-existing nondeterministic top-k tie-breaking (two identical
-        // full rebuilds can select different tied documents), while the
-        // stored records are exactly deterministic. Scores are a pure
-        // function of these records plus the global statistics, which are
-        // rebuilt from the same segment searchers on both paths.
+        // Record-level comparison: the stored records are exactly
+        // deterministic, and scores are a pure function of these records plus
+        // the global statistics, which are rebuilt from the same segment
+        // searchers on both paths. Query results are compared separately
+        // below — the query path is deterministic (float sums run in
+        // sorted-key order and top-k ties break on doc_id).
         match store.memory_index_snapshot() {
             Some(MemoryIndexSnapshot::Segmented(segmented)) => {
                 let mut out: Vec<(String, serde_json::Value)> = segmented
@@ -688,6 +688,29 @@ fn incremental_refresh_matches_full_rebuild() {
 
     assert_eq!(incremental_manifest, manifest_of(&fresh));
     assert_eq!(incremental_records, segment_records(&fresh));
+
+    // Query results must also match bit-for-bit. Comparing the two identical
+    // full rebuilds pins down query-path determinism; comparing the
+    // incremental refresh against the rebuild pins down refresh correctness.
+    fn projected(results: &[crate::index::SearchResult]) -> Vec<(String, u32)> {
+        results
+            .iter()
+            .map(|result| (result.doc_id.clone(), result.score.to_bits()))
+            .collect()
+    }
+    for query in ["rust testing", "pipelines", "migration"] {
+        let incremental = projected(&store.query(query, 8).expect("query should succeed"));
+        let rebuilt = projected(&fresh.query(query, 8).expect("query should succeed"));
+        let rebuilt_again = projected(&fresh2.query(query, 8).expect("query should succeed"));
+        assert_eq!(
+            incremental, rebuilt,
+            "incremental query results diverged for {query:?}"
+        );
+        assert_eq!(
+            rebuilt, rebuilt_again,
+            "two identical rebuilds diverged for {query:?}"
+        );
+    }
 }
 
 #[test]

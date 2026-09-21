@@ -24,12 +24,12 @@ pub(crate) struct SegmentCatalog {
     segment_count: usize,
     pub(crate) ordered_segment_ids: Vec<String>,
     pub(crate) segment_positions: HashMap<String, usize>,
-    pub(crate) summaries: HashMap<String, SegmentRoutingSummary>,
+    pub(crate) summaries: HashMap<String, Arc<SegmentRoutingSummary>>,
     term_segment_counts: HashMap<String, usize>,
     pub(crate) term_to_segments: HashMap<String, Vec<String>>,
     weighted_term_to_segments: HashMap<String, Vec<(String, f32)>>,
     typed_evidence_to_segments: HashMap<String, Vec<String>>,
-    pub(crate) connection_profiles: HashMap<String, SegmentConnectionProfile>,
+    pub(crate) connection_profiles: HashMap<String, Arc<SegmentConnectionProfile>>,
 }
 
 pub(crate) type SegmentCorpusStats = SegmentCatalog;
@@ -195,7 +195,11 @@ pub(crate) fn expand_connected_segments(
         .filter_map(|segment_id| {
             let position = corpus_stats.segment_positions.get(segment_id)?;
             let segment = segments.get(*position)?;
-            let mut profile = corpus_stats.connection_profiles.get(segment_id)?.clone();
+            let mut profile = corpus_stats
+                .connection_profiles
+                .get(segment_id)?
+                .as_ref()
+                .clone();
             add_query_temporal_connection_signal(&mut profile, segment, temporal);
             Some((segment.segment_id.as_str(), profile))
         })
@@ -646,11 +650,11 @@ impl SegmentRoutingSummary {
         }
 
         let query_probability = 1.0 / query_terms.len() as f32;
-        let divergence = query_terms
+        let divergence = sorted_query_terms(query_terms)
             .iter()
             .map(|term| {
                 let segment_probability = segment_distribution
-                    .get(term)
+                    .get(term.as_str())
                     .copied()
                     .unwrap_or(KL_SMOOTHING)
                     .max(KL_SMOOTHING);
@@ -690,7 +694,7 @@ impl SegmentRoutingSummary {
             return 0.0;
         }
 
-        let total_query_idf = query_terms
+        let total_query_idf = sorted_query_terms(query_terms)
             .iter()
             .map(|term| corpus_stats.idf(term))
             .sum::<f32>()
@@ -736,7 +740,7 @@ impl SegmentRoutingSummary {
             return 0.0;
         }
 
-        let total_query_idf = query_terms
+        let total_query_idf = sorted_query_terms(query_terms)
             .iter()
             .map(|term| corpus_stats.idf(term))
             .sum::<f32>()
@@ -834,7 +838,7 @@ impl SegmentCatalog {
             .map(|segment| {
                 (
                     segment.segment_id.clone(),
-                    SegmentRoutingSummary::from_index(&segment.index),
+                    Arc::new(SegmentRoutingSummary::from_index(&segment.index)),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -843,7 +847,10 @@ impl SegmentCatalog {
             .map(|segment| {
                 (
                     segment.segment_id.clone(),
-                    segment_connection_profile(segment, TemporalQueryContext::default()),
+                    Arc::new(segment_connection_profile(
+                        segment,
+                        TemporalQueryContext::default(),
+                    )),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -854,8 +861,10 @@ impl SegmentCatalog {
     /// profiles for segments whose index object is shared with the previous
     /// snapshot (detected by `Arc` identity — a shared index means identical
     /// records, so its summary cannot have changed). Only new or rebuilt
-    /// segments pay for summary construction; the term-level aggregations are
-    /// recomputed from the summaries, which is O(distinct terms).
+    /// segments pay for summary construction, and the term-level aggregation
+    /// maps are updated by delta: terms belonging to unchanged segments keep
+    /// their existing (already sorted) postings, so a single-write refresh
+    /// costs O(changed terms) instead of O(distinct corpus terms).
     pub(crate) fn refresh_incremental(
         previous: &Self,
         previous_segments: &[MemoryIndexSegment],
@@ -868,6 +877,7 @@ impl SegmentCatalog {
             .collect();
         let mut summaries = HashMap::with_capacity(segments.len());
         let mut connection_profiles = HashMap::with_capacity(segments.len());
+        let mut changed_segment_ids: HashSet<String> = HashSet::new();
         for segment in segments {
             let shared = previous_by_id
                 .get(segment.segment_id.as_str())
@@ -876,38 +886,108 @@ impl SegmentCatalog {
             if shared {
                 summaries.insert(
                     segment.segment_id.clone(),
-                    previous
-                        .summaries
-                        .get(&segment.segment_id)
-                        .expect("reused segment must have a catalog summary")
-                        .clone(),
+                    Arc::clone(
+                        previous
+                            .summaries
+                            .get(&segment.segment_id)
+                            .expect("reused segment must have a catalog summary"),
+                    ),
                 );
                 connection_profiles.insert(
                     segment.segment_id.clone(),
-                    previous
-                        .connection_profiles
-                        .get(&segment.segment_id)
-                        .expect("reused segment must have a connection profile")
-                        .clone(),
+                    Arc::clone(
+                        previous
+                            .connection_profiles
+                            .get(&segment.segment_id)
+                            .expect("reused segment must have a connection profile"),
+                    ),
                 );
             } else {
-                summaries.insert(
-                    segment.segment_id.clone(),
-                    SegmentRoutingSummary::from_index(&segment.index),
-                );
-                connection_profiles.insert(
-                    segment.segment_id.clone(),
-                    segment_connection_profile(segment, TemporalQueryContext::default()),
-                );
+                changed_segment_ids.insert(segment.segment_id.clone());
+                let summary = SegmentRoutingSummary::from_index(&segment.index);
+                let profile = segment_connection_profile(segment, TemporalQueryContext::default());
+                summaries.insert(segment.segment_id.clone(), Arc::new(summary));
+                connection_profiles.insert(segment.segment_id.clone(), Arc::new(profile));
             }
         }
-        Self::from_parts(segments, summaries, connection_profiles, generation)
+        // Segments present in the previous snapshot but gone now also change
+        // the term maps: their contributions must be removed.
+        for segment_id in previous.summaries.keys() {
+            if !summaries.contains_key(segment_id) {
+                changed_segment_ids.insert(segment_id.clone());
+            }
+        }
+        Self::from_parts_incremental(
+            previous,
+            segments,
+            summaries,
+            connection_profiles,
+            &changed_segment_ids,
+            generation,
+        )
+    }
+
+    /// Assemble a catalog from the previous snapshot's derived maps plus
+    /// deltas for `changed_segment_ids`. Produces bit-identical maps to
+    /// [`Self::from_parts`]: untouched terms keep their existing postings
+    /// (built by the same comparator), and every touched term's postings are
+    /// re-sorted with that comparator after the delta is applied.
+    fn from_parts_incremental(
+        previous: &Self,
+        segments: &[MemoryIndexSegment],
+        summaries: HashMap<String, Arc<SegmentRoutingSummary>>,
+        connection_profiles: HashMap<String, Arc<SegmentConnectionProfile>>,
+        changed_segment_ids: &HashSet<String>,
+        generation: u64,
+    ) -> Self {
+        let mut term_segment_counts = previous.term_segment_counts.clone();
+        let mut term_to_segments = previous.term_to_segments.clone();
+        let mut weighted_term_to_segments = previous.weighted_term_to_segments.clone();
+        let mut typed_evidence_to_segments = previous.typed_evidence_to_segments.clone();
+        for segment_id in changed_segment_ids {
+            apply_term_delta(
+                &mut term_segment_counts,
+                &mut term_to_segments,
+                &mut weighted_term_to_segments,
+                segment_id,
+                previous.summaries.get(segment_id).map(Arc::as_ref),
+                summaries.get(segment_id).map(Arc::as_ref),
+            );
+            apply_typed_evidence_delta(
+                &mut typed_evidence_to_segments,
+                segment_id,
+                previous
+                    .connection_profiles
+                    .get(segment_id)
+                    .map(Arc::as_ref),
+                connection_profiles.get(segment_id).map(Arc::as_ref),
+            );
+        }
+        let mut ordered_segment_ids = summaries.keys().cloned().collect::<Vec<_>>();
+        ordered_segment_ids.sort();
+        let segment_positions = segments
+            .iter()
+            .enumerate()
+            .map(|(position, segment)| (segment.segment_id.clone(), position))
+            .collect();
+        Self {
+            generation,
+            segment_count: segments.len(),
+            ordered_segment_ids,
+            segment_positions,
+            summaries,
+            term_segment_counts,
+            term_to_segments,
+            weighted_term_to_segments,
+            typed_evidence_to_segments,
+            connection_profiles,
+        }
     }
 
     fn from_parts(
         segments: &[MemoryIndexSegment],
-        summaries: HashMap<String, SegmentRoutingSummary>,
-        connection_profiles: HashMap<String, SegmentConnectionProfile>,
+        summaries: HashMap<String, Arc<SegmentRoutingSummary>>,
+        connection_profiles: HashMap<String, Arc<SegmentConnectionProfile>>,
         generation: u64,
     ) -> Self {
         let mut term_segment_counts = HashMap::new();
@@ -998,7 +1078,52 @@ impl SegmentCatalog {
     pub(crate) fn summary(&self, segment_id: &str) -> &SegmentRoutingSummary {
         self.summaries
             .get(segment_id)
+            .map(Arc::as_ref)
             .unwrap_or_else(|| panic!("segment catalog missing summary for {segment_id}"))
+    }
+
+    /// Canonical snapshot of the derived routing maps for differential
+    /// tests: sorted term counts, weighted postings in postings order with
+    /// weights as bits, and sorted typed-evidence postings.
+    #[cfg(test)]
+    pub(crate) fn derived_maps_snapshot(
+        &self,
+    ) -> (
+        Vec<(String, usize)>,
+        Vec<(String, Vec<(String, u32)>)>,
+        Vec<(String, Vec<String>)>,
+    ) {
+        let mut counts: Vec<(String, usize)> = self
+            .term_segment_counts
+            .iter()
+            .map(|(term, count)| (term.clone(), *count))
+            .collect();
+        counts.sort();
+        let mut weighted: Vec<(String, Vec<(String, u32)>)> = self
+            .weighted_term_to_segments
+            .iter()
+            .map(|(term, postings)| {
+                (
+                    term.clone(),
+                    postings
+                        .iter()
+                        .map(|(segment_id, weight)| (segment_id.clone(), weight.to_bits()))
+                        .collect(),
+                )
+            })
+            .collect();
+        weighted.sort();
+        let mut typed: Vec<(String, Vec<String>)> = self
+            .typed_evidence_to_segments
+            .iter()
+            .map(|(key, segment_ids)| {
+                let mut sorted = segment_ids.clone();
+                sorted.sort();
+                (key.clone(), sorted)
+            })
+            .collect();
+        typed.sort();
+        (counts, weighted, typed)
     }
 
     pub(crate) fn bounded_candidate_segment_ids(
@@ -1074,11 +1199,171 @@ impl SegmentCatalog {
     }
 }
 
+/// Term -> routing weight for one segment summary: the union of the four
+/// evidence maps, weighted exactly as [`SegmentRoutingSummary::local_term_weight`].
+fn summary_term_weights(summary: &SegmentRoutingSummary) -> HashMap<&str, f32> {
+    let mut weights = HashMap::new();
+    for term in summary
+        .terms
+        .keys()
+        .chain(summary.entities.keys())
+        .chain(summary.topics.keys())
+        .chain(summary.local_memory.keys())
+    {
+        weights
+            .entry(term.as_str())
+            .or_insert_with(|| summary.local_term_weight(term));
+    }
+    weights
+}
+
+/// The exact postings comparator used by [`SegmentCatalog::from_parts`].
+fn sort_weighted_postings(postings: &mut Vec<(String, f32)>) {
+    postings.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+}
+
+/// Update the term-level routing maps for one segment whose summary changed
+/// from `old` to `new` (either may be absent for removed/added segments).
+/// Only terms in the union of the two summaries are touched; every touched
+/// postings list ends up exactly as [`SegmentCatalog::from_parts`] would
+/// build it.
+fn apply_term_delta(
+    term_segment_counts: &mut HashMap<String, usize>,
+    term_to_segments: &mut HashMap<String, Vec<String>>,
+    weighted_term_to_segments: &mut HashMap<String, Vec<(String, f32)>>,
+    segment_id: &str,
+    old: Option<&SegmentRoutingSummary>,
+    new: Option<&SegmentRoutingSummary>,
+) {
+    let old_weights = old.map(summary_term_weights).unwrap_or_default();
+    let new_weights = new.map(summary_term_weights).unwrap_or_default();
+    let mut terms: HashSet<&str> = old_weights.keys().copied().collect();
+    terms.extend(new_weights.keys().copied());
+    for term in terms {
+        match (old_weights.get(term), new_weights.get(term)) {
+            (None, None) => unreachable!("term came from one of the weight maps"),
+            (Some(_), None) => {
+                if let Some(segment_ids) = term_to_segments.get_mut(term) {
+                    let pos = segment_ids
+                        .binary_search_by(|id| id.as_str().cmp(segment_id))
+                        .expect("removed segment must be listed for its term");
+                    segment_ids.remove(pos);
+                    if segment_ids.is_empty() {
+                        term_to_segments.remove(term);
+                    }
+                }
+                if let Some(count) = term_segment_counts.get_mut(term) {
+                    *count -= 1;
+                    if *count == 0 {
+                        term_segment_counts.remove(term);
+                    }
+                } else {
+                    unreachable!("removed segment must have been counted for its term");
+                }
+                if let Some(postings) = weighted_term_to_segments.get_mut(term) {
+                    let pos = postings
+                        .iter()
+                        .position(|(id, _)| id == segment_id)
+                        .expect("removed segment must have a weighted posting for its term");
+                    postings.remove(pos);
+                    if postings.is_empty() {
+                        weighted_term_to_segments.remove(term);
+                    }
+                }
+            }
+            (None, Some(&weight)) => {
+                let segment_ids = term_to_segments.entry(term.to_string()).or_default();
+                if let Err(pos) = segment_ids.binary_search_by(|id| id.as_str().cmp(segment_id)) {
+                    segment_ids.insert(pos, segment_id.to_string());
+                } else {
+                    unreachable!("added segment must not already be listed for its term");
+                }
+                *term_segment_counts.entry(term.to_string()).or_default() += 1;
+                let postings = weighted_term_to_segments
+                    .entry(term.to_string())
+                    .or_default();
+                postings.push((segment_id.to_string(), weight));
+                sort_weighted_postings(postings);
+            }
+            (Some(&old_weight), Some(&new_weight)) => {
+                if old_weight.to_bits() != new_weight.to_bits() {
+                    let postings = weighted_term_to_segments
+                        .get_mut(term)
+                        .expect("kept term must have weighted postings");
+                    let entry = postings
+                        .iter_mut()
+                        .find(|(id, _)| id == segment_id)
+                        .expect("kept segment must have a weighted posting for its term");
+                    entry.1 = new_weight;
+                    sort_weighted_postings(postings);
+                }
+            }
+        }
+    }
+}
+
+/// Typed evidence keys (`"prefix:term"`) for one connection profile.
+fn typed_evidence_keys(profile: &SegmentConnectionProfile) -> HashSet<String> {
+    [
+        ("person", &profile.people),
+        ("subject", &profile.subjects),
+        ("time", &profile.times),
+        ("action", &profile.actions),
+        ("object", &profile.objects),
+    ]
+    .iter()
+    .flat_map(|(prefix, terms)| terms.iter().map(move |term| format!("{prefix}:{term}")))
+    .collect()
+}
+
+/// Update the typed-evidence routing map for one segment whose connection
+/// profile changed. Postings stay sorted and deduplicated, as in
+/// [`SegmentCatalog::from_parts`].
+fn apply_typed_evidence_delta(
+    typed_evidence_to_segments: &mut HashMap<String, Vec<String>>,
+    segment_id: &str,
+    old: Option<&SegmentConnectionProfile>,
+    new: Option<&SegmentConnectionProfile>,
+) {
+    let old_keys = old.map(typed_evidence_keys).unwrap_or_default();
+    let new_keys = new.map(typed_evidence_keys).unwrap_or_default();
+    for key in old_keys.symmetric_difference(&new_keys) {
+        if new_keys.contains(key) {
+            let segment_ids = typed_evidence_to_segments.entry(key.clone()).or_default();
+            if let Err(pos) = segment_ids.binary_search_by(|id| id.as_str().cmp(segment_id)) {
+                segment_ids.insert(pos, segment_id.to_string());
+            }
+        } else if let Some(segment_ids) = typed_evidence_to_segments.get_mut(key) {
+            if let Ok(pos) = segment_ids.binary_search_by(|id| id.as_str().cmp(segment_id)) {
+                segment_ids.remove(pos);
+            }
+            if segment_ids.is_empty() {
+                typed_evidence_to_segments.remove(key);
+            }
+        }
+    }
+}
+
 pub(crate) fn query_tokens(query: &str) -> HashSet<String> {
     tokenizer::tokenize(query, TokenizerMode::Stemmed)
         .into_iter()
         .filter(|token| !is_routing_stopword(token))
         .collect()
+}
+
+/// Query terms in sorted order, for order-independent float summation:
+/// HashSet iteration order is nondeterministic and float summation is
+/// order-sensitive at the last ULP, which would otherwise make route scores
+/// (and therefore top-k selection) differ between identical builds.
+pub(crate) fn sorted_query_terms(query_terms: &HashSet<String>) -> Vec<&String> {
+    let mut terms: Vec<&String> = query_terms.iter().collect();
+    terms.sort();
+    terms
 }
 
 fn add_weight(distribution: &mut HashMap<String, f32>, text: &str, weight: f32) {

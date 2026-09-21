@@ -1,12 +1,13 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
-use crate::pipeline::PublishedIndexSnapshot;
+use crate::pipeline::{PipelineOptions, PublishedIndexSnapshot};
 use crate::query_plan::PreparedQuery;
 use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,7 +32,7 @@ pub struct Message {
     pub supersedes_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AddResponse {
     pub success: bool,
     pub request_id: String,
@@ -39,7 +40,7 @@ pub struct AddResponse {
     pub session_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SearchRequest {
     pub query: String,
     #[allow(dead_code)]
@@ -48,14 +49,15 @@ pub struct SearchRequest {
     pub top_k: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResponse {
     pub data: Vec<SearchMemory>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DeleteRequest {
     pub user_id: String,
+    #[serde(default)]
     pub doc_id: String,
 }
 
@@ -66,13 +68,71 @@ pub struct SupersedeRequest {
     pub old_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetRequest {
+    pub user_id: String,
+    #[serde(default)]
+    pub memory_id: String,
+    #[serde(default)]
+    pub include_inactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListRequest {
+    pub user_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default = "default_list_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub include_inactive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListResponse {
+    pub data: Vec<MemoryRecord>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRequest {
+    pub user_id: String,
+    #[serde(default)]
+    pub memory_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub expires_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryRecord {
+    pub id: String,
+    pub content: String,
+    pub role: Option<String>,
+    pub user_id: String,
+    pub session_id: Option<String>,
+    pub created_at: Option<String>,
+    pub expires_at_ms: Option<u64>,
+    pub supersedes_id: Option<String>,
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchMemory {
     pub id: String,
     pub content: String,
     pub score: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    pub role: Option<String>,
+    pub user_id: Option<String>,
+    pub session_id: Option<String>,
 }
 
 pub struct MemoryService {
@@ -89,7 +149,22 @@ pub struct MemorySearchService {
 }
 
 impl MemoryService {
-    pub fn new(store: IndexStore) -> Self {
+    /// Create an in-memory service without exposing the storage implementation
+    /// to application callers.
+    pub fn in_memory(options: PipelineOptions) -> Self {
+        Self::new(IndexStore::in_memory(options))
+    }
+
+    /// Open a persistent memory service without exposing `IndexStore` in the
+    /// application-facing construction API.
+    pub fn at_path(index_root: impl AsRef<Path>, options: PipelineOptions) -> anyhow::Result<Self> {
+        Ok(Self::new(IndexStore::at_path(
+            index_root.as_ref(),
+            options,
+        )?))
+    }
+
+    fn new(store: IndexStore) -> Self {
         let superseded_ids = store
             .source_documents()
             .into_iter()
@@ -132,6 +207,12 @@ impl MemoryService {
     /// persistence paths before sending it outside the process.
     pub fn inspection(&self) -> crate::pipeline::IndexStoreInspection {
         self.store.inspection()
+    }
+
+    /// Publish pending mutations. Normal mutation methods already call this;
+    /// this method is provided for hosts that batch lower-level changes.
+    pub fn refresh(&mut self) -> anyhow::Result<()> {
+        self.store.refresh()
     }
 
     pub fn add(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
@@ -253,6 +334,107 @@ impl MemoryService {
         Ok(self.format_search_response(results))
     }
 
+    pub fn get(&self, request: GetRequest) -> anyhow::Result<Option<MemoryRecord>> {
+        validate_identifier(&request.user_id, "user_id")?;
+        validate_identifier(&request.memory_id, "memory_id")?;
+        Ok(self
+            .store
+            .source_document_by_id(&request.memory_id)
+            .filter(|doc| owns_memory(doc, &request.user_id))
+            .filter(|doc| request.include_inactive || self.is_visible(doc))
+            .map(memory_record))
+    }
+
+    pub fn list(&self, request: ListRequest) -> anyhow::Result<ListResponse> {
+        validate_identifier(&request.user_id, "user_id")?;
+        if let Some(session_id) = &request.session_id {
+            validate_identifier(session_id, "session_id")?;
+        }
+        let limit = request.limit.clamp(1, 100);
+        let mut documents = self
+            .store
+            .source_documents()
+            .into_iter()
+            .filter(|doc| owns_memory(doc, &request.user_id))
+            .filter(|doc| {
+                request
+                    .session_id
+                    .as_deref()
+                    .is_none_or(|session| doc.group_id.as_deref() == Some(session))
+            })
+            .filter(|doc| request.include_inactive || self.is_visible(doc))
+            .collect::<Vec<_>>();
+        documents.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+        if let Some(cursor) = &request.cursor {
+            validate_identifier(cursor, "cursor")?;
+            documents.retain(|doc| doc.doc_id > *cursor);
+        }
+        let has_more = documents.len() > limit;
+        documents.truncate(limit);
+        let next_cursor = has_more
+            .then(|| documents.last().map(|doc| doc.doc_id.clone()))
+            .flatten();
+        Ok(ListResponse {
+            data: documents.into_iter().map(memory_record).collect(),
+            next_cursor,
+        })
+    }
+
+    pub fn update(&mut self, request: UpdateRequest) -> anyhow::Result<Option<MemoryRecord>> {
+        validate_identifier(&request.user_id, "user_id")?;
+        validate_identifier(&request.memory_id, "memory_id")?;
+        let Some(mut document) = self
+            .store
+            .source_document_by_id(&request.memory_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !owns_memory(&document, &request.user_id) {
+            return Ok(None);
+        }
+        if !self.is_visible(&document) {
+            return Ok(None);
+        }
+        if request.content.trim().is_empty() || request.content.len() > MAX_MESSAGE_CONTENT_BYTES {
+            anyhow::bail!(
+                "content must be non-empty and at most {MAX_MESSAGE_CONTENT_BYTES} bytes"
+            );
+        }
+        let role = request.role.unwrap_or_else(|| {
+            document
+                .author_agent
+                .clone()
+                .unwrap_or_else(|| "user".to_string())
+        });
+        if role != "user" && role != "assistant" {
+            anyhow::bail!("role must be user or assistant");
+        }
+        document.content = format!("{role}: {}", request.content);
+        document.author_agent = Some(role);
+        document.timestamp = request.timestamp.and_then(|millis| {
+            Utc.timestamp_millis_opt(millis)
+                .single()
+                .map(|date| date.to_rfc3339())
+        });
+        match request.expires_at_ms {
+            Some(expires_at) => {
+                document
+                    .filters
+                    .insert("expires_at_ms".to_string(), expires_at.to_string());
+            }
+            None => {
+                document.filters.remove("expires_at_ms");
+            }
+        }
+        self.store.upsert(document);
+        self.store.refresh()?;
+        Ok(self
+            .store
+            .source_document_by_id(&request.memory_id)
+            .map(memory_record))
+    }
+
     pub fn published_search(&self) -> MemorySearchService {
         MemorySearchService {
             index: self.store.published_snapshot(),
@@ -283,30 +465,35 @@ impl MemoryService {
         self.store.query_prepared_cached(&prepared, top_k, &filters)
     }
 
+    fn is_visible(&self, doc: &SourceDocument) -> bool {
+        let not_superseded = doc
+            .filters
+            .get(USER_FILTER)
+            .map(|user| (user.clone(), doc.doc_id.clone()))
+            .is_none_or(|key| !self.superseded_ids.contains(&key));
+        let not_expired = doc
+            .filters
+            .get("expires_at_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_none_or(|expires_at| expires_at > unix_time_ms());
+        not_superseded && not_expired
+    }
+
     fn format_search_response(&self, results: Vec<crate::SearchResult>) -> SearchResponse {
-        let now_ms = unix_time_ms();
         let data = results
             .into_iter()
             .filter_map(|result| {
                 self.store
                     .source_document_by_id(&result.doc_id)
-                    .filter(|doc| {
-                        doc.filters
-                            .get(USER_FILTER)
-                            .map(|user| (user.clone(), doc.doc_id.clone()))
-                            .is_none_or(|key| !self.superseded_ids.contains(&key))
-                    })
-                    .filter(|doc| {
-                        doc.filters
-                            .get("expires_at_ms")
-                            .and_then(|value| value.parse::<u64>().ok())
-                            .is_none_or(|expires_at| expires_at > now_ms)
-                    })
+                    .filter(|doc| self.is_visible(doc))
                     .map(|doc| SearchMemory {
                         id: result.doc_id,
                         content: doc.content.clone(),
                         score: result.score,
                         created_at: doc.timestamp.clone(),
+                        role: doc.author_agent.clone(),
+                        user_id: doc.filters.get(USER_FILTER).cloned(),
+                        session_id: doc.group_id.clone(),
                     })
             })
             .collect();
@@ -384,6 +571,38 @@ impl MemoryService {
     }
 }
 
+fn default_list_limit() -> usize {
+    100
+}
+
+fn owns_memory(doc: &SourceDocument, user_id: &str) -> bool {
+    doc.filters.get(USER_FILTER).map(String::as_str) == Some(user_id)
+}
+
+fn memory_record(doc: &SourceDocument) -> MemoryRecord {
+    let mut metadata = doc.filters.clone();
+    metadata.retain(|key, _| {
+        !matches!(
+            key.as_str(),
+            USER_FILTER | "request_id" | "request_fingerprint" | "expires_at_ms" | "supersedes_id"
+        )
+    });
+    MemoryRecord {
+        id: doc.doc_id.clone(),
+        content: doc.content.clone(),
+        role: doc.author_agent.clone(),
+        user_id: doc.filters.get(USER_FILTER).cloned().unwrap_or_default(),
+        session_id: doc.group_id.clone(),
+        created_at: doc.timestamp.clone(),
+        expires_at_ms: doc
+            .filters
+            .get("expires_at_ms")
+            .and_then(|value| value.parse().ok()),
+        supersedes_id: doc.filters.get("supersedes_id").cloned(),
+        metadata,
+    }
+}
+
 impl MemorySearchService {
     pub fn search(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
         validate_identifier(&request.user_id, "user_id")?;
@@ -446,6 +665,9 @@ impl MemorySearchService {
                         content: doc.content.clone(),
                         score: result.score,
                         created_at: doc.timestamp.clone(),
+                        role: doc.author_agent.clone(),
+                        user_id: doc.filters.get(USER_FILTER).cloned(),
+                        session_id: doc.group_id.clone(),
                     })
             })
             .collect();
@@ -507,7 +729,7 @@ mod tests {
     use crate::PipelineOptions;
 
     fn service() -> MemoryService {
-        MemoryService::new(IndexStore::in_memory(PipelineOptions::default()))
+        MemoryService::in_memory(PipelineOptions::default())
     }
 
     #[test]
@@ -845,5 +1067,100 @@ mod tests {
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("shared deployment"));
+    }
+
+    #[test]
+    fn list_get_and_update_preserve_identity_and_scope() {
+        let mut service = service();
+        service
+            .add(AddRequest {
+                request_id: "request-1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "old preference".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap();
+        let listed = service
+            .list(ListRequest {
+                user_id: "user-a".into(),
+                session_id: Some("session-a".into()),
+                limit: 10,
+                cursor: None,
+                include_inactive: false,
+            })
+            .unwrap();
+        assert_eq!(listed.data.len(), 1);
+        let id = listed.data[0].id.clone();
+        assert!(service
+            .get(GetRequest {
+                user_id: "user-b".into(),
+                memory_id: id.clone(),
+                include_inactive: false,
+            })
+            .unwrap()
+            .is_none());
+
+        let updated = service
+            .update(UpdateRequest {
+                user_id: "user-a".into(),
+                memory_id: id.clone(),
+                content: "new preference".into(),
+                role: None,
+                timestamp: None,
+                expires_at_ms: None,
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.id, id);
+        assert!(updated.content.contains("new preference"));
+        assert_eq!(updated.session_id.as_deref(), Some("session-a"));
+    }
+
+    #[test]
+    fn list_cursor_is_deterministic_and_excludes_inactive_memories() {
+        let mut service = service();
+        for request_id in ["a", "b"] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "assistant".into(),
+                        timestamp: None,
+                        content: format!("memory {request_id}"),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: "session-a".into(),
+                })
+                .unwrap();
+        }
+        let first = service
+            .list(ListRequest {
+                user_id: "user-a".into(),
+                session_id: None,
+                limit: 1,
+                cursor: None,
+                include_inactive: false,
+            })
+            .unwrap();
+        assert_eq!(first.data.len(), 1);
+        let second = service
+            .list(ListRequest {
+                user_id: "user-a".into(),
+                session_id: None,
+                limit: 1,
+                cursor: first.next_cursor,
+                include_inactive: false,
+            })
+            .unwrap();
+        assert_eq!(second.data.len(), 1);
+        assert_ne!(first.data[0].id, second.data[0].id);
     }
 }

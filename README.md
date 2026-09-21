@@ -361,8 +361,8 @@ See the [HTTP server guide](docs/server.md).
 
 ### Python
 
-Build the optional Python extension with `uv` and `maturin`, then use the same
-in-memory index from Python:
+Build the optional Python extension with `uv` and `maturin`, then use the
+memory service from Python:
 
 ```bash
 uv venv --python 3.10
@@ -374,9 +374,18 @@ PYO3_PYTHON="$PWD/.venv/bin/python" maturin develop --release --uv
 ```python
 import lint_ai
 
-store = lint_ai.IndexStore()
-store.upsert("doc-1", "Docker install guide for Ubuntu hosts")
-print(store.query("docker ubuntu", 5))
+memory = lint_ai.Memory(path="./memory-index")
+memory.add(
+    "request-1",
+    "user-1",
+    "session-1",
+    [{"role": "user", "content": "Docker runs on Ubuntu hosts"}],
+)
+print(memory.search("docker ubuntu", "user-1", 5))
+
+# Use the same API against a running lint-ai server:
+remote = lint_ai.RemoteMemory("http://127.0.0.1:8080", api_key="local-token")
+print(remote.search("docker ubuntu", "user-1", 5))
 ```
 
 ### Rust

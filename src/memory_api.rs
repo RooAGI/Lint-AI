@@ -280,11 +280,10 @@ impl MemoryService {
                     .insert((request.user_id.clone(), supersedes_id.clone()));
                 filters.insert("supersedes_id".to_string(), supersedes_id.clone());
             }
-            let timestamp = message.timestamp.and_then(|millis| {
-                Utc.timestamp_millis_opt(millis)
-                    .single()
-                    .map(|date| date.to_rfc3339())
-            });
+            let timestamp = message
+                .timestamp
+                .map(|millis| timestamp_to_rfc3339(millis, "timestamp"))
+                .transpose()?;
             self.store.upsert(SourceDocument {
                 doc_id: crate::stable_doc_id_from_source(&format!(
                     "{}:{}:{message_index}",
@@ -412,11 +411,10 @@ impl MemoryService {
         }
         document.content = format!("{role}: {}", request.content);
         document.author_agent = Some(role);
-        document.timestamp = request.timestamp.and_then(|millis| {
-            Utc.timestamp_millis_opt(millis)
-                .single()
-                .map(|date| date.to_rfc3339())
-        });
+        document.timestamp = request
+            .timestamp
+            .map(|millis| timestamp_to_rfc3339(millis, "timestamp"))
+            .transpose()?;
         match request.expires_at_ms {
             Some(expires_at) => {
                 document
@@ -720,7 +718,18 @@ fn validate_message(message: &Message, index: usize) -> anyhow::Result<()> {
     if let Some(supersedes_id) = &message.supersedes_id {
         validate_identifier(supersedes_id, "supersedes_id")?;
     }
+    if let Some(millis) = message.timestamp {
+        timestamp_to_rfc3339(millis, "timestamp")
+            .map_err(|error| anyhow::anyhow!("messages[{index}].{error}"))?;
+    }
     Ok(())
+}
+
+fn timestamp_to_rfc3339(millis: i64, field: &str) -> anyhow::Result<String> {
+    Utc.timestamp_millis_opt(millis)
+        .single()
+        .map(|date| date.to_rfc3339())
+        .ok_or_else(|| anyhow::anyhow!("{field} must be a valid Unix timestamp in milliseconds"))
 }
 
 #[cfg(test)]
@@ -1120,6 +1129,25 @@ mod tests {
         assert_eq!(updated.id, id);
         assert!(updated.content.contains("new preference"));
         assert_eq!(updated.session_id.as_deref(), Some("session-a"));
+
+        let invalid_update = service.update(UpdateRequest {
+            user_id: "user-a".into(),
+            memory_id: id.clone(),
+            content: "should not be applied".into(),
+            role: None,
+            timestamp: Some(i64::MAX),
+            expires_at_ms: None,
+        });
+        assert!(invalid_update.is_err());
+        let unchanged = service
+            .get(GetRequest {
+                user_id: "user-a".into(),
+                memory_id: id,
+                include_inactive: false,
+            })
+            .unwrap()
+            .unwrap();
+        assert!(unchanged.content.contains("new preference"));
     }
 
     #[test]

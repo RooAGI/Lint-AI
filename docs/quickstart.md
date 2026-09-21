@@ -157,9 +157,10 @@ Rust library work without an agent client.
 
 ## 8. Use it from Python
 
-The Python extension exposes an in-memory `IndexStore` with `upsert`, `query`,
-`remove`, and inspection methods. Build it locally with [uv](https://docs.astral.sh/uv/)
-and [maturin](https://www.maturin.rs/):
+The Python extension exposes the application-facing `Memory` service with
+`add`, `search`, `get`, `list`, `update`, `delete`, and `refresh` methods. Build
+it locally with [uv](https://docs.astral.sh/uv/) and
+[maturin](https://www.maturin.rs/):
 
 ```bash
 uv venv --python 3.10
@@ -178,13 +179,20 @@ Then use it from Python:
 ```python
 import lint_ai
 
-store = lint_ai.IndexStore()
-store.upsert("doc-1", "Docker install guide for Ubuntu hosts")
-print(store.query("docker ubuntu", 5))
+memory = lint_ai.Memory(path="./memory-index")
+memory.add(
+    "request-1",
+    "user-1",
+    "session-1",
+    [{"role": "user", "content": "Docker runs on Ubuntu hosts"}],
+)
+print(memory.search("docker ubuntu", "user-1", 5))
 ```
 
-The binding is enabled by the Rust `python` feature and does not require an
-agent client or the HTTP server.
+For a server-backed client, use `lint_ai.RemoteMemory(base_url, api_key=None)`
+with the same lifecycle methods. The Python `IndexStore` binding was removed in
+the 0.3.0 API transition; applications using `IndexStore` must migrate to
+`Memory` or pin the 0.2.x line.
 
 ## 9. Use it as a Rust library
 

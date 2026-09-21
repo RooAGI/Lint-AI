@@ -325,7 +325,9 @@ impl PyMemoryCore {
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.add(request).map_err(runtime_error)?,
-            MemoryBackend::Remote(client) => client.add(&request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.add(&request)).map_err(runtime_error)?
+            }
         };
         json_to_python(py, &response)
     }
@@ -345,7 +347,9 @@ impl PyMemoryCore {
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,
-            MemoryBackend::Remote(client) => client.search(&request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => py
+                .detach(|| client.search(&request))
+                .map_err(runtime_error)?,
         };
         json_to_python(py, &response.data)
     }
@@ -364,7 +368,9 @@ impl PyMemoryCore {
         };
         let response = match &self.backend {
             MemoryBackend::Local(service) => service.get(request).map_err(runtime_error)?,
-            MemoryBackend::Remote(client) => client.get(&request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.get(&request)).map_err(runtime_error)?
+            }
         };
         json_to_python(py, &response)
     }
@@ -387,7 +393,9 @@ impl PyMemoryCore {
         };
         let response = match &self.backend {
             MemoryBackend::Local(service) => service.list(request).map_err(runtime_error)?,
-            MemoryBackend::Remote(client) => client.list(&request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.list(&request)).map_err(runtime_error)?
+            }
         };
         json_to_python(py, &response)
     }
@@ -412,26 +420,28 @@ impl PyMemoryCore {
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.update(request).map_err(runtime_error)?,
-            MemoryBackend::Remote(client) => client.update(&request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => py
+                .detach(|| client.update(&request))
+                .map_err(runtime_error)?,
         };
         json_to_python(py, &response)
     }
 
-    fn delete(&mut self, user_id: String, memory_id: String) -> PyResult<bool> {
+    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
         match &mut self.backend {
             MemoryBackend::Local(service) => {
                 service.delete(&user_id, &memory_id).map_err(runtime_error)
             }
-            MemoryBackend::Remote(client) => {
-                client.delete(&user_id, &memory_id).map_err(runtime_error)
-            }
+            MemoryBackend::Remote(client) => py
+                .detach(|| client.delete(&user_id, &memory_id))
+                .map_err(runtime_error),
         }
     }
 
-    fn refresh(&mut self) -> PyResult<()> {
+    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
         match &mut self.backend {
             MemoryBackend::Local(service) => service.refresh().map_err(runtime_error),
-            MemoryBackend::Remote(client) => client.refresh().map_err(runtime_error),
+            MemoryBackend::Remote(client) => py.detach(|| client.refresh()).map_err(runtime_error),
         }
     }
 }
@@ -534,12 +544,12 @@ impl PyMemory {
         )
     }
 
-    fn delete(&mut self, user_id: String, memory_id: String) -> PyResult<bool> {
-        self.inner.delete(user_id, memory_id)
+    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
+        self.inner.delete(py, user_id, memory_id)
     }
 
-    fn refresh(&mut self) -> PyResult<()> {
-        self.inner.refresh()
+    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.inner.refresh(py)
     }
 }
 
@@ -630,12 +640,12 @@ impl PyRemoteMemory {
         )
     }
 
-    fn delete(&mut self, user_id: String, memory_id: String) -> PyResult<bool> {
-        self.inner.delete(user_id, memory_id)
+    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
+        self.inner.delete(py, user_id, memory_id)
     }
 
-    fn refresh(&mut self) -> PyResult<()> {
-        self.inner.refresh()
+    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.inner.refresh(py)
     }
 }
 

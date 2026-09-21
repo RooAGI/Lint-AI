@@ -190,9 +190,9 @@ print(memory.search("docker ubuntu", "user-1", 5))
 ```
 
 For a server-backed client, use `lint_ai.RemoteMemory(base_url, api_key=None)`
-with the same lifecycle methods. The Python `IndexStore` binding was removed in
-the 0.3.0 API transition; applications using `IndexStore` must migrate to
-`Memory` or pin the 0.2.x line.
+with the same lifecycle methods. The Python `IndexStore` binding removal is
+reserved for the planned 0.3.0 breaking release; applications should migrate
+to `Memory` or remain on the compatible 0.2.x line until then.
 
 ## 9. Use it as a Rust library
 

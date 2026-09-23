@@ -18,8 +18,9 @@ name-to-gender guessing:
 * ``he/she/him/her`` resolve to the most *salient* preceding person
   mention that is not the speaker (a speaker referring to themselves
   says "I"). Personhood is grammatical, not guessed, and is decided by
-  the compiled ``personhood`` Rust lib (its own repo; install with
-  ``cargo install --git <personhood-repo-url>``): NER PERSON,
+  the compiled ``behood`` Rust lib (https://github.com/RooAGI/Behood;
+  install with ``cargo install --git https://github.com/RooAGI/Behood``):
+  NER PERSON,
   participant names, proper nouns repeated in the conversation, and
   names introduced by "named"/"met"/"called" ("a woman named Jean").
   A one-off capitalized word NER did not recognize ("Nature",
@@ -234,28 +235,29 @@ def fail(message, code):
     return code
 
 
-def _personhood_bin():
-    """Path to the compiled `personhood` classifier, if available.
+def _behood_bin():
+    """Path to the compiled `behood` classifier, if available.
 
-    The classifier lives in its own repo; install it with
-    `cargo install --git <personhood-repo-url>` (or `cargo install
-    personhood` once published). PERSONHOOD_BIN overrides PATH
+    The classifier lives in its own repo
+    (https://github.com/RooAGI/Behood); install it with
+    `cargo install --git https://github.com/RooAGI/Behood` (or
+    `cargo install behood` once published). BEHOOD_BIN overrides PATH
     discovery. When no binary is found the pure-Python fallback in
     this script applies.
     """
-    env = os.environ.get("PERSONHOOD_BIN")
+    env = os.environ.get("BEHOOD_BIN")
     if env:
         return env
-    return shutil.which("personhood")
+    return shutil.which("behood")
 
 
 def _classify_personhood(descriptors, speaker_names):
-    """Classify every token via the Rust personhood lib.
+    """Classify every token via the Rust behood lib.
 
     Returns {id(tok): is_person} or None when the binary is missing or
     fails, in which case the pure-Python fallback applies.
     """
-    binary = _personhood_bin()
+    binary = _behood_bin()
     if binary is None:
         return None
     payload = {
@@ -272,17 +274,17 @@ def _classify_personhood(descriptors, speaker_names):
             timeout=120,
         )
     except Exception as exc:
-        print(json.dumps({"warning": f"personhood_spawn_failed: {exc}"}),
+        print(json.dumps({"warning": f"behood_spawn_failed: {exc}"}),
               file=sys.stderr)
         return None
     if proc.returncode != 0:
-        print(json.dumps({"warning": "personhood_classifier_failed: "
+        print(json.dumps({"warning": "behood_classifier_failed: "
                           f"{proc.stderr.strip()[:200]}"}), file=sys.stderr)
         return None
     try:
         verdicts = json.loads(proc.stdout)["verdicts"]
     except Exception as exc:
-        print(json.dumps({"warning": f"personhood_bad_output: {exc}"}),
+        print(json.dumps({"warning": f"behood_bad_output: {exc}"}),
               file=sys.stderr)
         return None
     return {v["id"]: v["is_person"] for v in verdicts}
@@ -291,8 +293,9 @@ def _classify_personhood(descriptors, speaker_names):
 def is_person_token(tok, ctx=None):
     """Whether a token can be a person mention (for antecedent search).
 
-    The verdict comes from the compiled `personhood` Rust lib (its own
-    repo; installed as the `personhood` binary): NER PERSON is always a
+    The verdict comes from the compiled `behood` Rust lib
+    (https://github.com/RooAGI/Behood; installed as the `behood`
+    binary): NER PERSON is always a
     person, non-person NER
     labels never are, and an unrecognized proper noun counts only with
     discourse support (participant name, repetition, or introduction by
@@ -413,7 +416,7 @@ class CorefCtx:
         # for the repeated-mention personhood rule (Python fallback only;
         # the Rust classifier counts internally).
         self.name_counts = name_counts or {}
-        # Personhood verdicts from the compiled `personhood` lib, keyed
+        # Personhood verdicts from the compiled `behood` lib, keyed
         # by id(token). None when the classifier was unavailable.
         self.personhood_verdicts = verdicts
         # Person mentions in document order:

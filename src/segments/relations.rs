@@ -139,6 +139,10 @@ pub struct RawRelation {
     pub session_date: Option<String>,
     pub evidence: String,
     pub confidence: f32,
+    /// Pronoun-resolution provenance, e.g. "she->Maria"; None when the
+    /// subject and object were explicit mentions.
+    #[serde(default)]
+    pub coref: Option<String>,
 }
 
 /// One extracted (subject, predicate, object) triple with evidence.
@@ -840,6 +844,40 @@ mod tests {
         assert_eq!(
             raw[6].session_date.as_deref(),
             Some("1:08 pm on 11 August, 2023")
+        );
+    }
+
+    #[test]
+    fn raw_relation_coref_field_optional() {
+        // Old script output without "coref" still deserializes.
+        let raw: Vec<RawRelation> = serde_json::from_str(
+            r#"[{"subject":"Jon","predicate":"take","object":"trip","is_place":false,"session_id":"s","turn_idx":0,"doc_id":"d","session_date":null,"evidence":"e","confidence":1.0}]"#,
+        )
+        .unwrap();
+        assert_eq!(raw[0].coref, None);
+        // New output carries pronoun-resolution provenance.
+        let raw: Vec<RawRelation> = serde_json::from_str(
+            r#"[{"subject":"Maria","predicate":"invite_to","object":"Paris","is_place":true,"session_id":"s","turn_idx":0,"doc_id":"d","session_date":null,"evidence":"e","confidence":0.8,"coref":"She->Maria"}]"#,
+        )
+        .unwrap();
+        assert_eq!(raw[0].coref.as_deref(), Some("She->Maria"));
+        // A coref-resolved non-speaker subject folds into the person list
+        // and resolves for shared-relation queries.
+        let turns = ["Jon"]
+            .into_iter()
+            .map(|s| RelationTurn {
+                speaker: s.to_string(),
+                text: String::new(),
+                session_id: "s".to_string(),
+                turn_idx: 0,
+                doc_id: "d".to_string(),
+                session_date: None,
+            })
+            .collect::<Vec<_>>();
+        let idx = RelationIndex::build(&turns, &raw);
+        assert_eq!(
+            idx.resolve_subjects(&["Maria".to_string()]),
+            Some(vec!["maria".to_string()])
         );
     }
 

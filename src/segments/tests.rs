@@ -519,6 +519,66 @@ fn expansion_terms_participate_in_segment_routing() {
 }
 
 #[test]
+fn literal_query_terms_outrank_expansion_noise_in_routing() {
+    // Regression test: routing on the expanded vocabulary let noisy
+    // wrong-sense expansions outrank segments matching the literal query
+    // terms ("game" -> "bathroom"/"gospel" misrouted real benchmark queries).
+    // Routing must prefer literal-term signal; expansion is only a recall
+    // fallback when literal terms match nothing (see
+    // expansion_terms_participate_in_segment_routing).
+    let raw_terms = query_tokens("game");
+    let expanded_terms = query_tokens_expanded("game");
+    // Keep only expansions that survive a second stemming pass, so the test
+    // is robust to the stemmer's non-idempotency ("degre" -> "degr").
+    let mut noise_terms: Vec<String> = expanded_terms
+        .difference(&raw_terms)
+        .filter(|term| query_tokens(term).into_iter().collect::<Vec<_>>() == vec![(*term).clone()])
+        .cloned()
+        .collect();
+    noise_terms.sort();
+    assert!(
+        noise_terms.len() >= 2,
+        "test needs noisy expansions of 'game' from the lexical store"
+    );
+    let noise_refs: Vec<&str> = noise_terms.iter().map(String::as_str).collect();
+    let records = vec![
+        record(
+            "doc-gold",
+            "session-gold",
+            "I bought a new game yesterday",
+            &["game"],
+        ),
+        record(
+            "doc-noise",
+            "session-noise",
+            &noise_terms.join(" "),
+            &noise_refs,
+        ),
+    ];
+    let segments = build_segments_by_group_id(&records);
+    assert_eq!(segments.len(), 2);
+
+    let routes = route_segments("game", &segments);
+    assert_eq!(
+        routes[0].segment_id, "session-gold",
+        "literal-term segment must route first despite expansion noise"
+    );
+    assert!(routes[0].score > 0.0);
+    // The expansion-only segment must not draw any routing score while the
+    // literal terms match: under expanded-vocabulary routing it overlapped
+    // the noisy expansions and outranked the literal segment.
+    for route in &routes {
+        if route.segment_id != "session-gold" {
+            assert_eq!(
+                route.score, 0.0,
+                "expansion-only segment '{}' must get no routing score",
+                route.segment_id
+            );
+        }
+    }
+}
+
+#[test]
 fn routes_and_queries_one_group_segment() {
     let records = vec![
         record(

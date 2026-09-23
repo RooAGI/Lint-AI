@@ -350,6 +350,7 @@ impl PyMemoryCore {
             options: None,
             user_id,
             top_k,
+            session_id: None,
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,

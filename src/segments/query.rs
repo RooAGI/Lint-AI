@@ -281,13 +281,6 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
             fallback: true,
         })
         .collect::<Vec<_>>();
-    if query.contains("diploma") {
-        eprintln!(
-            "TMPDBG selected={} fallback={}",
-            selected_segments.len(),
-            fallback_segments.len()
-        );
-    }
     let execution_segments = if execute_all_eligible || selected_segments.is_empty() {
         selected_segments
             .iter()

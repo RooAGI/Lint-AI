@@ -38,10 +38,31 @@ pub(crate) fn route_segments_with_corpus_stats(
     strategy: SegmentRoutingStrategy,
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
-    // Route on the expanded vocabulary the per-segment scorer will match, not
-    // just the literal query tokens; otherwise expansion-only queries fall
-    // back to arbitrary segments.
-    let query_terms = query_tokens_expanded(query);
+    // Route on the literal query terms first. The enriched expansion
+    // vocabulary carries noisy wrong-sense expansions (e.g. "game" ->
+    // "bathroom"/"gospel", "potter" -> "ceramicist") that dominate the routing
+    // score and misroute segments whose literal terms match well. Expansion
+    // is a recall fallback: it routes only when the literal terms match no
+    // segment at all (e.g. "diploma", which expands to "degree").
+    let raw_terms = query_tokens(query);
+    let raw_routes = route_segments_scored(query, &raw_terms, segments, strategy, corpus_stats);
+    if raw_routes
+        .iter()
+        .any(|route| route_has_signal(route, strategy, &raw_terms))
+    {
+        return raw_routes;
+    }
+    let expanded_terms = query_tokens_expanded(query);
+    route_segments_scored(query, &expanded_terms, segments, strategy, corpus_stats)
+}
+
+fn route_segments_scored(
+    query: &str,
+    query_terms: &HashSet<String>,
+    segments: &[MemoryIndexSegment],
+    strategy: SegmentRoutingStrategy,
+    corpus_stats: &SegmentCorpusStats,
+) -> Vec<SegmentRoute> {
     if strategy == SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness {
         return route_segments_by_team_coverage(&query_terms, segments, corpus_stats);
     }

@@ -8,7 +8,7 @@
 //!
 //! - the predicate -> family lexicon ([`predicate_family`], declarative data);
 //! - the per-conversation fact index ([`RelationIndex`]);
-//! - subject resolution (exact, fuzzy, two-person elimination);
+//! - subject resolution (exact, fuzzy);
 //! - structured queries: [`RelationIndex::query_shared`] (multi-hop
 //!   "both X and Y" intersection) and [`RelationIndex::query_temporal_span`]
 //!   ("where was X between <dates>").
@@ -435,9 +435,11 @@ impl RelationIndex {
 
     /// Resolve display names to normalized person ids.
     ///
-    /// Exact match, then fuzzy (edit distance <= 2), then elimination when
-    /// the conversation has exactly two persons and one name is unresolved.
-    /// Returns None if any name cannot be resolved.
+    /// Exact match, then fuzzy (edit distance <= 1 for short names, <= 2
+    /// otherwise). Returns None if any name cannot be resolved: a name with
+    /// no evidence in the data is never mapped by process of elimination
+    /// (e.g. "Jean" is a real, distinct person elsewhere, not a typo for
+    /// whoever is left over).
     pub fn resolve_subjects(&self, names: &[String]) -> Option<Vec<String>> {
         let mut resolved: Vec<Option<String>> = Vec::with_capacity(names.len());
         for name in names {
@@ -461,24 +463,6 @@ impl RelationIndex {
                 }
             }
             resolved.push(best.map(|(i, _)| self.person_norms[i].clone()));
-        }
-        // Elimination: two persons, two names, exactly one unresolved.
-        if self.person_norms.len() == 2 && names.len() == 2 {
-            let unresolved: Vec<usize> = resolved
-                .iter()
-                .enumerate()
-                .filter_map(|(i, r)| r.is_none().then_some(i))
-                .collect();
-            if unresolved.len() == 1 {
-                let taken: HashSet<&str> = resolved.iter().filter_map(|r| r.as_deref()).collect();
-                if let Some(other) = self
-                    .person_norms
-                    .iter()
-                    .find(|p| !taken.contains(p.as_str()))
-                {
-                    resolved[unresolved[0]] = Some(other.clone());
-                }
-            }
         }
         resolved.into_iter().collect()
     }
@@ -640,9 +624,10 @@ const NON_NAMES: &[&str] = &[
 ];
 
 /// Person-name candidates: capitalized words that are not question openers
-/// or month names. Exact/fuzzy/elimination resolution happens downstream in
-/// [`RelationIndex::resolve_subjects`], so unresolvable names (e.g. "Jean"
-/// for "Gina") are kept as candidates.
+/// or month names. Exact/fuzzy resolution happens downstream in
+/// [`RelationIndex::resolve_subjects`]; names with no evidence in the data
+/// (e.g. "Jean", a distinct person from another conversation) are kept as
+/// candidates so the structured path can decline honestly.
 fn extract_person_candidates(question: &str) -> Vec<String> {
     let mut out = Vec::new();
     for word in question.split_whitespace() {
@@ -826,7 +811,7 @@ mod tests {
         RelationIndex::build(&fixture_turns(), &fixture_raw())
     }
 
-    /// Two-person index (Jon + Gina) for the elimination rule.
+    /// Two-person index (Jon + Gina) for the Rome shared-object case.
     fn fixture_index_rome() -> RelationIndex {
         let turns = ["Jon", "Gina"]
             .into_iter()
@@ -893,8 +878,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_subjects_exact_fuzzy_elimination() {
-        // Two-person conversation for the elimination rule.
+    fn resolve_subjects_exact_and_fuzzy() {
+        // Two-person conversation.
         let turns = ["Jon", "Gina"]
             .into_iter()
             .map(|s| RelationTurn {
@@ -922,23 +907,25 @@ mod tests {
             idx.resolve_subjects(&["John".to_string(), "Gina".to_string()]),
             Some(vec!["jon".to_string(), "gina".to_string()])
         );
-        // Elimination: Jean unresolved, two persons, John -> jon, so Jean -> gina.
+        // "Jean" is a distinct person with no evidence in this index: no
+        // elimination mapping to whoever is left over; resolution declines.
         assert_eq!(
             idx.resolve_subjects(&["Jean".to_string(), "John".to_string()]),
-            Some(vec!["gina".to_string(), "jon".to_string()])
+            None
         );
     }
 
     #[test]
     fn query_shared_intersects_across_predicates() {
         let idx = fixture_index_rome();
+        // Gina (exact) + John -> jon (fuzzy distance 1).
         let shared = idx
             .query_shared(
-                &["Jean".to_string(), "John".to_string()],
+                &["Gina".to_string(), "John".to_string()],
                 PredicateFamily::PlacePresence,
                 true,
             )
-            .expect("resolves via fuzzy+elimination");
+            .expect("resolves via exact+fuzzy");
         assert_eq!(shared.len(), 1, "shared: {shared:?}");
         assert_eq!(shared[0].object, "Rome");
         assert_eq!(shared[0].evidence.len(), 2);
@@ -969,7 +956,7 @@ mod tests {
     #[test]
     fn query_shared_unresolvable_declines() {
         let idx = fixture_index();
-        // "Zelda" cannot resolve and elimination needs exactly two persons.
+        // "Zelda" appears nowhere in the index, so the shared query declines.
         assert!(idx
             .query_shared(
                 &["Zelda".to_string(), "Jon".to_string()],

@@ -64,12 +64,23 @@ struct LocomoTurn {
 struct ConvIndex {
     searcher: MemorySearchService,
     session_text: HashMap<String, String>,
+    session_date: HashMap<String, String>,
     doc_group: HashMap<String, String>,
     relations: RelationIndex,
 }
 
 struct AppState {
     convs: HashMap<String, Arc<ConvIndex>>,
+}
+
+/// Prepend the session's absolute date to hit text so the reader can convert
+/// relative expressions ("yesterday", "last month") instead of echoing them.
+/// Sessions without a date keep their original text (fail-open).
+fn with_date_prefix(conv: &ConvIndex, session_id: &str, text: String) -> String {
+    match conv.session_date.get(session_id) {
+        Some(date) => format!("[session date: {date}]\n{text}"),
+        None => text,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +126,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
 
     let mut docs = Vec::new();
     let mut session_text: HashMap<String, String> = HashMap::new();
+    let mut session_date: HashMap<String, String> = HashMap::new();
     let mut doc_group: HashMap<String, String> = HashMap::new();
     let mut rel_turns: Vec<RelationTurn> = Vec::new();
     for n in session_nums {
@@ -163,7 +175,10 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
                 author_agent: None,
             });
         }
-        session_text.insert(group_id, lines.join("\n"));
+        session_text.insert(group_id.clone(), lines.join("\n"));
+        if let Some(d) = date {
+            session_date.insert(group_id, d);
+        }
     }
 
     // Segmented layout with the gated-local routing strategy (the settled
@@ -195,6 +210,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     Ok(ConvIndex {
         searcher,
         session_text,
+        session_date,
         doc_group,
         relations,
     })
@@ -244,10 +260,15 @@ async fn search(
                 for ev in &obj.evidence {
                     if seen.insert(ev.session_id.clone()) {
                         if let Some(text) = conv.session_text.get(&ev.session_id) {
+                            let text = with_date_prefix(
+                                conv,
+                                &ev.session_id,
+                                format!("[{label}: {}] {text}", obj.object),
+                            );
                             out.push(Hit {
                                 session_id: ev.session_id.clone(),
                                 score: 1000.0 + obj.score,
-                                text: format!("[{label}: {}] {text}", obj.object),
+                                text,
                             });
                         }
                     }
@@ -287,9 +308,9 @@ async fn search(
         }
         if let Some(text) = conv.session_text.get(&gid) {
             out.push(Hit {
-                session_id: gid,
+                session_id: gid.clone(),
                 score: r.score,
-                text: text.clone(),
+                text: with_date_prefix(conv, &gid, text.clone()),
             });
         }
         if out.len() >= k {

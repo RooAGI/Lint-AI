@@ -23,7 +23,8 @@ use axum::{
 };
 use clap::Parser;
 use lint_ai::memory_api::{MemorySearchService, MemoryService, SearchRequest};
-use lint_ai::segments::SegmentRoutingStrategy;
+use lint_ai::segments::relations::{RelationIndex, RelationTurn};
+use lint_ai::segments::{reveal_question, IntentOperation, SegmentRoutingStrategy};
 use lint_ai::{IndexStore, MemoryIndexLayout, PipelineOptions, SourceDocument};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -62,6 +63,7 @@ struct ConvIndex {
     searcher: MemorySearchService,
     session_text: HashMap<String, String>,
     doc_group: HashMap<String, String>,
+    relations: RelationIndex,
 }
 
 struct AppState {
@@ -112,6 +114,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     let mut docs = Vec::new();
     let mut session_text: HashMap<String, String> = HashMap::new();
     let mut doc_group: HashMap<String, String> = HashMap::new();
+    let mut rel_turns: Vec<RelationTurn> = Vec::new();
     for n in session_nums {
         let key = format!("session_{n}");
         let date_key = format!("session_{n}_date_time");
@@ -136,6 +139,13 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
             filters.insert("memory_user_id".to_string(), LOCOMO_USER_ID.to_string());
             let doc_id = format!("{group_id}::turn{turn_idx}");
             doc_group.insert(doc_id.clone(), group_id.clone());
+            rel_turns.push(RelationTurn {
+                speaker: turn.speaker.clone(),
+                text: turn.text.clone(),
+                session_id: group_id.clone(),
+                turn_idx,
+                doc_id: doc_id.clone(),
+            });
             docs.push(SourceDocument {
                 doc_id,
                 source: format!("locomo/{}/session/{n}/turn/{turn_idx}", conv.sample_id),
@@ -166,10 +176,20 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     }
     service.refresh().context("failed to build conv index")?;
     let searcher = service.published_search();
+    // Entity-relation sidecar: SPO triples over the raw turns for
+    // shared-relation ("both X and Y") questions.
+    let relations = RelationIndex::build(&rel_turns);
+    eprintln!(
+        "  relations for {}: {} triples, {} persons",
+        conv.sample_id,
+        relations.len(),
+        relations.persons.len()
+    );
     Ok(ConvIndex {
         searcher,
         session_text,
         doc_group,
+        relations,
     })
 }
 
@@ -186,6 +206,40 @@ async fn search(
         .get(&p.conv)
         .ok_or((StatusCode::NOT_FOUND, format!("unknown conv {}", p.conv)))?;
     let k = p.k.clamp(1, 20);
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    // Shared-relation fast path: "both X and Y <verb>" questions are answered
+    // by intersecting per-subject relation objects; the evidence sessions go
+    // first, then the normal search backfills the rest.
+    let revealed = reveal_question(&p.q);
+    if revealed.operation == IntentOperation::SharedRelation {
+        if let Some(srq) = &revealed.shared_relation {
+            if let Some(shared) =
+                conv.relations
+                    .query_shared(&srq.subjects, srq.family, srq.expect_place)
+            {
+                for obj in &shared {
+                    for ev in &obj.evidence {
+                        if seen.insert(ev.session_id.clone()) {
+                            if let Some(text) = conv.session_text.get(&ev.session_id) {
+                                out.push(Hit {
+                                    session_id: ev.session_id.clone(),
+                                    score: 1000.0 + obj.score,
+                                    text: format!("[shared relation: {}] {}", obj.object, text),
+                                });
+                            }
+                        }
+                        if out.len() >= k {
+                            break;
+                        }
+                    }
+                    if out.len() >= k {
+                        break;
+                    }
+                }
+            }
+        }
+    }
     // Per-conversation session id: the production path resolves follow-up
     // phrasing against prior observed queries and fires the conversational
     // reranker when the query classifies as a follow-up. Over-fetch docs,
@@ -201,8 +255,6 @@ async fn search(
         .searcher
         .search(request)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
     for r in response.data {
         let gid = conv
             .doc_group

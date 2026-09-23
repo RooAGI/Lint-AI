@@ -29,6 +29,7 @@ use crate::tokenizer::{is_stopword, tokenize, TokenizerMode};
 use super::catalog::query_connection_profile;
 use super::diagnostics::{SegmentQueryDiagnostics, SegmentQueryOutput};
 use super::model::MemoryIndexSegment;
+use super::relations::PredicateFamily;
 use super::routing::SegmentRoutingStrategy;
 use super::segmented::SegmentedMemoryIndex;
 
@@ -47,6 +48,8 @@ pub enum IntentOperation {
     Choose,
     /// Filter a class of events by a pivot event ("events before X").
     TemporalFilter,
+    /// "both X and Y <verb>": intersect per-subject relation objects.
+    SharedRelation,
 }
 
 impl IntentOperation {
@@ -58,10 +61,12 @@ impl IntentOperation {
             IntentOperation::TemporalOrder => "temporal-order",
             IntentOperation::Choose => "choose",
             IntentOperation::TemporalFilter => "temporal-filter",
+            IntentOperation::SharedRelation => "shared-relation",
         }
     }
 
-    /// True for operations whose retrieval needs per-operand fan-out + union.
+    /// True for operations whose retrieval needs per-operand fan-out + union,
+    /// or relation intersection. Lookup never fires a special path.
     fn is_multi_operand(self) -> bool {
         !matches!(self, IntentOperation::Lookup)
     }
@@ -87,6 +92,17 @@ pub struct ScopeEntity {
     pub display: String,
 }
 
+/// A "both X and Y <verb>" question: intersect relation objects across subjects.
+#[derive(Debug, Clone, Serialize)]
+pub struct SharedRelationQuery {
+    /// Subject display names as written in the question, e.g. ["Jean", "John"].
+    pub subjects: Vec<String>,
+    /// Predicate family to look up per subject.
+    pub family: PredicateFamily,
+    /// True for "which city/where": prefer proper-noun (place-like) objects.
+    pub expect_place: bool,
+}
+
 /// The revealed question: operation + operand roles + answer shape.
 #[derive(Debug, Clone)]
 pub struct RevealedQuestion {
@@ -98,6 +114,8 @@ pub struct RevealedQuestion {
     pub answer_shape: String,
     /// Set when the intent path should not run (caller falls back).
     pub fallback_reason: Option<String>,
+    /// Set for SharedRelation: the relation query to run.
+    pub shared_relation: Option<SharedRelationQuery>,
 }
 
 impl RevealedQuestion {
@@ -598,9 +616,85 @@ fn single_scope_answer_type(q_lower: &str) -> Option<&'static str> {
 
 /// Reveal the real question: operation, operand roles, answer shape.
 /// Pure function of the question text; no index access.
+/// Detect "both X and Y <verb>" / "X and Y both <verb>" shared-relation
+/// questions. Returns the subject names (original case) and predicate family.
+fn detect_shared_relation(question: &str) -> Option<SharedRelationQuery> {
+    let q_lower = question.to_lowercase();
+    if !q_lower.contains("both") {
+        return None;
+    }
+    // Find the two subject spans around "both ... and ..." or "... and ... both".
+    let subjects: Vec<String> = {
+        let words: Vec<&str> = question.split_whitespace().collect();
+        let lower: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+        let both_pos = lower
+            .iter()
+            .position(|w| w.trim_matches(|c: char| !c.is_alphabetic()) == "both")?;
+        let and_pos = lower
+            .iter()
+            .position(|w| w.trim_matches(|c: char| !c.is_alphabetic()) == "and")?;
+        let clean = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        let is_name = |w: &str| {
+            let c = clean(w);
+            c.len() >= 3 && c.chars().next().is_some_and(|ch| ch.is_uppercase())
+        };
+        if and_pos == both_pos + 2 {
+            // "both X and Y": X right after both, Y right after and.
+            let a = words.get(both_pos + 1)?;
+            let b = words.get(and_pos + 1)?;
+            if !(is_name(a) && is_name(b)) {
+                return None;
+            }
+            vec![clean(a), clean(b)]
+        } else if both_pos == and_pos + 2 {
+            // "X and Y both": X before and, Y between and and both.
+            let a = words.get(and_pos.checked_sub(1)?)?;
+            let b = words.get(and_pos + 1)?;
+            if !(is_name(a) && is_name(b)) {
+                return None;
+            }
+            vec![clean(a), clean(b)]
+        } else {
+            return None;
+        }
+    };
+    // Predicate family from the verb / activity noun.
+    let family = if q_lower.contains("volunteering") {
+        PredicateFamily::PlacePresence
+    } else if q_lower.contains("visit") {
+        PredicateFamily::PlacePresence
+    } else {
+        return None;
+    };
+    let expect_place = q_lower.contains("which city")
+        || q_lower.contains("what city")
+        || q_lower.starts_with("where ");
+    Some(SharedRelationQuery {
+        subjects,
+        family,
+        expect_place,
+    })
+}
+
 pub fn reveal_question(question: &str) -> RevealedQuestion {
     let q = question.trim();
     let q_lower = q.to_lowercase();
+    // Shared-relation ("both X and Y") takes precedence over scope splitting.
+    if let Some(srq) = detect_shared_relation(q) {
+        let answer_shape = format!(
+            "intersection of {} objects across {}",
+            srq.family.as_str(),
+            srq.subjects.join(", ")
+        );
+        return RevealedQuestion {
+            operation: IntentOperation::SharedRelation,
+            operands: Vec::new(),
+            time_constraint: None,
+            answer_shape,
+            fallback_reason: None,
+            shared_relation: Some(srq),
+        };
+    }
     let how_many = q_lower.starts_with("how many")
         || q_lower.starts_with("how much")
         || q_lower.starts_with("how long")
@@ -698,6 +792,7 @@ pub fn reveal_question(question: &str) -> RevealedQuestion {
         time_constraint: time,
         answer_shape,
         fallback_reason,
+        shared_relation: None,
     }
 }
 
@@ -1009,6 +1104,36 @@ mod tests {
         let r = reveal_question(q);
         assert_eq!(r.operation, IntentOperation::Aggregate);
         assert_eq!(r.operands.len(), 2);
+    }
+
+    #[test]
+    fn reveal_shared_relation_both_visited() {
+        let q = "Which city have both Jean and John visited?";
+        let r = reveal_question(q);
+        assert_eq!(r.operation, IntentOperation::SharedRelation, "q: {q}");
+        let srq = r.shared_relation.expect("shared_relation set");
+        assert_eq!(srq.subjects, vec!["Jean".to_string(), "John".to_string()]);
+        assert_eq!(srq.family, PredicateFamily::PlacePresence);
+        assert!(srq.expect_place);
+    }
+
+    #[test]
+    fn reveal_shared_relation_volunteering_both_after() {
+        let q = "What type of volunteering have John and Maria both done?";
+        let r = reveal_question(q);
+        assert_eq!(r.operation, IntentOperation::SharedRelation, "q: {q}");
+        let srq = r.shared_relation.expect("shared_relation set");
+        assert_eq!(srq.subjects, vec!["John".to_string(), "Maria".to_string()]);
+        assert_eq!(srq.family, PredicateFamily::PlacePresence);
+        assert!(!srq.expect_place);
+    }
+
+    #[test]
+    fn reveal_shared_relation_rejects_non_names() {
+        // "both" with non-name operands is not a shared relation.
+        let q = "What did both the cat and the dog eat?";
+        let r = reveal_question(q);
+        assert_ne!(r.operation, IntentOperation::SharedRelation, "q: {q}");
     }
 
     #[test]

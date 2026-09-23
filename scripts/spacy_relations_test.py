@@ -252,4 +252,63 @@ r = rels.get(("Jon", "buy", "nice setup"))
 check("exclamatory NP kept as antecedent",
       r is not None and "it->nice setup" in (r["coref"] or ""))
 
+# 28. Personhood evidence: a one-off proper noun NER did not recognize
+# ("Shepherd") is not a person -- "He" must not resolve to it.
+rels = extract([T("Audrey", "He's a German Shepherd. He loves treats and long walks. ")])
+check("one-off Shepherd not a person",
+      not any(r["predicate"] == "love" for r in rels))
+
+# 29. Personhood evidence: a one-off capitalized common noun ("Nature")
+# is not a person either.
+rels = extract([T("Jon", "Nature's beauty reminds me to slow down. She paints landscapes. ")])
+check("one-off Nature not a person",
+      not any(r["predicate"] == "paint" for r in rels))
+
+# 30. Personhood evidence: a naming verb introduces a person
+# ("They called her Priya" -- NER misses it as NORP).
+rels = triples(extract([T("Jon", "They called her Priya after the ceremony. She painted landscapes. ")]))
+r = rels.get(("Priya", "paint", "landscapes"))
+check("introduced name is a person",
+      r is not None and r["coref"] == "She->Priya")
+
+# 31. Personhood evidence: a repeated proper noun is a person.
+rels = triples(extract([T("Jon", "I saw Priya at the park. Priya was walking her dog. She waved at me. ")]))
+r = rels.get(("Priya", "wave_at", "Jon"))
+check("repeated name is a person",
+      r is not None and "She->Priya" in (r["coref"] or ""))
+
+# 32. Personhood evidence: participant names are exempt -- a speaker's
+# name needs no repetition or introduction.
+rels = triples(extract([T("Priya", "I think Jon is right. He knows the answer. "),
+                        T("Jon", "Thanks! ", idx=1)]))
+r = rels.get(("Jon", "know", "answer"))
+check("participant name is a person",
+      r is not None and "He->Jon" in (r["coref"] or ""))
+
+# 33. Interjections are not referring expressions: "Yay!" must not
+# steal "this" from the online clothes store (conv-30).
+rels = triples(extract([T("Gina", "Yay! My online clothes store is open! I've been dreaming of this for a while now. ")]))
+r = rels.get(("Gina", "dream_of", "online clothes store"))
+check("interjection not an antecedent",
+      r is not None and r["coref"] == "this->online clothes store")
+
+# 34. A bare fragment root ("Dang, ...") is discourse, not an
+# antecedent: "that" must not resolve to it.
+rels = extract([T("Nate", "Dang, your full of great ideas Joanna! I really should start doing that as well. ")])
+check("bare fragment not an antecedent",
+      not any(r["predicate"] == "do" for r in rels))
+
+# 35. A nominal modifier anchors a verbless fragment ("My dog."):
+# still a referring NP.
+rels = triples(extract([T("Jon", "My dog. I love it. ")]))
+r = rels.get(("Jon", "love", "dog"))
+check("anchored fragment kept as antecedent",
+      r is not None and r["coref"] == "it->dog")
+
+# 36. Emoji/symbol chunks are not referring expressions.
+rels = extract([T("Maria", "Keep it up! \U0001f9d8\u200d\u2640\ufe0f I love it. ")])
+check("emoji not an antecedent",
+      not any("coref" in r and r["coref"] and "->\U0001f9d8" in r["coref"]
+              for r in rels))
+
 sys.exit(1 if check.failed else 0)

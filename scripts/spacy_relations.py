@@ -17,7 +17,14 @@ name-to-gender guessing:
   exactly two speakers, and is dropped otherwise;
 * ``he/she/him/her`` resolve to the most *salient* preceding person
   mention that is not the speaker (a speaker referring to themselves
-  says "I");
+  says "I"). Personhood is grammatical, not guessed, and is decided by
+  the compiled ``personhood`` Rust lib (its own repo; install with
+  ``cargo install --git <personhood-repo-url>``): NER PERSON,
+  participant names, proper nouns repeated in the conversation, and
+  names introduced by "named"/"met"/"called" ("a woman named Jean").
+  A one-off capitalized word NER did not recognize ("Nature",
+  "Turtles", "Shepherd") is not a person, so no pronoun resolves to
+  it;
 * ``they/them`` resolve to the nearest preceding *coordinated* person
   set ("Jon and Maria ... They ..."), emitting one triple per member,
   and are dropped when there is no coordination;
@@ -60,6 +67,9 @@ Errors go to stderr as {"error": ...} with a non-zero exit code.
 """
 
 import json
+import os
+import shutil
+import subprocess
 import sys
 
 ALLOWED_MODELS = {
@@ -77,6 +87,11 @@ NON_PERSON_ENTS = {
     "LAW", "LANGUAGE", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY",
     "ORDINAL", "CARDINAL",
 }
+
+# Verbs whose object introduces a person by name ("a woman named Jean",
+# "I met Jon", "they called her Priya"): discourse support for
+# personhood when NER did not label the name PERSON.
+INTRODUCTION_LEMMAS = {"name", "call", "meet"}
 
 # Dependency labels that head a subordinate clause; their subtrees are cut
 # out of object noun phrases ("a shelter I volunteer at" -> "a shelter").
@@ -122,6 +137,12 @@ ROLE_W = {"psubj": 4, "subj": 3, "obj": 2, "obl": 1, "pred": 0}
 # Linking verbs whose nominal subjects are predicative comments, not
 # topics ("the skill is awesome"): demoted to oblique for non-persons.
 COPULA_LEMMAS = {"be", "seem", "become"}
+
+# Modifier relations that anchor a noun phrase to a referent ("my
+# dog", "nice setup", "the birthday cakes"). A ROOT-headed chunk in a
+# verbless sentence with none of these is a bare exclamation
+# ("Yay!", "Dang", "Cheers"): discourse, not a referring NP.
+ANCHORING_MODS = {"det", "poss", "amod", "compound", "nummod"}
 
 # Determiners marking a bare negative NP that exhausts its sentence
 # ("No prob.", "No way."): a discourse formula, not a referring
@@ -213,15 +234,118 @@ def fail(message, code):
     return code
 
 
-def is_person_token(tok):
-    """Whether a token can be a person mention (for antecedent search)."""
+def _personhood_bin():
+    """Path to the compiled `personhood` classifier, if available.
+
+    The classifier lives in its own repo; install it with
+    `cargo install --git <personhood-repo-url>` (or `cargo install
+    personhood` once published). PERSONHOOD_BIN overrides PATH
+    discovery. When no binary is found the pure-Python fallback in
+    this script applies.
+    """
+    env = os.environ.get("PERSONHOOD_BIN")
+    if env:
+        return env
+    return shutil.which("personhood")
+
+
+def _classify_personhood(descriptors, speaker_names):
+    """Classify every token via the Rust personhood lib.
+
+    Returns {id(tok): is_person} or None when the binary is missing or
+    fails, in which case the pure-Python fallback applies.
+    """
+    binary = _personhood_bin()
+    if binary is None:
+        return None
+    payload = {
+        "strategy": "discourse",
+        "mentions": descriptors,
+        "context": {"speaker_names": [s.lower() for s in speaker_names]},
+    }
+    try:
+        proc = subprocess.run(
+            [binary],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception as exc:
+        print(json.dumps({"warning": f"personhood_spawn_failed: {exc}"}),
+              file=sys.stderr)
+        return None
+    if proc.returncode != 0:
+        print(json.dumps({"warning": "personhood_classifier_failed: "
+                          f"{proc.stderr.strip()[:200]}"}), file=sys.stderr)
+        return None
+    try:
+        verdicts = json.loads(proc.stdout)["verdicts"]
+    except Exception as exc:
+        print(json.dumps({"warning": f"personhood_bad_output: {exc}"}),
+              file=sys.stderr)
+        return None
+    return {v["id"]: v["is_person"] for v in verdicts}
+
+
+def is_person_token(tok, ctx=None):
+    """Whether a token can be a person mention (for antecedent search).
+
+    The verdict comes from the compiled `personhood` Rust lib (its own
+    repo; installed as the `personhood` binary): NER PERSON is always a
+    person, non-person NER
+    labels never are, and an unrecognized proper noun counts only with
+    discourse support (participant name, repetition, or introduction by
+    a naming verb). When the classifier is unavailable, the
+    pure-Python fallback below applies.
+    """
+    if ctx is not None and ctx.personhood_verdicts is not None:
+        verdict = ctx.personhood_verdicts.get(id(tok))
+        if verdict is not None:
+            return verdict
+    return _python_is_person_token(tok, ctx)
+
+
+def _python_is_person_token(tok, ctx=None):
+    """Pure-Python personhood fallback (mirrors the Rust DiscourseEvidence).
+
+    Used only when the compiled classifier cannot run.
+    """
     if tok.ent_type_ == "PERSON":
         return True
     if tok.ent_type_ in NON_PERSON_ENTS:
         return False
-    return tok.pos_ == "PROPN" or (
-        tok.text[:1].isupper() and tok.pos_ in ("NOUN", "PROPN")
-    )
+    if not (tok.pos_ == "PROPN"
+            or (tok.text[:1].isupper() and tok.pos_ in ("NOUN", "PROPN"))):
+        return False
+    if ctx is None:
+        return True
+    key = tok.text.lower()
+    if key in ctx.speaker_names:
+        return True
+    if ctx.name_counts.get(key, 0) >= 2:
+        return True
+    return tok.head.lemma_.lower() in INTRODUCTION_LEMMAS
+
+
+def fallback_name_counts(docs):
+    """Conversation-wide counts of proper-noun fallback candidates.
+
+    Only tokens that would reach the proper-noun fallback in
+    is_person_token are counted: NER PERSON needs no discourse
+    support, and NER non-person labels are never persons.
+    """
+    counts = {}
+    for doc in docs:
+        for tok in doc:
+            if tok.ent_type_ == "PERSON" or tok.ent_type_ in NON_PERSON_ENTS:
+                continue
+            if tok.pos_ == "PROPN" or (
+                tok.text[:1].isupper() and tok.pos_ in ("NOUN", "PROPN")
+            ):
+                key = tok.text.lower()
+                counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def phrase_text(noun, doc):
@@ -279,9 +403,19 @@ class CorefCtx:
     remaining ties broken toward the earliest introduction.
     """
 
-    def __init__(self, speakers):
+    def __init__(self, speakers, name_counts=None, verdicts=None):
         # Distinct speaker display names, in first-seen order.
         self.speakers = speakers
+        # Lowercased participant names: exempt from the discourse-support
+        # requirement for proper-noun personhood.
+        self.speaker_names = {s.lower() for s in speakers}
+        # Conversation-wide counts of proper-noun fallback candidates,
+        # for the repeated-mention personhood rule (Python fallback only;
+        # the Rust classifier counts internally).
+        self.name_counts = name_counts or {}
+        # Personhood verdicts from the compiled `personhood` lib, keyed
+        # by id(token). None when the classifier was unavailable.
+        self.personhood_verdicts = verdicts
         # Person mentions in document order:
         # {"sent", "tok_i", "key", "text", "role", "number"?}.
         self.person_mentions = []
@@ -318,7 +452,7 @@ class CorefCtx:
                          "role": role_of(tok.dep_, tok.head, is_person=True),
                          "tok": tok}
                     )
-            elif is_person_token(tok):
+            elif is_person_token(tok, self):
                 nums = tok.morph.get("Number")
                 self.person_mentions.append(
                     {"sent": sent_idx, "tok_i": tok.i,
@@ -333,9 +467,9 @@ class CorefCtx:
             root = chunk.root
             if root.pos_ == "PRON":
                 continue
-            if is_person_token(root):
+            if is_person_token(root, self):
                 continue
-            if root.dep_ in ("npadvmod",):
+            if root.dep_ in ("npadvmod", "intj"):
                 continue
             if (root.dep_ == "ROOT"
                     and not _sentence_has_matrix_verb(sent)
@@ -350,8 +484,21 @@ class CorefCtx:
                 # exclamatory NP ("nice setup") has no clause material
                 # and is kept.
                 continue
+            if (root.dep_ == "ROOT"
+                    and not _sentence_has_matrix_verb(sent)
+                    and not any(c.dep_ in ANCHORING_MODS
+                                for c in root.children)):
+                # A bare fragment root ("Yay!", "Dang", "Cheers for the
+                # support"): an exclamation with no nominal modifier
+                # anchoring it to a referent. Discourse, not a
+                # referring NP: never an antecedent. A modified NP
+                # ("nice setup", "my dog", "the menu") still refers.
+                continue
             text, ids = phrase_text(root, doc)
             if not text:
+                continue
+            if not any(c.isalpha() for c in text):
+                # No letters: emoji / symbols ("🧘‍"), not a referring NP.
                 continue
             if _is_neg_formula(chunk, sent):
                 continue
@@ -460,7 +607,7 @@ class CorefCtx:
         return self._pick(cands, sent_idx)
 
 
-def conj_person_names(tok, speaker):
+def conj_person_names(tok, speaker, ctx=None):
     """Person names coordinated with a mention token ("Jon and Maria")."""
     group = [tok]
     if tok.dep_ == "conj":
@@ -475,7 +622,7 @@ def conj_person_names(tok, speaker):
         low = t.text.lower()
         if low in SELF_PRONOUNS:
             names.append(speaker)
-        elif is_person_token(t):
+        elif is_person_token(t, ctx):
             names.append(t.text)
     seen = set()
     out = []
@@ -534,7 +681,7 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject,
         m = ctx.nearest_person(sent_idx, tok.i, speaker)
         if m is None or m["key"] in exclude_keys:
             return None
-        names = conj_person_names(m["tok"], speaker)
+        names = conj_person_names(m["tok"], speaker, ctx)
         if len(names) < 2:
             # "they" with no coordinated antecedent is ambiguous: drop.
             return None
@@ -556,7 +703,7 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject,
                     if clow in SELF_PRONOUNS:
                         return [(speaker, set(),
                                  f"{tok.text}->{speaker}")]
-                    if is_person_token(child):
+                    if is_person_token(child, ctx):
                         return [(child.text, set(),
                                  f"{tok.text}->{child.text}")]
         return None
@@ -609,7 +756,7 @@ def resolve_name(child, speaker, conf, ctx, sent_idx):
     if child.pos_ == "PROPN" or (
         child.text[:1].isupper() and child.pos_ in ("NOUN", "PROPN")
     ):
-        names = conj_person_names(child, speaker)
+        names = conj_person_names(child, speaker, ctx)
         head_low = child.text.lower()
         head_name = speaker if head_low in SELF_PRONOUNS else child.text
         if head_name.lower() not in {n.lower() for n in names}:
@@ -774,7 +921,15 @@ def main() -> int:
         s = t.get("speaker", "")
         if s.lower() not in {x.lower() for x in speakers}:
             speakers.append(s)
-    ctx = CorefCtx(speakers)
+    ctx = CorefCtx(speakers, fallback_name_counts(docs),
+                   _classify_personhood(
+                       [{"id": id(tok),
+                         "text": tok.text,
+                         "ner_label": tok.ent_type_,
+                         "pos": tok.pos_,
+                         "head_lemma": tok.head.lemma_}
+                        for doc in docs for tok in doc],
+                       speakers))
     sent_maps = []
     sent_idx = 0
     for turn, doc in zip(turns, docs):

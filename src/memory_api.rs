@@ -1,7 +1,9 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
+use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
 use crate::pipeline::{PipelineOptions, PublishedIndexSnapshot};
 use crate::query_plan::PreparedQuery;
+use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -156,6 +158,9 @@ pub struct MemorySearchService {
     superseded_ids: HashSet<(String, String)>,
     query_cache: Arc<Mutex<HashMap<String, Vec<crate::SearchResult>>>>,
     conversation_states: Arc<Mutex<crate::conversation_state::ConversationStateStore>>,
+    /// Manual override for the conversational rerank; `None` (default) defers
+    /// to the index options. Primarily a test/benchmark hook.
+    rerank_override: Option<bool>,
 }
 
 impl MemoryService {
@@ -458,6 +463,7 @@ impl MemoryService {
             superseded_ids: self.superseded_ids.clone(),
             query_cache: Arc::new(Mutex::new(HashMap::new())),
             conversation_states: Arc::clone(&self.conversation_states),
+            rerank_override: None,
         }
     }
 
@@ -469,7 +475,33 @@ impl MemoryService {
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
         let prepared = self.prepare_query(request);
-        let results = self.store.query_prepared(&prepared, top_k, &filters)?;
+        let do_rerank = should_conversational_rerank(
+            self.store.options().conversational_rerank,
+            request.session_id.as_deref(),
+            &request.query,
+        );
+        let depth = if do_rerank {
+            top_k.max(RERANK_DEEP_TOP_K)
+        } else {
+            top_k
+        };
+        let mut results = self.store.query_prepared(&prepared, depth, &filters)?;
+        if do_rerank {
+            let entities = session_resolved_entities(
+                &self.conversation_states,
+                &request.user_id,
+                request.session_id.as_deref().unwrap_or(""),
+            );
+            results = conversational_rerank(
+                results,
+                &self.store,
+                &request.query,
+                &entities,
+                &filters,
+                RERANK_WEIGHTS,
+            );
+            results.truncate(top_k);
+        }
         self.observe_search_turn(request, &prepared, &results);
         Ok(results)
     }
@@ -482,9 +514,39 @@ impl MemoryService {
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
         let prepared = self.prepare_query(request);
-        let results = self
-            .store
-            .query_prepared_cached(&prepared, top_k, &filters)?;
+        let do_rerank = should_conversational_rerank(
+            self.store.options().conversational_rerank,
+            request.session_id.as_deref(),
+            &request.query,
+        );
+        let results = if do_rerank {
+            // The rerank needs the deep candidate pool; query the current
+            // snapshot at depth without forcing a refresh, matching this
+            // path's read-only contract.
+            let deep = self.store.query_prepared_cached(
+                &prepared,
+                top_k.max(RERANK_DEEP_TOP_K),
+                &filters,
+            )?;
+            let entities = session_resolved_entities(
+                &self.conversation_states,
+                &request.user_id,
+                request.session_id.as_deref().unwrap_or(""),
+            );
+            let mut ranked = conversational_rerank(
+                deep,
+                &self.store,
+                &request.query,
+                &entities,
+                &filters,
+                RERANK_WEIGHTS,
+            );
+            ranked.truncate(top_k);
+            ranked
+        } else {
+            self.store
+                .query_prepared_cached(&prepared, top_k, &filters)?
+        };
         self.observe_search_turn(request, &prepared, &results);
         Ok(results)
     }
@@ -549,7 +611,33 @@ impl MemoryService {
         filters: &BTreeMap<String, String>,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
         let prepared = prepare_session_query(&self.conversation_states, scope, session_id, query);
-        let results = self.store.query_prepared(&prepared, top_k, filters)?;
+        let do_rerank = should_conversational_rerank(
+            self.store.options().conversational_rerank,
+            session_id,
+            query,
+        );
+        let depth = if do_rerank {
+            top_k.max(RERANK_DEEP_TOP_K)
+        } else {
+            top_k
+        };
+        let mut results = self.store.query_prepared(&prepared, depth, filters)?;
+        if do_rerank {
+            let entities = session_resolved_entities(
+                &self.conversation_states,
+                scope,
+                session_id.unwrap_or(""),
+            );
+            results = conversational_rerank(
+                results,
+                &self.store,
+                query,
+                &entities,
+                filters,
+                RERANK_WEIGHTS,
+            );
+            results.truncate(top_k);
+        }
         observe_session_search(
             &self.conversation_states,
             scope,
@@ -1092,7 +1180,41 @@ pub(crate) fn observe_session_search(
         );
 }
 
+/// Entity mentions resolved from the session's recent turns, most recent
+/// first. Feeds the conversational rerank's speaker-match feature.
+fn session_resolved_entities(
+    states: &Mutex<crate::conversation_state::ConversationStateStore>,
+    scope: &str,
+    session_id: &str,
+) -> Vec<String> {
+    let now_ms = unix_time_ms();
+    states
+        .lock()
+        .expect("conversation state lock poisoned")
+        .get(scope, session_id, now_ms)
+        .map(|state| state.resolved_entities.clone())
+        .unwrap_or_default()
+}
+
+/// True when the conversational rerank should fire for this query: a
+/// follow-up inside a live session, with the feature enabled.
+fn should_conversational_rerank(enabled: bool, session_id: Option<&str>, query: &str) -> bool {
+    enabled && session_id.is_some() && is_follow_up(query)
+}
+
 impl MemorySearchService {
+    /// Override the conversational rerank for this searcher, regardless of
+    /// the index options. `None` restores the options-driven default.
+    pub fn set_conversational_rerank(&mut self, enabled: Option<bool>) -> &mut Self {
+        self.rerank_override = enabled;
+        self
+    }
+
+    fn conversational_rerank_enabled(&self) -> bool {
+        self.rerank_override
+            .unwrap_or_else(|| self.index.conversational_rerank_enabled())
+    }
+
     pub fn search(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
         validate_identifier(&request.user_id, "user_id")?;
         if let Some(session_id) = request.session_id.as_deref() {
@@ -1111,15 +1233,30 @@ impl MemorySearchService {
             session_id,
             &request.query,
         );
+        let top_k = request.top_k.min(100);
+        // Session follow-ups retrieve deep and rescore with the conversational
+        // rerank; everything else keeps the base ranking untouched.
+        let do_rerank = should_conversational_rerank(
+            self.conversational_rerank_enabled(),
+            session_id,
+            &request.query,
+        );
+        let depth = if do_rerank {
+            top_k.max(RERANK_DEEP_TOP_K)
+        } else {
+            top_k
+        };
         // Key the cache on the effective query text: identical raw queries at
         // different points in a session rewrite differently and must not
-        // share an entry.
+        // share an entry. The rerank mode is part of the key: the override
+        // can flip between searches on the same searcher.
         let cache_key = format!(
-            "{}\0{}\0{}\0{}",
+            "{}\0{}\0{}\0{}\0{}",
             request.user_id,
             session_id.unwrap_or(""),
             prepared.search_query(),
-            request.top_k.min(100)
+            top_k,
+            do_rerank
         );
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
@@ -1135,9 +1272,23 @@ impl MemorySearchService {
         let results = if let Some(cached) = cached {
             cached
         } else {
-            let results = self
-                .index
-                .query_prepared(&prepared, request.top_k.min(100), &filters)?;
+            let mut results = self.index.query_prepared(&prepared, depth, &filters)?;
+            if do_rerank {
+                let entities = session_resolved_entities(
+                    &self.conversation_states,
+                    &request.user_id,
+                    session_id.unwrap_or(""),
+                );
+                results = conversational_rerank(
+                    results,
+                    &self.index,
+                    &request.query,
+                    &entities,
+                    &filters,
+                    RERANK_WEIGHTS,
+                );
+                results.truncate(top_k);
+            }
             let mut cache = self.query_cache.lock().expect("query cache lock poisoned");
             if cache.len() >= 256 {
                 if let Some(key) = cache.keys().next().cloned() {

@@ -643,6 +643,7 @@ pub fn build_query_snapshot_from_source_documents(
         index_location: IndexLocation::InMemory,
         memory_index_layout: MemoryIndexLayout::Single,
         fuse_global_arm: false,
+        conversational_rerank: true,
     };
     build_query_snapshot(source_docs, &options)
 }

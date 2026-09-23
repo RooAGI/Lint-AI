@@ -5,6 +5,7 @@ use super::{
     persist_store_metadata, source_document_from_record, IndexLocation, IndexStoreInspection,
     LexicalState, MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
 };
+use crate::conversational_rerank::{RerankDocSource, RerankDocView};
 use crate::index::{
     build_semantic_doc_state, DocRecord, MemoryIndex, Provenance, QueryDiagnostics, QueryTimings,
     SearchResult, SemanticAggregate, SemanticDocState,
@@ -257,6 +258,79 @@ impl PublishedIndexSnapshot {
 
     pub fn source_document_by_id(&self, doc_id: &str) -> Option<&SourceDocument> {
         self.source_docs.get(doc_id)
+    }
+
+    /// Pipeline options this snapshot was built with.
+    pub fn conversational_rerank_enabled(&self) -> bool {
+        self.options.conversational_rerank
+    }
+}
+
+/// Group members visible to the conversational rerank: documents in `group_id`
+/// that also satisfy `filters` (the deep search's user/provider isolation),
+/// plus the singleton fallback — stage 1 keys ungrouped documents by doc id,
+/// so a group id that names no group but names a document resolves to that
+/// document alone instead of vanishing.
+fn filtered_group_member_ids(
+    source_docs: &std::collections::HashMap<String, SourceDocument>,
+    group_id: &str,
+    filters: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let matches_filters = |doc: &SourceDocument| {
+        filters
+            .iter()
+            .all(|(key, value)| doc.filters.get(key).is_some_and(|actual| actual == value))
+    };
+    let mut ids: Vec<String> = source_docs
+        .values()
+        .filter(|doc| doc.group_id.as_deref() == Some(group_id) && matches_filters(doc))
+        .map(|doc| doc.doc_id.clone())
+        .collect();
+    if ids.is_empty() {
+        if let Some(doc) = source_docs.get(group_id) {
+            if matches_filters(doc) {
+                ids.push(doc.doc_id.clone());
+            }
+        }
+    }
+    ids
+}
+
+impl RerankDocSource for PublishedIndexSnapshot {
+    fn rerank_doc(&self, doc_id: &str) -> Option<RerankDocView> {
+        self.source_docs.get(doc_id).map(rerank_doc_view)
+    }
+
+    fn group_member_ids(
+        &self,
+        group_id: &str,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<String> {
+        filtered_group_member_ids(&self.source_docs, group_id, filters)
+    }
+}
+
+/// Shared view construction for the conversational rerank: the indexed text,
+/// timestamp for turn ordering, and the author/role as the speaker.
+fn rerank_doc_view(doc: &SourceDocument) -> RerankDocView {
+    RerankDocView {
+        text: doc.content.clone(),
+        timestamp: doc.timestamp.clone(),
+        speaker: doc.author_agent.clone(),
+    }
+}
+
+impl RerankDocSource for IndexStore {
+    fn rerank_doc(&self, doc_id: &str) -> Option<RerankDocView> {
+        self.source_docs.get(doc_id).map(rerank_doc_view)
+    }
+
+    fn group_member_ids(
+        &self,
+        group_id: &str,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<String> {
+        filtered_group_member_ids(&self.source_docs, group_id, filters)
     }
 }
 
@@ -798,6 +872,11 @@ impl IndexStore {
 
     pub fn source_document_by_id(&self, doc_id: &str) -> Option<&SourceDocument> {
         self.source_docs.get(doc_id)
+    }
+
+    /// Pipeline options this store was built with.
+    pub fn options(&self) -> &PipelineOptions {
+        &self.options
     }
 
     pub fn records(&self) -> Vec<&DocRecord> {
@@ -1395,5 +1474,73 @@ impl IndexStore {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, HashMap};
+
+    fn test_doc(doc_id: &str, group_id: Option<&str>, filters: &[(&str, &str)]) -> SourceDocument {
+        SourceDocument {
+            doc_id: doc_id.to_string(),
+            source: format!("src:{doc_id}"),
+            content: "test content".to_string(),
+            concept: String::new(),
+            group_id: group_id.map(str::to_string),
+            headings: Vec::new(),
+            links: Vec::new(),
+            timestamp: None,
+            doc_length: 12,
+            author_agent: None,
+            filters: filters
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    fn docs_map(docs: Vec<SourceDocument>) -> HashMap<String, SourceDocument> {
+        docs.into_iter().map(|d| (d.doc_id.clone(), d)).collect()
+    }
+
+    #[test]
+    fn group_members_honor_filters() {
+        let docs = docs_map(vec![
+            test_doc("d1", Some("g1"), &[("user", "alice")]),
+            test_doc("d2", Some("g1"), &[("user", "bob")]),
+            test_doc("d3", Some("g1"), &[("user", "alice")]),
+        ]);
+        let filters: BTreeMap<String, String> = [("user".to_string(), "alice".to_string())]
+            .into_iter()
+            .collect();
+        let mut ids = filtered_group_member_ids(&docs, "g1", &filters);
+        ids.sort();
+        assert_eq!(ids, vec!["d1".to_string(), "d3".to_string()]);
+    }
+
+    #[test]
+    fn ungrouped_doc_resolves_as_singleton() {
+        let docs = docs_map(vec![test_doc("solo", None, &[("user", "alice")])]);
+        let filters: BTreeMap<String, String> = [("user".to_string(), "alice".to_string())]
+            .into_iter()
+            .collect();
+        // Stage 1 keys ungrouped documents by doc id; the member lookup must
+        // resolve that key back to the document instead of dropping it.
+        let ids = filtered_group_member_ids(&docs, "solo", &filters);
+        assert_eq!(ids, vec!["solo".to_string()]);
+        // ...but not when the filters exclude it.
+        let other: BTreeMap<String, String> = [("user".to_string(), "mallory".to_string())]
+            .into_iter()
+            .collect();
+        assert!(filtered_group_member_ids(&docs, "solo", &other).is_empty());
+    }
+
+    #[test]
+    fn unknown_group_yields_no_members() {
+        let docs = docs_map(vec![test_doc("d1", Some("g1"), &[("user", "alice")])]);
+        let filters: BTreeMap<String, String> = BTreeMap::new();
+        assert!(filtered_group_member_ids(&docs, "nope", &filters).is_empty());
     }
 }

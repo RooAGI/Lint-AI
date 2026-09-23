@@ -71,6 +71,11 @@ pub struct PipelineOptions {
     /// fusion. When false, only the routed arm runs: lower latency, slightly
     /// lower recall on weak routers.
     pub fuse_global_arm: bool,
+    /// When true (default), a follow-up query inside a session is retrieved
+    /// deep (top-200) and rescored with the two-stage conversational rerank
+    /// (session selection, then neighbor-context / speaker-match pinpoint).
+    /// When false, session follow-ups keep the base ranking.
+    pub conversational_rerank: bool,
 }
 
 impl Default for PipelineOptions {
@@ -91,6 +96,7 @@ impl Default for PipelineOptions {
             index_location: IndexLocation::InMemory,
             memory_index_layout: MemoryIndexLayout::Single,
             fuse_global_arm: false,
+            conversational_rerank: true,
         }
     }
 }

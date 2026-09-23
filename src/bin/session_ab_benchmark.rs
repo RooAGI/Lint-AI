@@ -690,11 +690,13 @@ struct PairResult {
     retrieved_followup_session: Vec<String>,
     retrieved_session_prior: Vec<String>,
     retrieved_conv_rerank: Vec<String>,
+    retrieved_conv_rerank_prod: Vec<String>,
     full_stateless: ArmMetrics,
     followup_stateless: ArmMetrics,
     followup_session: ArmMetrics,
     session_prior: ArmMetrics,
     conv_rerank: ArmMetrics,
+    conv_rerank_prod: ArmMetrics,
 }
 
 fn mean(values: &[f64]) -> f64 {
@@ -758,6 +760,10 @@ struct Report {
     /// conv_rerank minus followup_session: the full two-stage conversational
     /// ranker effect.
     conv_vs_session: HashMap<String, DeltaSummary>,
+    /// conv_rerank_prod minus conv_rerank: the production implementation's
+    /// gap to the experimental one (speaker feature is inert on role-based
+    /// corpora, so a small gap is expected).
+    prod_vs_local: HashMap<String, DeltaSummary>,
     by_category: HashMap<String, HashMap<String, ArmAggregate>>,
     per_pair: Vec<PairResult>,
 }
@@ -882,7 +888,9 @@ fn main() -> Result<()> {
                 };
                 messages.push(Message {
                     role: role.to_string(),
-                    timestamp: None,
+                    // Synthetic per-turn timestamps so the production rerank's
+                    // timestamp turn-ordering matches the dataset order.
+                    timestamp: Some(1_700_000_000_000 + turn_idx as i64 * 60_000),
                     // Keep the speaker name in the text so entity analysis
                     // sees the same surface form as the questions.
                     content: format!("{}: {}", turn.speaker, turn.text),
@@ -905,7 +913,13 @@ fn main() -> Result<()> {
             });
         }
         service.add_batch(add_requests)?;
-        let searcher = service.published_search();
+        let mut searcher = service.published_search();
+        // Controls use the base ranking only; the production rerank arm below
+        // enables the library implementation explicitly.
+        searcher.set_conversational_rerank(Some(false));
+        // Production rerank arm: the library's conversational rerank, enabled.
+        let mut searcher_prod = service.published_search();
+        searcher_prod.set_conversational_rerank(Some(true));
         eprintln!(
             "conversation {} indexed ({} sessions)",
             conv.sample_id,
@@ -939,6 +953,36 @@ fn main() -> Result<()> {
 
         let search = |query: &str, session_id: Option<String>| -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored(query, session_id, TOP_K)?;
+            Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
+        };
+
+        let search_scored_prod = |query: &str,
+                                  session_id: Option<String>,
+                                  top_k: usize|
+         -> Result<(Vec<(String, f32)>, f64)> {
+            let start = Instant::now();
+            let response = searcher_prod.search(SearchRequest {
+                query: query.to_string(),
+                options: None,
+                user_id: USER_ID.to_string(),
+                top_k,
+                session_id,
+            })?;
+            let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let mut seen = HashSet::new();
+            let mut out = Vec::new();
+            for m in &response.data {
+                if let Some(tk) = doc_to_turn.get(&m.id) {
+                    if seen.insert(tk.clone()) {
+                        out.push((tk.clone(), m.score));
+                    }
+                }
+            }
+            Ok((out, latency_ms))
+        };
+
+        let search_prod = |query: &str, session_id: Option<String>| -> Result<(Vec<String>, f64)> {
+            let (scored, latency_ms) = search_scored_prod(query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
         };
 
@@ -1042,6 +1086,12 @@ fn main() -> Result<()> {
             let g_cv = rerank_conversational(&broad_cv, &turn_lookup, &q_follow, &q_name, TOP_K);
             let t_cv = cv_start.elapsed().as_secs_f64() * 1000.0;
 
+            // Arm 6: production conversational rerank (library implementation,
+            // exercised through the real query path).
+            let sid_prod = format!("abq-prod-{}-{q_idx}", conv.sample_id);
+            let _ = search_prod(&q_full, Some(sid_prod.clone()))?;
+            let (g_prod, t_prod) = search_prod(&q_follow, Some(sid_prod))?;
+
             per_pair.push(PairResult {
                 id: format!("{}_q{q_idx}", conv.sample_id),
                 conversation: conv.sample_id.clone(),
@@ -1054,11 +1104,13 @@ fn main() -> Result<()> {
                 retrieved_followup_session: g_b.clone(),
                 retrieved_session_prior: g_sp.clone(),
                 retrieved_conv_rerank: g_cv.clone(),
+                retrieved_conv_rerank_prod: g_prod.clone(),
                 full_stateless: score_arms(&g_full, &relevant, t_full),
                 followup_stateless: score_arms(&g_a, &relevant, t_a),
                 followup_session: score_arms(&g_b, &relevant, t_b),
                 session_prior: score_arms(&g_sp, &relevant, t_sp),
                 conv_rerank: score_arms(&g_cv, &relevant, t_cv),
+                conv_rerank_prod: score_arms(&g_prod, &relevant, t_prod),
             });
         }
         eprintln!(
@@ -1092,6 +1144,9 @@ fn main() -> Result<()> {
     fn pick_cv(p: &PairResult) -> &ArmMetrics {
         &p.conv_rerank
     }
+    fn pick_prod(p: &PairResult) -> &ArmMetrics {
+        &p.conv_rerank_prod
+    }
     let mut arms: HashMap<String, ArmAggregate> = HashMap::new();
     arms.insert(
         "full_stateless".to_string(),
@@ -1110,6 +1165,10 @@ fn main() -> Result<()> {
         aggregate_arm(&per_pair, pick_sp),
     );
     arms.insert("conv_rerank".to_string(), aggregate_arm(&per_pair, pick_cv));
+    arms.insert(
+        "conv_rerank_prod".to_string(),
+        aggregate_arm(&per_pair, pick_prod),
+    );
 
     let metrics: Vec<(&str, fn(&ArmMetrics) -> f64)> = vec![
         ("recall_at_5", |m: &ArmMetrics| m.recall_at_5),
@@ -1122,6 +1181,7 @@ fn main() -> Result<()> {
     let mut session_vs_full: HashMap<String, DeltaSummary> = HashMap::new();
     let mut sessionprior_vs_session: HashMap<String, DeltaSummary> = HashMap::new();
     let mut conv_vs_session: HashMap<String, DeltaSummary> = HashMap::new();
+    let mut prod_vs_local: HashMap<String, DeltaSummary> = HashMap::new();
     for (name, metric) in &metrics {
         session_vs_stateless.insert(
             name.to_string(),
@@ -1138,6 +1198,10 @@ fn main() -> Result<()> {
         conv_vs_session.insert(
             name.to_string(),
             delta_summary(&per_pair, *metric, pick_b, pick_cv),
+        );
+        prod_vs_local.insert(
+            name.to_string(),
+            delta_summary(&per_pair, *metric, pick_cv, pick_prod),
         );
     }
 
@@ -1157,6 +1221,7 @@ fn main() -> Result<()> {
             m.insert("followup_session".to_string(), aggregate_arm(qs, pick_b));
             m.insert("session_prior".to_string(), aggregate_arm(qs, pick_sp));
             m.insert("conv_rerank".to_string(), aggregate_arm(qs, pick_cv));
+            m.insert("conv_rerank_prod".to_string(), aggregate_arm(qs, pick_prod));
             by_category.insert(category_label(cat).to_string(), m);
         }
     }
@@ -1175,6 +1240,7 @@ fn main() -> Result<()> {
         session_vs_full,
         sessionprior_vs_session,
         conv_vs_session,
+        prod_vs_local,
         by_category,
         per_pair,
     };

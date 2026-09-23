@@ -40,6 +40,7 @@
 pub mod cli;
 mod config;
 pub mod conversation_state;
+mod conversational_rerank;
 mod ids;
 pub mod index;
 #[cfg(any(

@@ -59,6 +59,7 @@ fn source_document(record: DocRecord) -> SourceDocument {
         timestamp: record.timestamp,
         doc_length: record.doc_length,
         author_agent: record.author_agent,
+        key_phrases: Vec::new(),
     }
 }
 

@@ -475,6 +475,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
                 timestamp: Some(session_date.clone()),
                 doc_length: turn.content.len(),
                 author_agent: None,
+                key_phrases: Vec::new(),
             });
         }
     }

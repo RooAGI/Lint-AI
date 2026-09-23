@@ -96,6 +96,7 @@ pub fn graph_to_source_documents(graph: &Graph) -> Vec<SourceDocument> {
                 timestamp: t0.and_then(|r| r.timestamp.clone()),
                 doc_length: t0.map(|r| r.doc_length).unwrap_or(p.content.len()),
                 author_agent: t0.and_then(|r| r.author_agent.clone()),
+                key_phrases: Vec::new(),
             }
         })
         .collect()

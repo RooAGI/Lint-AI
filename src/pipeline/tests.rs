@@ -24,6 +24,7 @@ fn sample_doc(id: &str, content: &str) -> SourceDocument {
         timestamp: None,
         doc_length: content.len(),
         author_agent: None,
+        key_phrases: Vec::new(),
     }
 }
 
@@ -63,6 +64,7 @@ fn workspace_watcher_publishes_relative_file_change_events_without_content() {
 fn sample_doc_with_group(id: &str, group_id: &str, content: &str) -> SourceDocument {
     SourceDocument {
         group_id: Some(group_id.to_string()),
+        key_phrases: Vec::new(),
         ..sample_doc(id, content)
     }
 }

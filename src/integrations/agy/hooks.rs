@@ -332,6 +332,7 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         doc_length: body.len(),
         author_agent: Some("agy".to_string()),
         filters,
+        key_phrases: Vec::new(),
     };
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {

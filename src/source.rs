@@ -21,6 +21,23 @@ pub struct SourceDocument {
     pub author_agent: Option<String>,
     #[serde(default)]
     pub filters: BTreeMap<String, String>,
+    /// Grammar-accepted entity mentions for this document's session
+    /// (behood noun-phrase layer, e.g. "Harry Potter conference"). Carried
+    /// into the segment summary's entity channel, which is exempt from the
+    /// local-memory term cap, so discriminative phrases survive routing.
+    #[serde(default)]
+    pub key_phrases: Vec<KeyPhrase>,
+}
+
+/// One grammar-accepted entity mention: a noun phrase the dependency
+/// grammar judged name-worthy (proper-noun participants, not a person or
+/// pronoun head), with behood's ontological kind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyPhrase {
+    /// Literal phrase text, e.g. "Harry Potter conference".
+    pub text: String,
+    /// Ontological kind: "event" | "place" | "org" | "work" | "thing".
+    pub kind: String,
 }
 
 impl SourceDocument {
@@ -49,6 +66,7 @@ impl SourceDocument {
             doc_length,
             author_agent,
             filters: BTreeMap::new(),
+            key_phrases: Vec::new(),
         }
     }
 }

@@ -379,4 +379,109 @@ r = rels.get(("Jon", "sell", "car"))
 check("rust entityhood verdicts consumed (no it->car when denied)",
       r is None or r.get("coref") != "it->car")
 
+# 39. Key phrases end-to-end: "Harry Potter conference" is a grammar-
+# accepted entity mention (kind event); the locative PP is trimmed but
+# the of-PP in "University of Washington" is kept. Runs against the real
+# behood binary when it speaks protocol v3, else skipped.
+import shutil
+
+
+def extract_full(turns, env=None):
+    payload = {"model": "en_core_web_sm", "turns": turns}
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    assert proc.returncode == 0, f"extractor failed: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def _behood_speaks_v3():
+    binary = os.environ.get("BEHOOD_BIN") or shutil.which("behood")
+    if not binary:
+        return None
+    try:
+        proc = subprocess.run(
+            [binary],
+            input=json.dumps({"mentions": [], "chunks": [],
+                              "np_mentions": [],
+                              "context": {"speaker_names": []}}),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode == 0 and "phrase_verdicts" in proc.stdout:
+            return binary
+    except Exception:
+        pass
+    return None
+
+
+_behood_v3 = _behood_speaks_v3()
+if _behood_v3 is None:
+    print("SKIP key-phrase e2e (no v3 behood binary)")
+else:
+    env = dict(os.environ, BEHOOD_BIN=_behood_v3)
+    out = extract_full([
+        T("Tim", "Last week I went to a Harry Potter conference in the UK. "),
+        T("Tim", "I work at the University of Washington. "),
+    ], env=env)
+    phrases = {p["text"]: p["kind"] for p in out["key_phrases"]}
+    check("key phrase 'Harry Potter conference' (event)",
+          phrases.get("Harry Potter conference") == "event")
+    check("key phrase 'UK' (place)", phrases.get("UK") == "place")
+    check("key phrase keeps of-PP 'University of Washington'",
+          phrases.get("University of Washington") == "org")
+    check("no person/pronoun key phrases",
+          not any(t in phrases for t in ("Tim", "I", "Last week")))
+
+# 40. Forced policy divergence, phrase layer: a fake behood binary that
+# accepts every noun phrase as an entity mention. The fallback would
+# reject the ordinary description "peaceful retreat", so its presence in
+# key_phrases proves the Rust phrase verdicts are actually consumed.
+_FAKE_ALL_PHRASES = """#!/usr/bin/env python3
+import json, sys
+p = json.load(sys.stdin)
+json.dump({
+    "verdicts": [{"id": m["id"], "is_person": False, "evidence": []}
+                 for m in p["mentions"]],
+    "entity_verdicts": [{"id": c["id"], "is_entity": True, "evidence": []}
+                        for c in p.get("chunks", [])],
+    "phrase_verdicts": [{"id": m["id"], "is_entity_mention": True,
+                         "kind": "thing", "evidence": []}
+                        for m in p.get("np_mentions", [])],
+}, sys.stdout)
+"""
+
+with tempfile.TemporaryDirectory() as d:
+    p = Path(d) / "behood"
+    p.write_text(_FAKE_ALL_PHRASES)
+    p.chmod(0o755)
+    out = extract_full(
+        [T("Maria", "We enjoyed a peaceful retreat. ")],
+        env=dict(os.environ, BEHOOD_BIN=str(p)),
+    )
+    phrases = [kp["text"] for kp in out["key_phrases"]]
+    check("rust phrase verdicts consumed (fake accepts 'peaceful retreat')",
+          "peaceful retreat" in phrases)
+
+# 41. Pure-Python fallback (behood binary absent): "Harry Potter
+# conference" is still a key phrase via the mirrored rule.
+out = extract_full(
+    [T("Tim", "Last week I went to a Harry Potter conference in the UK. "),
+     T("Tim", "We enjoyed a peaceful retreat. ")],
+    env=dict(os.environ, BEHOOD_BIN="/nonexistent/behood"),
+)
+phrases = {p["text"]: p["kind"] for p in out["key_phrases"]}
+check("fallback key phrase 'Harry Potter conference' (event)",
+      phrases.get("Harry Potter conference") == "event")
+check("fallback rejects ordinary description",
+      "peaceful retreat" not in phrases)
+check("fallback rejects pronoun heads",
+      not any(t.lower() in ("i", "we", "it") for t in phrases))
+
 sys.exit(1 if check.failed else 0)

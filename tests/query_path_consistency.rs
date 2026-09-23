@@ -15,6 +15,7 @@ fn document(id: &str, content: &str, timestamp: &str, group: &str) -> SourceDocu
         doc_length: content.len(),
         author_agent: None,
         filters: BTreeMap::new(),
+        key_phrases: Vec::new(),
     }
 }
 

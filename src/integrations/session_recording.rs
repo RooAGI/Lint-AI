@@ -552,6 +552,7 @@ pub fn promote_recorded_session(
             group_id: Some(group_id.clone()),
             doc_id: doc_id.clone(),
             content: event_content(&event),
+            key_phrases: Vec::new(),
         };
         store.upsert(document);
         imported_document_ids.push(doc_id);

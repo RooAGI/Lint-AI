@@ -193,6 +193,7 @@ fn build_conversation_docs(conv: &LocomoConversation) -> Result<Vec<SourceDocume
                 timestamp: date.clone(),
                 doc_length: turn.text.len(),
                 author_agent: None,
+                key_phrases: Vec::new(),
             });
         }
     }

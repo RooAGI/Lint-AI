@@ -103,6 +103,7 @@ pub use crate::semantic_relations::{
     DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
     SemanticRelationStore, SemanticStatus, SupersessionOptions,
 };
+pub use crate::source::KeyPhrase;
 pub use crate::source::SourceDocument;
 pub use crate::temporal_fact::{TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair};
 // Re-exported so the public `index::DocRecord` struct can be constructed by

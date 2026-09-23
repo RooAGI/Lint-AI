@@ -68,7 +68,9 @@ Protocol mirrors scripts/spacy_ner.py:
              {"subject": str, "predicate": str, "object": str,
               "is_place": bool, "session_id": str, "turn_idx": int,
               "doc_id": str, "evidence": str, "confidence": float,
-              "coref": str|null}]}
+              "coref": str|null}],
+           "key_phrases": [
+             {"text": str, "kind": str, "session_id": str}]}
 Errors go to stderr as {"error": ...} with a non-zero exit code.
 """
 
@@ -149,6 +151,11 @@ COPULA_LEMMAS = {"be", "seem", "become"}
 # verbless sentence with none of these is a bare exclamation
 # ("Yay!", "Dang", "Cheers"): discourse, not a referring NP.
 ANCHORING_MODS = {"det", "poss", "amod", "compound", "nummod"}
+
+# Nominal modifier dependencies sent to behood for the entity-mention
+# verdict: the grammar front end only reports surface facts; the Rust
+# NounPhraseMention rule decides mentionhood.
+NP_MOD_DEPS = {"compound", "flat", "amod", "nmod", "nummod", "appos"}
 
 # Determiners marking a bare negative NP that exhausts its sentence
 # ("No prob.", "No way."): a discourse formula, not a referring
@@ -256,20 +263,22 @@ def _behood_bin():
     return shutil.which("behood")
 
 
-def _classify(descriptors, chunk_descriptors, speaker_names):
-    """Classify mentions and chunks via the Rust behood lib.
+def _classify(descriptors, chunk_descriptors, np_descriptors, speaker_names):
+    """Classify mentions, chunks, and noun phrases via the Rust behood lib.
 
-    Returns (personhood_verdicts, entity_verdicts), each keyed by the
-    caller-assigned string id, or (None, None) when the binary is
-    missing or fails, in which case the pure-Python fallbacks apply.
+    Returns (personhood_verdicts, entity_verdicts, phrase_verdicts), each
+    keyed by the caller-assigned string id, or (None, None, None) when the
+    binary is missing or fails, in which case the pure-Python fallbacks
+    apply.
     """
     binary = _behood_bin()
     if binary is None:
-        return None, None
+        return None, None, None
     payload = {
         "strategy": "discourse",
         "mentions": descriptors,
         "chunks": chunk_descriptors,
+        "np_mentions": np_descriptors,
         "context": {"speaker_names": [s.lower() for s in speaker_names]},
     }
     try:
@@ -283,21 +292,25 @@ def _classify(descriptors, chunk_descriptors, speaker_names):
     except Exception as exc:
         print(json.dumps({"warning": f"behood_spawn_failed: {exc}"}),
               file=sys.stderr)
-        return None, None
+        return None, None, None
     if proc.returncode != 0:
         print(json.dumps({"warning": "behood_classifier_failed: "
                           f"{proc.stderr.strip()[:200]}"}), file=sys.stderr)
-        return None, None
+        return None, None, None
     try:
         data = json.loads(proc.stdout)
         verdicts = data["verdicts"]
         entity_verdicts = data.get("entity_verdicts", [])
+        phrase_verdicts = data.get("phrase_verdicts", [])
     except Exception as exc:
         print(json.dumps({"warning": f"behood_bad_output: {exc}"}),
               file=sys.stderr)
-        return None, None
+        return None, None, None
     return ({v["id"]: v["is_person"] for v in verdicts},
-            {v["id"]: v["is_entity"] for v in entity_verdicts})
+            {v["id"]: v["is_entity"] for v in entity_verdicts},
+            {v["id"]: {"is_entity_mention": v["is_entity_mention"],
+                       "kind": v["kind"]}
+             for v in phrase_verdicts})
 
 
 def is_person_token(tok, ctx=None, sent_idx=None):
@@ -440,6 +453,168 @@ def _chunk_descriptors(docs, sent_index):
                         c.dep_ in ANCHORING_MODS for c in root.children),
                     "is_neg_formula": _is_neg_formula(chunk, sent),
                 })
+    return out
+
+
+# Prepositions heading locative/temporal adjuncts: not part of an entity
+# mention's name ("a Harry Potter conference in the UK" -> the mention is
+# "Harry Potter conference"). "of"-PPs are kept: they are often
+# name-internal ("University of Washington").
+ADJUNCT_PREPS = {"in", "on", "at", "during", "after", "before"}
+
+
+def _np_text(root, doc):
+    """Key-phrase text: phrase_text minus locative/temporal PP adjuncts."""
+    text, ids = phrase_text(root, doc)
+    if not text:
+        return text
+    drop = set()
+    for child in root.children:
+        if child.dep_ == "prep" and child.lemma_.lower() in ADJUNCT_PREPS:
+            drop.update(t.i for t in child.subtree)
+    if not drop:
+        return text
+    ids = [i for i in ids if i not in drop]
+    return " ".join(doc[i].text for i in ids).strip()
+
+
+def _np_mention_descriptors(docs, sent_index, turns):
+    """Plain-data noun-phrase descriptors for behood's phrase layer.
+
+    One descriptor per spaCy noun chunk: the cleaned phrase text, the
+    head's lemma/POS/NER label, and its nominal modifiers. The id is the
+    head token's mention id ("sent_idx:tok.i") so the binary can join the
+    personhood verdicts; `session_id` is carried for key-phrase output.
+    """
+    out = []
+    for doc, per_turn, turn in zip(docs, sent_index, turns):
+        session_id = turn.get("session_id", "")
+        for sent, s_idx in per_turn:
+            for chunk in doc.noun_chunks:
+                if chunk.sent.start != sent.start:
+                    continue
+                root = chunk.root
+                text = _np_text(root, doc)
+                out.append({
+                    "id": f"{s_idx}:{root.i}",
+                    "text": text or chunk.text,
+                    "head_lemma": root.lemma_,
+                    "head_pos": root.pos_,
+                    "ner_label": root.ent_type_,
+                    "modifiers": [
+                        {"text": c.text, "pos": c.pos_, "dep": c.dep_}
+                        for c in root.children
+                        if c.dep_ in NP_MOD_DEPS
+                    ],
+                    "session_id": session_id,
+                })
+    return out
+
+
+# Head-noun lemmas naming the entity-mention kind in the pure-Python
+# fallback. Mirrors behood's declarative lexicons; only consulted when
+# the compiled classifier is unavailable.
+_FALLBACK_EVENT_HEADS = {
+    "conference", "meeting", "summit", "festival", "competition",
+    "tournament", "ceremony", "concert", "workshop", "seminar",
+    "party", "wedding", "reunion", "expo", "convention", "gala",
+}
+_FALLBACK_PLACE_HEADS = {
+    "city", "town", "village", "country", "state", "county",
+    "street", "avenue", "road", "park", "beach", "island",
+    "mountain", "lake", "restaurant", "hotel", "airport",
+    "station", "museum", "school",
+}
+_FALLBACK_ORG_HEADS = {
+    "company", "team", "club", "band", "firm", "agency",
+    "organization", "association", "committee", "league", "studio",
+}
+_FALLBACK_WORK_HEADS = {
+    "book", "novel", "movie", "film", "song", "album", "game",
+    "painting", "poem", "article",
+}
+
+
+def _phrase_kind_fallback(desc):
+    """Ontological kind for a noun phrase (pure-Python fallback)."""
+    label = desc.get("ner_label", "")
+    if label == "EVENT":
+        return "event"
+    if label in ("GPE", "LOC", "FAC"):
+        return "place"
+    if label == "ORG":
+        return "org"
+    if label == "WORK_OF_ART":
+        return "work"
+    lemma = desc.get("head_lemma", "").lower()
+    if lemma in _FALLBACK_EVENT_HEADS:
+        return "event"
+    if lemma in _FALLBACK_PLACE_HEADS:
+        return "place"
+    if lemma in _FALLBACK_ORG_HEADS:
+        return "org"
+    if lemma in _FALLBACK_WORK_HEADS:
+        return "work"
+    return "thing"
+
+
+def _key_phrases(np_descriptors, phrase_verdicts):
+    """Deduped entity-mention key phrases for the segment index.
+
+    One entry per (session, phrase): {"text", "kind", "session_id"}.
+    These are the grammar's name-worthy mentions ("Harry Potter
+    conference") -- the segment summary protects them from the term cap
+    so rare discriminative phrases survive routing.
+    """
+    out = []
+    seen = set()
+    for desc in np_descriptors:
+        verdict = (phrase_verdicts or {}).get(desc["id"])
+        if not verdict or not verdict.get("is_entity_mention"):
+            continue
+        key = (desc["session_id"], desc["text"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "text": desc["text"],
+            "kind": verdict.get("kind", "thing"),
+            "session_id": desc["session_id"],
+        })
+    return out
+
+
+def _phrase_verdicts_fallback(np_descriptors, name_counts, speaker_names):
+    """Entity-mention verdicts without the behood binary.
+
+    Mirrors the Rust NounPhraseMention rule: a phrase is an entity
+    mention when proper nouns participate in it (as modifiers of a head
+    noun, or as a lone proper name) and the head is not a person or a
+    pronoun. Returns {id: {"is_entity_mention": bool, "kind": str}}.
+    """
+    speakers = {s.lower() for s in speaker_names}
+    out = {}
+    for desc in np_descriptors:
+        is_person = (
+            desc.get("ner_label") == "PERSON"
+            or desc["text"].lower() in speakers
+            or (desc["head_pos"] == "PROPN"
+                and name_counts.get(desc["text"].lower(), 0) >= 2)
+        )
+        proper_mods = [m for m in desc["modifiers"] if m["pos"] == "PROPN"]
+        if (
+            not is_person
+            and desc["head_pos"] != "PRON"
+            and any(c.isalpha() for c in desc["text"])
+            and (proper_mods
+                 or (desc["head_pos"] == "PROPN" and not desc["modifiers"]))
+        ):
+            out[desc["id"]] = {
+                "is_entity_mention": True,
+                "kind": _phrase_kind_fallback(desc),
+            }
+        else:
+            out[desc["id"]] = {"is_entity_mention": False, "kind": "thing"}
     return out
 
 
@@ -1009,18 +1184,26 @@ def main() -> int:
             sent_idx += 1
         sent_index.append(per_turn)
 
-    ctx = CorefCtx(speakers, fallback_name_counts(docs),
-                   *_classify(
-                       [{"id": f"{s_idx}:{tok.i}",
-                         "text": tok.text,
-                         "ner_label": tok.ent_type_,
-                         "pos": tok.pos_,
-                         "head_lemma": tok.head.lemma_}
-                        for doc, per_turn in zip(docs, sent_index)
-                        for sent, s_idx in per_turn
-                        for tok in sent],
-                       _chunk_descriptors(docs, sent_index),
-                       speakers))
+    name_counts = fallback_name_counts(docs)
+    np_descriptors = _np_mention_descriptors(docs, sent_index, turns)
+    personhood_verdicts, entity_verdicts, phrase_verdicts = _classify(
+        [{"id": f"{s_idx}:{tok.i}",
+          "text": tok.text,
+          "ner_label": tok.ent_type_,
+          "pos": tok.pos_,
+          "head_lemma": tok.head.lemma_}
+         for doc, per_turn in zip(docs, sent_index)
+         for sent, s_idx in per_turn
+         for tok in sent],
+        _chunk_descriptors(docs, sent_index),
+        np_descriptors,
+        speakers)
+    if phrase_verdicts is None:
+        # Pure-Python fallback when the behood binary is unavailable.
+        phrase_verdicts = _phrase_verdicts_fallback(
+            np_descriptors, name_counts, speakers)
+    ctx = CorefCtx(speakers, name_counts,
+                   personhood_verdicts, entity_verdicts)
     sent_maps = []
     for turn, doc, per_turn in zip(turns, docs, sent_index):
         speaker = turn.get("speaker", "")
@@ -1066,7 +1249,9 @@ def main() -> int:
                 }
             )
 
-    json.dump({"relations": relations}, sys.stdout)
+    json.dump({"relations": relations,
+               "key_phrases": _key_phrases(np_descriptors, phrase_verdicts)},
+              sys.stdout)
     return 0
 
 

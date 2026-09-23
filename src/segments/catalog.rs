@@ -3,6 +3,7 @@ use crate::index::{
 };
 use crate::query_expansion::normalize_for_index;
 use crate::query_semantics::parse_reference_date;
+use crate::tier1::BEHOOD_NP_ENTITY_SOURCE;
 use crate::tokenizer::{self, TokenizerMode};
 use chrono::NaiveDate;
 use std::cmp::Ordering;
@@ -581,11 +582,17 @@ impl SegmentRoutingSummary {
                 add_weight(&mut profile.terms, &term.term, term.score.max(0.1));
             }
             for entity in &record.key_entities {
-                add_weight(
-                    &mut profile.entities,
-                    &entity.text,
-                    entity.score.unwrap_or(1.0),
-                );
+                let weight = entity.score.unwrap_or(1.0);
+                add_weight(&mut profile.entities, &entity.text, weight);
+                if entity.source == BEHOOD_NP_ENTITY_SOURCE {
+                    // Grammar-accepted entity mentions are indexed literally
+                    // (in addition to the stemmed form above): the Porter
+                    // stem would conflate the phrase head ("conference" ->
+                    // "confer"), destroying the discriminative mention.
+                    // The 2x score (set in assemble_doc_record) reflects the
+                    // higher precision of grammar-accepted mentions.
+                    add_weight_literal(&mut profile.entities, &entity.text, weight);
+                }
             }
             if let Some(topic) = &record.probable_topic {
                 add_weight(&mut profile.topics, topic, 1.0);
@@ -1402,6 +1409,27 @@ fn add_weight(distribution: &mut HashMap<String, f32>, text: &str, weight: f32) 
     for token in query_tokens(text) {
         *distribution.entry(token).or_default() += weight;
     }
+}
+
+/// Add literal (unstemmed, lowercased) tokens to a distribution. Used for
+/// grammar-accepted entity mentions, where the Porter stem conflates the
+/// phrase head with an unrelated word ("conference" -> "confer", colliding
+/// with the verb "confer"). Literal phrase tokens are rare by construction
+/// and carry high IDF, so they dominate acronym-only evidence.
+fn add_weight_literal(distribution: &mut HashMap<String, f32>, text: &str, weight: f32) {
+    for token in literal_query_tokens(text) {
+        *distribution.entry(token).or_default() += weight;
+    }
+}
+
+/// Query tokens without stemming: lowercase alphanumeric tokens (min 3
+/// chars), stopwords removed. Matches the entity channel's literal indexing
+/// of grammar-accepted phrases.
+pub(crate) fn literal_query_tokens(input: &str) -> Vec<String> {
+    tokenizer::tokenize(input, TokenizerMode::Unstemmed)
+        .into_iter()
+        .filter(|token| !tokenizer::is_stopword(token, TokenizerMode::Unstemmed))
+        .collect()
 }
 
 pub(crate) fn collect_profile_candidates(

@@ -384,6 +384,7 @@ mod tests {
             timestamp: None,
             doc_length: content.len(),
             author_agent: None,
+            key_phrases: Vec::new(),
         }
     }
 

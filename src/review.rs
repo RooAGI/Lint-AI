@@ -339,6 +339,7 @@ mod tests {
             timestamp: None,
             doc_length: 13,
             author_agent: None,
+            key_phrases: Vec::new(),
         };
         let symbol = SymbolRecord::declared(
             "doc-1",

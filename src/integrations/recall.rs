@@ -743,6 +743,7 @@ mod tests {
                 timestamp: Some("2026-08-22T00:00:00Z".to_string()),
                 doc_length: 0,
                 author_agent: Some(provider.to_string()),
+                key_phrases: Vec::new(),
             });
         }
         memory.refresh().unwrap();

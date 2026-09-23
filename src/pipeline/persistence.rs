@@ -480,6 +480,7 @@ pub(crate) fn source_document_from_record(record: &DocRecord) -> SourceDocument 
         timestamp: record.timestamp.clone(),
         doc_length: record.doc_length,
         author_agent: record.author_agent.clone(),
+        key_phrases: Vec::new(),
     }
 }
 

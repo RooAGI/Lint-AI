@@ -69,6 +69,7 @@ impl CodexDocument {
             doc_length,
             author_agent: Some("codex".to_string()),
             filters,
+            key_phrases: Vec::new(),
         })
     }
 }

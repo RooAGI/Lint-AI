@@ -44,7 +44,15 @@ pub(crate) fn route_segments_with_corpus_stats(
     // score and misroute segments whose literal terms match well. Expansion
     // is a recall fallback: it routes only when the literal terms match no
     // segment at all (e.g. "diploma", which expands to "degree").
-    let raw_terms = query_tokens(query);
+    //
+    // "Literal" here means both the stemmed form and the unstemmed form.
+    // Grammar-accepted entity mentions are indexed in the entity channel
+    // under their literal (unstemmed) tokens, because the Porter stem
+    // conflates phrase heads ("conference" -> "confer", colliding with the
+    // verb). The unstemmed query tokens meet them there; literal phrase
+    // evidence is rare (high IDF) and outranks acronym-only evidence.
+    let mut raw_terms = query_tokens(query);
+    raw_terms.extend(literal_query_tokens(query));
     let raw_routes = route_segments_scored(query, &raw_terms, segments, strategy, corpus_stats);
     if raw_routes
         .iter()

@@ -126,6 +126,22 @@ pub fn parse_session_date(s: &str) -> Option<Ymd> {
     })
 }
 
+/// One raw key phrase from `scripts/spacy_relations.py` (JSON field-for-field):
+/// a grammar-accepted entity mention with behood's ontological kind.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawKeyPhrase {
+    pub text: String,
+    pub kind: String,
+    pub session_id: String,
+}
+
+/// Full output of the dependency-parse extractor: triples plus key phrases.
+#[derive(Debug, Clone, Default)]
+pub struct ExtractorOutput {
+    pub relations: Vec<RawRelation>,
+    pub key_phrases: Vec<RawKeyPhrase>,
+}
+
 /// One raw triple from `scripts/spacy_relations.py` (JSON field-for-field).
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawRelation {
@@ -255,16 +271,16 @@ fn python_executable() -> String {
 }
 
 /// Run the dependency-parse extractor (`scripts/spacy_relations.py`) over the
-/// turns and return raw triples.
+/// turns and return raw triples plus grammar-accepted key phrases.
 ///
 /// Never panics: any failure (missing Python/spaCy, bad output) yields an
-/// empty vec and the caller declines to the adaptive retrieval path.
-pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> Vec<RawRelation> {
+/// empty output and the caller declines to the adaptive retrieval path.
+pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> ExtractorOutput {
     let script =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_relations.py");
     if !script.exists() {
         eprintln!("relations: extractor script missing: {}", script.display());
-        return Vec::new();
+        return ExtractorOutput::default();
     }
     let payload = serde_json::json!({"model": "en_core_web_sm", "turns": turns});
     let mut child = match Command::new(python_executable())
@@ -277,7 +293,7 @@ pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> Vec<RawRelation> {
         Ok(child) => child,
         Err(e) => {
             eprintln!("relations: failed to spawn extractor: {e}");
-            return Vec::new();
+            return ExtractorOutput::default();
         }
     };
     let write_result = child
@@ -290,13 +306,13 @@ pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> Vec<RawRelation> {
         .unwrap_or(Ok(()));
     if let Err(e) = write_result {
         eprintln!("relations: failed to write extractor input: {e}");
-        return Vec::new();
+        return ExtractorOutput::default();
     }
     let output = match child.wait_with_output() {
         Ok(output) => output,
         Err(e) => {
             eprintln!("relations: extractor wait failed: {e}");
-            return Vec::new();
+            return ExtractorOutput::default();
         }
     };
     if !output.status.success() {
@@ -307,17 +323,23 @@ pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> Vec<RawRelation> {
                 .take(300)
                 .collect::<String>()
         );
-        return Vec::new();
+        return ExtractorOutput::default();
     }
     #[derive(Deserialize)]
     struct Output {
+        #[serde(default)]
         relations: Vec<RawRelation>,
+        #[serde(default)]
+        key_phrases: Vec<RawKeyPhrase>,
     }
     match serde_json::from_slice::<Output>(&output.stdout) {
-        Ok(parsed) => parsed.relations,
+        Ok(parsed) => ExtractorOutput {
+            relations: parsed.relations,
+            key_phrases: parsed.key_phrases,
+        },
         Err(e) => {
             eprintln!("relations: bad extractor output: {e}");
-            Vec::new()
+            ExtractorOutput::default()
         }
     }
 }

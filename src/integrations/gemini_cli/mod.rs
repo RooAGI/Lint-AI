@@ -557,6 +557,7 @@ mod tests {
                 timestamp: None,
                 doc_length: 32,
                 author_agent: Some(provider.as_str().to_string()),
+                key_phrases: Vec::new(),
             });
             memory.refresh().unwrap();
             drop(memory);

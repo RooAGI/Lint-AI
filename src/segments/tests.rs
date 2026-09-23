@@ -6,7 +6,7 @@ use crate::index::{
 use crate::query_semantics::{
     parse_reference_date, resolve_anchor_window, temporal_anchor_is_span,
 };
-use crate::tier1::{RankedTerm, Tier1Entity};
+use crate::tier1::{RankedTerm, Tier1Entity, BEHOOD_NP_ENTITY_SOURCE};
 use chrono::NaiveDate;
 use chrono::TimeDelta;
 use std::collections::{HashMap, HashSet};
@@ -576,6 +576,117 @@ fn literal_query_terms_outrank_expansion_noise_in_routing() {
             );
         }
     }
+}
+
+/// A DocRecord whose key entities include grammar-accepted phrases
+/// (behood-np provenance), alongside ordinary terms.
+fn record_with_phrases(
+    doc_id: &str,
+    group_id: &str,
+    content: &str,
+    terms: &[&str],
+    phrases: &[(&str, &str)],
+) -> DocRecord {
+    let mut rec = record(doc_id, group_id, content, terms);
+    rec.key_entities
+        .extend(phrases.iter().map(|(text, kind)| Tier1Entity {
+            text: (*text).to_string(),
+            label: (*kind).to_string(),
+            start: 0,
+            end: 0,
+            // Score 2.0 matches assemble_doc_record: grammar-accepted mentions
+            // are higher precision than heuristic NER.
+            score: Some(2.0),
+            source: BEHOOD_NP_ENTITY_SOURCE.to_string(),
+        }));
+    rec
+}
+
+#[test]
+fn key_phrase_literal_tokens_join_summary_entity_channel() {
+    // The Porter stem conflates the phrase head "conference" with the verb
+    // "confer". Grammar-accepted phrases must therefore be indexed literally
+    // in the entity channel, which (unlike local_memory) is never pruned.
+    let rec = record_with_phrases(
+        "doc-13",
+        "session-13",
+        "Last week I went to a Harry Potter conference in the UK",
+        &["went", "week"],
+        &[("Harry Potter conference", "event"), ("UK", "place")],
+    );
+    let summary = SegmentRoutingSummary::from_records(std::slice::from_ref(&rec));
+    assert!(
+        summary.entities.contains_key("conference"),
+        "entity channel must index the literal phrase head, not just 'confer'"
+    );
+    assert!(summary.entities.contains_key("harry"));
+    assert!(summary.entities.contains_key("potter"));
+    // The stemmed form is still indexed too, for the existing stemmed path.
+    assert!(summary.entities.contains_key("confer"));
+}
+
+#[test]
+fn literal_phrase_evidence_outranks_acronym_only_evidence() {
+    // The conv-43_q5 miss: "Which week did Tim visit the UK for the Harry
+    // Potter Conference?" must route to the session holding the
+    // grammar-accepted phrase, not to a session that merely mentions "UK".
+    // "conference" is rare (high IDF); "uk" is common (low IDF), so the
+    // literal phrase evidence dominates the acronym-only evidence.
+    //
+    // The verb-"confer" distractor proves the literal channel disambiguates:
+    // the stemmed form "confer" matches both the phrase head and the verb,
+    // but only the phrase session carries the literal "conference".
+    let gold = record_with_phrases(
+        "doc-13",
+        "session-13",
+        "Last week I went to a Harry Potter conference in the UK",
+        &["went", "week"],
+        &[("Harry Potter conference", "event"), ("UK", "place")],
+    );
+    let other = record(
+        "doc-7",
+        "session-7",
+        "UK weather and travel discussion",
+        &["uk", "weather", "travel"],
+    );
+    let verb_distractor = record(
+        "doc-9",
+        "session-9",
+        "the committee will confer the award",
+        &["confer", "award", "committee"],
+    );
+    let segments = build_segments_by_group_id(&[gold, other, verb_distractor]);
+    assert_eq!(segments.len(), 3);
+
+    let routes = route_segments_with_strategy(
+        "Which week did Tim visit the UK for the Harry Potter Conference?",
+        &segments,
+        SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+    );
+    assert_eq!(
+        routes[0].segment_id, "session-13",
+        "literal phrase evidence must outrank acronym-only evidence"
+    );
+    assert!(routes[0].score > 0.0);
+}
+
+#[test]
+fn literal_query_tokens_are_unstemmed() {
+    // Premise check: the stemmer really does conflate "conference" with the
+    // verb "confer", which is why the literal channel exists.
+    assert_eq!(
+        query_tokens("conference"),
+        HashSet::from(["confer".to_string()])
+    );
+    assert_eq!(
+        literal_query_tokens("conference"),
+        vec!["conference".to_string()]
+    );
+    assert_eq!(
+        literal_query_tokens("Which week did Tim visit the UK?"),
+        // "uk" is below the tokenizer's 3-char minimum; stopwords filtered.
+        vec!["week".to_string(), "tim".to_string(), "visit".to_string(),]
+    );
 }
 
 #[test]

@@ -268,6 +268,7 @@ mod tests {
                 timestamp: None,
                 doc_length: 38,
                 author_agent: Some(provider.to_string()),
+                key_phrases: Vec::new(),
             }
         }
 
@@ -314,6 +315,7 @@ mod tests {
             timestamp: None,
             doc_length: 14,
             author_agent: None,
+            key_phrases: Vec::new(),
         });
         store.upsert(SourceDocument {
             doc_id: "workspace-file".to_string(),
@@ -327,6 +329,7 @@ mod tests {
             timestamp: None,
             doc_length: 17,
             author_agent: None,
+            key_phrases: Vec::new(),
         });
         let service = MemoryService::new(store);
         let payload = list_memories(&service, 20);

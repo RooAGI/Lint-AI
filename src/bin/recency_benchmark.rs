@@ -24,6 +24,7 @@ fn document(topic: &str, bucket: &str, age_days: i64, today: chrono::NaiveDate) 
         timestamp: Some(format!("{date}T12:00:00Z")),
         doc_length: 0,
         author_agent: Some("recency-benchmark".to_string()),
+        key_phrases: Vec::new(),
     }
 }
 

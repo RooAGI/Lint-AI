@@ -173,6 +173,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
                 timestamp: date.clone(),
                 doc_length: turn.text.len(),
                 author_agent: None,
+                key_phrases: Vec::new(),
             });
         }
         session_text.insert(group_id.clone(), lines.join("\n"));
@@ -188,6 +189,29 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         query_top_n: 5,
         routing_strategy: SegmentRoutingStrategy::TypedEvidenceMultiplicative,
     };
+    // Grammar-accepted entity mentions (behood noun-phrase layer) run in one
+    // spaCy subprocess per conversation, BEFORE upsert, so each turn-doc
+    // carries its session's key phrases into the segment summaries.
+    // Any failure degrades to empty phrases and the adaptive path.
+    let extractor_output = extract_relations_via_spacy(&rel_turns);
+    let raw_relations = extractor_output.relations;
+    let mut phrases_by_session: HashMap<String, Vec<lint_ai::KeyPhrase>> = HashMap::new();
+    for kp in extractor_output.key_phrases {
+        phrases_by_session
+            .entry(kp.session_id.clone())
+            .or_default()
+            .push(lint_ai::KeyPhrase {
+                text: kp.text,
+                kind: kp.kind,
+            });
+    }
+    for doc in docs.iter_mut() {
+        if let Some(group_id) = doc.group_id.clone() {
+            if let Some(phrases) = phrases_by_session.get(&group_id) {
+                doc.key_phrases = phrases.clone();
+            }
+        }
+    }
     let mut service = MemoryService::in_memory(options);
     for doc in docs {
         service.upsert(doc);
@@ -196,10 +220,8 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     let searcher = service.published_search();
     // Entity-relation sidecar: dependency-parse (subject, predicate, object)
     // triples over the raw turns for structured fact queries
-    // ("both X and Y", "where was X between <dates>"). Extraction runs in
-    // one spaCy subprocess per conversation; any failure degrades to an
-    // empty index and the adaptive path.
-    let raw_relations = extract_relations_via_spacy(&rel_turns);
+    // ("both X and Y", "where was X between <dates>"). Built from the same
+    // extractor run as the key phrases above.
     let relations = RelationIndex::build(&rel_turns, &raw_relations);
     eprintln!(
         "  relations for {}: {} triples, {} persons",

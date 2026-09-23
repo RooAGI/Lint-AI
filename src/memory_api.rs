@@ -322,6 +322,7 @@ impl MemoryService {
                 doc_length: message.content.len(),
                 author_agent: Some(message.role.clone()),
                 filters,
+                key_phrases: Vec::new(),
             });
         }
 
@@ -1976,6 +1977,7 @@ mod tests {
                 doc_length: content.len(),
                 author_agent: None,
                 filters: doc_filters,
+                key_phrases: Vec::new(),
             });
         }
         service.store.refresh().unwrap();
@@ -2059,6 +2061,7 @@ mod tests {
                 doc_length: content.len(),
                 author_agent: None,
                 filters: doc_filters,
+                key_phrases: Vec::new(),
             });
         }
         service.store.refresh().unwrap();

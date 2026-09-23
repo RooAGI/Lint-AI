@@ -68,6 +68,7 @@ impl SourceAdapter for MarkdownAdapter {
                     timestamp: None,
                     doc_length,
                     author_agent: None,
+                    key_phrases: Vec::new(),
                 }
             })
             .collect())

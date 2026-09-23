@@ -1355,6 +1355,7 @@ mod tests {
             doc_length: content.len(),
             author_agent: None,
             filters: BTreeMap::new(),
+            key_phrases: Vec::new(),
         }
     }
 
@@ -1733,6 +1734,7 @@ mod scalar_configuration_supersession_tests {
             timestamp: Some(timestamp.to_string()),
             doc_length: content.len(),
             author_agent: None,
+            key_phrases: Vec::new(),
         }
     }
 
@@ -1958,6 +1960,7 @@ mod incremental_update_tests {
             doc_length: content.len(),
             author_agent: None,
             filters: BTreeMap::new(),
+            key_phrases: Vec::new(),
         }
     }
 

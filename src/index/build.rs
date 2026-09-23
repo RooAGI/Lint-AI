@@ -99,6 +99,19 @@ impl MemoryIndex {
                     .or_default()
                     .insert(doc_u32);
             }
+            // Stamp the document's session group as an exact-match filter so
+            // callers can explicitly scope a search to one historical session.
+            // This never activates implicitly: the query path only consults
+            // the "group_id" postings when the caller supplies an explicit
+            // group filter.
+            if let Some(group_id) = record.group_id.as_deref() {
+                filter_postings
+                    .entry("group_id".to_string())
+                    .or_default()
+                    .entry(group_id.to_string())
+                    .or_default()
+                    .insert(doc_u32);
+            }
             doc_to_chunks.push(Vec::new());
             doc_key_entities.push(normalized_entity_keys(&record.key_entities));
             let (rerank_text, rerank_tokens) = build_doc_rerank_cache(&record);
@@ -556,6 +569,16 @@ impl MemoryIndex {
                     .entry(key.clone())
                     .or_default()
                     .entry(value.clone())
+                    .or_default()
+                    .insert(doc_u32);
+            }
+            // Stamp the session group as an exact-match filter (see the full
+            // build above). Explicit group scoping only; never implicit.
+            if let Some(group_id) = record.group_id.as_deref() {
+                filter_postings
+                    .entry("group_id".to_string())
+                    .or_default()
+                    .entry(group_id.to_string())
                     .or_default()
                     .insert(doc_u32);
             }

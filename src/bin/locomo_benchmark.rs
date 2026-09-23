@@ -232,11 +232,7 @@ fn recall_any_at_k_fn(retrieved: &[String], relevant: &HashSet<String>, k: usize
         return 0.0;
     }
     let limit = k.min(retrieved.len());
-    if retrieved
-        .iter()
-        .take(limit)
-        .any(|id| relevant.contains(id))
-    {
+    if retrieved.iter().take(limit).any(|id| relevant.contains(id)) {
         1.0
     } else {
         0.0
@@ -400,15 +396,14 @@ fn main() -> Result<()> {
                 relevant_session_ids: relevant_sorted,
                 recall_at_k,
                 recall_any_at_k,
-                mrr: 0.0,   // filled below
+                mrr: 0.0,        // filled below
                 ndcg_at_10: 0.0, // filled below
                 analysis_ms,
                 total_ms: timings.total_ms,
             });
             // Fill mrr/ndcg now that the struct owns the retrieved list.
             let last = per_query.last_mut().expect("just pushed");
-            let rel: HashSet<String> =
-                last.relevant_session_ids.iter().cloned().collect();
+            let rel: HashSet<String> = last.relevant_session_ids.iter().cloned().collect();
             last.mrr = reciprocal_rank(&last.retrieved_session_ids, &rel);
             last.ndcg_at_10 = ndcg_at_k(&last.retrieved_session_ids, &rel, 10);
         }

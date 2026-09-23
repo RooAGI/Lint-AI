@@ -18,7 +18,6 @@ use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
 use crate::pipeline::IndexStore;
-use crate::query_plan::PreparedQuery;
 use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
 use std::env;
@@ -52,7 +51,7 @@ pub struct GeminiCliServerOptions<'a> {
 
 struct GeminiMcp {
     root: PathBuf,
-    store: Mutex<Option<IndexStore>>,
+    store: Mutex<Option<crate::memory_api::MemoryService>>,
     provider: RecordingProvider,
     provider_label: &'static str,
     max_bytes: usize,
@@ -151,7 +150,7 @@ pub fn run_server_for(
 }
 
 impl GeminiMcp {
-    fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<IndexStore>>> {
+    fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<crate::memory_api::MemoryService>>> {
         let mut store = self
             .store
             .lock()
@@ -172,16 +171,18 @@ impl GeminiMcp {
                 max_total_bytes: self.max_total_bytes,
             };
             let ignores = self.ignore_paths.clone();
-            *store = Some(mcp_index::open_workspace_memory_store(
-                &self.root,
-                mcp_index::SHARED_MEMORY_DIR,
-                &ignores,
-                || {
-                    let graph = build_project_graph(&input)?;
-                    let graph = apply_ignore_paths(graph, &ignores);
-                    Ok(graph_to_source_documents(&graph))
-                },
-            )?);
+            *store = Some(crate::memory_api::MemoryService::new(
+                mcp_index::open_workspace_memory_store(
+                    &self.root,
+                    mcp_index::SHARED_MEMORY_DIR,
+                    &ignores,
+                    || {
+                        let graph = build_project_graph(&input)?;
+                        let graph = apply_ignore_paths(graph, &ignores);
+                        Ok(graph_to_source_documents(&graph))
+                    },
+                )?,
+            ));
         }
         Ok(store)
     }
@@ -254,15 +255,25 @@ impl GeminiMcp {
                     Ok(filters) => filters,
                     Err(message) => return Ok(error_response(id, -32602, &message)),
                 };
-                let mut store = self.store()?;
-                let store = store.as_mut().expect("initialized");
-                mcp_index::sync_memory_documents(
-                    &mcp_index::shared_memory_root(&self.root),
-                    store,
-                )?;
-                store.refresh()?;
+                // Stateful search: the session id (when supplied) scopes
+                // follow-up resolution and temporal-anchor carry to this
+                // provider's conversation. Absent means stateless.
+                let session_id = match mcp_tools::search_session_id(&args) {
+                    Ok(session_id) => session_id,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("initialized");
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                service.refresh_index()?;
                 let started = std::time::Instant::now();
-                let results = store.query_prepared(&PreparedQuery::new(query), top_k, &filters);
+                let results = service.search_with_filters(
+                    query,
+                    crate::integrations::session_recording::RecordingProvider::Gemini.as_str(),
+                    session_id.as_deref(),
+                    top_k,
+                    &filters,
+                );
                 let _ = crate::telemetry::record_project_query(
                     &self.root,
                     started.elapsed().as_millis() as u64,
@@ -278,11 +289,11 @@ impl GeminiMcp {
                 ))
             }
             "info" => {
-                let store = self.store()?;
+                let service = self.store()?;
                 Ok(text_response(
                     id,
                     &serde_json::to_string_pretty(
-                        &json!({"provider":self.provider_label, "root":self.root, "docs_count":store.as_ref().map(|s| s.source_documents().len()).unwrap_or(0)}),
+                        &json!({"provider":self.provider_label, "root":self.root, "docs_count":service.as_ref().map(|s| s.docs_count()).unwrap_or(0)}),
                     )?,
                 ))
             }
@@ -293,16 +304,13 @@ impl GeminiMcp {
                         return Ok(error_response(id, -32602, "unknown list_memories argument"))
                     }
                 };
-                let mut store = self.store()?;
-                let store = store.as_mut().expect("initialized");
-                mcp_index::sync_memory_documents(
-                    &mcp_index::shared_memory_root(&self.root),
-                    store,
-                )?;
-                store.refresh()?;
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("initialized");
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                service.refresh_index()?;
                 Ok(text_response(
                     id,
-                    &serde_json::to_string_pretty(&mcp_tools::list_memories(store, limit))?,
+                    &serde_json::to_string_pretty(&service.list_memories_payload(limit))?,
                 ))
             }
             "enable_lint_ai" => {
@@ -349,7 +357,7 @@ fn tool_definitions() -> Vec<ToolDefinition> {
             name: "search".into(),
             description: "Search Gemini project memory.".into(),
             input_schema: schema(
-                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema()}),
+                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema(),"session_id": {"type": "string", "description": "Optional conversation session id for follow-up resolution against prior session state. Omit for stateless search."}}),
                 vec!["query"],
             ),
         },

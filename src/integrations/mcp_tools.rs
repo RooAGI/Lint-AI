@@ -45,6 +45,35 @@ pub(crate) fn search_provider_filters(
     )]))
 }
 
+/// Extract the optional `session_id` search argument. A supplied value must be
+/// a non-empty, non-blank identifier; omit the argument for stateless search.
+/// A present-but-blank value, or a present non-string value, is rejected
+/// rather than silently treated as absent, so callers cannot accidentally
+/// lose session state. This is a conversation-state key only, never a corpus
+/// filter.
+pub(crate) fn search_session_id(arguments: &Value) -> Result<Option<String>, String> {
+    let Some(value) = arguments.get("session_id") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(session_id) = value.as_str() else {
+        return Err("session_id must be a string".to_string());
+    };
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id must not be blank".to_string());
+    }
+    if session_id.len() > 256 {
+        return Err("session_id must be at most 256 bytes".to_string());
+    }
+    if session_id.chars().any(|character| character.is_control()) {
+        return Err("session_id must not contain control characters".to_string());
+    }
+    Ok(Some(session_id.to_string()))
+}
+
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.

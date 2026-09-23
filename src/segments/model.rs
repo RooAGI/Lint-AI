@@ -1,8 +1,10 @@
 use crate::index::{DocRecord, MemoryIndex, TemporalQueryContext};
+use crate::query_semantics::parse_reference_date;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use super::catalog::*;
 use super::query::*;
@@ -30,14 +32,16 @@ pub(crate) const RERANK_QUERY_EVIDENCE_WEIGHT: f32 = 0.18;
 pub(crate) const RERANK_ENRICHED_EVIDENCE_WEIGHT: f32 = 0.14;
 pub(crate) const RERANK_LOCAL_EVIDENCE_WEIGHT: f32 = 0.12;
 pub(crate) const RERANK_TEMPORAL_WEIGHT: f32 = 0.10;
-pub(crate) const RERANK_COVERAGE_GAIN_WEIGHT: f32 = 0.16;
-pub(crate) const RERANK_SEGMENT_COVERAGE_WEIGHT: f32 = 0.28;
 pub(crate) const RERANK_COMMON_ONLY_PENALTY: f32 = 0.18;
 pub(crate) const CONNECTED_EXPANSION_POOL_MULTIPLIER: usize = 3;
 pub(crate) const CONNECTED_NEIGHBOR_CANDIDATE_LIMIT: usize = 128;
 pub(crate) const CONNECTED_EXPANSION_MIN_SCORE: f32 = 1.4;
 pub(crate) const CONNECTED_EXPANSION_MAX_SWAP_PENALTY: f32 = 0.35;
 pub(crate) const TYPED_EVIDENCE_ROUTE_WEIGHT: f32 = 1.15;
+/// Saturation constant for the multiplicative typed-evidence gate:
+/// typed_factor = typed_score / (typed_score + k), so typed evidence can
+/// amplify the coverage-local base score but never elect a zero-content segment.
+pub(crate) const TYPED_EVIDENCE_GATE_SATURATION: f32 = 4.0;
 pub(crate) const MISSING_COVERAGE_RECOVERY_POOL_LIMIT: usize = 20;
 pub(crate) const MISSING_COVERAGE_MIN_GAIN: f32 = 1.8;
 pub(crate) const MISSING_COVERAGE_MIN_WEAK_SCORE: f32 = 1.5;
@@ -52,6 +56,11 @@ pub struct MemoryIndexSegment {
     /// Shared by value across snapshots: a segment's index is immutable once
     /// built, so refreshes reuse unchanged segments instead of rebuilding them.
     pub index: Arc<MemoryIndex>,
+    /// Lazily computed sorted unique record dates for the anchored temporal
+    /// pre-filter. The index is immutable once built, so every record
+    /// timestamp is parsed at most once per segment instead of once per
+    /// anchored query.
+    pub(crate) record_dates: OnceLock<Vec<NaiveDate>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,10 +192,29 @@ pub(crate) fn build_memory_index_segment(
         segment_id,
         doc_ids,
         index,
+        record_dates: OnceLock::new(),
     }
 }
 
 impl MemoryIndexSegment {
+    /// Sorted unique dates of the segment's records with parseable
+    /// timestamps, computed once per segment. The anchored temporal
+    /// pre-filter binary-searches this per query instead of re-parsing
+    /// every record timestamp.
+    pub(crate) fn record_dates(&self) -> &Vec<NaiveDate> {
+        self.record_dates.get_or_init(|| {
+            let mut dates = self
+                .index
+                .docs
+                .values()
+                .filter_map(|record| record.timestamp.as_deref().and_then(parse_reference_date))
+                .collect::<Vec<_>>();
+            dates.sort();
+            dates.dedup();
+            dates
+        })
+    }
+
     pub(crate) fn team_coverage_gain(
         &self,
         query_terms: &HashSet<String>,

@@ -3,7 +3,12 @@ use crate::index::{
     DocRecord, GlobalBm25Statistics, MemoryIndex, Provenance, ScoreBreakdown, SearchResult,
     TemporalQueryContext, TemporalQueryHint,
 };
+use crate::query_semantics::{
+    parse_reference_date, resolve_anchor_window, temporal_anchor_is_span,
+};
 use crate::tier1::{RankedTerm, Tier1Entity};
+use chrono::NaiveDate;
+use chrono::TimeDelta;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -435,6 +440,8 @@ fn bounded_candidate_strategies_do_not_route_the_full_corpus() {
         SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness,
         SegmentRoutingStrategy::CoverageTeamSelection,
         SegmentRoutingStrategy::TypedEvidence,
+        SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+        SegmentRoutingStrategy::CoverageTeamTypedMultiplicative,
     ] {
         let routes = segmented.route_with_strategy("Common bought widget", strategy);
         assert!(!routes.is_empty(), "{strategy:?} returned no candidates");
@@ -448,6 +455,28 @@ fn bounded_candidate_strategies_do_not_route_the_full_corpus() {
 
     let exact = segmented.query_all_segments_with_diagnostics("Common bought widget", 5);
     assert_eq!(exact.diagnostics.queried_segment_count, segmented.len());
+}
+
+#[test]
+fn multiplicative_typed_evidence_gates_on_content() {
+    // Typed evidence must never elect a zero-content segment.
+    assert_eq!(combine_typed_evidence_multiplicative(0.0, 10.0), 0.0);
+    assert_eq!(combine_typed_evidence_multiplicative(0.0, 0.0), 0.0);
+    // No typed evidence leaves the base score untouched.
+    assert_eq!(combine_typed_evidence_multiplicative(2.5, 0.0), 2.5);
+    // Typed evidence strictly amplifies a positive base score.
+    let amplified = combine_typed_evidence_multiplicative(2.5, 4.0);
+    assert!(amplified > 2.5, "expected amplification, got {amplified}");
+    // The amplification saturates: typed evidence can at most double the base.
+    let saturated = combine_typed_evidence_multiplicative(2.5, 1e6);
+    assert!(
+        saturated < 5.0,
+        "expected saturation below 2x, got {saturated}"
+    );
+    assert!(
+        saturated > amplified,
+        "expected monotonic growth, got {saturated}"
+    );
 }
 
 #[test]
@@ -862,26 +891,28 @@ fn adaptive_segment_enrichment_stays_at_base_when_coverage_is_sufficient() {
 }
 
 #[test]
-fn route_aware_rerank_prefers_new_evidence_coverage() {
+fn route_aware_rerank_selects_highest_relevance_without_diversity_bias() {
+    // Relevance wins: a higher base_score doc is selected even when a
+    // lower-scoring doc would add more "new" evidence terms or come from an
+    // unrepresented segment. Diversity bonuses during selection demote the
+    // single best doc, which is exactly wrong for a recall@k objective.
     let candidates = vec![
         RouteAwareCandidate {
-            result: search_result("doc-common", 1.0),
+            result: search_result("doc-best", 1.0),
             segment_id: "session-common".to_string(),
             base_score: 1.0,
-            evidence_terms: HashSet::from(["appointment".to_string()]),
         },
         RouteAwareCandidate {
-            result: search_result("doc-specific", 0.9),
+            result: search_result("doc-diverse", 0.9),
             segment_id: "session-specific".to_string(),
             base_score: 0.9,
-            evidence_terms: HashSet::from(["gpa".to_string(), "jewelri".to_string()]),
         },
     ];
 
     let selected = select_route_aware_top_k(candidates, 1);
 
-    assert_eq!(selected[0].doc_id, "doc-specific");
-    assert!(selected[0].score > 0.9);
+    assert_eq!(selected[0].doc_id, "doc-best");
+    assert_eq!(selected[0].score, 1.0);
 }
 
 #[test]
@@ -1591,4 +1622,412 @@ fn sparse_router_marks_empty_query_terms_as_fallback() {
         Some("empty_query_terms")
     );
     assert_eq!(output.diagnostics.fallback_segments.len(), 2);
+}
+
+#[test]
+fn reciprocal_rank_fusion_prefers_docs_ranked_by_both_modes() {
+    let mode_a = vec![search_result("a", 0.1), search_result("b", 0.9)];
+    let mode_b = vec![search_result("b", 0.1), search_result("c", 0.9)];
+    // b: 1/62 + 1/61 > a: 1/61 > c: 1/62 ... a outranks c (rank 0 vs rank 1)
+    let fused = reciprocal_rank_fusion(&[mode_a.as_slice(), mode_b.as_slice()], 10);
+    let ids: Vec<&str> = fused.iter().map(|r| r.doc_id.as_str()).collect();
+    assert_eq!(ids, vec!["b", "a", "c"]);
+}
+
+#[test]
+fn reciprocal_rank_fusion_ignores_cross_mode_scores() {
+    // "low" has a huge raw score but is ranked last in its mode; "high" has a
+    // tiny score but is ranked first. Ranks win: score scales cannot crowd out
+    // a mode's ranking.
+    let mode_a = vec![search_result("high", 0.01), search_result("low", 999.0)];
+    let mode_b = vec![search_result("high", 0.01)];
+    let fused = reciprocal_rank_fusion(&[mode_a.as_slice(), mode_b.as_slice()], 10);
+    let ids: Vec<&str> = fused.iter().map(|r| r.doc_id.as_str()).collect();
+    assert_eq!(ids, vec!["high", "low"]);
+}
+
+#[test]
+fn reciprocal_rank_fusion_truncates_and_breaks_ties_by_doc_id() {
+    let mode_a = vec![search_result("b", 1.0)];
+    let mode_b = vec![search_result("a", 1.0)];
+    // Equal RRF weight (both rank 0 in one mode): doc_id ascending.
+    let fused = reciprocal_rank_fusion(&[mode_a.as_slice(), mode_b.as_slice()], 10);
+    let ids: Vec<&str> = fused.iter().map(|r| r.doc_id.as_str()).collect();
+    assert_eq!(ids, vec!["a", "b"]);
+    let truncated = reciprocal_rank_fusion(&[mode_a.as_slice(), mode_b.as_slice()], 1);
+    assert_eq!(truncated.len(), 1);
+    assert_eq!(truncated[0].doc_id, "a");
+}
+
+#[test]
+fn reciprocal_rank_fusion_handles_empty_modes() {
+    let empty: Vec<SearchResult> = vec![];
+    assert!(reciprocal_rank_fusion(&[], 10).is_empty());
+    assert!(reciprocal_rank_fusion(&[empty.as_slice()], 10).is_empty());
+    let mode_a = vec![search_result("a", 1.0)];
+    let fused = reciprocal_rank_fusion(&[mode_a.as_slice(), empty.as_slice()], 10);
+    assert_eq!(fused.len(), 1);
+    assert_eq!(fused[0].doc_id, "a");
+}
+
+fn temporal_boost_segment(group_id: &str, timestamps: &[&str]) -> MemoryIndexSegment {
+    let records: Vec<DocRecord> = timestamps
+        .iter()
+        .enumerate()
+        .map(|(i, timestamp)| {
+            let mut rec = record(
+                &format!("{group_id}-doc-{i}"),
+                group_id,
+                "some content without temporal terms",
+                &["content"],
+            );
+            rec.timestamp = Some((*timestamp).to_string());
+            rec
+        })
+        .collect();
+    let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+    assert_eq!(segmented.segments.len(), 1);
+    // `MemoryIndexSegment` is not `Clone`; rebuild is cheap enough for tests.
+    // Instead of cloning, move the single segment out via segment id lookup.
+    let id = segmented.segments[0].segment_id.clone();
+    let mut segments = segmented.segments;
+    let position = segments.iter().position(|s| s.segment_id == id).unwrap();
+    segments.swap_remove(position)
+}
+
+fn anchored_temporal_context(anchor: Option<&'static str>) -> TemporalQueryContext<'static> {
+    let anchor_window = anchor.and_then(|date| {
+        let parsed = parse_reference_date(date)?;
+        Some((
+            parsed.checked_sub_signed(TimeDelta::days(7))?,
+            parsed.checked_add_signed(TimeDelta::days(7))?,
+        ))
+    });
+    TemporalQueryContext {
+        anchor_date: anchor,
+        anchor_window,
+        ends_at: Some("2024-05-10"),
+        time_hint: None,
+        has_explicit_temporal: true,
+        ..TemporalQueryContext::default()
+    }
+}
+
+fn anchored_span_context(start: &'static str, end: &'static str) -> TemporalQueryContext<'static> {
+    TemporalQueryContext {
+        anchor_date: None,
+        anchor_window: Some((
+            parse_reference_date(start).expect("valid start"),
+            parse_reference_date(end).expect("valid end"),
+        )),
+        ends_at: Some(end),
+        time_hint: None,
+        has_explicit_temporal: true,
+        ..TemporalQueryContext::default()
+    }
+}
+
+#[test]
+fn temporal_route_boost_is_zero_without_temporal_context() {
+    let segment = temporal_boost_segment("g", &["2024-05-10"]);
+    assert_eq!(
+        segment_temporal_route_boost(&segment, TemporalQueryContext::default()),
+        0.0
+    );
+}
+
+#[test]
+fn temporal_route_boost_uses_max_not_sum_across_records() {
+    // Twenty in-window records must not beat one same-day record: the factor
+    // comes from the segment's best temporal evidence, not the record count.
+    let many = temporal_boost_segment(
+        "many",
+        &[
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+            "2024-05-09",
+        ],
+    );
+    let one = temporal_boost_segment("one", &["2024-05-10"]);
+    let temporal = anchored_temporal_context(Some("2024-05-10"));
+    let many_factor = segment_temporal_route_boost(&many, temporal);
+    let one_factor = segment_temporal_route_boost(&one, temporal);
+    // Same-day proximity is 1.0; one-day-away proximity is 1 - 1/7.
+    assert!((one_factor - 1.0).abs() < 1e-6, "one_factor={one_factor}");
+    assert!(
+        (many_factor - (1.0 - 1.0 / 7.0)).abs() < 1e-6,
+        "many_factor={many_factor}"
+    );
+    assert!(many_factor < one_factor);
+}
+
+#[test]
+fn temporal_route_boost_is_bounded_and_ignores_out_of_window_records() {
+    let segment = temporal_boost_segment("g", &["2023-01-01", "2025-12-31"]);
+    let factor =
+        segment_temporal_route_boost(&segment, anchored_temporal_context(Some("2024-05-10")));
+    assert_eq!(factor, 0.0);
+    // Even a pathological segment cannot exceed the 1.0 factor cap.
+    let saturated = temporal_boost_segment(
+        "s",
+        &[
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+            "2024-05-10",
+        ],
+    );
+    let saturated_factor =
+        segment_temporal_route_boost(&saturated, anchored_temporal_context(Some("2024-05-10")));
+    assert!(
+        saturated_factor <= 1.0,
+        "saturated_factor={saturated_factor}"
+    );
+}
+
+#[test]
+fn temporal_route_boost_applies_hint_from_best_record_only() {
+    // Past hint: a record 30 days before the anchor is outside the 7-day
+    // window but still earns the hint weight once, not per record.
+    let segment = temporal_boost_segment("g", &["2024-04-10", "2024-04-10", "2024-04-10"]);
+    let temporal = TemporalQueryContext {
+        time_hint: Some(TemporalQueryHint::Past),
+        ..anchored_temporal_context(Some("2024-05-10"))
+    };
+    let factor = segment_temporal_route_boost(&segment, temporal);
+    assert!((factor - 0.18).abs() < 1e-6, "factor={factor}");
+}
+
+fn anchored_prefilter_segments() -> Vec<MemoryIndexSegment> {
+    let mut in_window = record(
+        "in-doc-0",
+        "in-window",
+        "lunch meeting on tuesday with the team",
+        &["lunch", "meeting", "tuesday"],
+    );
+    in_window.timestamp = Some("2024-05-07".to_string());
+    let mut out_window = record(
+        "out-doc-0",
+        "out-window",
+        "lunch meeting notes from last year",
+        &["lunch", "meeting"],
+    );
+    out_window.timestamp = Some("2023-01-01".to_string());
+    build_segments_by_group_id(&[in_window, out_window])
+}
+
+fn route_with_temporal_for_prefilter_test(
+    segments: &[MemoryIndexSegment],
+    temporal: TemporalQueryContext<'_>,
+) -> Vec<SegmentRoute> {
+    let corpus_stats = SegmentCorpusStats::from_segments(segments, 0);
+    route_segments_with_temporal_context_and_corpus_stats(
+        "lunch meeting tuesday",
+        segments,
+        SegmentRoutingStrategy::TypedEvidence,
+        temporal,
+        &corpus_stats,
+    )
+}
+
+#[test]
+fn anchored_prefilter_restricts_routing_to_in_window_segments() {
+    let segments = anchored_prefilter_segments();
+    let routes = route_with_temporal_for_prefilter_test(
+        &segments,
+        anchored_temporal_context(Some("2024-05-07")),
+    );
+    // The out-of-window segment matches the content terms but must not be
+    // routed when the anchor is resolved.
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].segment_id, "in-window");
+}
+
+#[test]
+fn anchored_prefilter_falls_back_when_nothing_is_in_window() {
+    let segments = anchored_prefilter_segments();
+    let routes = route_with_temporal_for_prefilter_test(
+        &segments,
+        anchored_temporal_context(Some("2025-01-01")),
+    );
+    // No segment holds a record in the anchor window: route everything rather
+    // than returning an empty route set.
+    let ids: HashSet<&str> = routes
+        .iter()
+        .map(|route| route.segment_id.as_str())
+        .collect();
+    assert!(ids.contains("in-window"));
+    assert!(ids.contains("out-window"));
+}
+
+#[test]
+fn anchored_prefilter_is_inactive_without_anchor_date() {
+    let segments = anchored_prefilter_segments();
+    let routes = route_with_temporal_for_prefilter_test(&segments, anchored_temporal_context(None));
+    // No resolved anchor: both segments stay routable.
+    let ids: HashSet<&str> = routes
+        .iter()
+        .map(|route| route.segment_id.as_str())
+        .collect();
+    assert!(ids.contains("in-window"));
+    assert!(ids.contains("out-window"));
+}
+
+#[test]
+fn temporal_anchor_is_span_classifies_point_and_range_phrases() {
+    // Points: named weekdays and explicit offsets win over nearby range words.
+    assert!(!temporal_anchor_is_span(
+        "last Tuesday",
+        "Who did I meet with during the lunch last Tuesday?"
+    ));
+    assert!(!temporal_anchor_is_span(
+        "four weeks ago",
+        "I mentioned an investment for a competition four weeks ago?"
+    ));
+    assert!(!temporal_anchor_is_span(
+        "yesterday",
+        "What did I do yesterday?"
+    ));
+    // Ranges: explicit markers, or a bare quantity with range context.
+    assert!(temporal_anchor_is_span(
+        "two months",
+        "What is the order of the concerts I attended in the past two months?"
+    ));
+    assert!(temporal_anchor_is_span(
+        "past two months",
+        "What is the order of the concerts I attended in the past two months?"
+    ));
+    // "most recent" is not range context.
+    assert!(!temporal_anchor_is_span(
+        "two months",
+        "What is the most recent thing I bought two months after moving?"
+    ));
+}
+
+#[test]
+fn resolve_anchor_window_returns_point_and_range_windows() {
+    let reference = parse_reference_date("2024-05-10").unwrap();
+    let (start, end) =
+        resolve_anchor_window("last Tuesday", "lunch last Tuesday?", reference).unwrap();
+    assert_eq!(
+        (start.to_string(), end.to_string()),
+        ("2024-04-30".to_string(), "2024-05-14".to_string())
+    );
+    let (start, end) = resolve_anchor_window(
+        "two months",
+        "concerts I attended in the past two months",
+        reference,
+    )
+    .unwrap();
+    assert_eq!(
+        (start.to_string(), end.to_string()),
+        ("2024-03-11".to_string(), "2024-05-10".to_string())
+    );
+    assert!(
+        resolve_anchor_window("most recently", "what happened most recently?", reference).is_none()
+    );
+}
+
+#[test]
+fn span_prefilter_keeps_mid_range_segments_and_drops_out_of_range() {
+    let mut in_range = record(
+        "in-doc-0",
+        "in-range",
+        "concerts and musical events attended",
+        &["concerts", "musical", "events"],
+    );
+    in_range.timestamp = Some("2024-04-15".to_string());
+    let mut out_of_range = record(
+        "out-doc-0",
+        "out-range",
+        "concerts and musical events attended",
+        &["concerts", "musical", "events"],
+    );
+    out_of_range.timestamp = Some("2023-01-01".to_string());
+    let segments = build_segments_by_group_id(&[in_range, out_of_range]);
+    let corpus_stats = SegmentCorpusStats::from_segments(&segments, 0);
+    let routes = route_segments_with_temporal_context_and_corpus_stats(
+        "concerts musical events",
+        &segments,
+        SegmentRoutingStrategy::TypedEvidence,
+        anchored_span_context("2024-03-11", "2024-05-10"),
+        &corpus_stats,
+    );
+    // A point-window around the range start would have dropped the mid-range
+    // segment; the range window keeps it.
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].segment_id, "in-range");
+}
+
+#[test]
+fn segment_record_dates_are_cached_sorted_and_unique() {
+    let mut dated = record(
+        "dated-doc-0",
+        "dated-group",
+        "lunch meeting on tuesday",
+        &["lunch", "meeting"],
+    );
+    dated.timestamp = Some("2024-05-07".to_string());
+    let mut duplicate = record(
+        "dated-doc-1",
+        "dated-group",
+        "another lunch meeting",
+        &["lunch"],
+    );
+    duplicate.timestamp = Some("2024/05/07".to_string());
+    let mut undated = record(
+        "dated-doc-2",
+        "dated-group",
+        "no timestamp on this one",
+        &["meeting"],
+    );
+    undated.timestamp = Some("not-a-date".to_string());
+    let segments = build_segments_by_group_id(&[dated, duplicate, undated]);
+    assert_eq!(segments.len(), 1);
+    let segment = &segments[0];
+    // Two records share the same date in different formats; the unparseable
+    // timestamp is excluded. Dates are parsed once and cached.
+    let first = segment.record_dates() as *const Vec<NaiveDate>;
+    let second = segment.record_dates() as *const Vec<NaiveDate>;
+    assert_eq!(first, second, "record dates must be computed once");
+    assert_eq!(segment.record_dates().len(), 1);
+    assert_eq!(
+        segment.record_dates()[0],
+        parse_reference_date("2024-05-07").unwrap()
+    );
+    // The cached dates drive the anchor-window check: in-window matches,
+    // out-of-window does not.
+    let in_window = (
+        parse_reference_date("2024-05-01").unwrap(),
+        parse_reference_date("2024-05-10").unwrap(),
+    );
+    assert!(segment_has_record_in_anchor_window(segment, in_window));
+    let out_window = (
+        parse_reference_date("2023-01-01").unwrap(),
+        parse_reference_date("2023-12-31").unwrap(),
+    );
+    assert!(!segment_has_record_in_anchor_window(segment, out_window));
 }

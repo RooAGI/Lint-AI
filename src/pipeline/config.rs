@@ -66,6 +66,11 @@ pub struct PipelineOptions {
     pub supersession: SupersessionOptions,
     pub index_location: IndexLocation,
     pub memory_index_layout: MemoryIndexLayout,
+    /// When true (default), a multi-segment query also runs the corpus-wide
+    /// all-segments arm and fuses it with the routed arm via reciprocal rank
+    /// fusion. When false, only the routed arm runs: lower latency, slightly
+    /// lower recall on weak routers.
+    pub fuse_global_arm: bool,
 }
 
 impl Default for PipelineOptions {
@@ -85,6 +90,7 @@ impl Default for PipelineOptions {
             supersession: SupersessionOptions::default(),
             index_location: IndexLocation::InMemory,
             memory_index_layout: MemoryIndexLayout::Single,
+            fuse_global_arm: false,
         }
     }
 }

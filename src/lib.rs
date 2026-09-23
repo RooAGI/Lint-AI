@@ -39,6 +39,7 @@
 
 pub mod cli;
 mod config;
+pub mod conversation_state;
 mod ids;
 pub mod index;
 #[cfg(any(
@@ -55,6 +56,7 @@ pub mod query_plan;
 mod remote_query;
 pub mod segments;
 pub mod semantic_relations;
+pub mod session_prepare;
 pub mod source;
 pub mod telemetry;
 pub mod temporal_fact;
@@ -87,11 +89,11 @@ pub use crate::index::{
     TemporalQueryContext,
 };
 pub use crate::pipeline::{
-    build_index_store, build_query_snapshot, build_query_snapshot_from_source_documents,
-    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, IndexStoreInspection,
-    MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
-    MemoryIndexSnapshotInspection, PipelineOptions, PublishedIndexSnapshot, StorePaths,
-    Tier1NerProvider, Tier1TermRankerKind,
+    build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
+    build_query_snapshot_from_source_documents, resolve_store_paths, ChunkStrategy, IndexDump,
+    IndexLocation, IndexStore, IndexStoreInspection, MemoryIndexLayout,
+    MemoryIndexSegmentInspection, MemoryIndexSnapshot, MemoryIndexSnapshotInspection,
+    PipelineOptions, PublishedIndexSnapshot, StorePaths, Tier1NerProvider, Tier1TermRankerKind,
 };
 pub use crate::segments::{
     SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,
@@ -112,7 +114,10 @@ pub use crate::temporal::parse_temporal_date;
 // power users driving `MemoryIndex` directly.
 pub use crate::aggregation::{build_aggregate_output, AggregateOutput};
 pub use crate::query_expansion::normalize_for_index;
-pub use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
+pub use crate::query_semantics::{
+    analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
+    temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

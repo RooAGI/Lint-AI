@@ -394,7 +394,12 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
-fn build_doc_records(
+/// Extracts [`DocRecord`]s from source documents (NER + term ranking +
+/// chunking). This is the expensive per-document pipeline phase; the
+/// benchmark harness calls it once per question and builds both the
+/// single-layout snapshot and the segmented index from the same records
+/// instead of extracting twice.
+pub fn build_doc_records(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
 ) -> Result<Vec<DocRecord>> {
@@ -583,7 +588,10 @@ fn assemble_doc_record(
     record
 }
 
-fn build_query_snapshot_from_records(
+/// Builds a single-layout [`MemoryIndex`] from pre-extracted records.
+/// Paired with [`build_doc_records`]: extract once, then build the snapshot
+/// and any segmented indexes from the same records.
+pub fn build_query_snapshot_from_records(
     records: &[DocRecord],
     options: &PipelineOptions,
 ) -> Result<MemoryIndex> {
@@ -634,6 +642,7 @@ pub fn build_query_snapshot_from_source_documents(
         supersession: crate::semantic_relations::SupersessionOptions::default(),
         index_location: IndexLocation::InMemory,
         memory_index_layout: MemoryIndexLayout::Single,
+        fuse_global_arm: false,
     };
     build_query_snapshot(source_docs, &options)
 }

@@ -87,6 +87,15 @@ the 133-question multi-session segmented comparison in the benchmark overview;
 combined into one headline.
 | Average in-process query latency | 1.88 ms |
 
+The default segmented query path routes each query with the gated
+coverage-local router and runs the routed arm only (no corpus-wide fusion).
+On the full 500-question set this measures 92.8% any-hit Recall@5 at about
+9 ms per query. Passing `--fuse-global` to the server adds a corpus-wide arm
+fused by reciprocal rank fusion; with this router the lift is small
+(+3 questions out of 500) while latency rises to about 70 ms. Full router
+comparisons and the measured trade-offs are in the
+[benchmark results](benchmark-results.md).
+
 The latest v0.2.0 macOS layout comparison used 23,366 records and 100 requests
 per cell across five cold-start repetitions. At concurrency 10, routed segmented
 indexing reached a median 1,512.31 requests per second and global segmented

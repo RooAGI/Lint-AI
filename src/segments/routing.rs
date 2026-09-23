@@ -15,6 +15,8 @@ pub enum SegmentRoutingStrategy {
     TeamCoverageLocalDistinctiveness,
     CoverageTeamSelection,
     TypedEvidence,
+    TypedEvidenceMultiplicative,
+    CoverageTeamTypedMultiplicative,
 }
 
 pub(crate) fn route_segments(query: &str, segments: &[MemoryIndexSegment]) -> Vec<SegmentRoute> {
@@ -41,10 +43,28 @@ pub(crate) fn route_segments_with_corpus_stats(
         return route_segments_by_team_coverage(&query_terms, segments, corpus_stats);
     }
     if strategy == SegmentRoutingStrategy::CoverageTeamSelection {
-        return route_segments_by_coverage_team_selection(&query_terms, segments, corpus_stats);
+        return route_segments_by_coverage_team_selection(
+            query,
+            &query_terms,
+            segments,
+            corpus_stats,
+            false,
+        );
+    }
+    if strategy == SegmentRoutingStrategy::CoverageTeamTypedMultiplicative {
+        return route_segments_by_coverage_team_selection(
+            query,
+            &query_terms,
+            segments,
+            corpus_stats,
+            true,
+        );
     }
     if strategy == SegmentRoutingStrategy::TypedEvidence {
         return route_segments_by_typed_evidence(query, &query_terms, corpus_stats);
+    }
+    if strategy == SegmentRoutingStrategy::TypedEvidenceMultiplicative {
+        return route_segments_by_typed_evidence_multiplicative(query, &query_terms, corpus_stats);
     }
 
     let candidate_segment_ids = corpus_stats.bounded_candidate_segment_ids(&query_terms);
@@ -125,6 +145,55 @@ fn route_segments_by_typed_evidence(
             Some(SegmentRoute {
                 segment_id,
                 score: base_score + typed_score * TYPED_EVIDENCE_ROUTE_WEIGHT,
+                fallback: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    routes.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.segment_id.cmp(&b.segment_id))
+    });
+    routes
+}
+
+/// Combine a coverage-local base score with typed evidence multiplicatively:
+/// typed evidence amplifies content coverage but can never elect a
+/// zero-content segment (base 0 -> 0).
+pub(crate) fn combine_typed_evidence_multiplicative(base_score: f32, typed_score: f32) -> f32 {
+    let typed_factor = typed_score / (typed_score + TYPED_EVIDENCE_GATE_SATURATION);
+    base_score * (1.0 + typed_factor)
+}
+
+fn route_segments_by_typed_evidence_multiplicative(
+    query: &str,
+    query_terms: &HashSet<String>,
+    corpus_stats: &SegmentCorpusStats,
+) -> Vec<SegmentRoute> {
+    let query_profile = query_connection_profile(query);
+    let mut candidate_ids = corpus_stats.typed_candidate_segment_ids(&query_profile);
+    candidate_ids.extend(corpus_stats.bounded_candidate_segment_ids(query_terms));
+    let route_ids = if candidate_ids.is_empty() {
+        corpus_stats.ordered_segment_ids.clone()
+    } else {
+        candidate_ids.into_iter().collect()
+    };
+    let mut routes = route_ids
+        .into_iter()
+        .filter_map(|segment_id| {
+            corpus_stats.segment_positions.get(&segment_id)?;
+            let base_score = corpus_stats
+                .summary(&segment_id)
+                .coverage_local_distinctiveness_score(query_terms, corpus_stats);
+            let segment_profile = corpus_stats.connection_profiles.get(&segment_id)?;
+            let typed_score = typed_evidence_route_score(&query_profile, &segment_profile);
+            // Multiplicative gate: typed evidence amplifies the coverage-local
+            // base but can never elect a zero-content segment (base 0 -> 0).
+            let score = combine_typed_evidence_multiplicative(base_score, typed_score);
+            Some(SegmentRoute {
+                segment_id,
+                score,
                 fallback: false,
             })
         })
@@ -258,9 +327,11 @@ fn bounded_routing_candidates<'a>(
 }
 
 fn route_segments_by_coverage_team_selection(
+    query: &str,
     query_terms: &HashSet<String>,
     segments: &[MemoryIndexSegment],
     corpus_stats: &SegmentCorpusStats,
+    typed_gate: bool,
 ) -> Vec<SegmentRoute> {
     let eligible_segments = bounded_routing_candidates(segments, query_terms, corpus_stats);
     let mut selected = Vec::with_capacity(eligible_segments.len());
@@ -277,6 +348,26 @@ fn route_segments_by_coverage_team_selection(
             )
         })
         .collect::<HashMap<_, _>>();
+    // Typed-evidence factors are static per segment, so precompute them once
+    // when the gate is enabled.
+    let query_profile = query_connection_profile(query);
+    let typed_scores: HashMap<&str, f32> = if typed_gate {
+        eligible_segments
+            .iter()
+            .map(|segment| {
+                let typed_score = corpus_stats
+                    .connection_profiles
+                    .get(&segment.segment_id)
+                    .map(|segment_profile| {
+                        typed_evidence_route_score(&query_profile, segment_profile)
+                    })
+                    .unwrap_or(0.0);
+                (segment.segment_id.as_str(), typed_score)
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
     let mut base_order = eligible_segments;
     base_order.sort_by(|left, right| {
         base_scores
@@ -321,7 +412,17 @@ fn route_segments_by_coverage_team_selection(
                     .get(segment.segment_id.as_str())
                     .copied()
                     .unwrap_or_default();
-                (segment, marginal_score + (base_score * 1.6))
+                let combined = marginal_score + (base_score * 1.6);
+                let score = if typed_gate {
+                    let typed_score = typed_scores
+                        .get(segment.segment_id.as_str())
+                        .copied()
+                        .unwrap_or(0.0);
+                    combine_typed_evidence_multiplicative(combined, typed_score)
+                } else {
+                    combined
+                };
+                (segment, score)
             })
             .max_by(|(left_segment, left_score), (right_segment, right_score)| {
                 left_score
@@ -385,6 +486,14 @@ pub(crate) fn route_segments_with_temporal_context_and_corpus_stats(
     temporal: TemporalQueryContext<'_>,
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
+    // Anchored pre-filter: when the query resolves to a concrete date range,
+    // restrict routing to segments holding a record inside the anchor window,
+    // then rank those by content. Out-of-window segments otherwise steal top-k
+    // slots via expansion neighborhoods even when the correct segment has
+    // weaker content overlap. Falls back to the full route list when no
+    // segment has in-window evidence (e.g. sessions without parseable
+    // timestamps), so anchored queries never route to an empty set.
+    let anchor_window = temporal.anchor_window;
     let mut routes = route_segments_with_corpus_stats(query, segments, strategy, corpus_stats)
         .into_iter()
         .filter_map(|mut route| {
@@ -395,9 +504,28 @@ pub(crate) fn route_segments_with_temporal_context_and_corpus_stats(
             if !segment_has_allowed_documents(segment, temporal.allowed_doc_ids) {
                 return None;
             }
-            route.score += segment_temporal_route_boost(segment, temporal);
-            Some(route)
+            let in_anchor_window = match anchor_window {
+                Some(window) => segment_has_record_in_anchor_window(segment, window),
+                None => true,
+            };
+            // The temporal signal is an additive nudge applied only to segments
+            // that already carry content signal: it reorders content-bearing
+            // segments toward temporally relevant ones, while a zero-content
+            // segment keeps its zero score and can never be elected on
+            // temporal evidence alone (the saturation fix's core guarantee).
+            let temporal_factor = segment_temporal_route_boost(segment, temporal);
+            if temporal_factor > 0.0 && route.score > 0.0 {
+                route.score += temporal_factor;
+            }
+            Some((route, in_anchor_window))
         })
+        .collect::<Vec<_>>();
+    if anchor_window.is_some() && routes.iter().any(|(_, in_window)| *in_window) {
+        routes.retain(|(_, in_window)| *in_window);
+    }
+    let mut routes = routes
+        .into_iter()
+        .map(|(route, _)| route)
         .collect::<Vec<_>>();
     routes.sort_by(|a, b| {
         b.score
@@ -462,7 +590,7 @@ pub(crate) fn adaptive_segment_routes(
                     .count();
                 let close = route_score_is_close(route.score, cutoff_score);
                 let should_expand =
-                    added_terms > 0 && (coverage < ADAPTIVE_MIN_QUERY_COVERAGE || close);
+                    coverage < ADAPTIVE_MIN_QUERY_COVERAGE && (added_terms > 0 || close);
                 should_expand.then_some((route, added_terms, close))
             })
             .max_by(
@@ -502,7 +630,6 @@ pub(crate) struct RouteAwareCandidate {
     pub(crate) result: SearchResult,
     pub(crate) segment_id: String,
     pub(crate) base_score: f32,
-    pub(crate) evidence_terms: HashSet<String>,
 }
 
 impl RouteAwareCandidate {
@@ -514,23 +641,34 @@ impl RouteAwareCandidate {
         query_terms: &HashSet<String>,
         enrichment: &SegmentQueryEnrichment,
         temporal: TemporalQueryContext<'_>,
-        max_segment_result_score: f32,
+        // Max result score across ALL routed segments (not per-segment): the
+        // per-segment BM25 scores share global corpus statistics, so they are
+        // comparable across segments and must be normalized jointly. A
+        // per-segment max would promote every weak segment's best doc to 1.0
+        // and destroy cross-segment ordering.
+        max_result_score: f32,
         max_route_score: f32,
         corpus_stats: &SegmentCorpusStats,
     ) -> Self {
         let result_terms = result_evidence_terms(&result, segment);
-        let normalized_result_score =
-            normalize_positive_score(result.score, max_segment_result_score);
+        let normalized_result_score = normalize_positive_score(result.score, max_result_score);
         let normalized_route_score = normalize_positive_score(route.score, max_route_score);
-        let query_matches = query_terms
+        // Coverage RATIOS, not raw counts: a raw match count grows with query
+        // length and would let long queries drown out the BM25 signal (a
+        // 45-term query could contribute 45 * weight vs 1.0 max from BM25).
+        let query_term_count = query_terms.len().max(1) as f32;
+        let query_coverage = query_terms
             .iter()
             .filter(|term| result_terms.contains(*term))
-            .count() as f32;
-        let enriched_matches = enrichment
+            .count() as f32
+            / query_term_count;
+        let enriched_term_count = enrichment.added_terms.len().max(1) as f32;
+        let enriched_coverage = enrichment
             .added_terms
             .iter()
             .filter(|term| result_terms.contains(*term))
-            .count() as f32;
+            .count() as f32
+            / enriched_term_count;
         // Sum in sorted-term order via sorted_query_terms: HashSet iteration
         // order is nondeterministic and float summation is order-sensitive at
         // the last ULP. Without this, two identical rebuilds can produce
@@ -553,98 +691,50 @@ impl RouteAwareCandidate {
             })
             .sum::<f32>();
         let temporal_score = result_temporal_score(&result, segment, temporal);
-        let common_only_penalty = if query_matches == 0.0 && enriched_matches == 0.0 {
+        let common_only_penalty = if query_coverage == 0.0 && enriched_coverage == 0.0 {
             RERANK_COMMON_ONLY_PENALTY
         } else {
             0.0
         };
         let base_score = (normalized_result_score * RERANK_NORMALIZED_RESULT_WEIGHT)
             + (normalized_route_score * RERANK_ROUTE_WEIGHT)
-            + (query_matches * RERANK_QUERY_EVIDENCE_WEIGHT)
-            + (enriched_matches * RERANK_ENRICHED_EVIDENCE_WEIGHT)
+            + (query_coverage * RERANK_QUERY_EVIDENCE_WEIGHT)
+            + (enriched_coverage * RERANK_ENRICHED_EVIDENCE_WEIGHT)
             + (local_evidence_score.min(3.0) * RERANK_LOCAL_EVIDENCE_WEIGHT)
             + (temporal_score * RERANK_TEMPORAL_WEIGHT)
             - common_only_penalty;
 
-        let mut evidence_terms = query_terms
-            .iter()
-            .filter(|term| result_terms.contains(*term))
-            .cloned()
-            .collect::<HashSet<_>>();
-        evidence_terms.extend(
-            enrichment
-                .added_terms
-                .iter()
-                .filter(|term| result_terms.contains(*term))
-                .cloned(),
-        );
         result.score = base_score;
 
         Self {
             result,
             segment_id: segment.segment_id.clone(),
             base_score,
-            evidence_terms,
         }
     }
 }
 
+/// Plain relevance top-k: select the highest base_score candidates with a
+/// deterministic doc_id tie-break. Deliberately NOT maximal-marginal-relevance:
+/// diversity bonuses (new-term / new-segment rewards applied during selection)
+/// demote the single best doc, which is exactly wrong for a recall@k objective
+/// where one gold hit anywhere in the top-k is what counts.
 pub(crate) fn select_route_aware_top_k(
     mut candidates: Vec<RouteAwareCandidate>,
     top_k: usize,
 ) -> Vec<SearchResult> {
-    let mut selected = Vec::new();
-    let mut covered_terms = HashSet::new();
-    let mut represented_segments = HashSet::new();
-
-    while selected.len() < top_k && !candidates.is_empty() {
-        let best_index = candidates
-            .iter()
-            .enumerate()
-            .max_by(|(_, left), (_, right)| {
-                route_aware_selection_score(left, &covered_terms, &represented_segments)
-                    .partial_cmp(&route_aware_selection_score(
-                        right,
-                        &covered_terms,
-                        &represented_segments,
-                    ))
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| right.result.doc_id.cmp(&left.result.doc_id))
-            })
-            .map(|(index, _)| index);
-        let Some(best_index) = best_index else {
-            break;
-        };
-        let mut candidate = candidates.swap_remove(best_index);
-        let coverage_gain = candidate.evidence_terms.difference(&covered_terms).count() as f32
-            * RERANK_COVERAGE_GAIN_WEIGHT;
-        let segment_gain = if represented_segments.contains(&candidate.segment_id) {
-            0.0
-        } else {
-            RERANK_SEGMENT_COVERAGE_WEIGHT
-        };
-        candidate.result.score = candidate.base_score + coverage_gain + segment_gain;
-        covered_terms.extend(candidate.evidence_terms.iter().cloned());
-        represented_segments.insert(candidate.segment_id);
-        selected.push(candidate.result);
-    }
-
-    selected
-}
-
-fn route_aware_selection_score(
-    candidate: &RouteAwareCandidate,
-    covered_terms: &HashSet<String>,
-    represented_segments: &HashSet<String>,
-) -> f32 {
-    candidate.base_score
-        + candidate.evidence_terms.difference(covered_terms).count() as f32
-            * RERANK_COVERAGE_GAIN_WEIGHT
-        + if represented_segments.contains(&candidate.segment_id) {
-            0.0
-        } else {
-            RERANK_SEGMENT_COVERAGE_WEIGHT
-        }
+    candidates.sort_by(|left, right| {
+        right
+            .base_score
+            .partial_cmp(&left.base_score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.result.doc_id.cmp(&right.result.doc_id))
+    });
+    candidates
+        .into_iter()
+        .take(top_k)
+        .map(|candidate| candidate.result)
+        .collect()
 }
 
 pub(crate) fn normalize_positive_score(score: f32, max_score: f32) -> f32 {

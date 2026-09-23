@@ -51,6 +51,10 @@ struct Args {
     /// Query every segmented shard (global segmented comparison mode).
     #[arg(long)]
     global_index: bool,
+    /// Fuse the corpus-wide global arm with the routed arm
+    /// (higher recall, higher latency; off by default).
+    #[arg(long)]
+    fuse_global: bool,
     /// Project root containing provider hook telemetry under `.lint-ai`.
     #[arg(long)]
     project_root: Option<PathBuf>,
@@ -174,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         args.adaptive_segment_max_n,
         args.single_index,
         args.global_index,
+        args.fuse_global,
     );
     let project_root = args
         .project_root
@@ -273,6 +278,7 @@ fn memory_pipeline_options(
     adaptive_segment_max_n: Option<usize>,
     single_index: bool,
     global_index: bool,
+    fuse_global: bool,
 ) -> PipelineOptions {
     if single_index {
         return PipelineOptions {
@@ -300,6 +306,7 @@ fn memory_pipeline_options(
     };
     PipelineOptions {
         memory_index_layout: layout,
+        fuse_global_arm: fuse_global,
         ..PipelineOptions::default()
     }
 }
@@ -737,7 +744,7 @@ fn dashboard_provider_indexes(
                 return None;
             }
             let inspection =
-                IndexStore::at_path(&path, memory_pipeline_options(None, false, false))
+                IndexStore::at_path(&path, memory_pipeline_options(None, false, false, false))
                     .ok()?
                     .inspection();
             let snapshot = inspection.snapshot.map(|snapshot| DashboardSnapshotStatus {
@@ -1278,7 +1285,7 @@ mod tests {
     #[test]
     fn server_uses_segmented_memory_index() {
         assert!(matches!(
-            memory_pipeline_options(None, false, false).memory_index_layout,
+            memory_pipeline_options(None, false, false, false).memory_index_layout,
             MemoryIndexLayout::Segmented { .. }
         ));
     }
@@ -1286,7 +1293,7 @@ mod tests {
     #[test]
     fn server_adaptive_mode_is_opt_in() {
         assert!(matches!(
-            memory_pipeline_options(Some(8), false, false).memory_index_layout,
+            memory_pipeline_options(Some(8), false, false, false).memory_index_layout,
             MemoryIndexLayout::AdaptiveSegmented {
                 query_top_n: 3,
                 max_query_n: 8,
@@ -1299,7 +1306,7 @@ mod tests {
     fn server_adaptive_limit_at_or_below_base_keeps_fixed_mode() {
         for limit in [0, 2, 3] {
             assert!(matches!(
-                memory_pipeline_options(Some(limit), false, false).memory_index_layout,
+                memory_pipeline_options(Some(limit), false, false, false).memory_index_layout,
                 MemoryIndexLayout::Segmented { .. }
             ));
         }

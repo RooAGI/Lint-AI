@@ -572,6 +572,7 @@ pub(crate) fn build_memory_index(
             .map(|path| crate::pipeline::IndexLocation::Explicit(path.to_path_buf()))
             .unwrap_or(crate::pipeline::IndexLocation::InMemory),
         memory_index_layout: crate::pipeline::MemoryIndexLayout::Single,
+        fuse_global_arm: false,
     };
     crate::pipeline::build_query_snapshot(&source_docs, &options)
 }

@@ -68,6 +68,19 @@ pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
     } else {
         &input.conversation_id
     };
+    // The MCP search dispatch inherits this session when the agent does not
+    // pass session_id explicitly. Skip the "unknown" placeholder; the
+    // conversation-state store opens without touching the index (a full
+    // MemoryService open would load it); skipped until memory exists so
+    // hooks never create store directories for memory-less projects.
+    // Fail-open: the write never breaks the hook.
+    if !input.conversation_id.is_empty() {
+        let memory = crate::integrations::mcp_index::shared_memory_root(&root);
+        if memory.exists() {
+            crate::conversation_state::ConversationStateStore::open_under(&memory)
+                .note_active_session(RecordingProvider::Agy.as_str(), session_id);
+        }
+    }
     if let Err(error) = record_event_if_enabled(
         RecordingProvider::Agy,
         &root,

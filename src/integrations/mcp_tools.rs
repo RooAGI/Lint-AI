@@ -74,6 +74,39 @@ pub(crate) fn search_session_id(arguments: &Value) -> Result<Option<String>, Str
     Ok(Some(session_id.to_string()))
 }
 
+/// Resolve the effective session id for an MCP search.
+///
+/// An explicit `session_id` argument always wins. When the argument is
+/// absent (or null), the search inherits the session most recently seen
+/// active in this workspace — hooks keep that pointer current through the
+/// service's conversation-state store, so an agent that never passes
+/// `session_id` still gets follow-up resolution against its live
+/// conversation. A present-but-blank argument is still rejected rather than
+/// falling back, so callers cannot accidentally lose session state. The
+/// resolved id (when any) refreshes the pointer, keeping it alive while the
+/// conversation continues through MCP searches.
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code"
+))]
+pub(crate) fn resolve_search_session_id(
+    arguments: &Value,
+    service: &MemoryService,
+    provider: &str,
+) -> Result<Option<String>, String> {
+    let session_id = match search_session_id(arguments)? {
+        Some(explicit) => Some(explicit),
+        None => service.current_session_id(provider),
+    };
+    if let Some(active) = session_id.as_deref() {
+        service.note_active_session(provider, active);
+    }
+    Ok(session_id)
+}
+
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.
@@ -304,5 +337,58 @@ mod tests {
         );
         assert_eq!(parse_list_memories_limit(&json!({"limit": 0})).unwrap(), 1);
         assert!(parse_list_memories_limit(&json!({"unexpected": true})).is_err());
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn resolve_search_session_id_prefers_explicit_over_pointer() {
+        let dir = std::env::temp_dir().join(format!(
+            "lint-ai-resolve-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0),
+        ));
+        let service =
+            MemoryService::at_path(&dir, PipelineOptions::default()).expect("service opens");
+        service.note_active_session("claude", "hook-session");
+        // Explicit argument wins over the hook-written pointer...
+        let resolved = resolve_search_session_id(
+            &json!({"query": "q", "session_id": "agent-session"}),
+            &service,
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(resolved.as_deref(), Some("agent-session"));
+        // ...and refreshes the pointer with the explicit id.
+        assert_eq!(
+            service.current_session_id("claude").as_deref(),
+            Some("agent-session")
+        );
+        // Absent argument falls back to the pointer.
+        let resolved =
+            resolve_search_session_id(&json!({"query": "q"}), &service, "claude").unwrap();
+        assert_eq!(resolved.as_deref(), Some("agent-session"));
+        // A present-but-blank argument is still rejected, not silently
+        // degraded to the pointer.
+        assert!(resolve_search_session_id(
+            &json!({"query": "q", "session_id": "  "}),
+            &service,
+            "claude"
+        )
+        .is_err());
+        // No argument and no pointer means stateless.
+        let fresh = MemoryService::at_path(&dir.join("fresh"), PipelineOptions::default())
+            .expect("service opens");
+        let resolved = resolve_search_session_id(&json!({"query": "q"}), &fresh, "claude").unwrap();
+        assert_eq!(resolved, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

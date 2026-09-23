@@ -158,6 +158,79 @@ impl ConversationStateStore {
         Self::new(Some(store_root.join(CONVERSATION_STATE_DIR)))
     }
 
+    fn unix_time_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Path of the per-provider "current session" pointer inside the store
+    /// directory, e.g. `current_session.claude.json`. The pointer names the
+    /// session most recently seen active in this workspace; the MCP search
+    /// dispatch reads it back as the default session when the caller did not
+    /// pass `session_id` explicitly.
+    fn current_session_pointer_path(&self, provider: &str) -> Option<PathBuf> {
+        self.dir
+            .as_ref()
+            .map(|dir| dir.join(format!("current_session.{provider}.json")))
+    }
+
+    /// Record the session most recently seen active for `provider`.
+    ///
+    /// Fail-open and best-effort: blank ids are ignored, the write is atomic
+    /// (temp file + rename), and every I/O failure is swallowed, so a
+    /// read-only or full disk never breaks a hook or a search.
+    pub fn note_active_session(&self, provider: &str, session_id: &str) {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return;
+        }
+        let Some(path) = self.current_session_pointer_path(provider) else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+            "session_id": session_id,
+            "updated_at_ms": Self::unix_time_ms(),
+        })) else {
+            return;
+        };
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, &bytes).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        if std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+
+    /// Read back the session most recently marked active for `provider`, or
+    /// `None` when there is no pointer, it is unreadable or malformed, or it
+    /// is older than the session TTL. Never fails: every problem degrades to
+    /// stateless search.
+    pub fn current_session_id(&self, provider: &str) -> Option<String> {
+        let bytes = std::fs::read(self.current_session_pointer_path(provider)?).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let session_id = value.get("session_id")?.as_str()?.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+        let updated_at_ms = value.get("updated_at_ms")?.as_u64()?;
+        let now_ms = Self::unix_time_ms();
+        // Reject pointers from the future (clock skew) and stale ones; the
+        // conversation state they name expires on the same TTL.
+        if updated_at_ms > now_ms || now_ms - updated_at_ms > SESSION_TTL_MS {
+            return None;
+        }
+        Some(session_id.to_string())
+    }
+
     fn session_path(&self, user_id: &str, session_id: &str) -> Option<PathBuf> {
         let dir = self.dir.as_ref()?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -492,6 +565,82 @@ mod tests {
         // The evicted session reloads transparently from disk.
         let state = store.get("user-a", "s0", ms() + 1).unwrap();
         assert_eq!(state.recent_queries[0], "query 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn pointer_test_dir(name: &str) -> PathBuf {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(format!(
+            "lint-ai-pointer-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0),
+        ))
+    }
+
+    #[test]
+    fn active_session_pointer_roundtrips_per_provider() {
+        let dir = pointer_test_dir("roundtrip");
+        let store = ConversationStateStore::open_under(&dir);
+        store.note_active_session("claude", "session-123");
+        assert_eq!(
+            store.current_session_id("claude").as_deref(),
+            Some("session-123")
+        );
+        // The pointer is per provider: another provider sees nothing.
+        assert_eq!(store.current_session_id("codex"), None);
+        // A fresh store over the same directory reads the pointer back.
+        let reopened = ConversationStateStore::open_under(&dir);
+        assert_eq!(
+            reopened.current_session_id("claude").as_deref(),
+            Some("session-123")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_session_pointer_stale_is_ignored() {
+        let dir = pointer_test_dir("stale");
+        std::fs::create_dir_all(dir.join(CONVERSATION_STATE_DIR)).unwrap();
+        let stale_ms = ConversationStateStore::unix_time_ms().saturating_sub(SESSION_TTL_MS + 1);
+        std::fs::write(
+            dir.join(CONVERSATION_STATE_DIR)
+                .join("current_session.claude.json"),
+            serde_json::json!({"session_id": "old-session", "updated_at_ms": stale_ms}).to_string(),
+        )
+        .unwrap();
+        let store = ConversationStateStore::open_under(&dir);
+        assert_eq!(store.current_session_id("claude"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_session_pointer_corrupt_or_missing_is_ignored() {
+        let dir = pointer_test_dir("corrupt");
+        std::fs::create_dir_all(dir.join(CONVERSATION_STATE_DIR)).unwrap();
+        std::fs::write(
+            dir.join(CONVERSATION_STATE_DIR)
+                .join("current_session.claude.json"),
+            b"not json",
+        )
+        .unwrap();
+        let store = ConversationStateStore::open_under(&dir);
+        assert_eq!(store.current_session_id("claude"), None);
+        let absent = ConversationStateStore::open_under(&dir.join("absent"));
+        assert_eq!(absent.current_session_id("claude"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_active_session_ignores_blank_ids() {
+        let dir = pointer_test_dir("blank");
+        let store = ConversationStateStore::open_under(&dir);
+        store.note_active_session("claude", "   ");
+        assert_eq!(store.current_session_id("claude"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

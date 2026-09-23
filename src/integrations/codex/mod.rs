@@ -401,16 +401,23 @@ impl CodexMcp {
                     Ok(filters) => filters,
                     Err(message) => return Ok(error_response(id, -32602, &message)),
                 };
-                // Stateful search: the session id (when supplied) scopes
-                // follow-up resolution and temporal-anchor carry to this
-                // provider's conversation. Absent means stateless.
-                let session_id = match mcp_tools::search_session_id(&arguments) {
-                    Ok(session_id) => session_id,
-                    Err(message) => return Ok(error_response(id, -32602, &message)),
-                };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                // Stateful search: an explicit session id scopes follow-up
+                // resolution and temporal-anchor carry to this provider's
+                // conversation; when omitted, the search inherits the session
+                // most recently seen active in this workspace (hooks keep that
+                // pointer current in the service's conversation-state store).
+                // Absent means stateless.
+                let session_id = match mcp_tools::resolve_search_session_id(
+                    &arguments,
+                    &*service,
+                    RecordingProvider::Codex.as_str(),
+                ) {
+                    Ok(session_id) => session_id,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
                 let started = std::time::Instant::now();
                 let results = service.search_with_filters(
                     query,
@@ -587,7 +594,7 @@ impl CodexMcp {
                         "query": { "type": "string" },
                         "top_k": { "type": "integer", "minimum": 1, "maximum": 20, "default": DEFAULT_QUERY_TOP_K },
                         "provider": mcp_tools::provider_argument_schema(),
-                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. Omit for stateless search." },
+                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search." },
                     },
                     "required": ["query"],
                     "additionalProperties": false

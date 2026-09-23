@@ -254,17 +254,24 @@ impl GeminiMcp {
                     Ok(filters) => filters,
                     Err(message) => return Ok(error_response(id, -32602, &message)),
                 };
-                // Stateful search: the session id (when supplied) scopes
-                // follow-up resolution and temporal-anchor carry to this
-                // provider's conversation. Absent means stateless.
-                let session_id = match mcp_tools::search_session_id(&args) {
-                    Ok(session_id) => session_id,
-                    Err(message) => return Ok(error_response(id, -32602, &message)),
-                };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("initialized");
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 service.refresh_index()?;
+                // Stateful search: an explicit session id scopes follow-up
+                // resolution and temporal-anchor carry to this provider's
+                // conversation; when omitted, the search inherits the session
+                // most recently seen active in this workspace (hooks keep that
+                // pointer current in the service's conversation-state store).
+                // Absent means stateless.
+                let session_id = match mcp_tools::resolve_search_session_id(
+                    &args,
+                    &*service,
+                    RecordingProvider::Gemini.as_str(),
+                ) {
+                    Ok(session_id) => session_id,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
                 let started = std::time::Instant::now();
                 let results = service.search_with_filters(
                     query,
@@ -356,7 +363,7 @@ fn tool_definitions() -> Vec<ToolDefinition> {
             name: "search".into(),
             description: "Search Gemini project memory.".into(),
             input_schema: schema(
-                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema(),"session_id": {"type": "string", "description": "Optional conversation session id for follow-up resolution against prior session state. Omit for stateless search."}}),
+                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema(),"session_id": {"type": "string", "description": "Optional conversation session id for follow-up resolution against prior session state. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search."}}),
                 vec!["query"],
             ),
         },

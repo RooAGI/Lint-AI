@@ -709,6 +709,41 @@ impl MemoryService {
         self.search_with_filters(query, "integration", None, top_k, &BTreeMap::new())
     }
 
+    /// Record the session most recently seen active for `provider` in this
+    /// workspace. Hooks call this on every event carrying a session id, and
+    /// the MCP search dispatch refreshes it when it resolves a session; the
+    /// dispatch reads it back as the default session when the caller did not
+    /// pass `session_id` explicitly. Fail-open: the write never fails.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn note_active_session(&self, provider: &str, session_id: &str) {
+        if let Ok(store) = self.conversation_states.lock() {
+            store.note_active_session(provider, session_id);
+        }
+    }
+
+    /// The session most recently marked active for `provider`, or `None`
+    /// when there is none, it is unreadable, or it is stale. Never fails:
+    /// every problem degrades to stateless search.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn current_session_id(&self, provider: &str) -> Option<String> {
+        self.conversation_states
+            .lock()
+            .ok()?
+            .current_session_id(provider)
+    }
+
     /// Plain query that records the turn into the session's conversation
     /// state without rewriting it. Hook retrieval uses this: hooks inject
     /// background context rather than answering a conversational turn, so

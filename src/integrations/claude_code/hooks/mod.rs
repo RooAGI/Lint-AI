@@ -66,6 +66,15 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
     let input: ClaudeHookInput =
         serde_json::from_value(raw).context("failed to decode Claude hook input")?;
     let root = resolve_root(&input.cwd, fallback_root)?;
+    // The MCP search dispatch inherits this session when the agent does not
+    // pass session_id explicitly. The conversation-state store opens without
+    // touching the index (a full MemoryService open would load it); skipped
+    // until memory exists so hooks never create store directories for
+    // memory-less projects. Fail-open: the write never breaks the hook.
+    if memory_root(&root).exists() {
+        crate::conversation_state::ConversationStateStore::open_under(&memory_root(&root))
+            .note_active_session(RecordingProvider::Claude.as_str(), &input.session_id);
+    }
     let payload = serde_json::json!({
         "hook_event_name": input.hook_event_name,
         "prompt": input.prompt,

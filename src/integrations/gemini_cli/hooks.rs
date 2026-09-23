@@ -121,6 +121,18 @@ fn handle_hook(
     if input.hook_event_name != kind.event_name() {
         anyhow::bail!("{provider_label} hook event mismatch")
     }
+    // The MCP search dispatch inherits this session when the agent does not
+    // pass session_id explicitly. The conversation-state store opens without
+    // touching the index (a full MemoryService open would load it); skipped
+    // until memory exists so hooks never create store directories for
+    // memory-less projects. Fail-open: the write never breaks the hook.
+    {
+        let memory = crate::integrations::mcp_index::shared_memory_root(_root);
+        if memory.exists() {
+            crate::conversation_state::ConversationStateStore::open_under(&memory)
+                .note_active_session(provider.as_str(), &input.session_id);
+        }
+    }
     if kind == GeminiHookKind::SessionStart {
         return Ok(GeminiHookOutput {
             system_message: Some(

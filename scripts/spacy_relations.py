@@ -431,7 +431,7 @@ def _chunk_descriptors(docs, sent_index):
     binary can decide antecedent eligibility without parser objects.
     """
     out = []
-    for doc, per_turn in zip(docs, sent_index):
+    for turn_idx, (doc, per_turn) in enumerate(zip(docs, sent_index)):
         for sent, s_idx in per_turn:
             has_mv = _sentence_has_matrix_verb(sent)
             for chunk in doc.noun_chunks:
@@ -441,6 +441,8 @@ def _chunk_descriptors(docs, sent_index):
                 text, _ = phrase_text(root, doc)
                 out.append({
                     "id": f"{s_idx}:{root.i}",
+                    "turn_idx": turn_idx,
+                    "tok": root.i,
                     "text": text or "",
                     "root_pos": root.pos_,
                     "root_dep": root.dep_,
@@ -487,7 +489,7 @@ def _np_mention_descriptors(docs, sent_index, turns):
     personhood verdicts; `session_id` is carried for key-phrase output.
     """
     out = []
-    for doc, per_turn, turn in zip(docs, sent_index, turns):
+    for turn_idx, (doc, per_turn, turn) in enumerate(zip(docs, sent_index, turns)):
         session_id = turn.get("session_id", "")
         for sent, s_idx in per_turn:
             for chunk in doc.noun_chunks:
@@ -497,6 +499,8 @@ def _np_mention_descriptors(docs, sent_index, turns):
                 text = _np_text(root, doc)
                 out.append({
                     "id": f"{s_idx}:{root.i}",
+                    "turn_idx": turn_idx,
+                    "tok": root.i,
                     "text": text or chunk.text,
                     "head_lemma": root.lemma_,
                     "head_pos": root.pos_,
@@ -580,6 +584,11 @@ def _key_phrases(np_descriptors, phrase_verdicts):
             "text": desc["text"],
             "kind": verdict.get("kind", "thing"),
             "session_id": desc["session_id"],
+            # Turn-local token linkage: join to frame args via
+            # (session_id, turn_idx, tok in arg.entity_ids) to recover the
+            # verb-frame context of each mention for contextual typing.
+            "turn_idx": desc.get("turn_idx", 0),
+            "tok": desc.get("tok", -1),
         })
     return out
 
@@ -1070,7 +1079,8 @@ def low_lemma(verb, doc_low):
 
 def extract_doc(turn, doc, doc_low, ctx, sent_map):
     speaker = turn.get("speaker", "")
-    out = []
+    out = []  # flat triples (unchanged; retrieval index consumes these)
+    frames = []  # one frame per (subject, verb): all arguments grouped
     for sent in doc.sents:
         sent_idx = sent_map[sent.start]
         for verb in sent:
@@ -1084,11 +1094,16 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
             # its own clause's subject ("he saw him").
             subj_keys = frozenset(s.lower() for s, _, _ in subjects)
             lemma = low_lemma(verb, doc_low)
+            # Frame arguments: every argument of this verb, collected so the
+            # full activity stays together (play(obj=quarterback, for=Eagles))
+            # instead of fragmenting into one triple per argument.
+            frame_args = []
             for child in verb.children:
                 if child.dep_ == "dobj":
                     objs = noun_phrase(child, doc, ctx, sent_idx, speaker,
                                        exclude_keys=subj_keys)
                     for obj, ids, onote in objs:
+                        frame_args.append(("dobj", obj, ids, onote))
                         for subject, sconf, snote in subjects:
                             notes = [n for n in (snote, onote) if n]
                             conf = sconf if not notes else min(sconf,
@@ -1099,11 +1114,14 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                                  ";".join(notes) if notes else None)
                             )
                 elif child.dep_ == "prep":
+                    prep_lemma = child.lemma_.lower()
                     pobjs = [c for c in child.children if c.dep_ == "pobj"]
                     for pobj in pobjs:
                         objs = noun_phrase(pobj, doc, ctx, sent_idx, speaker,
                                            exclude_keys=subj_keys)
                         for obj, ids, onote in objs:
+                            frame_args.append(
+                                (f"prep:{prep_lemma}", obj, ids, onote))
                             for subject, sconf, snote in subjects:
                                 notes = [n for n in (snote, onote) if n]
                                 conf = sconf if not notes else min(sconf,
@@ -1122,6 +1140,8 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                         objs = noun_phrase(verb.head, doc, ctx, sent_idx,
                                            speaker, exclude_keys=subj_keys)
                         for obj, ids, onote in objs:
+                            frame_args.append(
+                                (f"prep:{prep_lemma}", obj, ids, onote))
                             for subject, sconf, snote in subjects:
                                 notes = [n for n in (snote, onote) if n]
                                 conf = min(sconf, 0.85)
@@ -1133,7 +1153,38 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                                      obj, ids, conf,
                                      ";".join(notes) if notes else None)
                                 )
-    return out
+            # One frame per subject: the verb with all its arguments grouped.
+            # This is the "real activity" unit; the flat triples above stay
+            # for the retrieval index.
+            seen_args = set()
+            for subject, sconf, snote in subjects:
+                args = []
+                for role, obj, ids, onote in frame_args:
+                    if (role, obj) in seen_args:
+                        continue
+                    seen_args.add((role, obj))
+                    args.append({
+                        "role": role,
+                        "object": obj,
+                        "entity_ids": sorted(ids),
+                        "note": onote,
+                    })
+                if not args:
+                    continue
+                frames.append({
+                    "verb": verb.text,
+                    "verb_lemma": lemma,
+                    "subject": subject,
+                    "subject_conf": sconf,
+                    "subject_note": snote,
+                    "args": args,
+                    "session_id": turn.get("session_id", ""),
+                    "turn_idx": turn.get("turn_idx", 0),
+                    "doc_id": turn.get("doc_id", ""),
+                    "session_date": turn.get("session_date"),
+                    "evidence": f"{speaker}: {turn.get('text', '')}",
+                })
+    return out, frames
 
 
 def main() -> int:
@@ -1214,10 +1265,12 @@ def main() -> int:
         sent_maps.append(sent_map)
 
     relations = []
+    frames = []
     for turn, doc, doc_low, sent_map in zip(turns, docs, docs_low,
                                             sent_maps):
         try:
-            triples = extract_doc(turn, doc, doc_low, ctx, sent_map)
+            triples, doc_frames = extract_doc(turn, doc, doc_low, ctx, sent_map)
+            frames.extend(doc_frames)
         except Exception as exc:
             print(
                 json.dumps({"warning": f"turn_failed: {exc}"}), file=sys.stderr
@@ -1250,6 +1303,7 @@ def main() -> int:
             )
 
     json.dump({"relations": relations,
+               "frames": frames,
                "key_phrases": _key_phrases(np_descriptors, phrase_verdicts)},
               sys.stdout)
     return 0

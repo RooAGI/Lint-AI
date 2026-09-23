@@ -357,7 +357,7 @@ impl ClaudeMcp {
 
         match tool_name {
             "search" => {
-                if let Some(name) = unknown_argument(&arguments, &["query", "top_k", "provider"]) {
+                if let Some(name) = unknown_argument(&arguments, &["query", "top_k", "provider", "session_id"]) {
                     return Ok(error_response(
                         id,
                         -32602,
@@ -1122,6 +1122,33 @@ mod tests {
             })
             .unwrap();
         assert_eq!(response.error.unwrap().code, -32602);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_tool_accepts_session_id_argument() {
+        // Regression: the schema advertises session_id and the handler
+        // resolves it, so the argument allowlist must not reject it.
+        let root = temp_dir("mcp-session-id");
+        let mcp = test_mcp(root.clone(), vec![]);
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(4)),
+                method: "tools/call".to_string(),
+                params: Some(json!({
+                    "name": "search",
+                    "arguments": { "query": "docker", "session_id": "sess-abc" }
+                })),
+            })
+            .unwrap();
+        match response.error {
+            None => {}
+            Some(error) => assert!(
+                !error.message.contains("unknown search argument"),
+                "session_id was rejected: {}",
+                error.message
+            ),
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -1,30 +1,29 @@
-//! Entity-relation (SPO) extraction and shared-relation query.
+//! Entity-relation (SPO) fact store and structured query.
 //!
-//! Rule-based and dependency-free: verb-phrase patterns over dialogue turns
-//! with speaker attribution. Covers place-presence predicates (`visited`,
-//! `volunteered_at`) used by multi-hop "both X and Y" questions, e.g.
-//! "Which city have both Jean and John visited?".
+//! Extraction is dependency-parse based (`scripts/spacy_relations.py`):
+//! general grammatical rules over dependency labels produce
+//! `(subject, predicate, object)` triples, where the predicate is
+//! `verb_lemma[_prt][_prep]` (e.g. `go_to`, `be_in`, `volunteer_at`).
+//! No verb phrase is ever enumerated in code. The Rust side owns:
 //!
-//! Design notes:
-//! - Subjects resolve to the turn speaker for first-person / "we" phrasing;
-//!   an explicit capitalized name immediately before the verb wins.
-//! - Objects are noun phrases after the verb phrase; pronouns and articles
-//!   are stripped. No NER dependency: the patterns carry the semantics.
-//! - The query side ([`RelationIndex::query_shared`]) intersects objects
-//!   across subjects within a predicate family, so "went to X" (visited)
-//!   and "volunteer at X" (volunteered_at) can meet on the same object.
-//! - If spaCy ever becomes available here, this module is the seam to
-//!   upgrade extraction to dependency-parse triples; the store and query
-//!   API stay the same.
+//! - the predicate -> family lexicon ([`predicate_family`], declarative data);
+//! - the per-conversation fact index ([`RelationIndex`]);
+//! - subject resolution (exact, fuzzy, two-person elimination);
+//! - structured queries: [`RelationIndex::query_shared`] (multi-hop
+//!   "both X and Y" intersection) and [`RelationIndex::query_temporal_span`]
+//!   ("where was X between <dates>").
+//!
+//! Every relation carries the session date as a temporal anchor and a
+//! spaCy-NER place flag (`is_place`) backing the place-expectation filter.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
-use regex::Regex;
-use serde::Serialize;
-use std::sync::OnceLock;
+use serde::{Deserialize, Serialize};
 
 /// One dialogue turn to extract relations from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RelationTurn {
     /// Display name of the speaker, e.g. "Gina".
     pub speaker: String,
@@ -36,6 +35,110 @@ pub struct RelationTurn {
     pub turn_idx: usize,
     /// Document id this turn was indexed under.
     pub doc_id: String,
+    /// Raw session date string, e.g. "1:08 pm on 11 August, 2023".
+    pub session_date: Option<String>,
+}
+
+/// Calendar date used as a temporal anchor. Field order gives chronological
+/// ordering via the derived `Ord`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Ymd {
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
+}
+
+/// Month name (full or 3-letter) to month number.
+pub fn month_number(lower: &str) -> Option<u32> {
+    Some(match lower {
+        "january" | "jan" => 1,
+        "february" | "feb" => 2,
+        "march" | "mar" => 3,
+        "april" | "apr" => 4,
+        "may" => 5,
+        "june" | "jun" => 6,
+        "july" | "jul" => 7,
+        "august" | "aug" => 8,
+        "september" | "sep" | "sept" => 9,
+        "october" | "oct" => 10,
+        "november" | "nov" => 11,
+        "december" | "dec" => 12,
+        _ => return None,
+    })
+}
+
+/// Strip an English ordinal suffix ("11th" -> "11").
+fn strip_ordinal(w: &str) -> &str {
+    w.strip_suffix("st")
+        .or_else(|| w.strip_suffix("nd"))
+        .or_else(|| w.strip_suffix("rd"))
+        .or_else(|| w.strip_suffix("th"))
+        .unwrap_or(w)
+}
+
+/// Parse a LoCoMo session date like "1:08 pm on 11 August, 2023".
+/// Needs a month, an adjacent 1-2 digit day, and a 4-digit year.
+pub fn parse_session_date(s: &str) -> Option<Ymd> {
+    let words: Vec<&str> = s
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let mi = words
+        .iter()
+        .position(|w| month_number(&w.to_lowercase()).is_some())?;
+    let month = month_number(&words[mi].to_lowercase())?;
+    // Day: closest 1-2 digit number next to the month ("11 August",
+    // "August 11", "August 11th").
+    let mut day: Option<u32> = None;
+    for off in [1, 2] {
+        for j in [mi.checked_sub(off), mi.checked_add(off)]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(w) = words.get(j) {
+                let lowered = w.to_lowercase();
+                let digits = strip_ordinal(&lowered);
+                if digits.len() <= 2 && digits.chars().all(|c| c.is_ascii_digit()) {
+                    if let Ok(d) = digits.parse::<u32>() {
+                        if (1..=31).contains(&d) {
+                            day = Some(d);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if day.is_some() {
+            break;
+        }
+    }
+    let year = words.iter().find_map(|w| {
+        if w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()) {
+            w.parse::<i32>().ok()
+        } else {
+            None
+        }
+    })?;
+    Some(Ymd {
+        year,
+        month,
+        day: day?,
+    })
+}
+
+/// One raw triple from `scripts/spacy_relations.py` (JSON field-for-field).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawRelation {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub is_place: bool,
+    pub session_id: String,
+    pub turn_idx: usize,
+    pub doc_id: String,
+    pub session_date: Option<String>,
+    pub evidence: String,
+    pub confidence: f32,
 }
 
 /// One extracted (subject, predicate, object) triple with evidence.
@@ -45,39 +148,52 @@ pub struct EntityRelation {
     pub subject: String,
     /// Normalized subject for matching.
     pub subject_norm: String,
-    /// Canonical predicate: "visited" or "volunteered_at".
-    pub predicate: &'static str,
+    /// Predicate string, e.g. "go_to" (`verb_lemma[_prt][_prep]`).
+    pub predicate: String,
     /// Display object, e.g. "Rome".
     pub object: String,
     /// Normalized object for intersection.
     pub object_norm: String,
+    /// spaCy-NER place flag (GPE/LOC/FAC overlap).
+    pub is_place: bool,
     pub session_id: String,
     pub turn_idx: usize,
     pub doc_id: String,
     /// "Speaker: text" evidence line.
     pub evidence: String,
     pub confidence: f32,
+    /// Temporal anchor from the session date; None when unparseable.
+    pub date: Option<Ymd>,
 }
 
 /// A family of predicates that count as "being somewhere" for intersection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PredicateFamily {
-    /// visited, volunteered_at: physical presence at a place.
+    /// go_to / be_in / volunteer_at / ...: physical presence at a place.
     PlacePresence,
 }
 
 impl PredicateFamily {
-    pub fn predicates(&self) -> &'static [&'static str] {
-        match self {
-            PredicateFamily::PlacePresence => &["visited", "volunteered_at"],
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             PredicateFamily::PlacePresence => "place-presence",
         }
     }
+}
+
+/// Declarative predicate -> family lexicon.
+///
+/// Predicates are `verb_lemma[_prt][_prep]` strings from the dependency
+/// extractor. This table is *data*: adding a new verb never changes the
+/// extraction or query mechanism.
+pub fn predicate_family(predicate: &str) -> Option<PredicateFamily> {
+    Some(match predicate {
+        "be_to" | "go_to" | "come_to" | "travel_to" | "move_to" | "fly_to" | "drive_to"
+        | "walk_to" | "take_to" | "get_to" | "head_to" | "return_to" | "visit" | "be_in"
+        | "stay_in" | "live_in" | "arrive_in" | "stay_at" | "arrive_at" | "volunteer_at"
+        | "work_at" => PredicateFamily::PlacePresence,
+        _ => return None,
+    })
 }
 
 /// Normalize a name or object for matching: lowercase, trim, collapse space.
@@ -112,255 +228,98 @@ fn levenshtein(a: &str, b: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Extraction patterns.
+// spaCy subprocess extraction.
 // ---------------------------------------------------------------------------
 
-/// Object capture: a noun phrase, terminated by punctuation, a clause
-/// boundary, or end of text. The boundary is a *consuming* group (the
-/// `regex` crate has no look-around); group 1 is the object.
-const OBJ: &str = r"([A-Za-z][A-Za-z\s\-']{0,38}?)";
-const BOUND: &str = r"(?:[.,;:!?]|\s+(?:to|and|but|or|because|when|where|which|that|who|with|for|from|at|in|on)\b|\s*$)";
-
-/// (regex source, predicate, confidence). Order matters: most specific first.
-fn patterns() -> &'static [(String, &'static str, f32)] {
-    static CELL: OnceLock<Vec<(String, &'static str, f32)>> = OnceLock::new();
-    CELL.get_or_init(|| {
-        vec![
-            // "been only to Rome once" / "have been to Paris"
-            (
-                format!(r"(?i)\bbeen\s+(?:only\s+)?to\s+{OBJ}{BOUND}"),
-                "visited",
-                1.0,
-            ),
-            // "took a short trip last week to Rome"
-            (
-                format!(
-                    r"(?i)\bt(?:ook|ake)\s+(?:a\s+)?(?:\w+\s+){{0,2}}trip\b[^.?!]{{0,30}}?\bto\s+{OBJ}{BOUND}"
-                ),
-                "visited",
-                0.9,
-            ),
-            // "went to a homeless shelter"
-            (
-                format!(r"(?i)\bwent\s+to\s+{OBJ}{BOUND}"),
-                "visited",
-                1.0,
-            ),
-            // "visited Rome" / "visiting Paris" / "visits Berlin"
-            (
-                format!(r"(?i)\bvisit(?:s|ed|ing)?\s+{OBJ}{BOUND}"),
-                "visited",
-                1.0,
-            ),
-            // "travelled to Tokyo"
-            (
-                format!(r"(?i)\btravel(?:led|ling|s)?\s+to\s+{OBJ}{BOUND}"),
-                "visited",
-                1.0,
-            ),
-            // "volunteer at a shelter" / "volunteered with Habitat"
-            (
-                format!(
-                    r"(?i)\bvolunteer(?:s|ed|ing)?\s+(?:at|with|for)\s+{OBJ}{BOUND}"
-                ),
-                "volunteered_at",
-                1.0,
-            ),
-            // relative clause: "a homeless shelter I volunteer at".
-            // Anchored on the preceding "to " so the object starts at the
-            // noun phrase (no look-around: the regex crate forbids it).
-            (
-                r"(?i)\bto\s+([A-Za-z][A-Za-z\-']*(?:\s+[A-Za-z][A-Za-z\-']*){0,3})\s+(?:that\s+)?i\s+volunteer\s+at\b"
-                    .to_string(),
-                "volunteered_at",
-                0.85,
-            ),
-        ]
-    })
+/// Python executable for the extractor scripts. Mirrors the project's
+/// `detect_python_executable` convention (`PYTHON_EXECUTABLE` / `PYTHON` /
+/// `VIRTUAL_ENV`, else `python3`).
+fn python_executable() -> String {
+    if let Ok(value) = std::env::var("PYTHON_EXECUTABLE") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
+    if let Ok(value) = std::env::var("PYTHON") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
+    "python3".to_string()
 }
 
-/// Compiled patterns, cached (extraction runs per turn at index time).
-fn compiled_patterns() -> &'static [(Regex, &'static str, f32)] {
-    static CELL: OnceLock<Vec<(Regex, &'static str, f32)>> = OnceLock::new();
-    CELL.get_or_init(|| {
-        patterns()
-            .iter()
-            .map(|(src, pred, conf)| {
-                (
-                    Regex::new(src).expect("valid relation pattern"),
-                    *pred,
-                    *conf,
-                )
-            })
-            .collect()
-    })
-}
-
-/// Words stripped from the front of a captured object.
-const LEADING_STRIP: &[&str] = &[
-    "a", "an", "the", "to", "at", "in", "of", "for", "with", "on",
-];
-
-/// Trailing adverbs stripped from a captured object ("Rome once" -> "Rome").
-const TRAILING_STRIP: &[&str] = &[
-    "once",
-    "twice",
-    "yesterday",
-    "today",
-    "tomorrow",
-    "again",
-    "before",
-    "ago",
-    "recently",
-    "lately",
-    "already",
-    "just",
-    "still",
-    "there",
-];
-
-/// Pronouns / deictics that are never valid objects.
-const BAD_OBJECTS: &[&str] = &[
-    "it", "them", "him", "her", "us", "me", "this", "that", "there", "here",
-];
-
-/// Pronouns that never name an explicit subject.
-const PRONOUNS: &[&str] = &["i", "we", "you", "he", "she", "it", "they", "this", "that"];
-
-/// Greetings / interjections that look like names but aren't.
-const NOT_NAMES: &[&str] = &[
-    "hey", "hi", "hello", "wow", "oh", "well", "yeah", "yes", "no", "ok", "okay", "thanks",
-    "thank", "please", "sorry",
-];
-
-fn clean_object(raw: &str) -> Option<String> {
-    let mut words: Vec<&str> = raw.split_whitespace().collect();
-    while let Some(first) = words.first() {
-        if LEADING_STRIP.contains(&first.to_lowercase().as_str()) {
-            words.remove(0);
-        } else {
-            break;
+/// Run the dependency-parse extractor (`scripts/spacy_relations.py`) over the
+/// turns and return raw triples.
+///
+/// Never panics: any failure (missing Python/spaCy, bad output) yields an
+/// empty vec and the caller declines to the adaptive retrieval path.
+pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> Vec<RawRelation> {
+    let script =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_relations.py");
+    if !script.exists() {
+        eprintln!("relations: extractor script missing: {}", script.display());
+        return Vec::new();
+    }
+    let payload = serde_json::json!({"model": "en_core_web_sm", "turns": turns});
+    let mut child = match Command::new(python_executable())
+        .arg(&script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("relations: failed to spawn extractor: {e}");
+            return Vec::new();
+        }
+    };
+    let write_result = child
+        .stdin
+        .as_mut()
+        .map(|stdin| {
+            let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+            stdin.write_all(&bytes).and_then(|_| stdin.flush())
+        })
+        .unwrap_or(Ok(()));
+    if let Err(e) = write_result {
+        eprintln!("relations: failed to write extractor input: {e}");
+        return Vec::new();
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(e) => {
+            eprintln!("relations: extractor wait failed: {e}");
+            return Vec::new();
+        }
+    };
+    if !output.status.success() {
+        eprintln!(
+            "relations: extractor failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(300)
+                .collect::<String>()
+        );
+        return Vec::new();
+    }
+    #[derive(Deserialize)]
+    struct Output {
+        relations: Vec<RawRelation>,
+    }
+    match serde_json::from_slice::<Output>(&output.stdout) {
+        Ok(parsed) => parsed.relations,
+        Err(e) => {
+            eprintln!("relations: bad extractor output: {e}");
+            Vec::new()
         }
     }
-    while let Some(last) = words.last() {
-        if TRAILING_STRIP.contains(&last.to_lowercase().as_str()) {
-            words.pop();
-        } else {
-            break;
-        }
-    }
-    if words.is_empty() {
-        return None;
-    }
-    let object = words.join(" ");
-    let norm = normalize_relation_token(&object);
-    if norm.is_empty() || BAD_OBJECTS.contains(&norm.as_str()) {
-        return None;
-    }
-    // Single generic nouns ("place", "spot") carry no signal.
-    if words.len() == 1 && matches!(norm.as_str(), "place" | "spot" | "trip") {
-        return None;
-    }
-    Some(object)
-}
-
-/// Find an explicit capitalized name just before the match; else the speaker.
-/// Leading vocatives ("Hey Gina! ...") address someone and are skipped.
-fn resolve_match_subject(text: &str, match_start: usize, speaker: &str) -> String {
-    let before = &text[..match_start];
-    // Last 1-3 words before the verb phrase.
-    let tail: Vec<&str> = before.split_whitespace().rev().take(3).collect();
-    for word in tail.iter().rev() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-        let lower = clean.to_lowercase();
-        if clean.len() >= 3
-            && clean.chars().next().is_some_and(|c| c.is_uppercase())
-            && !PRONOUNS.contains(&lower.as_str())
-            && !NOT_NAMES.contains(&lower.as_str())
-            && !is_vocative(before, clean)
-        {
-            return clean.to_string();
-        }
-    }
-    speaker.to_string()
-}
-
-/// True if `name` appears as a leading vocative ("Hey Gina! ...", "John, ...").
-fn is_vocative(before: &str, name: &str) -> bool {
-    let trimmed = before.trim_start();
-    // Vocative = within the first few words and followed by ! or , .
-    let prefix: String = trimmed
-        .split_whitespace()
-        .take(4)
-        .collect::<Vec<_>>()
-        .join(" ");
-    // Find the name in the prefix; check the char after it.
-    if let Some(pos) = prefix.find(name) {
-        let after = prefix[pos + name.len()..].chars().next();
-        if matches!(after, Some('!') | Some(',')) {
-            return true;
-        }
-    }
-    // Also: "Hey <Name>!" greeting form (case-insensitive).
-    let lower_prefix = prefix.to_lowercase();
-    let lower_name = name.to_lowercase();
-    for greet in ["hey", "hi", "hello"] {
-        let gp = format!("{greet} {lower_name}");
-        if let Some(pos) = lower_prefix.find(&gp) {
-            let after = lower_prefix[pos + gp.len()..].chars().next();
-            if matches!(after, Some('!') | Some(',')) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Extract (subject, predicate, object) triples from dialogue turns.
-pub fn extract_relations(turns: &[RelationTurn]) -> Vec<EntityRelation> {
-    let mut out = Vec::new();
-    for turn in turns {
-        let mut seen: HashSet<(String, &'static str, String)> = HashSet::new();
-        for (re, predicate, confidence) in compiled_patterns() {
-            for caps in re.captures_iter(&turn.text) {
-                let raw_obj = match caps.get(1) {
-                    Some(m) => m.as_str(),
-                    None => continue,
-                };
-                let object = match clean_object(raw_obj) {
-                    Some(o) => o,
-                    None => continue,
-                };
-                let m0 = caps.get(0).expect("full match");
-                let subject = resolve_match_subject(&turn.text, m0.start(), &turn.speaker);
-                let key = (
-                    normalize_relation_token(&subject),
-                    *predicate,
-                    normalize_relation_token(&object),
-                );
-                if !seen.insert(key.clone()) {
-                    continue;
-                }
-                out.push(EntityRelation {
-                    subject: subject.clone(),
-                    subject_norm: key.0,
-                    predicate,
-                    object: object.clone(),
-                    object_norm: key.2,
-                    session_id: turn.session_id.clone(),
-                    turn_idx: turn.turn_idx,
-                    doc_id: turn.doc_id.clone(),
-                    evidence: format!("{}: {}", turn.speaker, turn.text),
-                    confidence: *confidence,
-                });
-            }
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
-// Relation index + shared-relation query.
+// Relation index + structured query.
 // ---------------------------------------------------------------------------
 
 /// One indexed hit for (subject, predicate).
@@ -368,11 +327,14 @@ pub fn extract_relations(turns: &[RelationTurn]) -> Vec<EntityRelation> {
 pub struct RelationHit {
     pub object: String,
     pub object_norm: String,
+    pub is_place: bool,
     pub session_id: String,
     pub turn_idx: usize,
     pub doc_id: String,
     pub evidence: String,
     pub confidence: f32,
+    /// Temporal anchor from the session date; None when unparseable.
+    pub date: Option<Ymd>,
 }
 
 /// One object shared by all queried subjects, with per-subject evidence.
@@ -397,15 +359,15 @@ pub struct SharedEvidence {
 /// Per-conversation relation index: (subject_norm, predicate) -> hits.
 #[derive(Debug, Default)]
 pub struct RelationIndex {
-    by_sp: HashMap<(String, &'static str), Vec<RelationHit>>,
+    by_sp: HashMap<(String, String), Vec<RelationHit>>,
     /// Display names of known persons (speakers first).
     pub persons: Vec<String>,
     person_norms: Vec<String>,
 }
 
 impl RelationIndex {
-    /// Build from dialogue turns (extraction + indexing).
-    pub fn build(turns: &[RelationTurn]) -> Self {
+    /// Build from dialogue turns (persons) and raw extractor triples.
+    pub fn build(turns: &[RelationTurn], raw: &[RawRelation]) -> Self {
         let mut idx = RelationIndex::default();
         let mut seen_person: HashSet<String> = HashSet::new();
         for turn in turns {
@@ -415,24 +377,31 @@ impl RelationIndex {
                 idx.person_norms.push(norm);
             }
         }
-        for rel in extract_relations(turns) {
+        for rel in raw {
+            let subject_norm = normalize_relation_token(&rel.subject);
+            let object_norm = normalize_relation_token(&rel.object);
+            if subject_norm.is_empty() || object_norm.is_empty() {
+                continue;
+            }
             // Fold named subjects into the person list.
-            let snorm = rel.subject_norm.clone();
-            if !idx.person_norms.contains(&snorm) {
-                idx.person_norms.push(snorm.clone());
+            if !idx.person_norms.contains(&subject_norm) {
+                idx.person_norms.push(subject_norm.clone());
                 idx.persons.push(rel.subject.clone());
             }
+            let date = rel.session_date.as_deref().and_then(parse_session_date);
             idx.by_sp
-                .entry((snorm, rel.predicate))
+                .entry((subject_norm, rel.predicate.clone()))
                 .or_default()
                 .push(RelationHit {
-                    object: rel.object,
-                    object_norm: rel.object_norm,
-                    session_id: rel.session_id,
+                    object: rel.object.clone(),
+                    object_norm,
+                    is_place: rel.is_place,
+                    session_id: rel.session_id.clone(),
                     turn_idx: rel.turn_idx,
-                    doc_id: rel.doc_id,
-                    evidence: rel.evidence,
+                    doc_id: rel.doc_id.clone(),
+                    evidence: rel.evidence.clone(),
                     confidence: rel.confidence,
+                    date,
                 });
         }
         idx
@@ -445,6 +414,23 @@ impl RelationIndex {
 
     pub fn is_empty(&self) -> bool {
         self.by_sp.is_empty()
+    }
+
+    /// Total indexed triples.
+    pub fn triple_count(&self) -> usize {
+        self.by_sp.values().map(Vec::len).sum()
+    }
+
+    /// Hits for one subject under any predicate in the family.
+    fn hits_for<'a>(
+        &'a self,
+        snorm: &'a str,
+        family: PredicateFamily,
+    ) -> impl Iterator<Item = &'a RelationHit> {
+        self.by_sp
+            .iter()
+            .filter(move |((s, p), _)| s == snorm && predicate_family(p) == Some(family))
+            .flat_map(|(_, hits)| hits.iter())
     }
 
     /// Resolve display names to normalized person ids.
@@ -513,19 +499,15 @@ impl RelationIndex {
         let mut per_subject: Vec<HashMap<String, (String, Vec<RelationHit>)>> = Vec::new();
         for snorm in &subjects {
             let mut objects: HashMap<String, (String, Vec<RelationHit>)> = HashMap::new();
-            for pred in family.predicates() {
-                if let Some(hits) = self.by_sp.get(&(snorm.clone(), *pred)) {
-                    for hit in hits {
-                        if expect_place && !looks_like_place(&hit.object) {
-                            continue;
-                        }
-                        objects
-                            .entry(hit.object_norm.clone())
-                            .or_insert_with(|| (hit.object.clone(), Vec::new()))
-                            .1
-                            .push(hit.clone());
-                    }
+            for hit in self.hits_for(snorm, family) {
+                if expect_place && !hit.is_place {
+                    continue;
                 }
+                objects
+                    .entry(hit.object_norm.clone())
+                    .or_insert_with(|| (hit.object.clone(), Vec::new()))
+                    .1
+                    .push(hit.clone());
             }
             per_subject.push(objects);
         }
@@ -566,105 +548,371 @@ impl RelationIndex {
         });
         Some(shared)
     }
+
+    /// Objects related to one subject under the family whose session date
+    /// falls inside `[start, end]` (inclusive), e.g. "Where was John between
+    /// August 11 and August 15 2023?".
+    ///
+    /// Returns None when the subject cannot be resolved (caller declines to
+    /// the adaptive path); relations without a parseable date are excluded.
+    /// Reuses [`SharedObject`] with single-subject evidence.
+    pub fn query_temporal_span(
+        &self,
+        name: &str,
+        family: PredicateFamily,
+        start: Ymd,
+        end: Ymd,
+        expect_place: bool,
+    ) -> Option<Vec<SharedObject>> {
+        let subjects = self.resolve_subjects(std::slice::from_ref(&name.to_string()))?;
+        let snorm = &subjects[0];
+        let mut objects: HashMap<String, (String, Vec<SharedEvidence>, f32)> = HashMap::new();
+        for hit in self.hits_for(snorm, family) {
+            let date = match hit.date {
+                Some(d) => d,
+                None => continue,
+            };
+            if date < start || date > end {
+                continue;
+            }
+            if expect_place && !hit.is_place {
+                continue;
+            }
+            let entry = objects
+                .entry(hit.object_norm.clone())
+                .or_insert_with(|| (hit.object.clone(), Vec::new(), 0.0));
+            entry.2 += hit.confidence;
+            entry.1.push(SharedEvidence {
+                subject: snorm.clone(),
+                session_id: hit.session_id.clone(),
+                turn_idx: hit.turn_idx,
+                doc_id: hit.doc_id.clone(),
+                text: hit.evidence.clone(),
+            });
+        }
+        let mut out: Vec<SharedObject> = objects
+            .into_iter()
+            .map(|(object_norm, (object, evidence, score))| SharedObject {
+                object,
+                object_norm,
+                evidence,
+                score,
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.object.cmp(&b.object))
+        });
+        Some(out)
+    }
 }
 
-/// Heuristic place check for the expect_place filter: proper-noun object.
-fn looks_like_place(object: &str) -> bool {
-    let first = object.split_whitespace().next().unwrap_or("");
-    first.chars().next().is_some_and(|c| c.is_uppercase())
+// ---------------------------------------------------------------------------
+// Question analysis: (persons, time window, answer type) -> structured query.
+// ---------------------------------------------------------------------------
+
+/// A structured fact query over the relation index.
+///
+/// Three independent analyzers extract person candidates (capitalized words
+/// that are not question openers or month names), an optional time window
+/// (general date grammar), and the answer type (wh-word / answer noun ->
+/// family, declarative). Composition then picks the query: 2+ persons ->
+/// shared-relation intersection; exactly one person plus a time window ->
+/// temporal-span filter. Anything else declines (None) to the adaptive
+/// retrieval path. Adding a question shape never adds a branch here; it
+/// adds an entry to the answer-type table or the date grammar.
+#[derive(Debug, Clone)]
+pub struct StructuredFactQuery {
+    /// Person display names as written in the question.
+    pub persons: Vec<String>,
+    pub family: PredicateFamily,
+    /// Inclusive date window, when the question carries one.
+    pub time_window: Option<(Ymd, Ymd)>,
+    pub expect_place: bool,
+}
+
+/// Question openers / auxiliaries that are never person names.
+const NON_NAMES: &[&str] = &[
+    "what", "which", "where", "when", "who", "whom", "whose", "how", "did", "does", "do", "is",
+    "are", "was", "were", "has", "have", "had", "can", "could", "would", "will",
+];
+
+/// Person-name candidates: capitalized words that are not question openers
+/// or month names. Exact/fuzzy/elimination resolution happens downstream in
+/// [`RelationIndex::resolve_subjects`], so unresolvable names (e.g. "Jean"
+/// for "Gina") are kept as candidates.
+fn extract_person_candidates(question: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for word in question.split_whitespace() {
+        let clean: String = word
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_string();
+        let lower = clean.to_lowercase();
+        if clean.len() >= 3
+            && clean.chars().next().is_some_and(|c| c.is_uppercase())
+            && !NON_NAMES.contains(&lower.as_str())
+            && month_number(&lower).is_none()
+        {
+            out.push(clean);
+        }
+    }
+    out
+}
+
+/// Find a 4-digit year in text.
+fn find_year(text: &str) -> Option<i32> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
+        .find_map(|w| w.parse::<i32>().ok())
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
+/// Inclusive date window from general date grammar: "between <date> and
+/// <date>", "from <date> to <date>", "in <year>", "in <month> <year>".
+/// A date fragment without a year borrows the year found elsewhere in the
+/// question ("between August 11 and August 15 2023").
+fn extract_time_window(question: &str) -> Option<(Ymd, Ymd)> {
+    let ql = question.to_lowercase();
+    for (open, sep) in [("between", "and"), ("from", "to")] {
+        if let Some(rest) = ql.split(open).nth(1) {
+            let mut parts = rest.split(sep);
+            let a = parts.next()?.trim();
+            let b = parts.next().unwrap_or("").trim();
+            if a.is_empty() || b.is_empty() {
+                continue;
+            }
+            let year = find_year(&format!("{a} {b}"))?;
+            let d1 = parse_session_date(&format!("{a} {year}"))?;
+            let d2 = parse_session_date(&format!("{b} {year}"))?;
+            let (start, end) = if d1 <= d2 { (d1, d2) } else { (d2, d1) };
+            return Some((start, end));
+        }
+    }
+    // "in <year>" -> whole year; "in <month> <year>" -> whole month.
+    if let Some(rest) = ql.split("in ").nth(1) {
+        let head: String = rest.chars().take(32).collect();
+        if let Some(year) = find_year(&head) {
+            let first_word = head
+                .split(|c: char| !c.is_alphabetic())
+                .find(|w| !w.is_empty())
+                .unwrap_or("");
+            if let Some(month) = month_number(first_word) {
+                return Some((
+                    Ymd {
+                        year,
+                        month,
+                        day: 1,
+                    },
+                    Ymd {
+                        year,
+                        month,
+                        day: days_in_month(year, month),
+                    },
+                ));
+            }
+            return Some((
+                Ymd {
+                    year,
+                    month: 1,
+                    day: 1,
+                },
+                Ymd {
+                    year,
+                    month: 12,
+                    day: 31,
+                },
+            ));
+        }
+    }
+    None
+}
+
+/// Answer type: (family, expect_place) from the question's wh-word / answer
+/// noun. Declarative table; adding an answer shape never changes the
+/// analyzers or the composition below.
+fn extract_answer_type(question: &str) -> Option<(PredicateFamily, bool)> {
+    let ql: String = question
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    let ql = ql.split_whitespace().collect::<Vec<_>>().join(" ");
+    if ql.starts_with("where ") {
+        return Some((PredicateFamily::PlacePresence, true));
+    }
+    if ql.contains("which city") || ql.contains("what city") {
+        return Some((PredicateFamily::PlacePresence, true));
+    }
+    if ql.contains("volunteering") {
+        return Some((PredicateFamily::PlacePresence, false));
+    }
+    None
+}
+
+/// Analyze a question into a structured fact query, or decline (None) to
+/// the adaptive retrieval path.
+pub fn analyze_fact_question(question: &str) -> Option<StructuredFactQuery> {
+    let (family, expect_place) = extract_answer_type(question)?;
+    let persons = extract_person_candidates(question);
+    if persons.is_empty() {
+        return None;
+    }
+    let time_window = extract_time_window(question);
+    match (persons.len(), time_window) {
+        (1, Some(window)) => Some(StructuredFactQuery {
+            persons,
+            family,
+            time_window: Some(window),
+            expect_place,
+        }),
+        (2.., _) => Some(StructuredFactQuery {
+            persons,
+            family,
+            time_window: None,
+            expect_place,
+        }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn turn(speaker: &str, text: &str, session: &str, idx: usize) -> RelationTurn {
-        RelationTurn {
-            speaker: speaker.to_string(),
-            text: text.to_string(),
-            session_id: session.to_string(),
-            turn_idx: idx,
-            doc_id: format!("{session}::turn{idx}"),
+    /// Raw triples exactly as `scripts/spacy_relations.py` emits them for the
+    /// gold turns (verified by running the script; see /tmp/gen_fix.py).
+    fn fixture_raw() -> Vec<RawRelation> {
+        serde_json::from_str(
+            r#"[
+            {"subject":"Gina","predicate":"be_to","object":"Rome","is_place":true,"session_id":"conv-30::session_2","turn_idx":5,"doc_id":"d1","session_date":null,"evidence":"Gina: Been only to Rome once.","confidence":0.9},
+            {"subject":"Jon","predicate":"take_to","object":"Rome","is_place":true,"session_id":"conv-30::session_15","turn_idx":1,"doc_id":"d2","session_date":null,"evidence":"Jon: Took a short trip last week to Rome.","confidence":0.9},
+            {"subject":"John","predicate":"go_to","object":"homeless shelter","is_place":false,"session_id":"conv-41::session_3","turn_idx":5,"doc_id":"d3","session_date":null,"evidence":"John: We went to a homeless shelter.","confidence":1.0},
+            {"subject":"Maria","predicate":"volunteer_at","object":"homeless shelter","is_place":false,"session_id":"conv-41::session_2","turn_idx":1,"doc_id":"d4","session_date":null,"evidence":"Maria: I volunteer at a homeless shelter.","confidence":0.85},
+            {"subject":"Maria","predicate":"volunteer_at","object":"yesterday","is_place":false,"session_id":"conv-41::session_2","turn_idx":1,"doc_id":"d4","session_date":null,"evidence":"Maria: I volunteer at a homeless shelter.","confidence":1.0},
+            {"subject":"John","predicate":"take_to","object":"new place","is_place":false,"session_id":"conv-43::session_6","turn_idx":0,"doc_id":"d5","session_date":"1:08 pm on 11 August, 2023","evidence":"John: Took a trip to a new place.","confidence":0.9},
+            {"subject":"John","predicate":"be_in","object":"Chicago","is_place":true,"session_id":"conv-43::session_6","turn_idx":2,"doc_id":"d6","session_date":"1:08 pm on 11 August, 2023","evidence":"John: I was in Chicago.","confidence":1.0},
+            {"subject":"John","predicate":"meet_up_with","object":"teammates","is_place":false,"session_id":"conv-43::session_7","turn_idx":0,"doc_id":"d7","session_date":"7:54 pm on 17 August, 2023","evidence":"John: I met back up with my teammates.","confidence":1.0}
+        ]"#,
+        )
+        .expect("valid fixture json")
+    }
+
+    fn fixture_turns() -> Vec<RelationTurn> {
+        ["Gina", "Jon", "John", "Maria"]
+            .into_iter()
+            .map(|s| RelationTurn {
+                speaker: s.to_string(),
+                text: String::new(),
+                session_id: "s".to_string(),
+                turn_idx: 0,
+                doc_id: "d".to_string(),
+                session_date: None,
+            })
+            .collect()
+    }
+
+    fn fixture_index() -> RelationIndex {
+        RelationIndex::build(&fixture_turns(), &fixture_raw())
+    }
+
+    /// Two-person index (Jon + Gina) for the elimination rule.
+    fn fixture_index_rome() -> RelationIndex {
+        let turns = ["Jon", "Gina"]
+            .into_iter()
+            .map(|s| RelationTurn {
+                speaker: s.to_string(),
+                text: String::new(),
+                session_id: "s".to_string(),
+                turn_idx: 0,
+                doc_id: "d".to_string(),
+                session_date: None,
+            })
+            .collect::<Vec<_>>();
+        let raw: Vec<RawRelation> = fixture_raw()
+            .into_iter()
+            .filter(|r| r.session_id.starts_with("conv-30"))
+            .collect();
+        RelationIndex::build(&turns, &raw)
+    }
+
+    #[test]
+    fn raw_relation_deserializes_script_output() {
+        let raw = fixture_raw();
+        assert_eq!(raw.len(), 8);
+        assert_eq!(raw[1].predicate, "take_to");
+        assert!(raw[1].is_place);
+        assert_eq!(
+            raw[6].session_date.as_deref(),
+            Some("1:08 pm on 11 August, 2023")
+        );
+    }
+
+    #[test]
+    fn predicate_family_lexicon() {
+        for p in [
+            "be_to",
+            "go_to",
+            "come_to",
+            "travel_to",
+            "take_to",
+            "visit",
+            "be_in",
+            "stay_in",
+            "volunteer_at",
+            "work_at",
+        ] {
+            assert_eq!(
+                predicate_family(p),
+                Some(PredicateFamily::PlacePresence),
+                "predicate {p}"
+            );
+        }
+        for p in ["donate", "take", "have", "meet_up_with", "twist", "love"] {
+            assert_eq!(predicate_family(p), None, "predicate {p}");
         }
     }
 
     #[test]
-    fn extract_been_to_with_speaker_subject() {
-        let turns = vec![turn(
-            "Gina",
-            "Paris?! That is really great Jon! Never had a chance to visit it. Been only to Rome once.",
-            "conv-30::session_2",
-            5,
-        )];
-        let rels = extract_relations(&turns);
-        assert_eq!(rels.len(), 1, "rels: {rels:?}");
-        let r = &rels[0];
-        assert_eq!(r.subject, "Gina");
-        assert_eq!(r.predicate, "visited");
-        assert_eq!(r.object, "Rome");
-        // "to visit it" must not produce a triple (pronoun object).
-        assert!(!rels.iter().any(|x| x.object_norm == "it"));
-    }
-
-    #[test]
-    fn extract_trip_to_light_verb() {
-        let turns = vec![turn(
-            "Jon",
-            "Hey Gina! Took a short trip last week to Rome to clear my mind a little.",
-            "conv-30::session_15",
-            1,
-        )];
-        let rels = extract_relations(&turns);
-        assert_eq!(rels.len(), 1, "rels: {rels:?}");
-        assert_eq!(rels[0].subject, "Jon");
-        assert_eq!(rels[0].predicate, "visited");
-        assert_eq!(rels[0].object, "Rome");
-    }
-
-    #[test]
-    fn extract_went_to_with_we_subject() {
-        let turns = vec![turn(
-            "John",
-            "We went to a homeless shelter to give out food and supplies.",
-            "conv-41::session_3",
-            5,
-        )];
-        let rels = extract_relations(&turns);
-        assert_eq!(rels.len(), 1, "rels: {rels:?}");
-        assert_eq!(rels[0].subject, "John");
-        assert_eq!(rels[0].predicate, "visited");
-        assert_eq!(rels[0].object, "homeless shelter");
-    }
-
-    #[test]
-    fn extract_volunteer_at_relative_clause() {
-        let turns = vec![turn(
-            "Maria",
-            "I donated my old car to a homeless shelter I volunteer at yesterday.",
-            "conv-41::session_2",
-            1,
-        )];
-        let rels = extract_relations(&turns);
-        assert_eq!(rels.len(), 1, "rels: {rels:?}");
-        assert_eq!(rels[0].subject, "Maria");
-        assert_eq!(rels[0].predicate, "volunteered_at");
-        assert_eq!(rels[0].object, "homeless shelter");
-    }
-
-    #[test]
-    fn no_triple_without_verb_phrase() {
-        let turns = vec![turn("Jon", "Paris?! That is really great!", "s", 0)];
-        assert!(extract_relations(&turns).is_empty());
+    fn build_indexes_persons_and_triples() {
+        let idx = fixture_index();
+        assert_eq!(idx.triple_count(), 8);
+        for p in ["gina", "jon", "john", "maria"] {
+            assert!(idx.person_norms.contains(&p.to_string()), "missing {p}");
+        }
     }
 
     #[test]
     fn resolve_subjects_exact_fuzzy_elimination() {
-        let turns = vec![
-            turn("Jon", "Took a trip to Rome.", "s1", 0),
-            turn("Gina", "Been to Rome.", "s2", 0),
-        ];
-        let idx = RelationIndex::build(&turns);
-        // Exact.
+        // Two-person conversation for the elimination rule.
+        let turns = ["Jon", "Gina"]
+            .into_iter()
+            .map(|s| RelationTurn {
+                speaker: s.to_string(),
+                text: String::new(),
+                session_id: "s".to_string(),
+                turn_idx: 0,
+                doc_id: "d".to_string(),
+                session_date: None,
+            })
+            .collect::<Vec<_>>();
+        let raw: Vec<RawRelation> = serde_json::from_str(
+            r#"[
+            {"subject":"Jon","predicate":"take_to","object":"Rome","is_place":true,"session_id":"s","turn_idx":0,"doc_id":"d","session_date":null,"evidence":"Jon: Took a trip to Rome.","confidence":0.9}
+        ]"#,
+        )
+        .unwrap();
+        let idx = RelationIndex::build(&turns, &raw);
         assert_eq!(
             idx.resolve_subjects(&["Jon".to_string(), "Gina".to_string()]),
             Some(vec!["jon".to_string(), "gina".to_string()])
@@ -683,17 +931,7 @@ mod tests {
 
     #[test]
     fn query_shared_intersects_across_predicates() {
-        let turns = vec![
-            turn("Gina", "Been only to Rome once.", "conv-30::session_2", 5),
-            turn(
-                "Jon",
-                "Took a short trip last week to Rome.",
-                "conv-30::session_15",
-                1,
-            ),
-            turn("Gina", "I love Paris.", "conv-30::session_3", 0),
-        ];
-        let idx = RelationIndex::build(&turns);
+        let idx = fixture_index_rome();
         let shared = idx
             .query_shared(
                 &["Jean".to_string(), "John".to_string()],
@@ -704,7 +942,6 @@ mod tests {
         assert_eq!(shared.len(), 1, "shared: {shared:?}");
         assert_eq!(shared[0].object, "Rome");
         assert_eq!(shared[0].evidence.len(), 2);
-        // Sessions are the gold ones.
         let sessions: HashSet<&str> = shared[0]
             .evidence
             .iter()
@@ -716,21 +953,7 @@ mod tests {
 
     #[test]
     fn query_shared_volunteering_family_bridge() {
-        let turns = vec![
-            turn(
-                "John",
-                "We went to a homeless shelter to give out food.",
-                "conv-41::session_3",
-                5,
-            ),
-            turn(
-                "Maria",
-                "I donated my car to a homeless shelter I volunteer at.",
-                "conv-41::session_2",
-                1,
-            ),
-        ];
-        let idx = RelationIndex::build(&turns);
+        let idx = fixture_index();
         let shared = idx
             .query_shared(
                 &["John".to_string(), "Maria".to_string()],
@@ -738,16 +961,15 @@ mod tests {
                 false,
             )
             .expect("resolves");
+        // "homeless shelter" intersects; Maria's noisy "yesterday" does not.
         assert_eq!(shared.len(), 1, "shared: {shared:?}");
         assert_eq!(shared[0].object, "homeless shelter");
     }
 
     #[test]
     fn query_shared_unresolvable_declines() {
-        let turns = vec![turn("Jon", "Took a trip to Rome.", "s1", 0)];
-        let idx = RelationIndex::build(&turns);
-        // Only one person known; "Zelda" cannot resolve and elimination
-        // needs exactly two persons.
+        let idx = fixture_index();
+        // "Zelda" cannot resolve and elimination needs exactly two persons.
         assert!(idx
             .query_shared(
                 &["Zelda".to_string(), "Jon".to_string()],
@@ -755,5 +977,197 @@ mod tests {
                 true
             )
             .is_none());
+    }
+
+    #[test]
+    fn parse_session_date_formats() {
+        assert_eq!(
+            parse_session_date("1:08 pm on 11 August, 2023"),
+            Some(Ymd {
+                year: 2023,
+                month: 8,
+                day: 11
+            })
+        );
+        assert_eq!(
+            parse_session_date("7:54 pm on 17 August, 2023"),
+            Some(Ymd {
+                year: 2023,
+                month: 8,
+                day: 17
+            })
+        );
+        assert_eq!(
+            parse_session_date("August 11th 2023"),
+            Some(Ymd {
+                year: 2023,
+                month: 8,
+                day: 11
+            })
+        );
+        assert_eq!(parse_session_date("no date here"), None);
+        assert_eq!(parse_session_date("August 2023"), None);
+    }
+
+    #[test]
+    fn query_temporal_span_chicago_window() {
+        let idx = fixture_index();
+        let start = Ymd {
+            year: 2023,
+            month: 8,
+            day: 11,
+        };
+        let end = Ymd {
+            year: 2023,
+            month: 8,
+            day: 15,
+        };
+        let hits = idx
+            .query_temporal_span("John", PredicateFamily::PlacePresence, start, end, true)
+            .expect("resolves");
+        // Only Chicago: "new place" is not place-like (NER), session_7 is
+        // outside the window, and meet_up_with is not a place predicate.
+        assert_eq!(hits.len(), 1, "hits: {hits:?}");
+        assert_eq!(hits[0].object, "Chicago");
+        let sessions: HashSet<&str> = hits[0]
+            .evidence
+            .iter()
+            .map(|e| e.session_id.as_str())
+            .collect();
+        assert_eq!(sessions, HashSet::from(["conv-43::session_6"]));
+    }
+
+    #[test]
+    fn query_temporal_span_outside_window_empty() {
+        let idx = fixture_index();
+        let hits = idx
+            .query_temporal_span(
+                "John",
+                PredicateFamily::PlacePresence,
+                Ymd {
+                    year: 2023,
+                    month: 8,
+                    day: 16,
+                },
+                Ymd {
+                    year: 2023,
+                    month: 8,
+                    day: 20,
+                },
+                true,
+            )
+            .expect("resolves");
+        assert!(hits.is_empty(), "hits: {hits:?}");
+    }
+
+    #[test]
+    fn query_temporal_span_unresolvable_declines() {
+        let idx = fixture_index();
+        assert!(idx
+            .query_temporal_span(
+                "Zelda",
+                PredicateFamily::PlacePresence,
+                Ymd {
+                    year: 2023,
+                    month: 8,
+                    day: 11
+                },
+                Ymd {
+                    year: 2023,
+                    month: 8,
+                    day: 15
+                },
+                true,
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn analyze_temporal_span_chicago_question() {
+        let q = analyze_fact_question("Where was John between August 11 and August 15 2023?")
+            .expect("should analyze");
+        assert_eq!(q.persons, vec!["John".to_string()]);
+        assert_eq!(q.family, PredicateFamily::PlacePresence);
+        assert!(q.expect_place);
+        let (start, end) = q.time_window.expect("should have window");
+        assert_eq!((start.year, start.month, start.day), (2023, 8, 11));
+        assert_eq!((end.year, end.month, end.day), (2023, 8, 15));
+    }
+
+    #[test]
+    fn analyze_shared_questions() {
+        let q = analyze_fact_question("Which city have both Jean and John visited?")
+            .expect("should analyze");
+        assert_eq!(q.persons, vec!["Jean".to_string(), "John".to_string()]);
+        assert_eq!(q.family, PredicateFamily::PlacePresence);
+        assert!(q.expect_place);
+        assert!(q.time_window.is_none());
+
+        let q = analyze_fact_question("What type of volunteering have John and Maria both done?")
+            .expect("should analyze");
+        assert_eq!(q.persons, vec!["John".to_string(), "Maria".to_string()]);
+        assert!(!q.expect_place);
+    }
+
+    #[test]
+    fn analyze_time_window_variants() {
+        let q = analyze_fact_question("Where was John from August 11 to August 15 2023?")
+            .expect("from/to");
+        let (s, e) = q.time_window.unwrap();
+        assert_eq!((s.month, s.day), (8, 11));
+        assert_eq!((e.month, e.day), (8, 15));
+
+        let q = analyze_fact_question("Where was John in 2023?").expect("in year");
+        let (s, e) = q.time_window.unwrap();
+        assert_eq!((s.month, s.day), (1, 1));
+        assert_eq!((e.month, e.day), (12, 31));
+
+        let q = analyze_fact_question("Where was John in August 2023?").expect("in month");
+        let (s, e) = q.time_window.unwrap();
+        assert_eq!((s.month, s.day, e.day), (8, 1, 31));
+    }
+
+    #[test]
+    fn analyze_declines_without_answer_type_or_person() {
+        assert!(analyze_fact_question("Did John visit Rome?").is_none());
+        assert!(
+            analyze_fact_question("What personal health incidents does Evan face in 2023?")
+                .is_none()
+        );
+        // Single person without a time window declines to the adaptive path.
+        assert!(analyze_fact_question("Where was John?").is_none());
+    }
+
+    #[test]
+    fn analyze_temporal_span_end_to_end() {
+        // Chicago question: analyzer -> index -> temporal-span hit.
+        let turns = ["John"]
+            .iter()
+            .map(|s| RelationTurn {
+                speaker: s.to_string(),
+                text: String::new(),
+                session_id: "s".to_string(),
+                turn_idx: 0,
+                doc_id: "d".to_string(),
+                session_date: None,
+            })
+            .collect::<Vec<_>>();
+        let raw: Vec<RawRelation> = serde_json::from_str(
+            r#"[
+            {"subject":"John","predicate":"be_in","object":"Chicago","is_place":true,"session_id":"D6:1","turn_idx":0,"doc_id":"d","session_date":"1:08 pm on 11 August, 2023","evidence":"John: I was in Chicago.","confidence":0.9},
+            {"subject":"John","predicate":"be_in","object":"Chicago","is_place":true,"session_id":"D7:1","turn_idx":0,"doc_id":"d","session_date":"7:54 pm on 17 August, 2023","evidence":"John: Chicago again.","confidence":0.9}
+        ]"#,
+        )
+        .unwrap();
+        let idx = RelationIndex::build(&turns, &raw);
+        let q = analyze_fact_question("Where was John between August 11 and August 15 2023?")
+            .expect("should analyze");
+        let (start, end) = q.time_window.unwrap();
+        let objs = idx
+            .query_temporal_span(&q.persons[0], q.family, start, end, q.expect_place)
+            .expect("should resolve");
+        assert_eq!(objs.len(), 1);
+        assert_eq!(objs[0].object, "Chicago");
+        assert_eq!(objs[0].evidence[0].session_id, "D6:1");
     }
 }

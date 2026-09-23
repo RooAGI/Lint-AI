@@ -23,8 +23,10 @@ use axum::{
 };
 use clap::Parser;
 use lint_ai::memory_api::{MemorySearchService, MemoryService, SearchRequest};
-use lint_ai::segments::relations::{RelationIndex, RelationTurn};
-use lint_ai::segments::{reveal_question, IntentOperation, SegmentRoutingStrategy};
+use lint_ai::segments::relations::{
+    analyze_fact_question, extract_relations_via_spacy, RelationIndex, RelationTurn, SharedObject,
+};
+use lint_ai::segments::SegmentRoutingStrategy;
 use lint_ai::{IndexStore, MemoryIndexLayout, PipelineOptions, SourceDocument};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -145,6 +147,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
                 session_id: group_id.clone(),
                 turn_idx,
                 doc_id: doc_id.clone(),
+                session_date: date.clone(),
             });
             docs.push(SourceDocument {
                 doc_id,
@@ -176,13 +179,17 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     }
     service.refresh().context("failed to build conv index")?;
     let searcher = service.published_search();
-    // Entity-relation sidecar: SPO triples over the raw turns for
-    // shared-relation ("both X and Y") questions.
-    let relations = RelationIndex::build(&rel_turns);
+    // Entity-relation sidecar: dependency-parse (subject, predicate, object)
+    // triples over the raw turns for structured fact queries
+    // ("both X and Y", "where was X between <dates>"). Extraction runs in
+    // one spaCy subprocess per conversation; any failure degrades to an
+    // empty index and the adaptive path.
+    let raw_relations = extract_relations_via_spacy(&rel_turns);
+    let relations = RelationIndex::build(&rel_turns, &raw_relations);
     eprintln!(
         "  relations for {}: {} triples, {} persons",
         conv.sample_id,
-        relations.len(),
+        relations.triple_count(),
         relations.persons.len()
     );
     Ok(ConvIndex {
@@ -208,34 +215,48 @@ async fn search(
     let k = p.k.clamp(1, 20);
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    // Shared-relation fast path: "both X and Y <verb>" questions are answered
-    // by intersecting per-subject relation objects; the evidence sessions go
-    // first, then the normal search backfills the rest.
-    let revealed = reveal_question(&p.q);
-    if revealed.operation == IntentOperation::SharedRelation {
-        if let Some(srq) = &revealed.shared_relation {
-            if let Some(shared) =
-                conv.relations
-                    .query_shared(&srq.subjects, srq.family, srq.expect_place)
-            {
-                for obj in &shared {
-                    for ev in &obj.evidence {
-                        if seen.insert(ev.session_id.clone()) {
-                            if let Some(text) = conv.session_text.get(&ev.session_id) {
-                                out.push(Hit {
-                                    session_id: ev.session_id.clone(),
-                                    score: 1000.0 + obj.score,
-                                    text: format!("[shared relation: {}] {}", obj.object, text),
-                                });
-                            }
-                        }
-                        if out.len() >= k {
-                            break;
+    // Structured fact path: independent analyzers extract (persons, time
+    // window, answer type) from the question; composition picks the
+    // shared-relation or temporal-span query. Evidence sessions go first,
+    // then the normal search backfills the rest.
+    if let Some(fq) = analyze_fact_question(&p.q) {
+        let temporal = fq.persons.len() == 1 && fq.time_window.is_some();
+        let hits: Option<Vec<SharedObject>> = match (fq.persons.len(), fq.time_window) {
+            (2.., _) => conv
+                .relations
+                .query_shared(&fq.persons, fq.family, fq.expect_place),
+            (1, Some((start, end))) => conv.relations.query_temporal_span(
+                &fq.persons[0],
+                fq.family,
+                start,
+                end,
+                fq.expect_place,
+            ),
+            _ => None,
+        };
+        if let Some(objs) = hits {
+            let label = if temporal {
+                "temporal relation"
+            } else {
+                "shared relation"
+            };
+            for obj in &objs {
+                for ev in &obj.evidence {
+                    if seen.insert(ev.session_id.clone()) {
+                        if let Some(text) = conv.session_text.get(&ev.session_id) {
+                            out.push(Hit {
+                                session_id: ev.session_id.clone(),
+                                score: 1000.0 + obj.score,
+                                text: format!("[{label}: {}] {text}", obj.object),
+                            });
                         }
                     }
                     if out.len() >= k {
                         break;
                     }
+                }
+                if out.len() >= k {
+                    break;
                 }
             }
         }

@@ -77,8 +77,8 @@ mod review;
 mod rules;
 mod symbols;
 mod temporal;
-mod tokenizer;
 mod tier1;
+mod tokenizer;
 mod usage;
 
 pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
@@ -116,6 +116,14 @@ pub use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
+use pyo3::types::PyAny;
+#[cfg(feature = "python")]
+use reqwest::blocking::Client;
+#[cfg(feature = "python")]
+use serde::de::DeserializeOwned;
+#[cfg(feature = "python")]
+use std::path::Path;
 
 #[cfg(feature = "python")]
 #[pyfunction]
@@ -124,80 +132,565 @@ fn version() -> &'static str {
 }
 
 #[cfg(feature = "python")]
-#[pyclass(name = "IndexStore", unsendable)]
-struct PyIndexStore {
-    inner: IndexStore,
+struct RemoteMemoryClient {
+    client: Client,
+    base_url: String,
+    api_key: Option<String>,
+}
+
+#[cfg(feature = "python")]
+impl RemoteMemoryClient {
+    fn new(base_url: String, api_key: Option<String>) -> anyhow::Result<Self> {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        anyhow::ensure!(!base_url.is_empty(), "base_url must not be empty");
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        Ok(Self {
+            client,
+            base_url,
+            api_key,
+        })
+    }
+
+    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::blocking::RequestBuilder {
+        let mut request = self
+            .client
+            .request(method, format!("{}{}", self.base_url, path));
+        if let Some(api_key) = &self.api_key {
+            request = request.bearer_auth(api_key);
+        }
+        request
+    }
+
+    fn decode<T: DeserializeOwned>(response: reqwest::blocking::Response) -> anyhow::Result<T> {
+        let status = response.status();
+        let body = response.text()?;
+        if !status.is_success() {
+            anyhow::bail!("remote memory request failed ({status}): {body}");
+        }
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    fn add(&self, request: &memory_api::AddRequest) -> anyhow::Result<memory_api::AddResponse> {
+        Self::decode(
+            self.request(reqwest::Method::POST, "/v1/memories")
+                .json(request)
+                .send()?,
+        )
+    }
+
+    fn search(
+        &self,
+        request: &memory_api::SearchRequest,
+    ) -> anyhow::Result<memory_api::SearchResponse> {
+        Self::decode(
+            self.request(reqwest::Method::POST, "/v1/memories/search")
+                .json(request)
+                .send()?,
+        )
+    }
+
+    fn get(
+        &self,
+        request: &memory_api::GetRequest,
+    ) -> anyhow::Result<Option<memory_api::MemoryRecord>> {
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("/v1/memories/{}", encode_path_segment(&request.memory_id)),
+            )
+            .query(&[
+                ("user_id", request.user_id.as_str()),
+                (
+                    "include_inactive",
+                    if request.include_inactive {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                ),
+            ])
+            .send()?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::decode(response).map(Some)
+    }
+
+    fn list(&self, request: &memory_api::ListRequest) -> anyhow::Result<memory_api::ListResponse> {
+        Self::decode(
+            self.request(reqwest::Method::GET, "/v1/memories")
+                .query(request)
+                .send()?,
+        )
+    }
+
+    fn update(
+        &self,
+        request: &memory_api::UpdateRequest,
+    ) -> anyhow::Result<Option<memory_api::MemoryRecord>> {
+        let response = self
+            .request(
+                reqwest::Method::PATCH,
+                &format!("/v1/memories/{}", encode_path_segment(&request.memory_id)),
+            )
+            .json(request)
+            .send()?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::decode(response).map(Some)
+    }
+
+    fn delete(&self, user_id: &str, memory_id: &str) -> anyhow::Result<bool> {
+        let response = self
+            .request(
+                reqwest::Method::DELETE,
+                &format!("/v1/memories/{}", encode_path_segment(memory_id)),
+            )
+            .query(&[("user_id", user_id)])
+            .send()?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("remote memory deletion failed ({status})");
+        }
+        Ok(true)
+    }
+
+    fn refresh(&self) -> anyhow::Result<()> {
+        let response = self
+            .request(reqwest::Method::POST, "/v1/memories/refresh")
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("remote memory refresh failed ({status})");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "python")]
+enum MemoryBackend {
+    Local(memory_api::MemoryService),
+    Remote(RemoteMemoryClient),
+}
+
+#[cfg(feature = "python")]
+struct PyMemoryCore {
+    backend: MemoryBackend,
+}
+
+#[cfg(feature = "python")]
+impl PyMemoryCore {
+    fn local(path: Option<String>) -> PyResult<Self> {
+        let store = match path {
+            Some(path) => {
+                memory_api::MemoryService::at_path(Path::new(&path), PipelineOptions::default())
+                    .map_err(runtime_error)?
+            }
+            None => memory_api::MemoryService::in_memory(PipelineOptions::default()),
+        };
+        Ok(Self {
+            backend: MemoryBackend::Local(store),
+        })
+    }
+
+    fn remote(base_url: String, api_key: Option<String>) -> PyResult<Self> {
+        Ok(Self {
+            backend: MemoryBackend::Remote(
+                RemoteMemoryClient::new(base_url, api_key).map_err(runtime_error)?,
+            ),
+        })
+    }
+
+    fn add(
+        &mut self,
+        py: Python<'_>,
+        request_id: String,
+        user_id: String,
+        session_id: String,
+        messages: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let messages = python_value_to_json(py, messages)?;
+        let messages = serde_json::from_value(messages).map_err(json_error)?;
+        let request = memory_api::AddRequest {
+            request_id,
+            messages,
+            user_id,
+            session_id,
+        };
+        let response = match &mut self.backend {
+            MemoryBackend::Local(service) => service.add(request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.add(&request)).map_err(runtime_error)?
+            }
+        };
+        json_to_python(py, &response)
+    }
+
+    fn search(
+        &mut self,
+        py: Python<'_>,
+        query: String,
+        user_id: String,
+        top_k: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let request = memory_api::SearchRequest {
+            query,
+            options: None,
+            user_id,
+            top_k,
+        };
+        let response = match &mut self.backend {
+            MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => py
+                .detach(|| client.search(&request))
+                .map_err(runtime_error)?,
+        };
+        json_to_python(py, &response.data)
+    }
+
+    fn get(
+        &self,
+        py: Python<'_>,
+        memory_id: String,
+        user_id: String,
+        include_inactive: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let request = memory_api::GetRequest {
+            user_id,
+            memory_id,
+            include_inactive,
+        };
+        let response = match &self.backend {
+            MemoryBackend::Local(service) => service.get(request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.get(&request)).map_err(runtime_error)?
+            }
+        };
+        json_to_python(py, &response)
+    }
+
+    fn list(
+        &self,
+        py: Python<'_>,
+        user_id: String,
+        session_id: Option<String>,
+        limit: usize,
+        cursor: Option<String>,
+        include_inactive: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let request = memory_api::ListRequest {
+            user_id,
+            session_id,
+            limit,
+            cursor,
+            include_inactive,
+        };
+        let response = match &self.backend {
+            MemoryBackend::Local(service) => service.list(request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.list(&request)).map_err(runtime_error)?
+            }
+        };
+        json_to_python(py, &response)
+    }
+
+    fn update(
+        &mut self,
+        py: Python<'_>,
+        memory_id: String,
+        user_id: String,
+        content: String,
+        role: Option<String>,
+        timestamp: Option<i64>,
+        expires_at_ms: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        let request = memory_api::UpdateRequest {
+            user_id,
+            memory_id,
+            content,
+            role,
+            timestamp,
+            expires_at_ms,
+        };
+        let response = match &mut self.backend {
+            MemoryBackend::Local(service) => service.update(request).map_err(runtime_error)?,
+            MemoryBackend::Remote(client) => py
+                .detach(|| client.update(&request))
+                .map_err(runtime_error)?,
+        };
+        json_to_python(py, &response)
+    }
+
+    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
+        match &mut self.backend {
+            MemoryBackend::Local(service) => {
+                service.delete(&user_id, &memory_id).map_err(runtime_error)
+            }
+            MemoryBackend::Remote(client) => py
+                .detach(|| client.delete(&user_id, &memory_id))
+                .map_err(runtime_error),
+        }
+    }
+
+    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
+        match &mut self.backend {
+            MemoryBackend::Local(service) => service.refresh().map_err(runtime_error),
+            MemoryBackend::Remote(client) => py.detach(|| client.refresh()).map_err(runtime_error),
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(name = "Memory", unsendable)]
+struct PyMemory {
+    inner: PyMemoryCore,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl PyIndexStore {
+impl PyMemory {
     #[new]
-    fn new() -> Self {
-        Self {
-            inner: IndexStore::in_memory(PipelineOptions::default()),
+    #[pyo3(signature = (path=None, base_url=None, api_key=None))]
+    fn new(
+        path: Option<String>,
+        base_url: Option<String>,
+        api_key: Option<String>,
+    ) -> PyResult<Self> {
+        if path.is_some() && base_url.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "path and base_url cannot both be set",
+            ));
         }
-    }
-
-    #[pyo3(signature = (doc_id, content, source=None, timestamp=None, group_id=None))]
-    fn upsert(
-        &mut self,
-        doc_id: String,
-        content: String,
-        source: Option<String>,
-        timestamp: Option<String>,
-        group_id: Option<String>,
-    ) {
-        let source = source.unwrap_or_else(|| format!("memory://{}", doc_id));
-        let doc = SourceDocument {
-            source,
-            concept: "memory".to_string(),
-            headings: vec![],
-            links: vec![],
-            timestamp,
-            doc_length: content.len(),
-            author_agent: None,
-            filters: std::collections::BTreeMap::new(),
-            group_id,
-            doc_id,
-            content,
+        let inner = match base_url {
+            Some(base_url) => PyMemoryCore::remote(base_url, api_key)?,
+            None => PyMemoryCore::local(path)?,
         };
-
-        self.inner.upsert(doc);
+        Ok(Self { inner })
     }
 
-    fn query(&mut self, py: Python<'_>, query: &str, top_k: usize) -> PyResult<Py<PyAny>> {
-        let results = self
-            .inner
-            .query(query, top_k)
-            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
-        let json = serde_json::to_string(&results)
-            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
-        let json_module = py.import("json")?;
-        Ok(json_module.getattr("loads")?.call1((json,))?.unbind())
+    #[pyo3(signature = (request_id, user_id, session_id, messages))]
+    fn add(
+        &mut self,
+        py: Python<'_>,
+        request_id: String,
+        user_id: String,
+        session_id: String,
+        messages: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner
+            .add(py, request_id, user_id, session_id, messages)
     }
 
-    fn remove(&mut self, doc_id: &str) -> bool {
-        self.inner.remove(doc_id).is_some()
+    fn search(
+        &mut self,
+        py: Python<'_>,
+        query: String,
+        user_id: String,
+        top_k: usize,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner.search(py, query, user_id, top_k)
     }
 
-    fn len(&self) -> usize {
-        self.inner.len()
+    #[pyo3(signature = (memory_id, user_id, include_inactive=false))]
+    fn get(
+        &self,
+        py: Python<'_>,
+        memory_id: String,
+        user_id: String,
+        include_inactive: bool,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner.get(py, memory_id, user_id, include_inactive)
     }
 
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    #[pyo3(signature = (user_id, session_id=None, limit=100, cursor=None, include_inactive=false))]
+    fn list(
+        &self,
+        py: Python<'_>,
+        user_id: String,
+        session_id: Option<String>,
+        limit: usize,
+        cursor: Option<String>,
+        include_inactive: bool,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner
+            .list(py, user_id, session_id, limit, cursor, include_inactive)
     }
 
-    fn is_dirty(&self) -> bool {
-        self.inner.is_dirty()
+    #[pyo3(signature = (memory_id, user_id, content, role=None, timestamp=None, expires_at_ms=None))]
+    fn update(
+        &mut self,
+        py: Python<'_>,
+        memory_id: String,
+        user_id: String,
+        content: String,
+        role: Option<String>,
+        timestamp: Option<i64>,
+        expires_at_ms: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner.update(
+            py,
+            memory_id,
+            user_id,
+            content,
+            role,
+            timestamp,
+            expires_at_ms,
+        )
     }
+
+    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
+        self.inner.delete(py, user_id, memory_id)
+    }
+
+    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.inner.refresh(py)
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(name = "RemoteMemory", unsendable)]
+struct PyRemoteMemory {
+    inner: PyMemoryCore,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyRemoteMemory {
+    #[new]
+    #[pyo3(signature = (base_url, api_key=None))]
+    fn new(base_url: String, api_key: Option<String>) -> PyResult<Self> {
+        Ok(Self {
+            inner: PyMemoryCore::remote(base_url, api_key)?,
+        })
+    }
+
+    #[pyo3(signature = (request_id, user_id, session_id, messages))]
+    fn add(
+        &mut self,
+        py: Python<'_>,
+        request_id: String,
+        user_id: String,
+        session_id: String,
+        messages: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner
+            .add(py, request_id, user_id, session_id, messages)
+    }
+
+    fn search(
+        &mut self,
+        py: Python<'_>,
+        query: String,
+        user_id: String,
+        top_k: usize,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner.search(py, query, user_id, top_k)
+    }
+
+    #[pyo3(signature = (memory_id, user_id, include_inactive=false))]
+    fn get(
+        &self,
+        py: Python<'_>,
+        memory_id: String,
+        user_id: String,
+        include_inactive: bool,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner.get(py, memory_id, user_id, include_inactive)
+    }
+
+    #[pyo3(signature = (user_id, session_id=None, limit=100, cursor=None, include_inactive=false))]
+    fn list(
+        &self,
+        py: Python<'_>,
+        user_id: String,
+        session_id: Option<String>,
+        limit: usize,
+        cursor: Option<String>,
+        include_inactive: bool,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner
+            .list(py, user_id, session_id, limit, cursor, include_inactive)
+    }
+
+    #[pyo3(signature = (memory_id, user_id, content, role=None, timestamp=None, expires_at_ms=None))]
+    fn update(
+        &mut self,
+        py: Python<'_>,
+        memory_id: String,
+        user_id: String,
+        content: String,
+        role: Option<String>,
+        timestamp: Option<i64>,
+        expires_at_ms: Option<u64>,
+    ) -> PyResult<Py<PyAny>> {
+        self.inner.update(
+            py,
+            memory_id,
+            user_id,
+            content,
+            role,
+            timestamp,
+            expires_at_ms,
+        )
+    }
+
+    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
+        self.inner.delete(py, user_id, memory_id)
+    }
+
+    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.inner.refresh(py)
+    }
+}
+
+#[cfg(feature = "python")]
+fn encode_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+#[cfg(feature = "python")]
+fn python_value_to_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    let json_module = py.import("json")?;
+    let encoded: String = json_module.getattr("dumps")?.call1((value,))?.extract()?;
+    serde_json::from_str(&encoded).map_err(json_error)
+}
+
+#[cfg(feature = "python")]
+fn json_to_python<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>> {
+    let encoded = serde_json::to_string(value).map_err(json_error)?;
+    let json_module = py.import("json")?;
+    Ok(json_module.getattr("loads")?.call1((encoded,))?.unbind())
+}
+
+#[cfg(feature = "python")]
+fn runtime_error(error: anyhow::Error) -> pyo3::PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(error.to_string())
+}
+
+#[cfg(feature = "python")]
+fn json_error(error: impl std::fmt::Display) -> pyo3::PyErr {
+    pyo3::exceptions::PyValueError::new_err(error.to_string())
 }
 
 #[cfg(feature = "python")]
 #[pymodule]
 fn lint_ai(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
-    m.add_class::<PyIndexStore>()?;
+    m.add_class::<PyMemory>()?;
+    m.add_class::<PyRemoteMemory>()?;
     Ok(())
 }

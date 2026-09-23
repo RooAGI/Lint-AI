@@ -1,7 +1,8 @@
 # Lint-AI server
 
-`server` exposes an HTTP Add/Search contract with Lint-AI's `IndexStore`
-as the memory backend. It is a standalone HTTP interface for any application;
+`server` exposes a versioned memory API backed by `MemoryService`. The storage
+engine is an implementation detail of that service; clients should use the
+memory endpoints rather than depend on `IndexStore`. It is a standalone HTTP interface for any application;
 `POST /add/batch` accepts up to 128 normal add requests and publishes one
 snapshot after the batch, while each request still enforces the 1,024-message
 limit.
@@ -98,8 +99,21 @@ with a non-empty `sub` claim and a valid `exp` claim; that subject is treated
 as the authenticated `user_id` and must match the request scope. `JWT_SECRET`
 takes precedence over the legacy shared `SERVER_TOKEN` mode.
 
-The server exposes `GET /health`, `POST /add`, `POST /add/batch`,
-`POST /search`, `POST /delete`, `POST /supersede`, and `POST /expire`.
+The server exposes `GET /health`, the legacy mutation/search routes, and the
+versioned memory routes:
+
+* `GET /v1/memories` lists memories with `user_id`, optional `session_id`,
+  `limit`, and cursor parameters.
+* `POST /v1/memories` adds memories.
+* `GET /v1/memories/:memory_id` retrieves one memory.
+* `PATCH /v1/memories/:memory_id` updates one memory.
+* `DELETE /v1/memories/:memory_id` deletes one memory.
+* `POST /v1/memories/search` searches memories.
+* `POST /v1/memories/refresh` publishes pending changes.
+
+The legacy routes are `POST /add`, `POST /add/batch`, `POST /search`,
+`POST /delete`, `POST /supersede`, and `POST /expire`; they remain for
+backward compatibility.
 
 ## Dashboard
 

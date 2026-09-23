@@ -1,6 +1,6 @@
 use axum::{
     error_handling::HandleErrorLayer,
-    extract::{Extension, Json, Path, State},
+    extract::{Extension, Json, Path, Query, State},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse},
@@ -10,7 +10,8 @@ use axum::{
 use clap::Parser;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use lint_ai::memory_api::{
-    AddRequest, DeleteRequest, MemorySearchService, MemoryService, SearchRequest, SupersedeRequest,
+    AddRequest, DeleteRequest, GetRequest, ListRequest, MemorySearchService, MemoryService,
+    SearchRequest, SupersedeRequest, UpdateRequest,
 };
 use lint_ai::segments::SegmentRoutingStrategy;
 use lint_ai::telemetry::{
@@ -180,8 +181,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(std::env::current_dir()?)
         .canonicalize()?;
     let discovered_indexes = discover_index_paths(&project_root);
-    let store = match args.index {
-        Some(path) => IndexStore::at_path(&path, options)?,
+    let service = match args.index {
+        Some(path) => MemoryService::at_path(&path, options)?,
         None => discovered_indexes
             .iter()
             .find(|path| {
@@ -199,11 +200,10 @@ async fn main() -> anyhow::Result<()> {
                     .cloned()
             })
             .or_else(|| discovered_indexes.first().cloned())
-            .map(|path| IndexStore::at_path(&path, options.clone()))
+            .map(|path| MemoryService::at_path(&path, options.clone()))
             .transpose()?
-            .unwrap_or_else(|| IndexStore::in_memory(options)),
+            .unwrap_or_else(|| MemoryService::in_memory(options)),
     };
-    let service = MemoryService::new(store);
     let published_search = service.published_search();
     let state = AppState {
         service: Arc::new(RwLock::new(service)),
@@ -240,6 +240,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/delete", post(delete))
         .route("/supersede", post(supersede))
         .route("/expire", post(expire))
+        .route("/v1/memories", get(list_memories).post(add))
+        .route(
+            "/v1/memories/:memory_id",
+            get(get_memory).patch(update_memory).delete(delete_memory),
+        )
+        .route("/v1/memories/search", post(search))
+        .route("/v1/memories/refresh", post(refresh_memories))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(
             ServiceBuilder::new()
@@ -927,6 +934,170 @@ async fn search(
     }
 }
 
+async fn get_memory(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
+    Path(memory_id): Path<String>,
+    Query(query): Query<GetRequest>,
+) -> impl IntoResponse {
+    let request = GetRequest { memory_id, ..query };
+    let value = match serde_json::to_value(&request) {
+        Ok(value) => value,
+        Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+    };
+    if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+        return error.into_response();
+    }
+    let result = match state.service.read() {
+        Ok(service) => service.get(request),
+        Err(_) => Err(anyhow::anyhow!("memory reader lock poisoned")),
+    };
+    match result {
+        Ok(Some(memory)) => Json(memory).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":"memory lookup failed"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn list_memories(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
+    Query(request): Query<ListRequest>,
+) -> impl IntoResponse {
+    let value = match serde_json::to_value(&request) {
+        Ok(value) => value,
+        Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+    };
+    if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+        return error.into_response();
+    }
+    let result = match state.service.read() {
+        Ok(service) => service.list(request),
+        Err(_) => Err(anyhow::anyhow!("memory reader lock poisoned")),
+    };
+    match result {
+        Ok(result) => Json(result).into_response(),
+        Err(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"detail":"invalid list request"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn update_memory(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
+    Path(memory_id): Path<String>,
+    Json(mut request): Json<UpdateRequest>,
+) -> impl IntoResponse {
+    request.memory_id = memory_id;
+    let value = match serde_json::to_value(&request) {
+        Ok(value) => value,
+        Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+    };
+    if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+        return error.into_response();
+    }
+    let Ok(_writer) = state.writer_gate.try_lock() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail":"writer busy"})),
+        )
+            .into_response();
+    };
+    let result = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            publish_mutation(&state, |service| service.update(request))
+        })
+        .await
+        .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
+    };
+    match result {
+        Ok(Some(memory)) => Json(memory).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"detail":"memory update failed"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_memory(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
+    Path(memory_id): Path<String>,
+    Query(query): Query<DeleteRequest>,
+) -> impl IntoResponse {
+    let request = DeleteRequest {
+        doc_id: memory_id,
+        ..query
+    };
+    let value = match serde_json::to_value(&request) {
+        Ok(value) => value,
+        Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+    };
+    if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+        return error.into_response();
+    }
+    let Ok(_writer) = state.writer_gate.try_lock() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail":"writer busy"})),
+        )
+            .into_response();
+    };
+    let result = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            publish_mutation(&state, |service| {
+                service.delete(&request.user_id, &request.doc_id)
+            })
+        })
+        .await
+        .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
+    };
+    match result {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":"memory deletion failed"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn refresh_memories(State(state): State<AppState>) -> impl IntoResponse {
+    let Ok(_writer) = state.writer_gate.try_lock() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail":"writer busy"})),
+        )
+            .into_response();
+    };
+    let result = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || publish_mutation(&state, |service| service.refresh()))
+            .await
+            .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
+    };
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":"memory refresh failed"})),
+        )
+            .into_response(),
+    }
+}
+
 async fn delete(
     State(state): State<AppState>,
     auth: Option<Extension<AuthContext>>,
@@ -1141,9 +1312,7 @@ mod tests {
 
     #[test]
     fn published_search_lock_is_independent_from_writer_lock() {
-        let service = MemoryService::new(IndexStore::in_memory(memory_pipeline_options(
-            None, false, false,
-        )));
+        let service = MemoryService::in_memory(memory_pipeline_options(None, false, false));
         let published = service.published_search();
         let state = AppState {
             service: Arc::new(RwLock::new(service)),

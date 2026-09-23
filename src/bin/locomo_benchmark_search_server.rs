@@ -160,9 +160,12 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         query_top_n: 5,
         routing_strategy: SegmentRoutingStrategy::TypedEvidenceMultiplicative,
     };
-    let mut store = IndexStore::with_documents(options, docs);
-    store.refresh().context("failed to build conv index")?;
-    let searcher = MemoryService::new(store).published_search();
+    let mut service = MemoryService::in_memory(options);
+    for doc in docs {
+        service.upsert(doc);
+    }
+    service.refresh().context("failed to build conv index")?;
+    let searcher = service.published_search();
     Ok(ConvIndex {
         searcher,
         session_text,

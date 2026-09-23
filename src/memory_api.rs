@@ -171,15 +171,20 @@ impl MemoryService {
     }
 
     /// Open a persistent memory service without exposing `IndexStore` in the
-    /// application-facing construction API.
+    /// application-facing construction API. Hooks and the MCP server open a
+    /// fresh service per invocation against the same index root; a disk-backed
+    /// conversation store lets session state (follow-up context, temporal
+    /// anchors) survive across those invocations.
     pub fn at_path(index_root: impl AsRef<Path>, options: PipelineOptions) -> anyhow::Result<Self> {
-        Ok(Self::new(IndexStore::at_path(
-            index_root.as_ref(),
-            options,
-        )?))
+        let index_root = index_root.as_ref();
+        let mut service = Self::new(IndexStore::at_path(index_root, options)?);
+        service.conversation_states = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::conversation_state::ConversationStateStore::open_under(index_root),
+        ));
+        Ok(service)
     }
 
-    fn new(store: IndexStore) -> Self {
+    pub(crate) fn new(store: IndexStore) -> Self {
         let superseded_ids = store
             .source_documents()
             .into_iter()
@@ -671,28 +676,6 @@ impl MemoryService {
         self.store.refresh()
     }
 
-    /// Open a persistent store at `index_root`, routing construction through
-    /// the service so callers never touch `IndexStore` directly.
-    pub fn at_path(
-        index_root: &std::path::Path,
-        options: crate::pipeline::PipelineOptions,
-    ) -> anyhow::Result<Self> {
-        let mut service = Self::new(crate::IndexStore::at_path(index_root, options)?);
-        // Hooks and the MCP server open a fresh service per invocation against
-        // the same index root; a disk-backed conversation store lets session
-        // state (follow-up context, temporal anchors) survive across those
-        // invocations. In-memory services keep memory-only state.
-        service.conversation_states = std::sync::Arc::new(std::sync::Mutex::new(
-            crate::conversation_state::ConversationStateStore::open_under(index_root),
-        ));
-        Ok(service)
-    }
-
-    /// Build an in-memory service, for composed views and diagnostics.
-    pub fn in_memory(options: crate::pipeline::PipelineOptions) -> Self {
-        Self::new(crate::IndexStore::in_memory(options))
-    }
-
     /// Compose a workspace service with one provider's memory service into a
     /// single in-memory query view. Transfers already-published segments
     /// rather than reprocessing source documents.
@@ -749,7 +732,9 @@ impl MemoryService {
         feature = "agy",
         feature = "muse-code"
     ))]
-    pub(crate) fn upsert(&mut self, document: crate::SourceDocument) {
+    /// Insert or replace a source document directly. Low-level bulk-load;
+    /// prefer `add` for application writes.
+    pub fn upsert(&mut self, document: crate::SourceDocument) {
         self.store.upsert(document)
     }
 
@@ -1125,6 +1110,8 @@ fn memory_record(doc: &SourceDocument) -> MemoryRecord {
         supersedes_id: doc.filters.get("supersedes_id").cloned(),
         metadata,
     }
+}
+
 /// Prepare a query against an optional conversation session. Without a
 /// session id this is exactly `PreparedQuery::new(query)`; with one, the
 /// query is rewritten against the session's bounded prior state (follow-up
@@ -1860,28 +1847,6 @@ mod tests {
                         role: "assistant".into(),
                         timestamp: None,
                         content: format!("memory {request_id}"),
-    fn group_id_is_an_exact_filter_only_when_explicitly_requested() {
-        use std::collections::BTreeMap;
-
-        let mut service = service();
-        // Two sessions for the same user; group_id comes from session_id.
-        for (session, text) in [
-            (
-                "session-one",
-                "the quartz database uses append-only segments",
-            ),
-            (
-                "session-two",
-                "the quartz database uses append-only segments",
-            ),
-        ] {
-            service
-                .add(AddRequest {
-                    request_id: format!("req-{session}"),
-                    messages: vec![Message {
-                        role: "user".into(),
-                        timestamp: None,
-                        content: text.into(),
                         expires_at_ms: None,
                         supersedes_id: None,
                     }],
@@ -1911,6 +1876,35 @@ mod tests {
             .unwrap();
         assert_eq!(second.data.len(), 1);
         assert_ne!(first.data[0].id, second.data[0].id);
+    }
+
+    #[test]
+    fn group_id_is_an_exact_filter_only_when_explicitly_requested() {
+        use std::collections::BTreeMap;
+
+        let mut service = service();
+        // Two sessions for the same user; group_id comes from session_id.
+        for (session, text) in [
+            (
+                "session-one",
+                "the quartz database uses append-only segments",
+            ),
+            (
+                "session-two",
+                "the quartz database uses append-only segments",
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: format!("req-{session}"),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: text.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
                     session_id: session.to_string(),
                 })
                 .unwrap();

@@ -47,6 +47,7 @@ fuzzydate = "0.4.1"
 console = { version = "0.16.3", features = ["std"] }
 sha2 = "0.10"
 rayon = "1.11"
+libflate = "1.4"
 pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 

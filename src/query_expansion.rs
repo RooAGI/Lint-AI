@@ -29,8 +29,8 @@ struct LexicalStore {
     by_term: HashMap<String, Vec<Related>>,
 }
 
-static WORDNET_DATA: &str = include_str!("../data/lexical/wordnet_subset.json");
-static CONCEPTNET_DATA: &str = include_str!("../data/lexical/conceptnet_subset.json");
+static WORDNET_DATA: &[u8] = include_bytes!("../data/lexical/wordnet_subset.json.gz");
+static CONCEPTNET_DATA: &[u8] = include_bytes!("../data/lexical/conceptnet_subset.json.gz");
 static STORE: OnceLock<Option<LexicalStore>> = OnceLock::new();
 static STEMMER: OnceLock<Stemmer> = OnceLock::new();
 static NORMALIZE_RE: OnceLock<Regex> = OnceLock::new();
@@ -82,8 +82,8 @@ pub fn expand_query_terms(input_terms: &[String]) -> ExpandedQuery {
 
 fn load_store() -> Option<LexicalStore> {
     let mut store = LexicalStore::default();
-    let wn: Vec<Entry> = serde_json::from_str(WORDNET_DATA).ok()?;
-    let cn: Vec<Entry> = serde_json::from_str(CONCEPTNET_DATA).ok()?;
+    let wn: Vec<Entry> = serde_json::from_slice(&decompress_gzip(WORDNET_DATA)?).ok()?;
+    let cn: Vec<Entry> = serde_json::from_slice(&decompress_gzip(CONCEPTNET_DATA)?).ok()?;
 
     for e in wn {
         let key = normalize_for_index(&e.term);
@@ -122,6 +122,16 @@ fn load_store() -> Option<LexicalStore> {
         });
     }
     Some(store)
+}
+
+/// The lexical files are stored gzip-compressed so the embedded vocabulary
+/// does not blow the crates.io package size limit; decompress at load.
+fn decompress_gzip(data: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut decoder = libflate::gzip::Decoder::new(data).ok()?;
+    let mut out = Vec::new();
+    decoder.read_to_end(&mut out).ok()?;
+    Some(out)
 }
 
 fn add_related(store: &mut LexicalStore, key: &str, rel: Related) {
@@ -203,5 +213,19 @@ mod tests {
         for term in &out.expanded_terms {
             assert!(!out.original_terms.contains(term));
         }
+    }
+
+    #[test]
+    fn certificate_expands_to_degree_via_conceptnet() {
+        // Regression test for a LoCoMo miss: the question asked about a
+        // "certificate" while the dialogue turn said "degree". The bridge is
+        // associative (ConceptNet RelatedTo), not a WordNet synonym.
+        let out = expand_query_terms(&["certificate".to_string()]);
+        let degree = normalize_for_index("degree");
+        assert!(
+            out.expanded_terms.iter().any(|t| t == &degree),
+            "expected degree expansion, got {:?}",
+            out.expanded_terms
+        );
     }
 }

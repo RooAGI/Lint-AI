@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDate, NaiveDateTime, TimeDelta};
 use fuzzydate::parse as fuzzy_parse;
 use regex::Regex;
 use serde::Serialize;
@@ -822,14 +822,49 @@ struct PhraseMatch {
 }
 
 fn extract_temporal(query: &str) -> Option<QueryTemporal> {
-    let match_ = temporal_candidates(query).into_iter().next()?;
-    let resolved_at = fuzzy_parse(match_.text.as_str())
-        .ok()
-        .map(|dt: NaiveDateTime| dt.to_string());
+    // Explicit temporal language in the NEW query wins over a seeded anchor.
+    // The rewrite appends bracketed session context ("[previously asked: ...;
+    // temporal anchor: ...]") which embeds the prior turn's wording -- that
+    // embedded text must not count as the new query's temporal language.
+    // Strip the trailing bracketed context before checking for explicit
+    // phrases; fall back to the seeded marker only when the new query has
+    // none.
+    let new_query = match query.rfind('[') {
+        Some(idx) if query.trim_end().ends_with(']') => query[..idx].trim_end(),
+        _ => query,
+    };
+    if let Some(match_) = temporal_candidates(new_query).into_iter().next() {
+        let resolved_at = fuzzy_parse(match_.text.as_str())
+            .ok()
+            .map(|dt: NaiveDateTime| dt.to_string());
+        return Some(QueryTemporal {
+            phrase: match_.text,
+            resolved_at,
+            source: "fuzzydate".to_string(),
+        });
+    }
+    seeded_temporal_anchor(query)
+}
+
+/// Matches the `temporal anchor: YYYY-MM-DD` marker seeded into rewritten
+/// follow-up queries by session_prepare. Returns the anchor as an absolute
+/// date; the phrase is kept verbatim so downstream stages can tell a seeded
+/// absolute anchor apart from a relative phrase.
+fn seeded_temporal_anchor(query: &str) -> Option<QueryTemporal> {
+    static ANCHOR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = ANCHOR_RE.get_or_init(|| {
+        Regex::new(r"(?i)\btemporal anchor:\s*(\d{4})-(\d{1,2})-(\d{1,2})\b")
+            .expect("valid temporal anchor regex")
+    });
+    let caps = re.captures(query)?;
+    let year = caps.get(1)?.as_str().parse::<i32>().ok()?;
+    let month = caps.get(2)?.as_str().parse::<u32>().ok()?;
+    let day = caps.get(3)?.as_str().parse::<u32>().ok()?;
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
     Some(QueryTemporal {
-        phrase: match_.text,
-        resolved_at,
-        source: "fuzzydate".to_string(),
+        phrase: caps.get(0)?.as_str().to_string(),
+        resolved_at: Some(date.format("%Y-%m-%d").to_string()),
+        source: "session-anchor".to_string(),
     })
 }
 
@@ -865,6 +900,229 @@ fn dedup_phrase_matches(mut items: Vec<PhraseMatch>) -> Vec<PhraseMatch> {
         .drain(..)
         .filter(|item| seen.insert(item.text.to_lowercase()))
         .collect()
+}
+
+/// Parses a query-side reference date in `YYYY-MM-DD` or `YYYY/MM/DD` form,
+/// tolerating trailing text such as `"2023/05/30 (Tue) 23:40"`.
+pub fn parse_reference_date(value: &str) -> Option<NaiveDate> {
+    let normalized = value.replace('/', "-");
+    let date = normalized.get(..10).unwrap_or(&normalized);
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+}
+
+/// Resolves a relative temporal phrase (as extracted by `extract_temporal`,
+/// e.g. "last Tuesday", "10 days ago", "four weeks ago") against an explicit
+/// reference date — normally the question date.
+///
+/// Returns `None` for phrases with no fixed anchor ("most recently",
+/// "this week", "consecutive days"). Bare quantities without "ago"
+/// ("10 days") are treated as past, matching the memory-question domain.
+pub fn resolve_temporal_anchor(phrase: &str, reference: NaiveDate) -> Option<NaiveDate> {
+    let p = phrase.trim().to_lowercase();
+    match p.as_str() {
+        "today" | "tonight" => return Some(reference),
+        "yesterday" => return reference.checked_add_signed(TimeDelta::days(-1)),
+        "tomorrow" => return reference.checked_add_signed(TimeDelta::days(1)),
+        _ => {}
+    }
+    if let Some(anchor) = resolve_relative_weekday(&p, reference) {
+        return Some(anchor);
+    }
+    if let Some(anchor) = resolve_relative_span(&p, reference) {
+        return Some(anchor);
+    }
+    resolve_ago_quantity(&p, reference)
+}
+
+/// Whether a resolved temporal anchor denotes a *range* of time rather than a
+/// point ("in the past two months" vs "last Tuesday").
+///
+/// Point indicators win: a named weekday or an explicit offset ("ago",
+/// "yesterday") is always a point, even when range words appear nearby
+/// ("during the lunch last Tuesday"). Otherwise a bare quantity phrase
+/// ("two months") counts as a span when the question puts range context
+/// ("past", "in the", "over the") immediately before it.
+pub fn temporal_anchor_is_span(phrase: &str, question: &str) -> bool {
+    let p = phrase.trim().to_lowercase();
+    const WEEKDAYS: [&str; 7] = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ];
+    if WEEKDAYS.iter().any(|day| p.contains(day)) {
+        return false;
+    }
+    if p.contains("ago") || p.contains("yesterday") || p.contains("today") || p.contains("tomorrow")
+    {
+        return false;
+    }
+    const SPAN_MARKERS: [&str; 7] = [
+        "past",
+        "recent",
+        "between",
+        "during",
+        "over the",
+        "in the last",
+        "for the last",
+    ];
+    if SPAN_MARKERS.iter().any(|marker| p.contains(marker)) {
+        return true;
+    }
+    // Bare quantity phrase with range context just before it in the question
+    // ("... attended in the past two months ...").
+    let q = question.to_lowercase();
+    if let Some(pos) = q.find(p.as_str()) {
+        let context = &q[pos.saturating_sub(16)..pos];
+        if !context.contains("most recent") {
+            return ["past", "in the", "over the", "during", "between", "recent"]
+                .iter()
+                .any(|marker| context.contains(marker));
+        }
+    }
+    false
+}
+
+/// Resolves a query's relative temporal phrase to an inclusive date range used
+/// for anchored pre-filtering: routing is restricted to segments holding a
+/// record inside this range.
+///
+/// Point anchors ("last Tuesday", "four weeks ago") resolve to ±7 days around
+/// the anchor; range anchors ("in the past two months") resolve to
+/// [anchor, reference]. Returns `None` when the phrase has no resolvable
+/// anchor.
+pub fn resolve_anchor_window(
+    phrase: &str,
+    question: &str,
+    reference: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let anchor = resolve_temporal_anchor(phrase, reference)?;
+    if temporal_anchor_is_span(phrase, question) {
+        let (start, end) = if anchor <= reference {
+            (anchor, reference)
+        } else {
+            (reference, anchor)
+        };
+        Some((start, end))
+    } else {
+        Some((
+            anchor.checked_sub_signed(TimeDelta::days(7))?,
+            anchor.checked_add_signed(TimeDelta::days(7))?,
+        ))
+    }
+}
+
+fn weekday_number(name: &str) -> Option<u32> {
+    match name {
+        "monday" => Some(0),
+        "tuesday" => Some(1),
+        "wednesday" => Some(2),
+        "thursday" => Some(3),
+        "friday" => Some(4),
+        "saturday" => Some(5),
+        "sunday" => Some(6),
+        _ => None,
+    }
+}
+
+/// Handles "last|this|next <weekday>".
+fn resolve_relative_weekday(phrase: &str, reference: NaiveDate) -> Option<NaiveDate> {
+    let mut parts = phrase.split_whitespace();
+    let which = parts.next()?;
+    let unit = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let target = weekday_number(unit)?;
+    let ref_wd = reference.weekday().num_days_from_monday();
+    let offset: i64 = match which {
+        "last" => {
+            let back = (ref_wd + 7 - target) % 7;
+            -((if back == 0 { 7 } else { back }) as i64)
+        }
+        // The weekday in the current calendar week (may be past or upcoming).
+        "this" => target as i64 - ref_wd as i64,
+        "next" => {
+            let fwd = (target + 7 - ref_wd) % 7;
+            (if fwd == 0 { 7 } else { fwd }) as i64
+        }
+        _ => return None,
+    };
+    reference.checked_add_signed(TimeDelta::days(offset))
+}
+
+/// Handles "last|next <week|month|year|weekend>".
+fn resolve_relative_span(phrase: &str, reference: NaiveDate) -> Option<NaiveDate> {
+    let mut parts = phrase.split_whitespace();
+    let which = parts.next()?;
+    let unit = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let ref_wd = reference.weekday().num_days_from_monday();
+    let offset: i64 = match (which, unit) {
+        ("last", "week") => -7,
+        ("next", "week") => 7,
+        ("last", "month") => -30,
+        ("next", "month") => 30,
+        ("last", "year") => -365,
+        ("next", "year") => 365,
+        // Anchor "last weekend" to its Saturday.
+        ("last", "weekend") => -(((ref_wd + 7 - 5) % 7) as i64),
+        ("next", "weekend") => (((5 + 7 - ref_wd) % 7) as i64),
+        _ => return None,
+    };
+    reference.checked_add_signed(TimeDelta::days(offset))
+}
+
+/// Handles "<qty> <unit>(s) [ago]", "a|an <unit> ago", "a couple of <unit>s ago".
+fn resolve_ago_quantity(phrase: &str, reference: NaiveDate) -> Option<NaiveDate> {
+    let p = phrase
+        .strip_suffix("ago")
+        .map(str::trim)
+        .unwrap_or_else(|| phrase.trim());
+    let (qty, unit) = if p.contains("couple of") {
+        (2i64, p.split_whitespace().last()?)
+    } else {
+        let mut parts = p.split_whitespace();
+        let qty_word = parts.next()?;
+        let unit = parts.next()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        (parse_quantity_word(qty_word)?, unit)
+    };
+    let unit = unit.strip_suffix('s').unwrap_or(unit);
+    let days = match unit {
+        "day" => qty,
+        "week" => qty * 7,
+        "month" => qty * 30,
+        "year" => qty * 365,
+        _ => return None,
+    };
+    reference.checked_add_signed(TimeDelta::days(-days))
+}
+
+fn parse_quantity_word(word: &str) -> Option<i64> {
+    if let Ok(n) = word.parse::<i64>() {
+        return (n >= 0).then_some(n);
+    }
+    match word {
+        "a" | "an" | "one" => Some(1),
+        "two" => Some(2),
+        "three" => Some(3),
+        "four" => Some(4),
+        "five" => Some(5),
+        "six" => Some(6),
+        "seven" => Some(7),
+        "eight" => Some(8),
+        "nine" => Some(9),
+        "ten" => Some(10),
+        _ => None,
+    }
 }
 
 fn leading_question_word(query: &str) -> Option<String> {
@@ -1172,6 +1430,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolves_relative_anchors_against_reference_date() {
+        // 2023-04-18 was a Tuesday.
+        let reference = NaiveDate::from_ymd_opt(2023, 4, 18).unwrap();
+        let anchor = |phrase: &str| {
+            resolve_temporal_anchor(phrase, reference).map(|d| d.format("%Y-%m-%d").to_string())
+        };
+        assert_eq!(anchor("last Tuesday"), Some("2023-04-11".to_string()));
+        assert_eq!(anchor("last Saturday"), Some("2023-04-15".to_string()));
+        assert_eq!(anchor("next Friday"), Some("2023-04-21".to_string()));
+        assert_eq!(anchor("this Tuesday"), Some("2023-04-18".to_string()));
+        assert_eq!(anchor("10 days ago"), Some("2023-04-08".to_string()));
+        assert_eq!(anchor("four weeks ago"), Some("2023-03-21".to_string()));
+        assert_eq!(
+            anchor("a couple of days ago"),
+            Some("2023-04-16".to_string())
+        );
+        assert_eq!(anchor("5 days ago"), Some("2023-04-13".to_string()));
+        assert_eq!(anchor("yesterday"), Some("2023-04-17".to_string()));
+        assert_eq!(anchor("today"), Some("2023-04-18".to_string()));
+        assert_eq!(anchor("last week"), Some("2023-04-11".to_string()));
+        assert_eq!(anchor("last weekend"), Some("2023-04-15".to_string()));
+        assert_eq!(anchor("a month ago"), Some("2023-03-19".to_string()));
+        // No fixed anchor.
+        assert_eq!(anchor("most recently"), None);
+        assert_eq!(anchor("this week"), None);
+        assert_eq!(anchor("consecutive days"), None);
+    }
+
+    #[test]
+    fn parses_reference_dates_with_slashes() {
+        assert_eq!(
+            parse_reference_date("2023/05/30 (Tue) 23:40"),
+            NaiveDate::from_ymd_opt(2023, 5, 30)
+        );
+        assert_eq!(
+            parse_reference_date("2023-05-30"),
+            NaiveDate::from_ymd_opt(2023, 5, 30)
+        );
+        assert_eq!(parse_reference_date("not a date"), None);
+    }
+
+    #[test]
     fn classifies_quantity_intent() {
         assert_eq!(
             quantity_intent("How many days did it take?"),
@@ -1181,6 +1481,34 @@ mod tests {
             quantity_intent("How much did it cost?"),
             Some(AggregateIntent::Sum)
         );
+    }
+
+    #[test]
+    fn seeded_temporal_anchor_recognizes_valid_marker() {
+        let query = "tell me more [previously asked: what did we do?; temporal anchor: 2026-09-21]";
+        let temporal = extract_temporal(query).expect("seeded anchor should parse");
+        assert_eq!(temporal.source, "session-anchor");
+        assert_eq!(temporal.resolved_at.as_deref(), Some("2026-09-21"));
+    }
+
+    #[test]
+    fn seeded_temporal_anchor_rejects_malformed_marker() {
+        // Not a real date: falls through to ordinary temporal detection (none here).
+        let bad_date = "tell me more [temporal anchor: 2026-13-99]";
+        assert!(extract_temporal(bad_date).is_none());
+        // No date at all: not a marker.
+        let no_date = "tell me more [temporal anchor: soon]";
+        assert!(extract_temporal(no_date).is_none());
+    }
+
+    #[test]
+    fn explicit_temporal_phrase_wins_over_seeded_marker() {
+        // The seeded marker is always appended by resolve_follow_up, so a new
+        // query with its own temporal language must not be shadowed by it.
+        let query = "what about yesterday? [previously asked: x; temporal anchor: 2026-09-01]";
+        let temporal = extract_temporal(query).expect("explicit phrase should parse");
+        assert_ne!(temporal.source, "session-anchor");
+        assert_eq!(temporal.phrase, "yesterday");
     }
 
     #[test]

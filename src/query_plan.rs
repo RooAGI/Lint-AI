@@ -15,6 +15,7 @@ use crate::index::{
 };
 use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
 use crate::semantic_relations::{is_historical_query, SemanticRelationStore, SemanticStatus};
+use chrono::{NaiveDate, TimeDelta};
 use std::collections::HashSet;
 
 /// A raw query plus the analysis derived from it.
@@ -72,6 +73,28 @@ impl PreparedQuery {
     /// The context implied by the analysis. `allowed_doc_ids` is left unset;
     /// callers that scope a search assign it themselves.
     pub fn temporal_context(&self) -> TemporalQueryContext<'_> {
+        // A seeded session anchor ("temporal anchor: YYYY-MM-DD") carries an
+        // absolute date, so it needs no reference clock: center temporal
+        // scoring on it and pre-filter routing to its ±7-day point window,
+        // mirroring resolve_anchor_window's point behavior. Relative phrases
+        // keep their existing path (wired with an explicit reference date by
+        // callers like persistence.rs).
+        let (anchor_date, anchor_window): (Option<&str>, Option<(NaiveDate, NaiveDate)>) = self
+            .analysis
+            .temporal
+            .as_ref()
+            .filter(|temporal| temporal.source == "session-anchor")
+            .and_then(|temporal| {
+                let resolved_at = temporal.resolved_at.as_deref()?;
+                let date_str = resolved_at.get(..10)?;
+                let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+                let window = (
+                    date.checked_sub_signed(TimeDelta::days(7))?,
+                    date.checked_add_signed(TimeDelta::days(7))?,
+                );
+                Some((resolved_at, window))
+            })
+            .unzip();
         TemporalQueryContext {
             starts_from: None,
             ends_at: None,
@@ -95,6 +118,8 @@ impl PreparedQuery {
                 .filter(|_| self.analysis.temporal.is_some()),
             query_routing_intent: self.analysis.query_routing_intent,
             has_explicit_temporal: self.analysis.temporal.is_some(),
+            anchor_date,
+            anchor_window,
             allowed_doc_ids: None,
             allowed_doc_bitmap: None,
             allowed_segment_doc_bitmaps: None,

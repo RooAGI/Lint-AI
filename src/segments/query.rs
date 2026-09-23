@@ -1,6 +1,7 @@
 use crate::index::{
     GlobalBm25Statistics, MemoryIndex, SearchResult, TemporalQueryContext, TemporalQueryHint,
 };
+use crate::query_semantics::parse_reference_date;
 use chrono::NaiveDate;
 use rayon::prelude::*;
 use std::cmp::Ordering;
@@ -148,7 +149,7 @@ fn query_top_segments_with_diagnostics(
         segments,
         segment_limit,
         false,
-        SegmentRoutingStrategy::SparseOverlap,
+        SegmentRoutingStrategy::TypedEvidenceMultiplicative,
         TemporalQueryContext::default(),
         None,
         &corpus_stats,
@@ -213,17 +214,21 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
         .iter()
         .map(|segment| (segment.segment_id.as_str(), segment))
         .collect::<HashMap<_, _>>();
-    let mut routes = route_segments_with_corpus_stats(query, segments, strategy, corpus_stats)
-        .into_iter()
-        .filter(|route| {
-            segments_by_id
-                .get(route.segment_id.as_str())
-                .copied()
-                .is_some_and(|segment| {
-                    segment_has_allowed_documents(segment, temporal.allowed_doc_ids)
-                })
-        })
-        .collect::<Vec<_>>();
+    let mut routes = route_segments_with_temporal_context_and_corpus_stats(
+        query,
+        segments,
+        strategy,
+        temporal,
+        corpus_stats,
+    )
+    .into_iter()
+    .filter(|route| {
+        segments_by_id
+            .get(route.segment_id.as_str())
+            .copied()
+            .is_some_and(|segment| segment_has_allowed_documents(segment, temporal.allowed_doc_ids))
+    })
+    .collect::<Vec<_>>();
     if execute_all_eligible {
         let mut present = routes
             .iter()
@@ -1072,6 +1077,15 @@ fn query_selected_segments_with_enrichment(
             Some((route.segment_id.clone(), results))
         })
         .collect::<HashMap<_, _>>();
+    // Cross-segment max for the route-aware reranker: per-segment BM25 scores
+    // share the global corpus statistics, so joint normalization preserves the
+    // true cross-segment relevance ordering (a per-segment max would promote
+    // every weak segment's best doc to 1.0).
+    let max_result_score = segment_results
+        .values()
+        .flatten()
+        .map(|result| result.score.max(0.0))
+        .fold(0.0f32, f32::max);
     if profile {
         eprintln!(
             "query_timing segment_bm25_ms={:.3}",
@@ -1107,10 +1121,6 @@ fn query_selected_segments_with_enrichment(
         let segment_query_results = segment_results
             .get(route.segment_id.as_str())
             .expect("results computed for every routed segment");
-        let max_segment_result_score = segment_query_results
-            .iter()
-            .map(|result| result.score.max(0.0))
-            .fold(0.0f32, f32::max);
         let mut segment_results = 0usize;
         for mut result in segment_query_results.iter().cloned() {
             if seen_doc_ids.insert(result.doc_id.clone()) {
@@ -1123,7 +1133,7 @@ fn query_selected_segments_with_enrichment(
                         &query_terms,
                         &enrichment,
                         temporal,
-                        max_segment_result_score,
+                        max_result_score,
                         max_route_score,
                         corpus_stats,
                     ));
@@ -1395,10 +1405,16 @@ pub(crate) fn result_temporal_score(
     } else {
         0.4
     };
-    let Some(record_date) = record.timestamp.as_deref().and_then(parse_iso_date) else {
+    let Some(record_date) = record.timestamp.as_deref().and_then(parse_reference_date) else {
         return score;
     };
-    let Some(query_date) = temporal.ends_at.and_then(parse_iso_date) else {
+    // Center on the resolved relative-time anchor when the query carries one;
+    // otherwise the reference date (see `segment_temporal_route_boost`).
+    let Some(query_date) = temporal
+        .anchor_date
+        .and_then(parse_reference_date)
+        .or_else(|| temporal.ends_at.and_then(parse_reference_date))
+    else {
         return score + 0.2;
     };
     let window_days = temporal.window_days.max(1);
@@ -1454,7 +1470,12 @@ fn expand_temporal_path_segments(
 
     let window_days = temporal.window_days.max(1);
     let expansion_limit = segment_limit.max(1);
-    let query_date = temporal.ends_at.and_then(parse_iso_date);
+    // Hint matching centers on the resolved anchor when the query carries a
+    // relative time expression; otherwise the reference date.
+    let query_date = temporal
+        .anchor_date
+        .and_then(parse_reference_date)
+        .or_else(|| temporal.ends_at.and_then(parse_reference_date));
     let mut candidates = Vec::new();
 
     for segment in segments {
@@ -1530,7 +1551,7 @@ fn segment_dates(segment: &MemoryIndexSegment) -> Vec<NaiveDate> {
         .index
         .docs
         .values()
-        .filter_map(|record| record.timestamp.as_deref().and_then(parse_iso_date))
+        .filter_map(|record| record.timestamp.as_deref().and_then(parse_reference_date))
         .collect::<Vec<_>>();
     dates.sort();
     dates.dedup();
@@ -1589,7 +1610,7 @@ fn query_all_segments_with_diagnostics(
         segments,
         segments.len(),
         true,
-        SegmentRoutingStrategy::SparseOverlap,
+        SegmentRoutingStrategy::TypedEvidenceMultiplicative,
         TemporalQueryContext::default(),
         None,
         &corpus_stats,

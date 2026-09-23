@@ -55,6 +55,11 @@ pub fn expand_query_terms(input_terms: &[String]) -> ExpandedQuery {
     let mut expanded = Vec::new();
 
     for term in &original_terms {
+        // Never expand stopwords: their lexical neighborhoods ("and" -> "end",
+        // "not") are noise that would pollute both routing and scoring.
+        if crate::tokenizer::is_stopword(term, crate::tokenizer::TokenizerMode::Stemmed) {
+            continue;
+        }
         let mut count = 0usize;
         if let Some(related) = store.by_term.get(term) {
             for rel in related {

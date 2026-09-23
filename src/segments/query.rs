@@ -197,7 +197,7 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
 ) -> SegmentQueryOutput {
     let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
     let coordinator_started = std::time::Instant::now();
-    let query_terms = query_tokens(query);
+    let query_terms = query_tokens_expanded(query);
     if top_k == 0 || segment_limit == 0 {
         return SegmentQueryOutput {
             results: Vec::new(),
@@ -214,21 +214,24 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
         .iter()
         .map(|segment| (segment.segment_id.as_str(), segment))
         .collect::<HashMap<_, _>>();
-    let mut routes = route_segments_with_temporal_context_and_corpus_stats(
+    let routes = route_segments_with_temporal_context_and_corpus_stats(
         query,
         segments,
         strategy,
         temporal,
         corpus_stats,
-    )
-    .into_iter()
-    .filter(|route| {
-        segments_by_id
-            .get(route.segment_id.as_str())
-            .copied()
-            .is_some_and(|segment| segment_has_allowed_documents(segment, temporal.allowed_doc_ids))
-    })
-    .collect::<Vec<_>>();
+    );
+    let mut routes = routes
+        .into_iter()
+        .filter(|route| {
+            segments_by_id
+                .get(route.segment_id.as_str())
+                .copied()
+                .is_some_and(|segment| {
+                    segment_has_allowed_documents(segment, temporal.allowed_doc_ids)
+                })
+        })
+        .collect::<Vec<_>>();
     if execute_all_eligible {
         let mut present = routes
             .iter()
@@ -278,6 +281,13 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
             fallback: true,
         })
         .collect::<Vec<_>>();
+    if query.contains("diploma") {
+        eprintln!(
+            "TMPDBG selected={} fallback={}",
+            selected_segments.len(),
+            fallback_segments.len()
+        );
+    }
     let execution_segments = if execute_all_eligible || selected_segments.is_empty() {
         selected_segments
             .iter()
@@ -455,7 +465,7 @@ pub(crate) fn query_top_segments_with_enrichment_and_strategy(
     snapshot_generation: u64,
     kind: SegmentEnrichmentKind<'_>,
 ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let query_terms = query_tokens(query);
+    let query_terms = query_tokens_expanded(query);
     // Adaptive variants use base/max limits instead of `segment_limit`; the
     // adaptive call sites pass `max_segment_limit` positionally for `segment_limit`,
     // which the adaptive arms below ignore.

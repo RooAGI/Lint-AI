@@ -1,4 +1,6 @@
-use crate::index::{DocRecord, MemoryIndex, TemporalQueryContext, TemporalQueryHint};
+use crate::index::{
+    prepare_query_terms, DocRecord, MemoryIndex, TemporalQueryContext, TemporalQueryHint,
+};
 use crate::query_expansion::normalize_for_index;
 use crate::query_semantics::parse_reference_date;
 use crate::tokenizer::{self, TokenizerMode};
@@ -1361,6 +1363,29 @@ pub(crate) fn query_tokens(query: &str) -> HashSet<String> {
         .into_iter()
         .filter(|token| !is_routing_stopword(token))
         .collect()
+}
+
+/// Routing term set: the plain stemmed query tokens plus the lexical
+/// expansion terms the per-segment scorer will also match. Routing on the
+/// unexpanded tokens alone strands expansion-only queries (e.g. "diploma",
+/// which expands to "degree") on arbitrary fallback segments, so the
+/// expansion vocabulary never reaches the segment that actually holds it.
+pub(crate) fn query_tokens_expanded(query: &str) -> HashSet<String> {
+    let mut terms = query_tokens(query);
+    if let Some(prepared) = prepare_query_terms(query) {
+        // Expanded terms are already index-normalized; split multi-word
+        // expansions into their component tokens but never re-stem them
+        // (the stemmer is not idempotent: "degre" would become "degr").
+        terms.extend(
+            prepared
+                .expanded_terms
+                .iter()
+                .flat_map(|term| term.split_whitespace())
+                .filter(|token| !is_routing_stopword(token))
+                .map(str::to_string),
+        );
+    }
+    terms
 }
 
 /// Query terms in sorted order, for order-independent float summation:

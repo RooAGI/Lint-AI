@@ -480,6 +480,45 @@ fn multiplicative_typed_evidence_gates_on_content() {
 }
 
 #[test]
+fn expansion_terms_participate_in_segment_routing() {
+    // "diploma" appears in no segment, but the lexical store expands it to
+    // "degree". The router must select the degree segment instead of falling
+    // back to arbitrary segments; otherwise the per-segment expansion
+    // vocabulary never reaches the segment that holds it.
+    let records = vec![
+        record(
+            "doc-degree",
+            "session-degree",
+            "congratulations on finishing your degree",
+            &["degree"],
+        ),
+        record(
+            "doc-other",
+            "session-other",
+            "unrelated project discussion",
+            &["unrelated", "project"],
+        ),
+    ];
+    let segments = build_segments_by_group_id(&records);
+    assert_eq!(segments.len(), 2);
+
+    let routes = route_segments("diploma", &segments);
+    assert_eq!(routes[0].segment_id, "session-degree");
+    assert!(
+        routes[0].score > 0.0,
+        "expansion routing should give the degree segment a positive score"
+    );
+
+    let routes = route_segments_with_strategy(
+        "diploma",
+        &segments,
+        SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+    );
+    assert_eq!(routes[0].segment_id, "session-degree");
+    assert!(routes[0].score > 0.0);
+}
+
+#[test]
 fn routes_and_queries_one_group_segment() {
     let records = vec![
         record(
@@ -592,13 +631,34 @@ fn segmented_memory_index_returns_diagnostics() {
     );
     assert_eq!(
         output.diagnostics.query_terms,
-        vec!["docker".to_string(), "instal".to_string()]
+        vec![
+            "dock".to_string(),
+            "docker".to_string(),
+            "dockhand".to_string(),
+            "episod".to_string(),
+            "establish".to_string(),
+            "facil".to_string(),
+            "instal".to_string(),
+            "wallop".to_string(),
+            "worker".to_string(),
+        ]
     );
     assert_eq!(
         output.diagnostics.covered_query_terms,
         vec!["docker".to_string(), "instal".to_string()]
     );
-    assert!(output.diagnostics.uncovered_query_terms.is_empty());
+    assert_eq!(
+        output.diagnostics.uncovered_query_terms,
+        vec![
+            "dock".to_string(),
+            "dockhand".to_string(),
+            "episod".to_string(),
+            "establish".to_string(),
+            "facil".to_string(),
+            "wallop".to_string(),
+            "worker".to_string(),
+        ]
+    );
     assert_eq!(
         output.diagnostics.segments_with_results,
         vec!["session-a".to_string()]
@@ -631,7 +691,13 @@ fn diagnostics_report_query_coverage_across_more_segments() {
     );
     assert_eq!(
         top_one.diagnostics.uncovered_query_terms,
-        vec!["compos".to_string()]
+        vec![
+            "compos".to_string(),
+            "dock".to_string(),
+            "dockhand".to_string(),
+            "wallop".to_string(),
+            "worker".to_string(),
+        ]
     );
     assert_eq!(
         top_one.diagnostics.segments_with_results,
@@ -643,7 +709,15 @@ fn diagnostics_report_query_coverage_across_more_segments() {
         top_two.diagnostics.covered_query_terms,
         vec!["compos".to_string(), "docker".to_string()]
     );
-    assert!(top_two.diagnostics.uncovered_query_terms.is_empty());
+    assert_eq!(
+        top_two.diagnostics.uncovered_query_terms,
+        vec![
+            "dock".to_string(),
+            "dockhand".to_string(),
+            "wallop".to_string(),
+            "worker".to_string(),
+        ]
+    );
     assert_eq!(
         top_two.diagnostics.segments_with_results,
         vec!["session-a".to_string(), "session-b".to_string()]

@@ -38,7 +38,10 @@ pub(crate) fn route_segments_with_corpus_stats(
     strategy: SegmentRoutingStrategy,
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
-    let query_terms = query_tokens(query);
+    // Route on the expanded vocabulary the per-segment scorer will match, not
+    // just the literal query tokens; otherwise expansion-only queries fall
+    // back to arbitrary segments.
+    let query_terms = query_tokens_expanded(query);
     if strategy == SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness {
         return route_segments_by_team_coverage(&query_terms, segments, corpus_stats);
     }

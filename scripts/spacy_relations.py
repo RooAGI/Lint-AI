@@ -32,7 +32,12 @@ name-to-gender guessing:
 * a coordinated subject ("Jon and Maria visited Rome") credits every
   person conjunct, emitting one triple per member;
 * ``it/this/that/these/those`` resolve to the most *salient* preceding
-  non-person noun phrase ("I bought a car. I sold it.");
+  non-person noun phrase ("I bought a car. I sold it."). Whether a
+  chunk is a referring expression at all is decided by the compiled
+  ``behood`` entityhood layer: pronouns, persons, interjections, bare
+  exclamatory fragments ("Yay!"), clause-smuggled fragments, emoji,
+  and bare negative formulas ("No prob.") are discourse noise, never
+  antecedents;
 * reflexives (``himself/herself/themselves``) resolve to the clause's
   nominal subject when it is a person.
 
@@ -251,18 +256,20 @@ def _behood_bin():
     return shutil.which("behood")
 
 
-def _classify_personhood(descriptors, speaker_names):
-    """Classify every token via the Rust behood lib.
+def _classify(descriptors, chunk_descriptors, speaker_names):
+    """Classify mentions and chunks via the Rust behood lib.
 
-    Returns {id(tok): is_person} or None when the binary is missing or
-    fails, in which case the pure-Python fallback applies.
+    Returns (personhood_verdicts, entity_verdicts), each keyed by the
+    caller-assigned string id, or (None, None) when the binary is
+    missing or fails, in which case the pure-Python fallbacks apply.
     """
     binary = _behood_bin()
     if binary is None:
-        return None
+        return None, None
     payload = {
         "strategy": "discourse",
         "mentions": descriptors,
+        "chunks": chunk_descriptors,
         "context": {"speaker_names": [s.lower() for s in speaker_names]},
     }
     try:
@@ -276,21 +283,24 @@ def _classify_personhood(descriptors, speaker_names):
     except Exception as exc:
         print(json.dumps({"warning": f"behood_spawn_failed: {exc}"}),
               file=sys.stderr)
-        return None
+        return None, None
     if proc.returncode != 0:
         print(json.dumps({"warning": "behood_classifier_failed: "
                           f"{proc.stderr.strip()[:200]}"}), file=sys.stderr)
-        return None
+        return None, None
     try:
-        verdicts = json.loads(proc.stdout)["verdicts"]
+        data = json.loads(proc.stdout)
+        verdicts = data["verdicts"]
+        entity_verdicts = data.get("entity_verdicts", [])
     except Exception as exc:
         print(json.dumps({"warning": f"behood_bad_output: {exc}"}),
               file=sys.stderr)
-        return None
-    return {v["id"]: v["is_person"] for v in verdicts}
+        return None, None
+    return ({v["id"]: v["is_person"] for v in verdicts},
+            {v["id"]: v["is_entity"] for v in entity_verdicts})
 
 
-def is_person_token(tok, ctx=None):
+def is_person_token(tok, ctx=None, sent_idx=None):
     """Whether a token can be a person mention (for antecedent search).
 
     The verdict comes from the compiled `behood` Rust lib
@@ -301,9 +311,14 @@ def is_person_token(tok, ctx=None):
     discourse support (participant name, repetition, or introduction by
     a naming verb). When the classifier is unavailable, the
     pure-Python fallback below applies.
+
+    Verdicts are keyed by the stable ``f"{sent_idx}:{tok.i}"`` id, never
+    by object identity: spaCy token wrappers are not guaranteed stable
+    across passes over the document.
     """
-    if ctx is not None and ctx.personhood_verdicts is not None:
-        verdict = ctx.personhood_verdicts.get(id(tok))
+    if (ctx is not None and ctx.personhood_verdicts is not None
+            and sent_idx is not None):
+        verdict = ctx.personhood_verdicts.get(f"{sent_idx}:{tok.i}")
         if verdict is not None:
             return verdict
     return _python_is_person_token(tok, ctx)
@@ -349,6 +364,83 @@ def fallback_name_counts(docs):
                 key = tok.text.lower()
                 counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def _is_entity_chunk(chunk_id, chunk, sent, doc, ctx=None):
+    """Whether a noun chunk is a referring expression (antecedent search).
+
+    The verdict comes from the compiled `behood` Rust lib
+    (https://github.com/RooAGI/Behood; installed as the `behood`
+    binary): a chunk is rejected when the grammar shows it is discourse
+    noise -- pronoun root, person root, adverbial/interjection role,
+    bare exclamatory fragment, clause-smuggled fragment, no letters, or
+    a bare negative formula. When the classifier is unavailable, the
+    pure-Python fallback below applies.
+
+    Verdicts are keyed by the stable ``f"{sent_idx}:{root.i}"`` chunk id.
+    """
+    if ctx is not None and ctx.entity_verdicts is not None:
+        verdict = ctx.entity_verdicts.get(chunk_id)
+        if verdict is not None:
+            return verdict
+    return _python_is_entity_chunk(chunk, sent, doc, ctx)
+
+
+def _python_is_entity_chunk(chunk, sent, doc, ctx=None):
+    """Pure-Python entityhood fallback (mirrors the Rust ReferringExpression).
+
+    Used only when the compiled classifier cannot run.
+    """
+    root = chunk.root
+    if root.pos_ == "PRON":
+        return False
+    if _python_is_person_token(root, ctx):
+        return False
+    if root.dep_ in ("npadvmod", "intj"):
+        return False
+    if root.dep_ == "ROOT" and not _sentence_has_matrix_verb(sent):
+        if any(t.dep_ in CLAUSE_DEPS for t in root.subtree if t.i != root.i):
+            return False
+        if not any(c.dep_ in ANCHORING_MODS for c in root.children):
+            return False
+    text, _ = phrase_text(root, doc)
+    if not text or not any(c.isalpha() for c in text):
+        return False
+    if _is_neg_formula(chunk, sent):
+        return False
+    return True
+
+
+def _chunk_descriptors(docs, sent_index):
+    """Plain-data noun-chunk descriptors for the behood entityhood layer.
+
+    Every surface fact the Rust ReferringExpression rule needs, so the
+    binary can decide antecedent eligibility without parser objects.
+    """
+    out = []
+    for doc, per_turn in zip(docs, sent_index):
+        for sent, s_idx in per_turn:
+            has_mv = _sentence_has_matrix_verb(sent)
+            for chunk in doc.noun_chunks:
+                if chunk.sent.start != sent.start:
+                    continue
+                root = chunk.root
+                text, _ = phrase_text(root, doc)
+                out.append({
+                    "id": f"{s_idx}:{root.i}",
+                    "text": text or "",
+                    "root_pos": root.pos_,
+                    "root_dep": root.dep_,
+                    "root_mention_id": f"{s_idx}:{root.i}",
+                    "has_matrix_verb": has_mv,
+                    "has_clause_material": any(
+                        t.dep_ in CLAUSE_DEPS
+                        for t in root.subtree if t.i != root.i),
+                    "has_anchoring_mod": any(
+                        c.dep_ in ANCHORING_MODS for c in root.children),
+                    "is_neg_formula": _is_neg_formula(chunk, sent),
+                })
+    return out
 
 
 def phrase_text(noun, doc):
@@ -406,7 +498,8 @@ class CorefCtx:
     remaining ties broken toward the earliest introduction.
     """
 
-    def __init__(self, speakers, name_counts=None, verdicts=None):
+    def __init__(self, speakers, name_counts=None, verdicts=None,
+                 entity_verdicts=None):
         # Distinct speaker display names, in first-seen order.
         self.speakers = speakers
         # Lowercased participant names: exempt from the discourse-support
@@ -417,8 +510,13 @@ class CorefCtx:
         # the Rust classifier counts internally).
         self.name_counts = name_counts or {}
         # Personhood verdicts from the compiled `behood` lib, keyed
-        # by id(token). None when the classifier was unavailable.
+        # by stable "sent_idx:tok.i" id. None when the classifier was
+        # unavailable.
         self.personhood_verdicts = verdicts
+        # Entityhood verdicts from the compiled `behood` lib, keyed
+        # by stable "sent_idx:root.i" chunk id. None when the
+        # classifier was unavailable.
+        self.entity_verdicts = entity_verdicts
         # Person mentions in document order:
         # {"sent", "tok_i", "key", "text", "role", "number"?}.
         self.person_mentions = []
@@ -455,7 +553,7 @@ class CorefCtx:
                          "role": role_of(tok.dep_, tok.head, is_person=True),
                          "tok": tok}
                     )
-            elif is_person_token(tok, self):
+            elif is_person_token(tok, self, sent_idx):
                 nums = tok.morph.get("Number")
                 self.person_mentions.append(
                     {"sent": sent_idx, "tok_i": tok.i,
@@ -468,42 +566,16 @@ class CorefCtx:
             if chunk.sent.start != sent.start:
                 continue
             root = chunk.root
-            if root.pos_ == "PRON":
-                continue
-            if is_person_token(root, self):
-                continue
-            if root.dep_ in ("npadvmod", "intj"):
-                continue
-            if (root.dep_ == "ROOT"
-                    and not _sentence_has_matrix_verb(sent)
-                    and any(t.dep_ in CLAUSE_DEPS
-                            for t in root.subtree if t.i != root.i)):
-                # A fragment masquerading as a noun phrase ("No prob,
-                # always good to chat about those tranquil times", "Oh
-                # man, sorry to hear that"): verbless matrix, ROOT
-                # noun, and the phrase only looked complete because of
-                # subordinate-clause material. Discourse, not a
-                # referring NP: never an antecedent. A bare
-                # exclamatory NP ("nice setup") has no clause material
-                # and is kept.
-                continue
-            if (root.dep_ == "ROOT"
-                    and not _sentence_has_matrix_verb(sent)
-                    and not any(c.dep_ in ANCHORING_MODS
-                                for c in root.children)):
-                # A bare fragment root ("Yay!", "Dang", "Cheers for the
-                # support"): an exclamation with no nominal modifier
-                # anchoring it to a referent. Discourse, not a
-                # referring NP: never an antecedent. A modified NP
-                # ("nice setup", "my dog", "the menu") still refers.
+            # Entityhood verdict from the compiled `behood` lib: the
+            # grammar decides whether this chunk is a referring
+            # expression at all (pronouns, persons, interjections,
+            # bare fragments, emoji, and negative formulas are
+            # discourse noise, never antecedents).
+            if not _is_entity_chunk(f"{sent_idx}:{root.i}", chunk, sent,
+                                    doc, self):
                 continue
             text, ids = phrase_text(root, doc)
             if not text:
-                continue
-            if not any(c.isalpha() for c in text):
-                # No letters: emoji / symbols ("🧘‍"), not a referring NP.
-                continue
-            if _is_neg_formula(chunk, sent):
                 continue
             nums = root.morph.get("Number")
             self.entity_mentions.append(
@@ -610,7 +682,7 @@ class CorefCtx:
         return self._pick(cands, sent_idx)
 
 
-def conj_person_names(tok, speaker, ctx=None):
+def conj_person_names(tok, speaker, ctx=None, sent_idx=None):
     """Person names coordinated with a mention token ("Jon and Maria")."""
     group = [tok]
     if tok.dep_ == "conj":
@@ -625,7 +697,7 @@ def conj_person_names(tok, speaker, ctx=None):
         low = t.text.lower()
         if low in SELF_PRONOUNS:
             names.append(speaker)
-        elif is_person_token(t, ctx):
+        elif is_person_token(t, ctx, sent_idx):
             names.append(t.text)
     seen = set()
     out = []
@@ -684,7 +756,7 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject,
         m = ctx.nearest_person(sent_idx, tok.i, speaker)
         if m is None or m["key"] in exclude_keys:
             return None
-        names = conj_person_names(m["tok"], speaker, ctx)
+        names = conj_person_names(m["tok"], speaker, ctx, sent_idx)
         if len(names) < 2:
             # "they" with no coordinated antecedent is ambiguous: drop.
             return None
@@ -706,7 +778,7 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject,
                     if clow in SELF_PRONOUNS:
                         return [(speaker, set(),
                                  f"{tok.text}->{speaker}")]
-                    if is_person_token(child, ctx):
+                    if is_person_token(child, ctx, sent_idx):
                         return [(child.text, set(),
                                  f"{tok.text}->{child.text}")]
         return None
@@ -759,7 +831,7 @@ def resolve_name(child, speaker, conf, ctx, sent_idx):
     if child.pos_ == "PROPN" or (
         child.text[:1].isupper() and child.pos_ in ("NOUN", "PROPN")
     ):
-        names = conj_person_names(child, speaker, ctx)
+        names = conj_person_names(child, speaker, ctx, sent_idx)
         head_low = child.text.lower()
         head_name = speaker if head_low in SELF_PRONOUNS else child.text
         if head_name.lower() not in {n.lower() for n in names}:
@@ -924,24 +996,38 @@ def main() -> int:
         s = t.get("speaker", "")
         if s.lower() not in {x.lower() for x in speakers}:
             speakers.append(s)
+    # Global sentence indexing, computed before classification: mention
+    # and chunk ids are stable "sent_idx:tok.i" coordinates, never
+    # object identity (spaCy token wrappers are not guaranteed stable
+    # across passes over the document).
+    sent_index = []
+    sent_idx = 0
+    for doc in docs:
+        per_turn = []
+        for sent in doc.sents:
+            per_turn.append((sent, sent_idx))
+            sent_idx += 1
+        sent_index.append(per_turn)
+
     ctx = CorefCtx(speakers, fallback_name_counts(docs),
-                   _classify_personhood(
-                       [{"id": id(tok),
+                   *_classify(
+                       [{"id": f"{s_idx}:{tok.i}",
                          "text": tok.text,
                          "ner_label": tok.ent_type_,
                          "pos": tok.pos_,
                          "head_lemma": tok.head.lemma_}
-                        for doc in docs for tok in doc],
+                        for doc, per_turn in zip(docs, sent_index)
+                        for sent, s_idx in per_turn
+                        for tok in sent],
+                       _chunk_descriptors(docs, sent_index),
                        speakers))
     sent_maps = []
-    sent_idx = 0
-    for turn, doc in zip(turns, docs):
+    for turn, doc, per_turn in zip(turns, docs, sent_index):
         speaker = turn.get("speaker", "")
         sent_map = {}
-        for sent in doc.sents:
-            sent_map[sent.start] = sent_idx
-            ctx.add_sentence(speaker, sent, doc, sent_idx)
-            sent_idx += 1
+        for sent, s_idx in per_turn:
+            sent_map[sent.start] = s_idx
+            ctx.add_sentence(speaker, sent, doc, s_idx)
         sent_maps.append(sent_map)
 
     relations = []

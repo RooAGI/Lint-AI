@@ -311,4 +311,72 @@ check("emoji not an antecedent",
       not any("coref" in r and r["coref"] and "->\U0001f9d8" in r["coref"]
               for r in rels))
 
+# 37. Forced policy divergence, personhood: a fake behood binary whose
+# verdicts contradict the Python fallback proves the Rust personhood
+# verdicts are actually consumed. The fallback would call Maria a
+# person ("met" is an introduction verb), so She->Maria must vanish
+# only if the binary's all-False verdicts win.
+import os
+import tempfile
+
+
+def extract_with_behood(turns, script_text):
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "behood"
+        p.write_text(script_text)
+        p.chmod(0o755)
+        env = dict(os.environ, BEHOOD_BIN=str(p))
+        payload = {"model": "en_core_web_sm", "turns": turns}
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        assert proc.returncode == 0, f"extractor failed: {proc.stderr}"
+        assert "warning" not in proc.stderr, \
+            f"classifier not used: {proc.stderr}"
+        return json.loads(proc.stdout)["relations"]
+
+
+_FAKE_NONE_PERSON = """#!/usr/bin/env python3
+import json, sys
+p = json.load(sys.stdin)
+json.dump({
+    "verdicts": [{"id": m["id"], "is_person": False, "evidence": []}
+                 for m in p["mentions"]],
+    "entity_verdicts": [{"id": c["id"], "is_entity": True, "evidence": []}
+                        for c in p.get("chunks", [])],
+}, sys.stdout)
+"""
+
+rels = triples(extract_with_behood(
+    [T("Jon", "I met Maria yesterday. She invited me to Paris. ")],
+    _FAKE_NONE_PERSON))
+check("rust personhood verdicts consumed (no She->Maria when denied)",
+      rels.get(("Maria", "invite_to", "Paris")) is None)
+
+# 38. Forced policy divergence, entityhood: the fake binary accepts all
+# persons but rejects every chunk as an entity. The fallback would keep
+# "a car" as an antecedent, so it->car must vanish only if the binary's
+# verdicts win.
+_FAKE_NO_ENTITY = """#!/usr/bin/env python3
+import json, sys
+p = json.load(sys.stdin)
+json.dump({
+    "verdicts": [{"id": m["id"], "is_person": True, "evidence": []}
+                 for m in p["mentions"]],
+    "entity_verdicts": [{"id": c["id"], "is_entity": False, "evidence": []}
+                        for c in p.get("chunks", [])],
+}, sys.stdout)
+"""
+
+rels = triples(extract_with_behood(
+    [T("Jon", "I bought a car. I sold it. ")], _FAKE_NO_ENTITY))
+r = rels.get(("Jon", "sell", "car"))
+check("rust entityhood verdicts consumed (no it->car when denied)",
+      r is None or r.get("coref") != "it->car")
+
 sys.exit(1 if check.failed else 0)

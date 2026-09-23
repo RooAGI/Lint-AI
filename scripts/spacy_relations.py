@@ -15,20 +15,35 @@ name-to-gender guessing:
   grammatical, not gendered);
 * ``you`` resolves to the other participant when the conversation has
   exactly two speakers, and is dropped otherwise;
-* ``he/she/him/her`` resolve to the nearest preceding person mention
-  that is not the speaker (a speaker referring to themselves says "I");
+* ``he/she/him/her`` resolve to the most *salient* preceding person
+  mention that is not the speaker (a speaker referring to themselves
+  says "I");
 * ``they/them`` resolve to the nearest preceding *coordinated* person
   set ("Jon and Maria ... They ..."), emitting one triple per member,
   and are dropped when there is no coordination;
 * a coordinated subject ("Jon and Maria visited Rome") credits every
   person conjunct, emitting one triple per member;
-* ``it/this/that/these/those`` resolve to the nearest preceding
+* ``it/this/that/these/those`` resolve to the most *salient* preceding
   non-person noun phrase ("I bought a car. I sold it.");
 * reflexives (``himself/herself/themselves``) resolve to the clause's
   nominal subject when it is a person.
 
-Antecedents are searched over the current and previous three sentences,
-most recent first. A resolved triple carries a ``coref`` provenance note
+Salience is deterministic centering-style scoring, not recency: each
+candidate mention scores ``2 * role_weight + frequency - max(0,
+sent_dist - 1)``, where role_weight is presentational attribute 4 >
+subject 3 > direct object 2 > oblique 1 > predicative subject 0, and
+frequency counts mentions of the same entity in the window. Remaining
+ties break toward the earliest introduction. In copular clauses
+salience flows to the predicate: only a presentational attribute
+("That's a chill pic!") establishes a new topic and outranks even
+subjects, while other copular nominals ("the skill is awesome",
+"I'm a big fan of pottery") state the comment and score 0. Resolved
+pronouns feed back into the mention stacks, so a topic gains salience
+as it is referred to. An object pronoun never resolves to its own
+clause's subject ("he saw him": disjoint reference).
+
+Antecedents are searched over the current and previous three sentences
+and ranked by salience. A resolved triple carries a ``coref`` provenance note
 (e.g. ``"she->Maria"``) and its confidence is capped at 0.8, so
 downstream consumers can tell explicit mentions from resolved ones.
 
@@ -96,6 +111,73 @@ REFLEXIVE_PRONOUNS = {"himself", "herself", "itself", "themselves"}
 # How far back (in sentences) an antecedent may be.
 SENT_WINDOW = 3
 
+# Grammatical-role weights for salience scoring: presentational
+# attributes ("That's a chill pic!") outrank subjects, which outrank
+# direct objects, which outrank obliques. Other copular nominals --
+# predicative subjects ("the skill is awesome") and non-presentational
+# attributes ("I'm a big fan of pottery") -- state the comment and
+# score 0: they anchor reference only when nothing better exists.
+ROLE_W = {"psubj": 4, "subj": 3, "obj": 2, "obl": 1, "pred": 0}
+
+# Linking verbs whose nominal subjects are predicative comments, not
+# topics ("the skill is awesome"): demoted to oblique for non-persons.
+COPULA_LEMMAS = {"be", "seem", "become"}
+
+# Determiners marking a bare negative NP that exhausts its sentence
+# ("No prob.", "No way."): a discourse formula, not a referring
+# expression, so it never enters the antecedent stack.
+FORMULA_DETS = {"no", "nah", "nope"}
+
+
+def _demonstrative_subject(head):
+    """Whether the copula's subject presents new information."""
+    return any(
+        c.dep_ in ("nsubj", "nsubjpass")
+        and c.text.lower() in ("that", "this", "it")
+        for c in head.children
+    )
+
+
+def role_of(dep, head=None, is_person=False):
+    """Grammatical-role salience class for a mention.
+
+    In a copular clause salience flows to the predicate, not the
+    subject -- but only a presentational attribute ("That's a chill
+    pic!") establishes a new topic. Other copular nominals
+    ("the skill is awesome", "I'm a big fan of pottery") state the
+    comment and score 0. Persons are never demoted: on the animacy
+    hierarchy a person ("John is happy", "The CEO is Maria") stays
+    topic-worthy even in a copular clause.
+    """
+    head_lemma = head.lemma_ if head is not None else None
+    copular = head_lemma in COPULA_LEMMAS
+    if dep in ("nsubj", "nsubjpass", "csubj"):
+        if copular and not is_person:
+            return "pred"
+        return "subj"
+    if dep == "attr" and copular:
+        if is_person:
+            return "subj"
+        # "That's a chill pic! Where did you find it?"
+        if _demonstrative_subject(head):
+            return "psubj"
+        return "pred"
+    if dep in ("dobj", "obj"):
+        return "obj"
+    return "obl"
+
+
+def _is_neg_formula(chunk, sent):
+    """A bare negative NP exhausting a verbless sentence ("No prob.")."""
+    if chunk.start != sent.start:
+        return False
+    if any(not t.is_punct for t in sent if t.i >= chunk.end):
+        return False
+    return any(
+        c.dep_ == "det" and c.text.lower() in FORMULA_DETS
+        for c in chunk.root.children
+    )
+
 # Confidence cap for any triple built on a resolved pronoun.
 COREF_CONF = 0.8
 
@@ -148,16 +230,22 @@ def phrase_text(noun, doc):
 
 
 class CorefCtx:
-    """Conversation-level mention stacks for grammatical coreference."""
+    """Conversation-level mention stacks for grammatical coreference.
+
+    Mentions carry a grammatical role ("psubj"/"subj"/"obj"/"obl"/
+    "pred") and a normalized key; antecedents are picked by salience
+    (``2 * role_weight + frequency - max(0, sent_dist - 1)``), with
+    remaining ties broken toward the earliest introduction.
+    """
 
     def __init__(self, speakers):
         # Distinct speaker display names, in first-seen order.
         self.speakers = speakers
         # Person mentions in document order:
-        # {"sent": int, "tok_i": int, "name": str, "tok": Token}.
+        # {"sent", "tok_i", "key", "text", "role", "number"?}.
         self.person_mentions = []
         # Non-person noun-phrase mentions in document order:
-        # {"sent": int, "tok_i": int, "text": str, "ids": set[int]}.
+        # {"sent", "tok_i", "key", "text", "role", "ids", "number"?}.
         self.entity_mentions = []
 
     def other_speaker(self, speaker):
@@ -176,21 +264,27 @@ class CorefCtx:
             if low in SELF_PRONOUNS:
                 self.person_mentions.append(
                     {"sent": sent_idx, "tok_i": tok.i,
-                     "name": speaker, "tok": tok}
+                     "key": speaker.lower(), "text": speaker,
+                     "role": role_of(tok.dep_, tok.head, is_person=True),
+                     "tok": tok}
                 )
             elif low in YOU_PRONOUNS:
                 other = self.other_speaker(speaker)
                 if other is not None:
                     self.person_mentions.append(
                         {"sent": sent_idx, "tok_i": tok.i,
-                         "name": other, "tok": tok}
+                         "key": other.lower(), "text": other,
+                         "role": role_of(tok.dep_, tok.head, is_person=True),
+                         "tok": tok}
                     )
             elif is_person_token(tok):
                 nums = tok.morph.get("Number")
                 self.person_mentions.append(
                     {"sent": sent_idx, "tok_i": tok.i,
-                     "name": tok.text, "tok": tok,
-                     "number": nums[0] if nums else None}
+                     "key": tok.text.lower(), "text": tok.text,
+                     "role": role_of(tok.dep_, tok.head, is_person=True),
+                     "number": nums[0] if nums else None,
+                     "tok": tok}
                 )
         for chunk in doc.noun_chunks:
             if chunk.sent.start != sent.start:
@@ -203,13 +297,17 @@ class CorefCtx:
             if root.dep_ in ("npadvmod",):
                 continue
             text, ids = phrase_text(root, doc)
-            if text:
-                nums = root.morph.get("Number")
-                self.entity_mentions.append(
-                    {"sent": sent_idx, "tok_i": root.i,
-                     "text": text, "ids": ids,
-                     "number": nums[0] if nums else None}
-                )
+            if not text:
+                continue
+            if _is_neg_formula(chunk, sent):
+                continue
+            nums = root.morph.get("Number")
+            self.entity_mentions.append(
+                {"sent": sent_idx, "tok_i": root.i,
+                 "key": text.lower(), "text": text, "ids": ids,
+                 "role": role_of(root.dep_, root.head),
+                 "number": nums[0] if nums else None}
+            )
 
     def _in_window(self, m, sent_idx, tok_i):
         return (
@@ -218,8 +316,60 @@ class CorefCtx:
                  or (m["sent"] == sent_idx and m["tok_i"] < tok_i))
         )
 
-    def nearest_person(self, sent_idx, tok_i, speaker, number=None):
+    def _pick(self, cands, cur_sent):
+        """Highest-salience candidate.
+
+        ``2 * role_weight + frequency - max(0, sent_dist - 1)``:
+        presentational attributes outrank subjects, subjects outrank
+        direct objects, obliques follow, and predicative subjects
+        score 0. Frequency counts mentions of the same entity in the
+        window; adjacent sentences carry no recency penalty, decay
+        starts at distance 2. Remaining ties go to the
+        earliest-introduced entity (topic continuity).
+        """
+        reps = {}
+        for m in cands:
+            r = reps.get(m["key"])
+            pos = (m["sent"], m["tok_i"])
+            if r is None:
+                reps[m["key"]] = {"m": m, "freq": 1,
+                                  "first": pos, "last": pos}
+            else:
+                r["freq"] += 1
+                r["first"] = min(r["first"], pos)
+                if pos > r["last"]:
+                    r["last"] = pos
+                    r["m"] = m
+        best = None
+        best_key = None
+        for key, r in reps.items():
+            m = r["m"]
+            score = (2 * ROLE_W[m["role"]] + r["freq"]
+                     - max(0, cur_sent - m["sent"] - 1))
+            # Negated first-mention position: earlier introduction wins.
+            tie = (score, -r["first"][0], -r["first"][1])
+            if best_key is None or tie > best_key:
+                best_key = tie
+                best = m
+        return best
+
+    def nearest_person(self, sent_idx, tok_i, speaker):
         """Nearest preceding person mention that is not the speaker.
+
+        Used only as the structural anchor for they/them coordination;
+        singular pronouns use salience (best_person).
+        """
+        snorm = speaker.lower()
+        cands = [
+            m for m in self.person_mentions
+            if self._in_window(m, sent_idx, tok_i)
+            and m["key"] != snorm
+        ]
+        return cands[-1] if cands else None
+
+    def best_person(self, sent_idx, tok_i, speaker, exclude=frozenset(),
+                    number=None):
+        """Most salient preceding person mention (not the speaker).
 
         `number="Sing"` excludes plural mentions ("Turtles") as
         antecedents for he/she/him/her.
@@ -229,24 +379,31 @@ class CorefCtx:
         for m in self.person_mentions:
             if not self._in_window(m, sent_idx, tok_i):
                 continue
-            if m["name"].lower() == snorm:
+            if m["key"] == snorm or m["key"] in exclude:
                 continue
             if number == "Sing" and m.get("number") == "Plur":
                 continue
             cands.append(m)
-        return cands[-1] if cands else None
+        if not cands:
+            return None
+        return self._pick(cands, sent_idx)
 
-    def nearest_entity(self, sent_idx, tok_i, number):
-        """Nearest preceding non-person noun phrase with number agreement."""
+    def best_entity(self, sent_idx, tok_i, exclude=frozenset(),
+                    number=None):
+        """Most salient preceding non-person noun phrase."""
         cands = []
         for m in self.entity_mentions:
             if not self._in_window(m, sent_idx, tok_i):
+                continue
+            if m["key"] in exclude:
                 continue
             nums = m.get("number")
             if nums and number and nums != number:
                 continue
             cands.append(m)
-        return cands[-1] if cands else None
+        if not cands:
+            return None
+        return self._pick(cands, sent_idx)
 
 
 def conj_person_names(tok, speaker):
@@ -275,13 +432,19 @@ def conj_person_names(tok, speaker):
     return out
 
 
-def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject):
+def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject,
+                    exclude_keys=frozenset()):
     """Resolve one pronoun token: [(text, ids, note)] or None.
 
     Purely grammatical: person mentions, coordination, and noun phrases
-    ordered by recency. Gender is never consulted. Neuter pronouns never
+    ranked by salience. Gender is never consulted. Neuter pronouns never
     resolve as subjects -- this index is person-centric, so a thing
     subject ("aerial yoga") would corrupt the person list.
+
+    `exclude_keys` holds entity keys the pronoun must not corefer with:
+    an object pronoun is disjoint from its clause's subject
+    ("he saw him"). A successful resolution feeds back into the mention
+    stacks, so referred-to topics gain salience.
     """
     low = tok.text.lower()
     if low in SELF_PRONOUNS:
@@ -302,19 +465,33 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject):
             return None
         return [(other, set(), f"{tok.text}->{other}")]
     if low in SINGULAR_PRONOUNS:
-        m = ctx.nearest_person(sent_idx, tok.i, speaker, number="Sing")
+        m = ctx.best_person(sent_idx, tok.i, speaker,
+                             exclude=exclude_keys, number="Sing")
         if m is None:
             return None
-        return [(m["name"], set(), f"{tok.text}->{m['name']}")]
+        ctx.person_mentions.append(
+            {"sent": sent_idx, "tok_i": tok.i,
+             "key": m["key"], "text": m["text"],
+             "role": role_of(tok.dep_, tok.head, is_person=True),
+             "tok": m["tok"]}
+        )
+        return [(m["text"], set(), f"{tok.text}->{m['text']}")]
     if low in PLURAL_PRONOUNS:
         m = ctx.nearest_person(sent_idx, tok.i, speaker)
-        if m is None:
+        if m is None or m["key"] in exclude_keys:
             return None
         names = conj_person_names(m["tok"], speaker)
         if len(names) < 2:
             # "they" with no coordinated antecedent is ambiguous: drop.
             return None
         note = f"{tok.text}->({'+'.join(names)})"
+        for n in names:
+            ctx.person_mentions.append(
+                {"sent": sent_idx, "tok_i": tok.i,
+                 "key": n.lower(), "text": n,
+                 "role": role_of(tok.dep_, tok.head, is_person=True),
+                 "tok": m["tok"]}
+            )
         return [(n, set(), note) for n in names]
     if low in REFLEXIVE_PRONOUNS:
         verb = tok.head if tok.head.pos_ in ("VERB", "AUX") else None
@@ -333,18 +510,25 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject):
         if as_subject:
             return None
         number = "Plur" if low in ("these", "those") else "Sing"
-        m = ctx.nearest_entity(sent_idx, tok.i, number)
+        m = ctx.best_entity(sent_idx, tok.i, exclude=exclude_keys,
+                             number=number)
         if m is None:
             return None
+        ctx.entity_mentions.append(
+            {"sent": sent_idx, "tok_i": tok.i,
+             "key": m["key"], "text": m["text"], "ids": set(),
+             "role": role_of(tok.dep_, tok.head),
+             "number": m.get("number")}
+        )
         return [(m["text"], m["ids"], f"{tok.text}->{m['text']}")]
     return None
 
 
-def noun_phrase(noun, doc, ctx, sent_idx, speaker):
+def noun_phrase(noun, doc, ctx, sent_idx, speaker, exclude_keys=frozenset()):
     """[(text, token_ids, coref_note)] for an object noun; usually one."""
     if noun.pos_ == "PRON":
         refs = resolve_pronoun(noun, speaker, sent_idx, ctx,
-                               as_subject=False)
+                               as_subject=False, exclude_keys=exclude_keys)
         return refs if refs else []
     text, ids = phrase_text(noun, doc)
     if not text:
@@ -445,10 +629,14 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
             subjects = resolve_subject(verb, sent, speaker, ctx, sent_idx)
             if not subjects:
                 continue
+            # Disjoint reference: an object pronoun cannot corefer with
+            # its own clause's subject ("he saw him").
+            subj_keys = frozenset(s.lower() for s, _, _ in subjects)
             lemma = low_lemma(verb, doc_low)
             for child in verb.children:
                 if child.dep_ == "dobj":
-                    objs = noun_phrase(child, doc, ctx, sent_idx, speaker)
+                    objs = noun_phrase(child, doc, ctx, sent_idx, speaker,
+                                       exclude_keys=subj_keys)
                     for obj, ids, onote in objs:
                         for subject, sconf, snote in subjects:
                             notes = [n for n in (snote, onote) if n]
@@ -462,7 +650,8 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                 elif child.dep_ == "prep":
                     pobjs = [c for c in child.children if c.dep_ == "pobj"]
                     for pobj in pobjs:
-                        objs = noun_phrase(pobj, doc, ctx, sent_idx, speaker)
+                        objs = noun_phrase(pobj, doc, ctx, sent_idx, speaker,
+                                           exclude_keys=subj_keys)
                         for obj, ids, onote in objs:
                             for subject, sconf, snote in subjects:
                                 notes = [n for n in (snote, onote) if n]
@@ -480,7 +669,7 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                         "NOUN", "PROPN",
                     ):
                         objs = noun_phrase(verb.head, doc, ctx, sent_idx,
-                                           speaker)
+                                           speaker, exclude_keys=subj_keys)
                         for obj, ids, onote in objs:
                             for subject, sconf, snote in subjects:
                                 notes = [n for n in (snote, onote) if n]

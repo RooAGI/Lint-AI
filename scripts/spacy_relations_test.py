@@ -159,4 +159,56 @@ r = rels.get(("Dave", "love", "nice setup"))
 check("it->nice setup (no Wow)",
       r is not None and r["coref"] == "it->nice setup")
 
+# 16. Salience beats recency for persons: She -> Maria, not nearer Luke.
+rels = triples(extract([T("Jon", "I met Maria and Luke. She baked a cake. ")]))
+r = rels.get(("Maria", "bake", "cake"))
+check("She->Maria over nearer Luke",
+      r is not None and r["coref"] == "She->Maria"
+      and ("Luke", "bake", "cake") not in rels)
+
+# 17. Clause subject outranks nearer object ("Maria told Luke she ...").
+rels = triples(extract([T("Jon", "Maria told Luke she baked a cake. ")]))
+r = rels.get(("Maria", "bake", "cake"))
+check("She->Maria (subject beats object)",
+      r is not None and r["coref"] == "she->Maria")
+
+# 18. Topic continuity: "this" -> pottery, not the nearer copular
+# subject "skill" (demoted: predicative subjects are the comment).
+rels = triples(extract([T("Melanie", "I love pottery. "
+                                  "The creativity and skill is awesome. "
+                                  "Making it is calming. "
+                                  "Look at this! ")]))
+r = rels.get(("Melanie", "look_at", "pottery"))
+check("this->pottery (topic over copular subject)",
+      r is not None and r["coref"] == "this->pottery")
+
+# 19. "include this" -> the intro, not the nearer "movie script".
+rels = triples(extract([T("Joanna", "I just finished with the intro to my "
+                                  "next movie script, and I decided to "
+                                  "include this at the beginning. ")]))
+r = rels.get(("Joanna", "include", "intro"))
+check("this->the intro (first-mentioned wins)",
+      r is not None and r["coref"] == "this->intro")
+
+# 20. "No prob." is a discourse formula: "it" has no antecedent.
+rels = extract([T("Nate", "No prob. I made it with coconut milk. ")])
+check("No prob not an antecedent",
+      not any(r["predicate"] == "make" for r in rels))
+
+# 21. Disjoint reference: "he saw him" -> "him" cannot be "he".
+rels = extract([T("Jon", "Maria said he saw him at the park. ")])
+check("him disjoint from clause subject",
+      not any(r["predicate"] == "see" for r in rels))
+
+# 22. Presented attribute beats an older subject in context:
+# "That's a chill pic! Where did you find it?" -> it->chill pic,
+# not the subject of the previous sentence.
+rels = triples(extract([
+    T("Maria", "Nature's beauty reminds me to slow down and enjoy the small stuff. ", idx=0),
+    T("John", "That's a chill pic! Where did you find it? ", idx=1),
+]))
+r = rels.get(("Maria", "find", "chill pic"))
+check("it->chill pic over older subject",
+      r is not None and r["coref"] == "you->Maria;it->chill pic")
+
 sys.exit(1 if check.failed else 0)

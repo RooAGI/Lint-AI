@@ -1422,6 +1422,16 @@ mod tests {
         MemoryService::in_memory(PipelineOptions::default())
     }
 
+    /// Temp dir with symlinks resolved (on macOS `TMPDIR` lives under
+    /// `/var`, which is a symlink to `/private/var`; comparing or
+    /// reopening paths through the unresolved prefix breaks).
+    fn canonical_temp_dir(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(format!("lint-ai-{name}-{}", std::process::id()))
+    }
+
     #[test]
     fn add_is_immediately_searchable() {
         let mut service = service();
@@ -2186,7 +2196,7 @@ mod tests {
     ))]
     #[test]
     fn at_path_persists_conversation_state_across_instances() {
-        let dir = std::env::temp_dir().join(format!("lint-ai-conv-state-{}", std::process::id()));
+        let dir = canonical_temp_dir("conv-state");
         std::fs::create_dir_all(&dir).unwrap();
         let options = PipelineOptions::default();
         {
@@ -2236,8 +2246,7 @@ mod tests {
         // active-session pointer into the provider memory root; the composed
         // service has to see it, and explicit session state must survive a
         // new MCP process.
-        let base =
-            std::env::temp_dir().join(format!("lint-ai-compose-state-{}", std::process::id()));
+        let base = canonical_temp_dir("compose-state");
         let workspace_root = base.join("workspace-memory");
         let provider_root = base.join("memory");
         std::fs::create_dir_all(&workspace_root).unwrap();

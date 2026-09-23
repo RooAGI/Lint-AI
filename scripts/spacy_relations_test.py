@@ -211,4 +211,45 @@ r = rels.get(("Maria", "find", "chill pic"))
 check("it->chill pic over older subject",
       r is not None and r["coref"] == "you->Maria;it->chill pic")
 
+# 23. Nominal-chunk hygiene (conv-49): a fragment smuggling a clause
+# ("No prob, always good to chat about those tranquil times") is
+# discourse, not an antecedent; "it" falls through to the real entity.
+rels = triples(extract([
+    T("Evan", "Yeah, it's like a little slice of paradise. I always feel so peaceful and serene when I'm there. ", idx=0),
+    T("Sam", "Wow, it really seems like a peaceful retreat. Thanks for showing me! ", idx=1),
+    T("Evan", "No prob, always good to chat about those tranquil times. Take it easy! ", idx=2),
+]))
+r = rels.get(("Evan", "take", "peaceful retreat"))
+check("fragment with smuggled clause not an antecedent",
+      r is not None and r["coref"] == "it->peaceful retreat"
+      and not any("chat" in (x.get("coref") or "") for x in rels.values()))
+
+# 24. Nominal-chunk hygiene (conv-44): "Oh man, sorry to hear that" --
+# "that" must not resolve into the fragment.
+rels = extract([T("Audrey", "Oh man, sorry to hear that, Melanie. I hope you feel better. ")])
+check("that not resolved into fragment",
+      not any("sorry" in (r.get("coref") or "") for r in rels)
+      and not any(r["predicate"] == "hear" for r in rels))
+
+# 25. A relative clause modifying the head is genuinely nominal: the
+# phrase ("the car I saw" -> "the car") stays a valid antecedent.
+rels = triples(extract([T("Jon", "I bought the car I saw yesterday. I sold it today. ")]))
+r = rels.get(("Jon", "sell", "car"))
+check("relcl head kept as antecedent",
+      r is not None and r["coref"] == "it->car")
+
+# 26. Bare participial modifiers are nominal: "a broken window" stays.
+rels = triples(extract([T("Jon", "I saw a broken window. I photographed it yesterday. ")]))
+r = rels.get(("Jon", "photograph", "broken window"))
+check("participial modifier kept",
+      r is not None and r["coref"] == "it->broken window")
+
+# 27. A bare exclamatory NP ("nice setup") is a complete NP on its own:
+# kept as an antecedent.
+rels = triples(extract([T("Jon", "Wow, nice setup. ", idx=0),
+                        T("Maria", "Where did you buy it? ", idx=1)]))
+r = rels.get(("Jon", "buy", "nice setup"))
+check("exclamatory NP kept as antecedent",
+      r is not None and "it->nice setup" in (r["coref"] or ""))
+
 sys.exit(1 if check.failed else 0)

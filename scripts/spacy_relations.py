@@ -178,6 +178,32 @@ def _is_neg_formula(chunk, sent):
         for c in chunk.root.children
     )
 
+def _sentence_has_matrix_verb(sent):
+    """Whether the sentence has a verb outside any subordinate clause.
+
+    "No prob, always good to chat about those tranquil times" contains
+    a verb ("chat") but only inside an xcomp clause: the matrix is
+    verbless, so the sentence is a fragment. A verb reached through a
+    clause relation (relcl/acl/advcl/ccomp/xcomp/parataxis) does not
+    count.
+    """
+    for tok in sent:
+        if tok.pos_ not in ("VERB", "AUX"):
+            continue
+        node = tok
+        subordinate = False
+        while True:
+            if node.dep_ in CLAUSE_DEPS:
+                subordinate = True
+                break
+            if node.head.i == node.i or node.dep_ == "ROOT":
+                break
+            node = node.head
+        if not subordinate:
+            return True
+    return False
+
+
 # Confidence cap for any triple built on a resolved pronoun.
 COREF_CONF = 0.8
 
@@ -201,14 +227,29 @@ def is_person_token(tok):
 def phrase_text(noun, doc):
     """(text, token_ids) of a noun's phrase, minus dets and sub-clauses.
 
+    Clauses are dropped at any depth, not just as direct children: a
+    kept modifier can itself head a clause ("No prob, always good to
+    chat about those tranquil times" -- "chat" is xcomp of "good",
+    amod of "prob"), and that clause is not part of the noun phrase.
+    What survives is genuinely nominal: bare participial modifiers
+    ("a broken window") stay, clause-headed ones go. Relative clauses
+    were already dropped; this extends the same rule to clauses nested
+    under kept modifiers.
+
     Returns (None, None) for pronouns -- those go through coreference.
     """
     if noun.pos_ == "PRON":
         return None, None
     drop = set()
-    for child in noun.children:
-        if child.dep_ in CLAUSE_DEPS:
-            drop.update(t.i for t in child.subtree)
+
+    def visit(node):
+        for child in node.children:
+            if child.dep_ in CLAUSE_DEPS:
+                drop.update(t.i for t in child.subtree)
+            else:
+                visit(child)
+
+    visit(noun)
     toks = [t for t in noun.subtree if t.i not in drop and not t.is_punct]
     if not toks:
         return None, None
@@ -295,6 +336,19 @@ class CorefCtx:
             if is_person_token(root):
                 continue
             if root.dep_ in ("npadvmod",):
+                continue
+            if (root.dep_ == "ROOT"
+                    and not _sentence_has_matrix_verb(sent)
+                    and any(t.dep_ in CLAUSE_DEPS
+                            for t in root.subtree if t.i != root.i)):
+                # A fragment masquerading as a noun phrase ("No prob,
+                # always good to chat about those tranquil times", "Oh
+                # man, sorry to hear that"): verbless matrix, ROOT
+                # noun, and the phrase only looked complete because of
+                # subordinate-clause material. Discourse, not a
+                # referring NP: never an antecedent. A bare
+                # exclamatory NP ("nice setup") has no clause material
+                # and is kept.
                 continue
             text, ids = phrase_text(root, doc)
             if not text:

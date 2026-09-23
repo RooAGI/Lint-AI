@@ -480,6 +480,47 @@ def _np_text(root, doc):
     return " ".join(doc[i].text for i in ids).strip()
 
 
+def _verb_contexts(docs, sent_index):
+    """Syntactic pre-pass: (turn_idx, tok) -> verb-frame contexts.
+
+    Pure syntax, no coreference: for each verb, every dobj/prep argument's
+    subtree is an argument span; a mention token inside it gets
+    (verb_lemma, prep, role), where prep is the innermost preposition
+    marking the mention (None for direct arguments). Runs before
+    classification so behood can type mentions with their verb-frame
+    context -- selectional preference: `play for X` selects a team (Org),
+    not the GPE spaCy guesses for "Eagles".
+    """
+    out = {}
+    for turn_idx, (doc, per_turn) in enumerate(zip(docs, sent_index)):
+        for sent, _s_idx in per_turn:
+            for verb in sent:
+                if verb.pos_ not in ("VERB", "AUX") and verb.dep_ != "ROOT":
+                    continue
+                lemma = verb.lemma_.lower()
+                for child in verb.children:
+                    if child.dep_ == "dobj":
+                        role = "dobj"
+                    elif child.dep_ == "prep":
+                        role = "prep"
+                    else:
+                        continue
+                    span = set(t.i for t in child.subtree)
+                    for tok_i in span:
+                        t = doc[tok_i]
+                        prep = None
+                        if role == "prep":
+                            prep = child.lemma_.lower()
+                        # Innermost prep marking this token within the span
+                        # ("Eagles" in "quarterback for the Eagles").
+                        if (t.dep_ == "pobj" and t.head.i in span
+                                and t.head.dep_ == "prep"):
+                            prep = t.head.lemma_.lower()
+                        out.setdefault((turn_idx, tok_i), []).append(
+                            {"verb": lemma, "prep": prep, "role": role})
+    return out
+
+
 def _np_mention_descriptors(docs, sent_index, turns):
     """Plain-data noun-phrase descriptors for behood's phrase layer.
 
@@ -1237,6 +1278,21 @@ def main() -> int:
 
     name_counts = fallback_name_counts(docs)
     np_descriptors = _np_mention_descriptors(docs, sent_index, turns)
+    # Verb-frame context for selectional typing: attach the most frequent
+    # (verb_lemma, prep) per mention before classification so behood sees
+    # (mention, verb frame), not just the mention string.
+    _vctx = _verb_contexts(docs, sent_index)
+    for d in np_descriptors:
+        ctxs = _vctx.get((d.get("turn_idx", 0), d.get("tok", -1)), [])
+        if not ctxs:
+            continue
+        freq = {}
+        for c in ctxs:
+            key = (c["verb"], c["prep"])
+            freq[key] = freq.get(key, 0) + 1
+        (verb, prep), _n = max(freq.items(), key=lambda kv: kv[1])
+        d["verb_lemma"] = verb
+        d["prep"] = prep
     personhood_verdicts, entity_verdicts, phrase_verdicts = _classify(
         [{"id": f"{s_idx}:{tok.i}",
           "text": tok.text,

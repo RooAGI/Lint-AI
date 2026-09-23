@@ -138,4 +138,25 @@ rels = triples(extract([T("Jon", "I baked a cake. I photographed it. ")]))
 r = rels.get(("Jon", "photograph", "cake"))
 check("it takes singular antecedent", r is not None and r["coref"] == "it->cake")
 
+# 13. Singular he/she/him/her skip plural mentions ("Turtles").
+rels = extract([T("Nate", "Turtles bring me joy. I saw him at the pond. ")])
+check("him skips plural Turtles",
+      not any(r["subject"] == "Nate" and r["predicate"] == "see"
+              for r in rels))
+
+# 14. Plural "you two" fans out to every participant.
+rels = triples(extract([
+    T("Jon", "You two should visit Rome. ", 0),
+    T("Gina", "We will. ", 1),
+]))
+check("you two -> both",
+      ("Jon", "visit", "Rome") in rels and ("Gina", "visit", "Rome") in rels
+      and rels[("Jon", "visit", "Rome")]["coref"] == "You->(Jon+Gina)")
+
+# 15. Leading interjections are stripped from mention text.
+rels = triples(extract([T("Dave", "Wow, nice setup! I love it. ")]))
+r = rels.get(("Dave", "love", "nice setup"))
+check("it->nice setup (no Wow)",
+      r is not None and r["coref"] == "it->nice setup")
+
 sys.exit(1 if check.failed else 0)

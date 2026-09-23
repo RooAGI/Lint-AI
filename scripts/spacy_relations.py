@@ -133,6 +133,10 @@ def phrase_text(noun, doc):
     toks.sort(key=lambda t: t.i)
     while toks and toks[0].text.lower() in STRIP_FIRST:
         toks.pop(0)
+    # Leading interjections are discourse noise, not part of the phrase
+    # ("Wow, nice setup" -> "nice setup").
+    while toks and toks[0].pos_ == "INTJ":
+        toks.pop(0)
     while toks and toks[-1].pos_ == "ADP":
         toks.pop()
     if not toks:
@@ -182,9 +186,11 @@ class CorefCtx:
                          "name": other, "tok": tok}
                     )
             elif is_person_token(tok):
+                nums = tok.morph.get("Number")
                 self.person_mentions.append(
                     {"sent": sent_idx, "tok_i": tok.i,
-                     "name": tok.text, "tok": tok}
+                     "name": tok.text, "tok": tok,
+                     "number": nums[0] if nums else None}
                 )
         for chunk in doc.noun_chunks:
             if chunk.sent.start != sent.start:
@@ -212,14 +218,22 @@ class CorefCtx:
                  or (m["sent"] == sent_idx and m["tok_i"] < tok_i))
         )
 
-    def nearest_person(self, sent_idx, tok_i, speaker):
-        """Nearest preceding person mention that is not the speaker."""
+    def nearest_person(self, sent_idx, tok_i, speaker, number=None):
+        """Nearest preceding person mention that is not the speaker.
+
+        `number="Sing"` excludes plural mentions ("Turtles") as
+        antecedents for he/she/him/her.
+        """
         snorm = speaker.lower()
-        cands = [
-            m for m in self.person_mentions
-            if self._in_window(m, sent_idx, tok_i)
-            and m["name"].lower() != snorm
-        ]
+        cands = []
+        for m in self.person_mentions:
+            if not self._in_window(m, sent_idx, tok_i):
+                continue
+            if m["name"].lower() == snorm:
+                continue
+            if number == "Sing" and m.get("number") == "Plur":
+                continue
+            cands.append(m)
         return cands[-1] if cands else None
 
     def nearest_entity(self, sent_idx, tok_i, number):
@@ -273,12 +287,22 @@ def resolve_pronoun(tok, speaker, sent_idx, ctx, as_subject):
     if low in SELF_PRONOUNS:
         return [(speaker, set(), None)]
     if low in YOU_PRONOUNS:
+        # "you two / you all / you guys" is plural: every participant.
+        plural = any(
+            t.text.lower() in ("all", "both", "guys", "two", "three")
+            for t in tok.subtree
+        )
+        if plural:
+            if len(ctx.speakers) < 2:
+                return None
+            note = f"{tok.text}->({'+'.join(ctx.speakers)})"
+            return [(s, set(), note) for s in ctx.speakers]
         other = ctx.other_speaker(speaker)
         if other is None:
             return None
         return [(other, set(), f"{tok.text}->{other}")]
     if low in SINGULAR_PRONOUNS:
-        m = ctx.nearest_person(sent_idx, tok.i, speaker)
+        m = ctx.nearest_person(sent_idx, tok.i, speaker, number="Sing")
         if m is None:
             return None
         return [(m["name"], set(), f"{tok.text}->{m['name']}")]

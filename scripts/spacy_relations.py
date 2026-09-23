@@ -480,6 +480,15 @@ def _np_text(root, doc):
     return " ".join(doc[i].text for i in ids).strip()
 
 
+# Transparent partitive/quantifier heads: "the first volume of the
+# encyclopedia", "the majority of voters". The NP's kind passes through
+# from the of-complement, so the teacher reads the complement, not the
+# head. (Closed class; not a per-word hack.)
+TRANSPARENT_HEADS = {"volume", "part", "piece", "bit", "kind", "sort",
+                     "type", "number", "majority", "minority", "most",
+                     "some", "all", "half", "rest", "remainder", "bulk"}
+
+
 def _verb_contexts(docs, sent_index):
     """Syntactic pre-pass: (turn_idx, tok) -> verb-frame contexts.
 
@@ -490,6 +499,13 @@ def _verb_contexts(docs, sent_index):
     classification so behood can type mentions with their verb-frame
     context -- selectional preference: `play for X` selects a team (Org),
     not the GPE spaCy guesses for "Eagles".
+
+    Fold rule: a PP attaching to a NOUN inside the span is folded into
+    that noun phrase ("the destruction of the city" is one NP headed by
+    "destruction"); its tokens get no verb-frame context, so a
+    noun-attached "of" never emits (verb, of). Only a prep attaching
+    directly to the verb marks a verb frame ("died of hunger" keeps
+    (die, of)).
     """
     out = {}
     for turn_idx, (doc, per_turn) in enumerate(zip(docs, sent_index)):
@@ -508,6 +524,12 @@ def _verb_contexts(docs, sent_index):
                     span = set(t.i for t in child.subtree)
                     for tok_i in span:
                         t = doc[tok_i]
+                        # Fold: noun-attached PP ("of the city" under
+                        # "destruction") is a noun-phrase modifier, not a
+                        # verb argument -- no verb-frame context for it.
+                        if (t.dep_ == "pobj" and t.head.dep_ == "prep"
+                                and t.head.head.i != verb.i):
+                            continue
                         prep = None
                         if role == "prep":
                             prep = child.lemma_.lower()
@@ -538,14 +560,31 @@ def _np_mention_descriptors(docs, sent_index, turns):
                     continue
                 root = chunk.root
                 text = _np_text(root, doc)
+                # Transparent head ("the first volume of the encyclopedia"):
+                # the phrase's kind passes through from the of-complement,
+                # so the teacher reads the complement's NER/lexicon.
+                ner_label = root.ent_type_
+                head_lemma = root.lemma_
+                transparent_of = False
+                if root.lemma_.lower() in TRANSPARENT_HEADS:
+                    for c in root.children:
+                        if c.dep_ == "prep" and c.lemma_.lower() == "of":
+                            pobjs = [k for k in c.children
+                                     if k.dep_ == "pobj"]
+                            if pobjs:
+                                ner_label = pobjs[0].ent_type_
+                                head_lemma = pobjs[0].lemma_
+                                transparent_of = True
+                            break
                 out.append({
                     "id": f"{s_idx}:{root.i}",
                     "turn_idx": turn_idx,
                     "tok": root.i,
                     "text": text or chunk.text,
-                    "head_lemma": root.lemma_,
+                    "head_lemma": head_lemma,
                     "head_pos": root.pos_,
-                    "ner_label": root.ent_type_,
+                    "ner_label": ner_label,
+                    "transparent_of": transparent_of,
                     "modifiers": [
                         {"text": c.text, "pos": c.pos_, "dep": c.dep_}
                         for c in root.children
@@ -630,6 +669,19 @@ def _key_phrases(np_descriptors, phrase_verdicts):
             # verb-frame context of each mention for contextual typing.
             "turn_idx": desc.get("turn_idx", 0),
             "tok": desc.get("tok", -1),
+            # Verb-frame context attached by the pre-pass: the observation
+            # triple (verb_lemma, prep, kind) that selectional learning
+            # aggregates over.
+            "verb_lemma": desc.get("verb_lemma"),
+            "prep": desc.get("prep"),
+            # Raw spaCy NER label on the head: the independent teacher for
+            # data-only selectional learning (decided_by="ner").
+            "ner_label": desc.get("ner_label", ""),
+            # Head lemma: the lexicon teacher for data-only learning.
+            "head_lemma": desc.get("head_lemma", ""),
+            # Fold-rule marker: kind passed through from the of-complement
+            # (transparent head, e.g. "the first volume of ...").
+            "transparent_of": desc.get("transparent_of", False),
         })
     return out
 
@@ -1228,33 +1280,30 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
     return out, frames
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception as exc:
-        return fail(f"invalid_json: {exc}", 2)
+def run_payload(payload, get_nlp):
+    """Process one extraction payload; returns the result dict.
 
+    `get_nlp(model)` supplies a cached spaCy pipeline so long-lived
+    callers (e.g. --serve) pay the model load only once.
+    """
     model = payload.get("model", "en_core_web_sm")
     if model not in ALLOWED_MODELS:
-        return fail(
-            f"spacy_model_not_allowed({model}); allowed={sorted(ALLOWED_MODELS)}",
-            5,
-        )
+        raise ValueError(
+            f"spacy_model_not_allowed({model}); "
+            f"allowed={sorted(ALLOWED_MODELS)}")
+    nlp = get_nlp(model)
     turns = payload.get("turns", [])
-
-    try:
-        import spacy
-    except Exception as exc:
-        return fail(f"spacy_import_failed: {exc}", 3)
-
-    try:
-        nlp = spacy.load(model)
-    except Exception as exc:
-        return fail(f"spacy_model_load_failed({model}): {exc}", 4)
+    # Learner mode: emit only key phrases with their verb-frame observation
+    # fields (verb_lemma, prep, ner_label, head_lemma). Skips the lowercased
+    # re-parse, coreference, and triple/frame extraction, which the
+    # selectional learner never reads.
+    key_phrases_only = bool(payload.get("key_phrases_only", False))
 
     texts = [t.get("text", "") or "" for t in turns]
     docs = list(nlp.pipe(texts))
-    docs_low = list(nlp.pipe([t.lower() for t in texts]))
+    # docs_low only serves case-insensitive matching in extract_doc.
+    docs_low = ([] if key_phrases_only
+                else list(nlp.pipe([t.lower() for t in texts])))
 
     # Conversation-level coreference state: mention stacks are built over
     # all turns in order before any triple is extracted.
@@ -1309,19 +1358,23 @@ def main() -> int:
         # Pure-Python fallback when the behood binary is unavailable.
         phrase_verdicts = _phrase_verdicts_fallback(
             np_descriptors, name_counts, speakers)
-    ctx = CorefCtx(speakers, name_counts,
-                   personhood_verdicts, entity_verdicts)
+    ctx = None
     sent_maps = []
-    for turn, doc, per_turn in zip(turns, docs, sent_index):
-        speaker = turn.get("speaker", "")
-        sent_map = {}
-        for sent, s_idx in per_turn:
-            sent_map[sent.start] = s_idx
-            ctx.add_sentence(speaker, sent, doc, s_idx)
-        sent_maps.append(sent_map)
+    if not key_phrases_only:
+        ctx = CorefCtx(speakers, name_counts,
+                       personhood_verdicts, entity_verdicts)
+        for turn, doc, per_turn in zip(turns, docs, sent_index):
+            speaker = turn.get("speaker", "")
+            sent_map = {}
+            for sent, s_idx in per_turn:
+                sent_map[sent.start] = s_idx
+                ctx.add_sentence(speaker, sent, doc, s_idx)
+            sent_maps.append(sent_map)
 
     relations = []
     frames = []
+    # In learner mode docs_low/sent_maps are empty, so this loop is a no-op
+    # and only key_phrases are emitted below.
     for turn, doc, doc_low, sent_map in zip(turns, docs, docs_low,
                                             sent_maps):
         try:
@@ -1358,10 +1411,61 @@ def main() -> int:
                 }
             )
 
-    json.dump({"relations": relations,
-               "frames": frames,
-               "key_phrases": _key_phrases(np_descriptors, phrase_verdicts)},
-              sys.stdout)
+    return {"relations": relations,
+            "frames": frames,
+            "key_phrases": _key_phrases(np_descriptors, phrase_verdicts)}
+
+
+def main() -> int:
+    """One-shot (stdin JSON -> stdout JSON) or --serve: one JSON payload
+    per stdin line, one JSON result per stdout line, model kept loaded.
+    """
+    serve = "--serve" in sys.argv[1:]
+    try:
+        import spacy
+    except Exception as exc:
+        return fail(f"spacy_import_failed: {exc}", 3)
+
+    loaded = {}
+
+    def get_nlp(model):
+        if model not in loaded:
+            try:
+                loaded[model] = spacy.load(model)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"spacy_model_load_failed({model}): {exc}")
+        return loaded[model]
+
+    def handle(payload):
+        try:
+            return run_payload(payload, get_nlp)
+        except (ValueError, RuntimeError) as exc:
+            return {"error": str(exc)}
+
+    if serve:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception as exc:
+                out = {"error": f"invalid_json: {exc}"}
+            else:
+                out = handle(payload)
+            sys.stdout.write(json.dumps(out) + "\n")
+            sys.stdout.flush()
+        return 0
+
+    try:
+        payload = json.load(sys.stdin)
+    except Exception as exc:
+        return fail(f"invalid_json: {exc}", 2)
+    out = handle(payload)
+    if "error" in out and "key_phrases" not in out:
+        return fail(out["error"], 5)
+    json.dump(out, sys.stdout)
     return 0
 
 

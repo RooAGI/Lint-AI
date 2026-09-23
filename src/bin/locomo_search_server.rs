@@ -1,10 +1,15 @@
 //! Long-lived Lint-AI search server over LoCoMo conversations (pillar-4 agent tool).
 //!
-//! Builds one in-memory query snapshot per conversation at startup (same
-//! pipeline options as `locomo_benchmark.rs`), then serves:
+//! Builds one in-memory [`MemorySearchService`] per conversation at startup
+//! (same pipeline options as `locomo_benchmark.rs`, segmented layout with the
+//! gated-local routing strategy), then serves:
 //!   GET /health                        -> {"ok":true}
 //!   GET /search?conv=<sample_id>&q=<query>&k=<n>
 //!       -> {"results":[{"session_id":"...","score":1.23,"text":"..."}]}
+//!
+//! Searches run through the production [`MemoryService`] query path with a
+//! per-conversation `session_id`, so the conversational reranker fires on
+//! follow-up queries exactly as it does in production.
 //!
 //! This is benchmark scaffolding, not part of the shipped product.
 
@@ -17,15 +22,18 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use lint_ai::segments::{SegmentRoutingStrategy, SegmentedMemoryIndex};
-use lint_ai::{
-    analyze_query, build_doc_records, PipelineOptions, SourceDocument, TemporalQueryContext,
-};
+use lint_ai::memory_api::{MemorySearchService, MemoryService, SearchRequest};
+use lint_ai::segments::SegmentRoutingStrategy;
+use lint_ai::{IndexStore, MemoryIndexLayout, PipelineOptions, SourceDocument};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// User id stamped on every LoCoMo document; the production query path
+/// filters on it, mirroring how `AddRequest` stamps real writes.
+const LOCOMO_USER_ID: &str = "locomo-agent";
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -51,8 +59,9 @@ struct LocomoTurn {
 }
 
 struct ConvIndex {
-    segmented: SegmentedMemoryIndex,
+    searcher: MemorySearchService,
     session_text: HashMap<String, String>,
+    doc_group: HashMap<String, String>,
 }
 
 struct AppState {
@@ -65,15 +74,6 @@ struct SearchParams {
     q: String,
     #[serde(default = "default_k")]
     k: usize,
-    /// Routing strategy: "typed-evidence-multiplicative" (gated coverage-local,
-    /// default), "coverage-team-typed-multiplicative" (gated coverage-team),
-    /// or "sparse".
-    #[serde(default = "default_router")]
-    router: String,
-}
-
-fn default_router() -> String {
-    "typed-evidence-multiplicative".to_string()
 }
 
 fn default_k() -> usize {
@@ -111,6 +111,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
 
     let mut docs = Vec::new();
     let mut session_text: HashMap<String, String> = HashMap::new();
+    let mut doc_group: HashMap<String, String> = HashMap::new();
     for n in session_nums {
         let key = format!("session_{n}");
         let date_key = format!("session_{n}_date_time");
@@ -131,13 +132,17 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         for (turn_idx, turn) in turns.iter().enumerate() {
             let line = format!("{}: {}", turn.speaker, turn.text);
             lines.push(line.clone());
+            let mut filters = BTreeMap::new();
+            filters.insert("memory_user_id".to_string(), LOCOMO_USER_ID.to_string());
+            let doc_id = format!("{group_id}::turn{turn_idx}");
+            doc_group.insert(doc_id.clone(), group_id.clone());
             docs.push(SourceDocument {
-                doc_id: format!("{group_id}::turn{turn_idx}"),
+                doc_id,
                 source: format!("locomo/{}/session/{n}/turn/{turn_idx}", conv.sample_id),
                 content: line,
                 concept: "locomo-turn".to_string(),
                 group_id: Some(group_id.clone()),
-                filters: BTreeMap::new(),
+                filters,
                 headings: vec![format!("session:{group_id}")],
                 links: vec![],
                 timestamp: date.clone(),
@@ -148,11 +153,20 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         session_text.insert(group_id, lines.join("\n"));
     }
 
-    let records = build_doc_records(&docs, &PipelineOptions::default())?;
-    let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
+    // Segmented layout with the gated-local routing strategy (the settled
+    // default), top_n=5 matching the retrieval benchmark.
+    let mut options = PipelineOptions::default();
+    options.memory_index_layout = MemoryIndexLayout::Segmented {
+        query_top_n: 5,
+        routing_strategy: SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+    };
+    let mut store = IndexStore::with_documents(options, docs);
+    store.refresh().context("failed to build conv index")?;
+    let searcher = MemoryService::new(store).published_search();
     Ok(ConvIndex {
-        segmented,
+        searcher,
         session_text,
+        doc_group,
     })
 }
 
@@ -169,35 +183,29 @@ async fn search(
         .get(&p.conv)
         .ok_or((StatusCode::NOT_FOUND, format!("unknown conv {}", p.conv)))?;
     let k = p.k.clamp(1, 20);
-    let analysis = analyze_query(&p.q);
-    let temporal = TemporalQueryContext {
-        query_routing_intent: analysis.query_routing_intent,
-        ..Default::default()
+    // Per-conversation session id: the production path resolves follow-up
+    // phrasing against prior observed queries and fires the conversational
+    // reranker when the query classifies as a follow-up. Over-fetch docs,
+    // then collapse to sessions in rank order.
+    let request = SearchRequest {
+        query: p.q.clone(),
+        options: None,
+        user_id: LOCOMO_USER_ID.to_string(),
+        top_k: k * 6,
+        session_id: Some(p.conv.clone()),
     };
-    let strategy = match p.router.as_str() {
-        "coverage-team-typed-multiplicative" => {
-            SegmentRoutingStrategy::CoverageTeamTypedMultiplicative
-        }
-        "sparse" => SegmentRoutingStrategy::SparseOverlap,
-        _ => SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-    };
-    // Route to a small segment set (top_n=5, matching the retrieval
-    // benchmark) so the routing strategy actually decides what is searched.
-    // Over-fetch docs, then collapse to sessions in rank order.
-    let output = conv
-        .segmented
-        .query_with_temporal_context_and_diagnostics_and_strategy(
-            &analysis.augmented_query,
-            k * 6,
-            5,
-            strategy,
-            temporal,
-        );
-    let results = output.results;
+    let response = conv
+        .searcher
+        .search(request)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for r in results {
-        let gid = r.group_id.clone().unwrap_or_else(|| r.doc_id.clone());
+    for r in response.data {
+        let gid = conv
+            .doc_group
+            .get(&r.id)
+            .cloned()
+            .unwrap_or_else(|| r.id.clone());
         if !seen.insert(gid.clone()) {
             continue;
         }

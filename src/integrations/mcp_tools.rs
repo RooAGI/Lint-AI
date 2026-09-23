@@ -1,6 +1,6 @@
 use crate::index::SearchResult;
 use crate::integrations::mcp_transport::ToolDefinition;
-use crate::pipeline::IndexStore;
+use crate::memory_api::MemoryService;
 use crate::source::SourceDocument;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -77,11 +77,11 @@ pub(crate) fn search_session_id(arguments: &Value) -> Result<Option<String>, Str
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.
-pub(crate) fn search_results(store: &IndexStore, results: Vec<SearchResult>) -> Value {
+pub(crate) fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
     let results = results
         .into_iter()
         .filter_map(|result| {
-            let document = store.source_document_by_id(&result.doc_id)?;
+            let document = service.source_document_by_id(&result.doc_id)?;
             Some(json!({
                 "id": result.doc_id,
                 "source": result.source,
@@ -100,8 +100,8 @@ pub(crate) fn search_results(store: &IndexStore, results: Vec<SearchResult>) -> 
 }
 
 /// Return a bounded, provider-neutral view of the indexed memories.
-pub(crate) fn list_memories(store: &IndexStore, limit: usize) -> Value {
-    let memories = store
+pub(crate) fn list_memories(service: &MemoryService, limit: usize) -> Value {
+    let memories = service
         .source_documents()
         .into_iter()
         .filter(|document| is_recorded_memory(document))
@@ -180,7 +180,7 @@ pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::PipelineOptions;
+    use crate::pipeline::{IndexStore, PipelineOptions};
     use crate::source::SourceDocument;
     use std::collections::BTreeMap;
 
@@ -295,7 +295,8 @@ mod tests {
             doc_length: 17,
             author_agent: None,
         });
-        let payload = list_memories(&store, 20);
+        let service = MemoryService::new(store);
+        let payload = list_memories(&service, 20);
         assert_eq!(payload["count"], 1);
         assert_eq!(
             payload["memories"][0]["source"],

@@ -13,6 +13,7 @@ use crate::integrations::mcp_transport::{
 use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
+#[cfg(test)]
 use crate::pipeline::IndexStore;
 #[cfg(test)]
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
@@ -286,14 +287,12 @@ impl CodexMcp {
             let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
             let root = self.root.clone();
-            *store = Some(crate::memory_api::MemoryService::new(
-                mcp_index::open_workspace_memory_store(
-                    &root,
-                    mcp_index::SHARED_MEMORY_DIR,
-                    &self.ignore_paths,
-                    || Ok(documents),
-                )?,
-            ));
+            *store = Some(mcp_index::open_workspace_memory_store(
+                &root,
+                mcp_index::SHARED_MEMORY_DIR,
+                &self.ignore_paths,
+                || Ok(documents),
+            )?);
         }
         Ok(store)
     }

@@ -1,6 +1,7 @@
 use crate::integrations::session_recording::{provider_state_dir, RecordingProvider};
+use crate::memory_api::MemoryService;
 pub use crate::pipeline::WorkspaceWatcher;
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::Result;
@@ -106,7 +107,7 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
             }
         }
         let documents: Vec<SourceDocument> =
-            match IndexStore::at_path(&legacy_root, segmented_store_options()) {
+            match MemoryService::at_path(&legacy_root, segmented_store_options()) {
                 Ok(legacy_store) => legacy_store
                     .source_documents()
                     .into_iter()
@@ -120,12 +121,12 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
             let _ = fs::remove_dir_all(&legacy_root);
             continue;
         }
-        let mut shared = IndexStore::at_path(&shared_root, segmented_store_options())?;
+        let mut shared = MemoryService::at_path(&shared_root, segmented_store_options())?;
         for mut document in documents {
             normalize_migrated_document(&mut document, provider);
             shared.upsert(document);
         }
-        shared.refresh()?;
+        shared.refresh_index()?;
         match fs::remove_dir_all(&legacy_root) {
             Ok(()) => {}
             // A concurrent server removed it first; the documents are already
@@ -197,10 +198,10 @@ pub fn open_persistent_store(
     memory_name: &str,
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
-) -> Result<IndexStore> {
+) -> Result<MemoryService> {
     let index_root = root.join(".lint-ai").join(index_name);
     let _init_lock = StoreInitLock::acquire(&index_root)?;
-    let mut store = IndexStore::at_path(&index_root, segmented_store_options())?;
+    let mut store = MemoryService::at_path(&index_root, segmented_store_options())?;
     let state = workspace_state(root, ignore_paths)?;
     if store.is_empty() || !index_is_current(&index_root, &state) {
         for doc_id in store
@@ -214,11 +215,11 @@ pub fn open_persistent_store(
         for document in source_documents()? {
             store.upsert(document);
         }
-        store.refresh()?;
+        store.refresh_index()?;
         write_index_state(&index_root, &state)?;
     }
     if sync_memory_documents(&root.join(".lint-ai").join(memory_name), &mut store)? {
-        store.refresh()?;
+        store.refresh_index()?;
     }
     Ok(store)
 }
@@ -233,7 +234,7 @@ pub fn open_workspace_memory_store(
     memory_name: &str,
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
-) -> Result<IndexStore> {
+) -> Result<MemoryService> {
     // One-time migration: legacy per-provider silos (e.g. `claude-memory/`)
     // merge into the shared `memory/` store. New callers pass
     // `SHARED_MEMORY_DIR`; the parameter is kept for the transition.
@@ -242,7 +243,7 @@ pub fn open_workspace_memory_store(
     }
     let workspace_root = root.join(".lint-ai").join(WORKSPACE_MEMORY_NAME);
     let _init_lock = StoreInitLock::acquire(&workspace_root)?;
-    let mut workspace = IndexStore::at_path(&workspace_root, segmented_store_options())?;
+    let mut workspace = MemoryService::at_path(&workspace_root, segmented_store_options())?;
     let state = workspace_state(root, ignore_paths)?;
     if workspace.is_empty() || !index_is_current(&workspace_root, &state) {
         for doc_id in workspace
@@ -256,23 +257,23 @@ pub fn open_workspace_memory_store(
         for document in source_documents()? {
             workspace.upsert(document);
         }
-        workspace.refresh()?;
+        workspace.refresh_index()?;
         write_index_state(&workspace_root, &state)?;
     }
 
     let memory_root = root.join(".lint-ai").join(memory_name);
     let provider_memory = memory_root
         .exists()
-        .then(|| IndexStore::at_path(&memory_root, segmented_store_options()))
+        .then(|| MemoryService::at_path(&memory_root, segmented_store_options()))
         .transpose()?;
-    IndexStore::compose_segmented(workspace, provider_memory)
+    MemoryService::compose_segmented(workspace, provider_memory)
 }
 
-pub fn sync_memory_documents(memory_root: &Path, target: &mut IndexStore) -> Result<bool> {
+pub fn sync_memory_documents(memory_root: &Path, target: &mut MemoryService) -> Result<bool> {
     if !memory_root.exists() {
         return Ok(false);
     }
-    let memory = IndexStore::at_path(memory_root, segmented_store_options())?;
+    let memory = MemoryService::at_path(memory_root, segmented_store_options())?;
     let mut changed = false;
     for document in memory.source_documents() {
         let unchanged = target
@@ -366,6 +367,7 @@ fn write_index_state(index_root: &Path, state: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::IndexStore;
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 

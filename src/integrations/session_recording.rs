@@ -1,4 +1,5 @@
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
@@ -502,7 +503,7 @@ pub fn promote_recorded_session(
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(&memory_root, options)?;
+    let mut store = MemoryService::at_path(&memory_root, options)?;
     let mut imported_document_ids = Vec::new();
     let mut skipped_events = 0;
 
@@ -555,7 +556,7 @@ pub fn promote_recorded_session(
         store.upsert(document);
         imported_document_ids.push(doc_id);
     }
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(SessionImportReport {
         session_id: session_id.to_string(),
         group_id,

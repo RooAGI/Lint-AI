@@ -17,6 +17,7 @@ use crate::integrations::mcp_transport::{
 use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
+#[cfg(test)]
 use crate::pipeline::IndexStore;
 use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
@@ -171,18 +172,16 @@ impl GeminiMcp {
                 max_total_bytes: self.max_total_bytes,
             };
             let ignores = self.ignore_paths.clone();
-            *store = Some(crate::memory_api::MemoryService::new(
-                mcp_index::open_workspace_memory_store(
-                    &self.root,
-                    mcp_index::SHARED_MEMORY_DIR,
-                    &ignores,
-                    || {
-                        let graph = build_project_graph(&input)?;
-                        let graph = apply_ignore_paths(graph, &ignores);
-                        Ok(graph_to_source_documents(&graph))
-                    },
-                )?,
-            ));
+            *store = Some(mcp_index::open_workspace_memory_store(
+                &self.root,
+                mcp_index::SHARED_MEMORY_DIR,
+                &ignores,
+                || {
+                    let graph = build_project_graph(&input)?;
+                    let graph = apply_ignore_paths(graph, &ignores);
+                    Ok(graph_to_source_documents(&graph))
+                },
+            )?);
         }
         Ok(store)
     }

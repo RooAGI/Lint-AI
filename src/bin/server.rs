@@ -18,7 +18,7 @@ use lint_ai::telemetry::{
     project_query_snapshot, provider_lifecycle_status, OperationalTelemetry,
     ProviderLifecycleEvent, TelemetrySnapshot,
 };
-use lint_ai::{IndexStore, IndexStoreInspection, MemoryIndexLayout, PipelineOptions};
+use lint_ai::{IndexStoreInspection, MemoryIndexLayout, PipelineOptions};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -744,7 +744,7 @@ fn dashboard_provider_indexes(
                 return None;
             }
             let inspection =
-                IndexStore::at_path(&path, memory_pipeline_options(None, false, false, false))
+                MemoryService::at_path(&path, memory_pipeline_options(None, false, false, false))
                     .ok()?
                     .inspection();
             let snapshot = inspection.snapshot.map(|snapshot| DashboardSnapshotStatus {

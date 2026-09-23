@@ -571,13 +571,213 @@ impl MemoryService {
         &mut self,
         memory_root: &std::path::Path,
     ) -> anyhow::Result<bool> {
-        crate::integrations::mcp_index::sync_memory_documents(memory_root, &mut self.store)
+        crate::integrations::mcp_index::sync_memory_documents(memory_root, self)
     }
 
     /// Refresh the index after syncing, so newly synced documents are
     /// searchable. Only the Gemini CLI path needed this explicitly.
     pub(crate) fn refresh_index(&mut self) -> anyhow::Result<()> {
         self.store.refresh()
+    }
+
+    /// Open a persistent store at `index_root`, routing construction through
+    /// the service so callers never touch `IndexStore` directly.
+    pub fn at_path(
+        index_root: &std::path::Path,
+        options: crate::pipeline::PipelineOptions,
+    ) -> anyhow::Result<Self> {
+        Ok(Self::new(crate::IndexStore::at_path(index_root, options)?))
+    }
+
+    /// Build an in-memory service, for composed views and diagnostics.
+    pub fn in_memory(options: crate::pipeline::PipelineOptions) -> Self {
+        Self::new(crate::IndexStore::in_memory(options))
+    }
+
+    /// Compose a workspace service with one provider's memory service into a
+    /// single in-memory query view. Transfers already-published segments
+    /// rather than reprocessing source documents.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn compose_segmented(
+        workspace: Self,
+        provider_memory: Option<Self>,
+    ) -> anyhow::Result<Self> {
+        let composed = crate::IndexStore::compose_segmented(
+            workspace.store,
+            provider_memory.map(|service| service.store),
+        )?;
+        Ok(Self::new(composed))
+    }
+
+    /// True when the store holds no documents. Integration read paths use
+    /// this for the same early exit they had on the raw store.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.store.is_empty()
+    }
+
+    /// Upsert one source document. Integration capture paths call this, then
+    /// [`MemoryService::refresh_index`], exactly as they did on the raw store.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn upsert(&mut self, document: crate::SourceDocument) {
+        self.store.upsert(document)
+    }
+
+    /// Remove one document by id, returning the removed document if present.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn remove(&mut self, doc_id: &str) -> Option<crate::SourceDocument> {
+        self.store.remove(doc_id)
+    }
+
+    /// Look up a raw index record by document id, for response formatting in
+    /// integration read paths.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn record_by_id(&self, doc_id: &str) -> Option<&crate::index::DocRecord> {
+        self.store.record_by_id(doc_id)
+    }
+
+    /// All source documents, for migration and sync iteration.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn source_documents(&self) -> Vec<&crate::SourceDocument> {
+        self.store.source_documents()
+    }
+
+    /// Stateless plain query for integration read paths (hooks, recall).
+    /// Runs the service query pipeline with no session: identical to the raw
+    /// store's `query`, with no conversation state read or recorded.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn query_plain(
+        &mut self,
+        query: &str,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        self.search_with_filters(query, "integration", None, top_k, &BTreeMap::new())
+    }
+
+    /// Raw record access for tests asserting on capture idempotency and
+    /// document attribution. Production code uses the typed service methods.
+    #[cfg(test)]
+    pub(crate) fn records(&self) -> Vec<&crate::index::DocRecord> {
+        self.store.records()
+    }
+
+    /// Index-structure access for tests asserting on segment layout.
+    #[cfg(test)]
+    pub(crate) fn memory_index_snapshot(&self) -> Option<&crate::pipeline::MemoryIndexSnapshot> {
+        self.store.memory_index_snapshot()
+    }
+
+    /// Preferred-document selection for hook retrieval: one document per
+    /// `session_id`, preferring `session-summary` over `outcome` over
+    /// `checkpoint`, ties broken by timestamp. Ranked hits are deduplicated
+    /// by session and rewritten to the preferred record's identity.
+    /// This is the shared implementation of the logic previously duplicated
+    /// in the Claude Code and Codex hook modules.
+    #[cfg(any(feature = "claude-code", feature = "codex"))]
+    pub(crate) fn select_session_documents(
+        &self,
+        results: Vec<crate::SearchResult>,
+        limit: usize,
+    ) -> Vec<crate::SearchResult> {
+        use std::collections::{HashMap, HashSet};
+        fn document_type_priority(document_type: &str) -> u8 {
+            match document_type {
+                "session-summary" => 3,
+                "outcome" => 2,
+                "checkpoint" => 1,
+                _ => 0,
+            }
+        }
+        let mut preferred = HashMap::<String, (u8, &crate::index::DocRecord)>::new();
+        for record in self.store.records() {
+            let Some(session) = record.filters.get("session_id") else {
+                continue;
+            };
+            let priority = document_type_priority(
+                record
+                    .filters
+                    .get("document_type")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            );
+            match preferred.get(session) {
+                Some((current_priority, current))
+                    if (*current_priority, current.timestamp.as_deref())
+                        >= (priority, record.timestamp.as_deref()) => {}
+                _ => {
+                    preferred.insert(session.clone(), (priority, record));
+                }
+            }
+        }
+
+        let mut seen_sessions = HashSet::new();
+        let mut selected = Vec::new();
+        for mut result in results {
+            let Some(record) = self.store.record_by_id(&result.doc_id) else {
+                continue;
+            };
+            let session = record
+                .filters
+                .get("session_id")
+                .cloned()
+                .or_else(|| result.group_id.clone())
+                .unwrap_or_else(|| result.doc_id.clone());
+            if !seen_sessions.insert(session.clone()) {
+                continue;
+            }
+            if let Some((_, preferred_record)) = preferred.get(&session) {
+                result.doc_id = preferred_record.doc_id.clone();
+                result.source = preferred_record.source.clone();
+                result.group_id = preferred_record.group_id.clone();
+            }
+            selected.push(result);
+            if selected.len() == limit {
+                break;
+            }
+        }
+        selected
     }
 
     /// Number of source documents in the index, for the MCP info tool.
@@ -597,7 +797,7 @@ impl MemoryService {
         &self,
         results: Vec<crate::SearchResult>,
     ) -> serde_json::Value {
-        crate::integrations::mcp_tools::search_results(&self.store, results)
+        crate::integrations::mcp_tools::search_results(self, results)
     }
 
     /// Format the memory list as the MCP list_memories payload.
@@ -609,7 +809,7 @@ impl MemoryService {
         feature = "muse-code"
     ))]
     pub(crate) fn list_memories_payload(&self, limit: usize) -> serde_json::Value {
-        crate::integrations::mcp_tools::list_memories(&self.store, limit)
+        crate::integrations::mcp_tools::list_memories(self, limit)
     }
 
     /// Look up a source document by id, for tests that verify indexed

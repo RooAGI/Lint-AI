@@ -1,7 +1,8 @@
 use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
@@ -166,7 +167,7 @@ fn handle_hook(
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(&memory, options)?;
+    let mut store = MemoryService::at_path(&memory, options)?;
     if store.is_empty() {
         let _ = crate::telemetry::record_memory_retrieval(
             _root,
@@ -178,7 +179,7 @@ fn handle_hook(
         );
         return Ok(GeminiHookOutput::default());
     }
-    let results = store.query(&query, 5);
+    let results = store.query_plain(&query, 5);
     let _ = crate::telemetry::record_project_query(
         _root,
         started.elapsed().as_millis() as u64,
@@ -275,12 +276,12 @@ fn capture(
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(
+    let mut store = MemoryService::at_path(
         &crate::integrations::mcp_index::shared_memory_root(root),
         options,
     )?;
     store.upsert(document);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(GeminiHookOutput::default())
 }
 
@@ -381,6 +382,7 @@ fn resolve_root(cwd: &Path, fallback: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::IndexStore;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 

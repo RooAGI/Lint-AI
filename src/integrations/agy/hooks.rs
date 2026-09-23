@@ -4,7 +4,8 @@ use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -161,7 +162,7 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
     if !memory.exists() {
         return Ok(AgyHookOutput::default());
     }
-    let mut store = IndexStore::at_path(
+    let mut store = MemoryService::at_path(
         &memory,
         PipelineOptions {
             memory_index_layout: MemoryIndexLayout::Segmented {
@@ -175,7 +176,7 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
         return Ok(AgyHookOutput::default());
     }
     let started = std::time::Instant::now();
-    let results = store.query(&query, 5);
+    let results = store.query_plain(&query, 5);
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,
@@ -323,12 +324,12 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(
+    let mut store = MemoryService::at_path(
         &crate::integrations::mcp_index::shared_memory_root(root),
         options,
     )?;
     store.upsert(document);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(())
 }
 

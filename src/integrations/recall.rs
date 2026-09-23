@@ -10,7 +10,7 @@ use crate::adapters::{
 };
 use crate::index::{DocRecord, SearchResult, SectionChunk};
 use crate::integrations::mcp_index;
-use crate::pipeline::IndexStore;
+use crate::memory_api::MemoryService;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -159,7 +159,7 @@ pub fn recall(options: &RecallOptions<'_>) -> Result<RecallOutput> {
         .with_context(|| format!("unable to open the index for {}", root.display()))?;
 
     let results = store
-        .query(options.query, options.result_count)
+        .query_plain(options.query, options.result_count)
         .with_context(|| format!("query failed: {}", options.query))?;
 
     let hits = results
@@ -199,7 +199,7 @@ fn default_source() -> String {
 /// and write one store per project (`.lint-ai/memory/`); the provider is
 /// attribution on the records, not the directory. These stores remain
 /// project-scoped; the desktop worker never creates a consolidated copy.
-fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<IndexStore>> {
+fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<MemoryService>> {
     mcp_index::migrate_legacy_provider_memory_dirs(root)?;
     let mut stores = Vec::new();
     for entry in WalkDir::new(root)
@@ -229,7 +229,7 @@ fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<IndexStore>> {
         if !is_lint_ai_memory {
             continue;
         }
-        stores.push(IndexStore::at_path(
+        stores.push(MemoryService::at_path(
             entry.path(),
             mcp_index::segmented_store_options(),
         )?);
@@ -272,7 +272,7 @@ pub fn run_recall_server(
         )?
     };
     let mut document_store = document_store;
-    let mut memory_stores: HashMap<String, Option<Vec<IndexStore>>> =
+    let mut memory_stores: HashMap<String, Option<Vec<MemoryService>>> =
         HashMap::from([("claude".to_string(), None), ("codex".to_string(), None)]);
 
     let stdout = io::stdout();
@@ -294,7 +294,7 @@ pub fn run_recall_server(
         let started = Instant::now();
         let mut hits = Vec::new();
         if source == "documents" {
-            let results = document_store.query(&request.query, request.result_count)?;
+            let results = document_store.query_plain(&request.query, request.result_count)?;
             hits.extend(results.iter().filter_map(|result| {
                 document_store
                     .record_by_id(&result.doc_id)
@@ -308,7 +308,7 @@ pub fn run_recall_server(
                 *stores = Some(open_memory_stores(root, source)?);
             }
             for store in stores.as_mut().unwrap() {
-                let results = store.query(&request.query, request.result_count)?;
+                let results = store.query_plain(&request.query, request.result_count)?;
                 hits.extend(results.iter().filter_map(|result| {
                     store
                         .record_by_id(&result.doc_id)

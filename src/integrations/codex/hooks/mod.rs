@@ -5,7 +5,8 @@ use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use protocol::{CodexHookInput, CodexHookOutput};
@@ -293,7 +294,7 @@ fn retrieve(
         );
         return Ok(CodexHookOutput::default());
     }
-    let results = store.query(query, DEFAULT_TOP_K * 3);
+    let results = store.query_plain(query, DEFAULT_TOP_K * 3);
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,
@@ -301,7 +302,7 @@ fn retrieve(
         results.as_ref().is_ok_and(Vec::is_empty),
     );
     let results = results?;
-    let selected = select_session_documents(&store, results, DEFAULT_TOP_K);
+    let selected = store.select_session_documents(results, DEFAULT_TOP_K);
     let mut seen = HashSet::new();
     let mut retrieved_memories = Vec::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
@@ -423,70 +424,6 @@ fn tool_query(input: &CodexHookInput) -> String {
     parts.join(" ")
 }
 
-fn select_session_documents(
-    store: &IndexStore,
-    results: Vec<crate::index::SearchResult>,
-    limit: usize,
-) -> Vec<crate::index::SearchResult> {
-    let mut preferred = HashMap::<String, (u8, &crate::index::DocRecord)>::new();
-    for record in store.records() {
-        let Some(session) = record.filters.get("session_id") else {
-            continue;
-        };
-        let priority = document_type_priority(
-            record
-                .filters
-                .get("document_type")
-                .map(String::as_str)
-                .unwrap_or_default(),
-        );
-        match preferred.get(session) {
-            Some((current_priority, current))
-                if (*current_priority, current.timestamp.as_deref())
-                    >= (priority, record.timestamp.as_deref()) => {}
-            _ => {
-                preferred.insert(session.clone(), (priority, record));
-            }
-        }
-    }
-
-    let mut seen_sessions = HashSet::new();
-    let mut selected = Vec::new();
-    for mut result in results {
-        let Some(record) = store.record_by_id(&result.doc_id) else {
-            continue;
-        };
-        let session = record
-            .filters
-            .get("session_id")
-            .cloned()
-            .or_else(|| result.group_id.clone())
-            .unwrap_or_else(|| result.doc_id.clone());
-        if !seen_sessions.insert(session.clone()) {
-            continue;
-        }
-        if let Some((_, preferred_record)) = preferred.get(&session) {
-            result.doc_id = preferred_record.doc_id.clone();
-            result.source = preferred_record.source.clone();
-            result.group_id = preferred_record.group_id.clone();
-        }
-        selected.push(result);
-        if selected.len() == limit {
-            break;
-        }
-    }
-    selected
-}
-
-fn document_type_priority(document_type: &str) -> u8 {
-    match document_type {
-        "session-summary" => 3,
-        "outcome" => 2,
-        "checkpoint" => 1,
-        _ => 0,
-    }
-}
-
 fn relevant_excerpt(content: &str, query: &str, matched_terms: &[String]) -> String {
     let mut terms = query_terms(query);
     terms.extend(matched_terms.iter().flat_map(|term| query_terms(term)));
@@ -581,7 +518,7 @@ fn capture(
     };
     let mut store = open_store(root)?;
     store.upsert(document.into_source_document()?);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(CodexHookOutput::default())
 }
 
@@ -623,7 +560,7 @@ fn find_session_transcript(sessions_root: &Path, session_id: &str) -> Option<Pat
     None
 }
 
-fn open_store(root: &Path) -> Result<IndexStore> {
+fn open_store(root: &Path) -> Result<MemoryService> {
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
             query_top_n: 3,
@@ -631,7 +568,7 @@ fn open_store(root: &Path) -> Result<IndexStore> {
         },
         ..PipelineOptions::default()
     };
-    IndexStore::at_path(&memory_root(root), options)
+    MemoryService::at_path(&memory_root(root), options)
 }
 
 fn memory_root(root: &Path) -> PathBuf {
@@ -1028,7 +965,7 @@ mod tests {
         handle_hook(CodexHookKind::Stop, stop_input, &root).unwrap();
 
         let mut stored = open_store(&root).unwrap();
-        stored.refresh().unwrap();
+        stored.refresh_index().unwrap();
         assert_eq!(
             stored.records().len(),
             1,

@@ -707,11 +707,24 @@ impl MemoryService {
         workspace: Self,
         provider_memory: Option<Self>,
     ) -> anyhow::Result<Self> {
+        // The composed view must keep the conversation-state store the hooks
+        // write to: the provider memory's disk-backed store (opened under the
+        // same `.lint-ai/memory/` root the hooks use), falling back to the
+        // workspace store when there is no provider memory. A fresh
+        // memory-only store here would lose hook-written active sessions,
+        // drop explicit session state across MCP invocations, and break
+        // omitted-session_id inheritance.
+        let conversation_states = provider_memory
+            .as_ref()
+            .map(|service| Arc::clone(&service.conversation_states))
+            .unwrap_or_else(|| Arc::clone(&workspace.conversation_states));
         let composed = crate::IndexStore::compose_segmented(
             workspace.store,
             provider_memory.map(|service| service.store),
         )?;
-        Ok(Self::new(composed))
+        let mut service = Self::new(composed);
+        service.conversation_states = conversation_states;
+        Ok(service)
     }
 
     /// True when the store holds no documents. Integration read paths use
@@ -2207,5 +2220,59 @@ mod tests {
             "follow-up should resolve against disk-persisted session state"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn compose_segmented_preserves_provider_conversation_state() {
+        // Regression: compose_segmented() must not replace the disk-backed
+        // conversation-state store with a memory-only one. Hooks write the
+        // active-session pointer into the provider memory root; the composed
+        // service has to see it, and explicit session state must survive a
+        // new MCP process.
+        let base =
+            std::env::temp_dir().join(format!("lint-ai-compose-state-{}", std::process::id()));
+        let workspace_root = base.join("workspace-memory");
+        let provider_root = base.join("memory");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        std::fs::create_dir_all(&provider_root).unwrap();
+        let options = crate::pipeline::PipelineOptions {
+            memory_index_layout: crate::pipeline::MemoryIndexLayout::Segmented {
+                query_top_n: 3,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::LocalDistinctiveness,
+            },
+            ..crate::pipeline::PipelineOptions::default()
+        };
+        {
+            let provider = MemoryService::at_path(&provider_root, options.clone()).unwrap();
+            // Simulate a hook invocation marking a session active.
+            provider.note_active_session("claude", "sess-abc");
+        }
+        let workspace = MemoryService::at_path(&workspace_root, options.clone()).unwrap();
+        let provider = MemoryService::at_path(&provider_root, options.clone()).unwrap();
+        let composed = MemoryService::compose_segmented(workspace, Some(provider)).unwrap();
+        assert_eq!(
+            composed.current_session_id("claude"),
+            Some("sess-abc".to_string()),
+            "composed service must inherit the provider's conversation-state store"
+        );
+
+        // Without provider memory the composed service falls back to the
+        // workspace store rather than a memory-only store.
+        let workspace = MemoryService::at_path(&workspace_root, options.clone()).unwrap();
+        workspace.note_active_session("claude", "sess-ws");
+        let composed = MemoryService::compose_segmented(workspace, None).unwrap();
+        assert_eq!(
+            composed.current_session_id("claude"),
+            Some("sess-ws".to_string()),
+            "composed service must fall back to the workspace conversation-state store"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 }

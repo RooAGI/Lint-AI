@@ -377,7 +377,9 @@ impl CodexMcp {
 
         match tool_name {
             "search" => {
-                if let Some(name) = unknown_argument(&arguments, &["query", "top_k", "provider", "session_id"]) {
+                if let Some(name) =
+                    unknown_argument(&arguments, &["query", "top_k", "provider", "session_id"])
+                {
                     return Ok(error_response(
                         id,
                         -32602,

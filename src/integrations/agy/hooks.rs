@@ -176,7 +176,10 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
         return Ok(AgyHookOutput::default());
     }
     let started = std::time::Instant::now();
-    let results = store.query_plain(&query, 5);
+    let hook_session_id =
+        (!input.conversation_id.is_empty()).then_some(input.conversation_id.as_str());
+    let results =
+        store.observe_plain_query(&query, RecordingProvider::Agy.as_str(), hook_session_id, 5);
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,

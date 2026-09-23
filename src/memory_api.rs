@@ -146,7 +146,8 @@ pub struct MemoryService {
     store: IndexStore,
     superseded_ids: HashSet<(String, String)>,
     request_fingerprints: HashMap<(String, String), String>,
-    conversation_states: std::sync::Mutex<crate::conversation_state::ConversationStateStore>,
+    conversation_states:
+        std::sync::Arc<std::sync::Mutex<crate::conversation_state::ConversationStateStore>>,
 }
 
 #[derive(Clone)]
@@ -154,6 +155,7 @@ pub struct MemorySearchService {
     index: PublishedIndexSnapshot,
     superseded_ids: HashSet<(String, String)>,
     query_cache: Arc<Mutex<HashMap<String, Vec<crate::SearchResult>>>>,
+    conversation_states: Arc<Mutex<crate::conversation_state::ConversationStateStore>>,
 }
 
 impl MemoryService {
@@ -207,9 +209,9 @@ impl MemoryService {
             store,
             superseded_ids,
             request_fingerprints,
-            conversation_states: std::sync::Mutex::new(
+            conversation_states: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::conversation_state::ConversationStateStore::new(None),
-            ),
+            )),
         }
     }
 
@@ -455,6 +457,7 @@ impl MemoryService {
             index: self.store.published_snapshot(),
             superseded_ids: self.superseded_ids.clone(),
             query_cache: Arc::new(Mutex::new(HashMap::new())),
+            conversation_states: Arc::clone(&self.conversation_states),
         }
     }
 
@@ -586,7 +589,15 @@ impl MemoryService {
         index_root: &std::path::Path,
         options: crate::pipeline::PipelineOptions,
     ) -> anyhow::Result<Self> {
-        Ok(Self::new(crate::IndexStore::at_path(index_root, options)?))
+        let mut service = Self::new(crate::IndexStore::at_path(index_root, options)?);
+        // Hooks and the MCP server open a fresh service per invocation against
+        // the same index root; a disk-backed conversation store lets session
+        // state (follow-up context, temporal anchors) survive across those
+        // invocations. In-memory services keep memory-only state.
+        service.conversation_states = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::conversation_state::ConversationStateStore::open_under(index_root),
+        ));
+        Ok(service)
     }
 
     /// Build an in-memory service, for composed views and diagnostics.
@@ -678,9 +689,11 @@ impl MemoryService {
         self.store.source_documents()
     }
 
-    /// Stateless plain query for integration read paths (hooks, recall).
+    /// Stateless plain query for integration read paths (recall).
     /// Runs the service query pipeline with no session: identical to the raw
-    /// store's `query`, with no conversation state read or recorded.
+    /// store's `query`, with no conversation state read or recorded. Hook
+    /// retrieval uses [`MemoryService::observe_plain_query`] instead so hook
+    /// turns contribute session state.
     #[cfg(any(
         feature = "claude-code",
         feature = "codex",
@@ -694,6 +707,43 @@ impl MemoryService {
         top_k: usize,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
         self.search_with_filters(query, "integration", None, top_k, &BTreeMap::new())
+    }
+
+    /// Plain query that records the turn into the session's conversation
+    /// state without rewriting it. Hook retrieval uses this: hooks inject
+    /// background context rather than answering a conversational turn, so
+    /// they contribute state (what was asked, what was returned, entity
+    /// mentions) for later follow-up resolution without consuming it.
+    /// A blank session id degrades to stateless; hooks fail open and never
+    /// reject.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn observe_plain_query(
+        &mut self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        let session_id = session_id.filter(|id| !id.trim().is_empty());
+        let prepared = PreparedQuery::new(query);
+        let results = self
+            .store
+            .query_prepared(&prepared, top_k, &BTreeMap::new())?;
+        observe_session_search(
+            &self.conversation_states,
+            scope,
+            session_id,
+            query,
+            &prepared,
+            &results,
+        );
+        Ok(results)
     }
 
     /// Raw record access for tests asserting on capture idempotency and
@@ -1016,16 +1066,28 @@ impl MemorySearchService {
         if request.query.trim().is_empty() {
             return Ok(SearchResponse { data: vec![] });
         }
-        let mut filters = BTreeMap::new();
+        let session_id = request.session_id.as_deref();
+        // With a session id, resolve follow-up phrasing and temporal anchors
+        // against the session's bounded prior state before retrieval,
+        // mirroring MemoryService::search. Absent means stateless.
+        let prepared = prepare_session_query(
+            &self.conversation_states,
+            &request.user_id,
+            session_id,
+            &request.query,
+        );
+        // Key the cache on the effective query text: identical raw queries at
+        // different points in a session rewrite differently and must not
+        // share an entry.
         let cache_key = format!(
             "{}\0{}\0{}\0{}",
             request.user_id,
-            request.session_id.as_deref().unwrap_or(""),
-            request.query,
+            session_id.unwrap_or(""),
+            prepared.search_query(),
             request.top_k.min(100)
         );
-        filters.insert(USER_FILTER.to_string(), request.user_id);
-        let prepared = PreparedQuery::new(&request.query);
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), request.user_id.clone());
         let cached = if std::env::var_os("LINT_AI_DISABLE_QUERY_CACHE").is_some() {
             None
         } else {
@@ -1050,6 +1112,16 @@ impl MemorySearchService {
             cache.insert(cache_key, results.clone());
             results
         };
+        // Record the turn even on a cache hit: the session asked, and these
+        // are the documents it was given.
+        observe_session_search(
+            &self.conversation_states,
+            &request.user_id,
+            session_id,
+            &request.query,
+            &prepared,
+            &results,
+        );
         let now_ms = unix_time_ms();
         let data = results
             .into_iter()
@@ -1757,5 +1829,197 @@ mod tests {
             baseline_ids.contains(&"old-doc"),
             "stateless baseline should still see the out-of-window doc, got {baseline_ids:?}"
         );
+    }
+
+    fn add_quartz_fixture(service: &mut MemoryService) {
+        for (doc_id, content) in [
+            (
+                "quartz-doc",
+                "The Quartz database is a distributed store with strong consistency and tunable replication.",
+            ),
+            (
+                "sourdough-doc",
+                "Baking sourdough bread requires patience, a hot oven, and a lively starter.",
+            ),
+        ] {
+            let mut doc_filters = BTreeMap::new();
+            doc_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+            service.store.upsert(SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: format!("artifact://{doc_id}"),
+                content: content.to_string(),
+                concept: doc_id.to_string(),
+                group_id: Some(doc_id.to_string()),
+                headings: vec![],
+                links: vec![],
+                timestamp: None,
+                doc_length: content.len(),
+                author_agent: None,
+                filters: doc_filters,
+            });
+        }
+        service.store.refresh().unwrap();
+    }
+
+    fn published_search(
+        published: &MemorySearchService,
+        query: &str,
+        session_id: Option<&str>,
+    ) -> SearchResponse {
+        published
+            .search(SearchRequest {
+                query: query.into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: session_id.map(str::to_string),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn published_search_resolves_follow_up_against_session() {
+        let mut service = service();
+        add_quartz_fixture(&mut service);
+        let published = service.published_search();
+
+        // Turn 1 establishes the session's entities.
+        let first = published_search(&published, "Tell me about the Quartz database", Some("s1"));
+        assert!(first.data.iter().any(|m| m.content.contains("Quartz")));
+
+        // A follow-up with no standalone meaning resolves against the session.
+        let follow_up = published_search(&published, "what are its limitations?", Some("s1"));
+        assert!(
+            follow_up.data.iter().any(|m| m.content.contains("Quartz")),
+            "follow-up should resolve against session state"
+        );
+
+        // Without a session the same query stays stateless and cannot borrow
+        // the session's entities.
+        let stateless = published_search(&published, "what are its limitations?", None);
+        assert!(
+            !stateless.data.iter().any(|m| m.content.contains("Quartz")),
+            "stateless search must not resolve against session state"
+        );
+    }
+
+    #[test]
+    fn published_search_rejects_blank_session_id() {
+        let service = service();
+        let published = service.published_search();
+        for session_id in [Some(""), Some("   ")] {
+            let error = published
+                .search(SearchRequest {
+                    query: "hello".into(),
+                    options: None,
+                    user_id: "user-a".into(),
+                    top_k: 10,
+                    session_id: session_id.map(str::to_string),
+                })
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("session_id must not be empty"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn observe_plain_query_contributes_session_state_for_follow_ups() {
+        let mut service = service();
+        add_quartz_fixture(&mut service);
+
+        // Hook-style retrieval: the query is not rewritten, but the turn is
+        // recorded into the session state.
+        let results = service
+            .observe_plain_query(
+                "Tell me about the Quartz database",
+                "claude",
+                Some("hook-session"),
+                10,
+            )
+            .unwrap();
+        assert!(results.iter().any(|r| r.doc_id == "quartz-doc"));
+
+        // A later MCP-style search in the same scope/session resolves the
+        // follow-up against what the hook observed.
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        let follow_up = service
+            .search_with_filters(
+                "what are its limitations?",
+                "claude",
+                Some("hook-session"),
+                10,
+                &filters,
+            )
+            .unwrap();
+        assert!(
+            follow_up.iter().any(|r| r.doc_id == "quartz-doc"),
+            "follow-up should resolve against hook-observed state"
+        );
+
+        // A blank hook session id degrades to stateless instead of failing.
+        let blank = service
+            .observe_plain_query(
+                "Tell me about the Quartz database",
+                "claude",
+                Some("  "),
+                10,
+            )
+            .unwrap();
+        assert!(blank.iter().any(|r| r.doc_id == "quartz-doc"));
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn at_path_persists_conversation_state_across_instances() {
+        let dir = std::env::temp_dir().join(format!("lint-ai-conv-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = PipelineOptions::default();
+        {
+            let mut service = MemoryService::at_path(&dir, options.clone()).unwrap();
+            add_quartz_fixture(&mut service);
+            service
+                .observe_plain_query(
+                    "Tell me about the Quartz database",
+                    "claude",
+                    Some("persist-s1"),
+                    10,
+                )
+                .unwrap();
+        }
+        // A fresh service against the same root reloads the session state
+        // from disk, so the follow-up still resolves.
+        let mut reopened = MemoryService::at_path(&dir, options).unwrap();
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        let follow_up = reopened
+            .search_with_filters(
+                "what are its limitations?",
+                "claude",
+                Some("persist-s1"),
+                10,
+                &filters,
+            )
+            .unwrap();
+        assert!(
+            follow_up.iter().any(|r| r.doc_id == "quartz-doc"),
+            "follow-up should resolve against disk-persisted session state"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

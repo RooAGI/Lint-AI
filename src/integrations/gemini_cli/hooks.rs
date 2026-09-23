@@ -179,7 +179,7 @@ fn handle_hook(
         );
         return Ok(GeminiHookOutput::default());
     }
-    let results = store.query_plain(&query, 5);
+    let results = store.observe_plain_query(&query, provider.as_str(), Some(&input.session_id), 5);
     let _ = crate::telemetry::record_project_query(
         _root,
         started.elapsed().as_millis() as u64,

@@ -286,7 +286,12 @@ fn retrieve(
         );
         return Ok(ClaudeHookOutput::default());
     }
-    let results = store.query_plain(query, DEFAULT_TOP_K * 3);
+    let results = store.observe_plain_query(
+        query,
+        RecordingProvider::Claude.as_str(),
+        Some(session_id),
+        DEFAULT_TOP_K * 3,
+    );
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,

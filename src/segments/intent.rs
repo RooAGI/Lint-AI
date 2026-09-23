@@ -334,21 +334,20 @@ fn quoted_spans(text: &str) -> Vec<String> {
 fn scope_entities(scope: &str) -> Vec<ScopeEntity> {
     let mut entities = Vec::new();
     let mut seen = HashSet::new();
-    let mut push =
-        |display: String, entities: &mut Vec<ScopeEntity>, seen: &mut HashSet<String>| {
-            let mention = normalize_mention(&display);
-            if mention.is_empty() || !seen.insert(mention.clone()) {
-                return;
-            }
-            let tokens: Vec<&str> = mention.split_whitespace().collect();
-            if tokens
-                .iter()
-                .all(|t| is_stopword(t, TokenizerMode::Stemmed))
-            {
-                return;
-            }
-            entities.push(ScopeEntity { mention, display });
-        };
+    let push = |display: String, entities: &mut Vec<ScopeEntity>, seen: &mut HashSet<String>| {
+        let mention = normalize_mention(&display);
+        if mention.is_empty() || !seen.insert(mention.clone()) {
+            return;
+        }
+        let tokens: Vec<&str> = mention.split_whitespace().collect();
+        if tokens
+            .iter()
+            .all(|t| is_stopword(t, TokenizerMode::Stemmed))
+        {
+            return;
+        }
+        entities.push(ScopeEntity { mention, display });
+    };
     for acro in paren_acronyms(scope) {
         push(acro, &mut entities, &mut seen);
     }

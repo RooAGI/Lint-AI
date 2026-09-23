@@ -560,6 +560,13 @@ impl MemoryService {
 
     /// Sync shared memory documents into the index. Runs before each MCP
     /// search so the workspace sees memories recorded by other providers.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
     pub(crate) fn sync_shared_memory(
         &mut self,
         memory_root: &std::path::Path,
@@ -579,6 +586,13 @@ impl MemoryService {
     }
 
     /// Format search results as the MCP search payload.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
     pub(crate) fn search_results_payload(
         &self,
         results: Vec<crate::SearchResult>,
@@ -587,6 +601,13 @@ impl MemoryService {
     }
 
     /// Format the memory list as the MCP list_memories payload.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
     pub(crate) fn list_memories_payload(&self, limit: usize) -> serde_json::Value {
         crate::integrations::mcp_tools::list_memories(&self.store, limit)
     }

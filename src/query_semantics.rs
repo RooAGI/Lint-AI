@@ -1072,7 +1072,7 @@ fn resolve_relative_span(phrase: &str, reference: NaiveDate) -> Option<NaiveDate
         ("next", "year") => 365,
         // Anchor "last weekend" to its Saturday.
         ("last", "weekend") => -(((ref_wd + 7 - 5) % 7) as i64),
-        ("next", "weekend") => (((5 + 7 - ref_wd) % 7) as i64),
+        ("next", "weekend") => ((5 + 7 - ref_wd) % 7) as i64,
         _ => return None,
     };
     reference.checked_add_signed(TimeDelta::days(offset))

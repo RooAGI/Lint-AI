@@ -187,7 +187,7 @@ impl ConversationStateStore {
     ) -> Option<ConversationState> {
         let path = self.session_path(user_id, session_id)?;
         let bytes = std::fs::read(&path).ok()?;
-        let mut state: ConversationState = serde_json::from_slice(&bytes).ok()?;
+        let state: ConversationState = serde_json::from_slice(&bytes).ok()?;
         // The filename is a hash; verify the payload really belongs to this
         // session before trusting it.
         if state.user_id != user_id || state.session_id != session_id {

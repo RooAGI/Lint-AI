@@ -191,12 +191,18 @@ pub struct EntityRelation {
 pub enum PredicateFamily {
     /// go_to / be_in / volunteer_at / ...: physical presence at a place.
     PlacePresence,
+    /// Family-agnostic: any predicate family. Used for 1-person + time-window
+    /// questions whose answer type is not a known family (e.g. "What setback
+    /// did Melanie face in October 2023?"), served by
+    /// [`RelationIndex::query_temporal_span_general`].
+    Any,
 }
 
 impl PredicateFamily {
     pub fn as_str(self) -> &'static str {
         match self {
             PredicateFamily::PlacePresence => "place-presence",
+            PredicateFamily::Any => "any",
         }
     }
 }
@@ -459,6 +465,14 @@ impl RelationIndex {
             .flat_map(|(_, hits)| hits.iter())
     }
 
+    /// All hits for one subject across every predicate family.
+    fn hits_for_any<'a>(&'a self, snorm: &'a str) -> impl Iterator<Item = &'a RelationHit> {
+        self.by_sp
+            .iter()
+            .filter(move |((s, _), _)| s == snorm)
+            .flat_map(|(_, hits)| hits.iter())
+    }
+
     /// Resolve display names to normalized person ids.
     ///
     /// Exact match, then fuzzy (edit distance <= 1 for short names, <= 2
@@ -592,6 +606,77 @@ impl RelationIndex {
                 .entry(hit.object_norm.clone())
                 .or_insert_with(|| (hit.object.clone(), Vec::new(), 0.0));
             entry.2 += hit.confidence;
+            entry.1.push(SharedEvidence {
+                subject: snorm.clone(),
+                session_id: hit.session_id.clone(),
+                turn_idx: hit.turn_idx,
+                doc_id: hit.doc_id.clone(),
+                text: hit.evidence.clone(),
+            });
+        }
+        let mut out: Vec<SharedObject> = objects
+            .into_iter()
+            .map(|(object_norm, (object, evidence, score))| SharedObject {
+                object,
+                object_norm,
+                evidence,
+                score,
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.object.cmp(&b.object))
+        });
+        Some(out)
+    }
+
+    /// Family-agnostic temporal span: objects related to one subject under ANY
+    /// predicate family whose session date falls inside `[start, end]`
+    /// (inclusive), ranked by content overlap with the question.
+    ///
+    /// Serves 1-person + time-window questions whose answer type is not a
+    /// known predicate family (e.g. "What setback did Melanie face in October
+    /// 2023?"). Content terms are the stopword-filtered stemmed question
+    /// tokens ([`super::catalog::query_tokens`]); each hit scores its overlap
+    /// against the stemmed tokens of its object + evidence text, so hits
+    /// naming the question's distinctive terms ("hurt", "pottery") outrank
+    /// unrelated in-window hits. Returns None when the subject cannot be
+    /// resolved (caller declines to the adaptive path); relations without a
+    /// parseable date are excluded.
+    pub fn query_temporal_span_general(
+        &self,
+        name: &str,
+        start: Ymd,
+        end: Ymd,
+        question: &str,
+    ) -> Option<Vec<SharedObject>> {
+        let subjects = self.resolve_subjects(std::slice::from_ref(&name.to_string()))?;
+        let snorm = &subjects[0];
+        let content: HashSet<String> = super::catalog::query_tokens(question);
+        if content.is_empty() {
+            return None;
+        }
+        let mut objects: HashMap<String, (String, Vec<SharedEvidence>, f32)> = HashMap::new();
+        for hit in self.hits_for_any(snorm) {
+            let date = match hit.date {
+                Some(d) => d,
+                None => continue,
+            };
+            if date < start || date > end {
+                continue;
+            }
+            let hit_terms: HashSet<String> =
+                super::catalog::query_tokens(&format!("{} {}", hit.object, hit.evidence));
+            let overlap = content.intersection(&hit_terms).count() as f32;
+            if overlap == 0.0 {
+                continue;
+            }
+            let entry = objects
+                .entry(hit.object_norm.clone())
+                .or_insert_with(|| (hit.object.clone(), Vec::new(), 0.0));
+            entry.2 += overlap * hit.confidence;
             entry.1.push(SharedEvidence {
                 subject: snorm.clone(),
                 session_id: hit.session_id.clone(),
@@ -773,13 +858,28 @@ fn extract_answer_type(question: &str) -> Option<(PredicateFamily, bool)> {
 
 /// Analyze a question into a structured fact query, or decline (None) to
 /// the adaptive retrieval path.
+///
+/// Composition: 2+ persons -> shared-relation intersection; exactly one
+/// person plus a time window -> temporal-span filter. When the answer type is
+/// not a known predicate family, exactly one person + a time window still
+/// gets structured handling via the family-agnostic temporal-span path
+/// ([`PredicateFamily::Any`]: person + window + content overlap) instead of
+/// declining. Anything else declines (None).
 pub fn analyze_fact_question(question: &str) -> Option<StructuredFactQuery> {
-    let (family, expect_place) = extract_answer_type(question)?;
     let persons = extract_person_candidates(question);
     if persons.is_empty() {
         return None;
     }
     let time_window = extract_time_window(question);
+    let (family, expect_place) = match extract_answer_type(question) {
+        Some(typed) => typed,
+        None => match (persons.len(), time_window) {
+            // No known answer type, but the person + window anchor is enough
+            // for the general temporal-span path.
+            (1, Some(_)) => (PredicateFamily::Any, false),
+            _ => return None,
+        },
+    };
     match (persons.len(), time_window) {
         (1, Some(window)) => Some(StructuredFactQuery {
             persons,
@@ -787,7 +887,9 @@ pub fn analyze_fact_question(question: &str) -> Option<StructuredFactQuery> {
             time_window: Some(window),
             expect_place,
         }),
-        (2.., _) => Some(StructuredFactQuery {
+        // The shared-intersection path is family-typed; Any never reaches it
+        // (the fallback above declines for 2+ persons).
+        (2.., _) if family != PredicateFamily::Any => Some(StructuredFactQuery {
             persons,
             family,
             time_window: None,
@@ -1142,6 +1244,93 @@ mod tests {
     }
 
     #[test]
+    fn analyze_general_temporal_span_question() {
+        // No known answer type ("what setback" is not a place question), but
+        // 1 person + a time window -> the family-agnostic temporal-span path.
+        let q = analyze_fact_question("What setback did Melanie face in October 2023?")
+            .expect("should analyze");
+        assert_eq!(q.persons, vec!["Melanie".to_string()]);
+        assert_eq!(q.family, PredicateFamily::Any);
+        assert!(!q.expect_place);
+        let (start, end) = q.time_window.expect("should have window");
+        assert_eq!((start.year, start.month, start.day), (2023, 10, 1));
+        assert_eq!((end.year, end.month, end.day), (2023, 10, 31));
+    }
+
+    #[test]
+    fn analyze_general_path_declines_without_window() {
+        // 1 person, no time window, no known answer type -> decline.
+        assert!(analyze_fact_question("What does Melanie do with her family on hikes?").is_none());
+        // 2 persons, no known answer type -> decline (shared path stays typed).
+        assert!(analyze_fact_question("What did John and Melanie discuss?").is_none());
+    }
+
+    /// Melanie index for the family-agnostic temporal-span path. Kept
+    /// separate from fixture_raw so the existing len() assertions hold.
+    fn fixture_index_general() -> RelationIndex {
+        let turns = ["Melanie"]
+            .into_iter()
+            .map(|s| RelationTurn {
+                speaker: s.to_string(),
+                text: String::new(),
+                session_id: "s".to_string(),
+                turn_idx: 0,
+                doc_id: "d".to_string(),
+                session_date: None,
+            })
+            .collect::<Vec<_>>();
+        let raw: Vec<RawRelation> = serde_json::from_str(
+            r#"[
+            {"subject":"Melanie","predicate":"get_hurt","object":"ankle","is_place":false,"session_id":"conv-26::session_17","turn_idx":2,"doc_id":"d8","session_date":"2:00 pm on 12 October, 2023","evidence":"Melanie: I got hurt and had to take a break from pottery.","confidence":0.9},
+            {"subject":"Melanie","predicate":"go_to","object":"farmers market","is_place":true,"session_id":"conv-26::session_18","turn_idx":0,"doc_id":"d9","session_date":"10:00 am on 20 October, 2023","evidence":"Melanie: We went to the farmers market.","confidence":0.9},
+            {"subject":"Melanie","predicate":"visit","object":"sister","is_place":false,"session_id":"conv-26::session_19","turn_idx":1,"doc_id":"d10","session_date":"5:00 pm on 3 November, 2023","evidence":"Melanie: I visited my sister.","confidence":0.9}
+            ]"#,
+        )
+        .expect("valid fixture json");
+        RelationIndex::build(&turns, &raw)
+    }
+
+    #[test]
+    fn query_temporal_span_general_ranks_content_overlap() {
+        let idx = fixture_index_general();
+        let start = Ymd { year: 2023, month: 10, day: 1 };
+        let end = Ymd { year: 2023, month: 10, day: 31 };
+        let hits = idx
+            .query_temporal_span_general(
+                "Melanie",
+                start,
+                end,
+                "What injury forced Melanie to take a break from pottery in October 2023?",
+            )
+            .expect("resolves");
+        // The hurt/pottery hit shares distinctive content terms ("break",
+        // "pottery"); the farmers-market hit is in-window but content-poor;
+        // the November visit is outside the window.
+        assert_eq!(hits.len(), 2, "hits: {hits:?}");
+        assert_eq!(hits[0].object, "ankle");
+        assert_eq!(hits[1].object, "farmers market");
+        let sessions: HashSet<&str> = hits[0]
+            .evidence
+            .iter()
+            .map(|e| e.session_id.as_str())
+            .collect();
+        assert_eq!(sessions, HashSet::from(["conv-26::session_17"]));
+    }
+
+    #[test]
+    fn query_temporal_span_general_unresolvable_declines() {
+        let idx = fixture_index_general();
+        assert!(idx
+            .query_temporal_span_general(
+                "Zelda",
+                Ymd { year: 2023, month: 10, day: 1 },
+                Ymd { year: 2023, month: 10, day: 31 },
+                "What did Zelda do in October 2023?",
+            )
+            .is_none());
+    }
+
+    #[test]
     fn analyze_shared_questions() {
         let q = analyze_fact_question("Which city have both Jean and John visited?")
             .expect("should analyze");
@@ -1177,11 +1366,13 @@ mod tests {
     #[test]
     fn analyze_declines_without_answer_type_or_person() {
         assert!(analyze_fact_question("Did John visit Rome?").is_none());
-        assert!(
-            analyze_fact_question("What personal health incidents does Evan face in 2023?")
-                .is_none()
-        );
-        // Single person without a time window declines to the adaptive path.
+        // 1 person + a time window now takes the family-agnostic temporal-span
+        // path instead of declining (systematic generalization, not a revert
+        // of the decline policy: the person + window anchor is sufficient).
+        let q = analyze_fact_question("What personal health incidents does Evan face in 2023?")
+            .expect("1 person + window analyzes");
+        assert_eq!(q.family, PredicateFamily::Any);
+        // Single person without a time window still declines to the adaptive path.
         assert!(analyze_fact_question("Where was John?").is_none());
     }
 

@@ -24,7 +24,8 @@ use axum::{
 use clap::Parser;
 use lint_ai::memory_api::{MemorySearchService, MemoryService, SearchRequest};
 use lint_ai::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, RelationIndex, RelationTurn, SharedObject,
+    analyze_fact_question, extract_relations_via_spacy, PredicateFamily, RelationIndex, RelationTurn,
+    SharedObject,
 };
 use lint_ai::segments::SegmentRoutingStrategy;
 use lint_ai::{IndexStore, MemoryIndexLayout, PipelineOptions, SourceDocument};
@@ -59,6 +60,14 @@ struct LocomoConversation {
 struct LocomoTurn {
     speaker: String,
     text: String,
+    /// BLIP image caption for turns sharing a photo. Deserialization drops it
+    /// by default; we index it so image content is retrievable and visible to
+    /// the reader (e.g. conv-41_q3's certificate).
+    #[serde(default)]
+    blip_caption: Option<String>,
+    /// Image topic/query accompanying the photo, when present.
+    #[serde(default)]
+    query: Option<String>,
 }
 
 struct ConvIndex {
@@ -147,7 +156,17 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         let group_id = format!("{}::session_{n}", conv.sample_id);
         let mut lines = Vec::new();
         for (turn_idx, turn) in turns.iter().enumerate() {
-            let line = format!("{}: {}", turn.speaker, turn.text);
+            // Image turns carry their visual content in blip_caption/query;
+            // index it inline so it is routable and reader-visible. One
+            // systematic place: the turn line that feeds both the session
+            // text and the indexed document content.
+            let mut line = format!("{}: {}", turn.speaker, turn.text);
+            if let Some(caption) = turn.blip_caption.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                line.push_str(&format!(" [image: {}]", caption));
+            }
+            if let Some(q) = turn.query.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                line.push_str(&format!(" [image topic: {}]", q));
+            }
             lines.push(line.clone());
             let mut filters = BTreeMap::new();
             filters.insert("memory_user_id".to_string(), LOCOMO_USER_ID.to_string());
@@ -263,13 +282,23 @@ async fn search(
             (2.., _) => conv
                 .relations
                 .query_shared(&fq.persons, fq.family, fq.expect_place),
-            (1, Some((start, end))) => conv.relations.query_temporal_span(
-                &fq.persons[0],
-                fq.family,
-                start,
-                end,
-                fq.expect_place,
-            ),
+            (1, Some((start, end))) => {
+                // Family-agnostic temporal span (PredicateFamily::Any): person
+                // + time window + content overlap, for 1-person + window
+                // questions whose answer type is not a known family.
+                if fq.family == PredicateFamily::Any {
+                    conv.relations
+                        .query_temporal_span_general(&fq.persons[0], start, end, &p.q)
+                } else {
+                    conv.relations.query_temporal_span(
+                        &fq.persons[0],
+                        fq.family,
+                        start,
+                        end,
+                        fq.expect_place,
+                    )
+                }
+            }
             _ => None,
         };
         if let Some(objs) = hits {

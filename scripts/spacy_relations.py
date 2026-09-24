@@ -254,13 +254,20 @@ def _behood_bin():
     (https://github.com/RooAGI/Behood); install it with
     `cargo install --git https://github.com/RooAGI/Behood` (or
     `cargo install behood` once published). BEHOOD_BIN overrides PATH
-    discovery. When no binary is found the pure-Python fallback in
-    this script applies.
+    discovery; cargo's default install dir is tried last so a plain
+    `cargo install --git` works even when PATH is not set up. When no
+    binary is found the pure-Python fallback in this script applies.
     """
     env = os.environ.get("BEHOOD_BIN")
     if env:
         return env
-    return shutil.which("behood")
+    found = shutil.which("behood")
+    if found:
+        return found
+    cargo_bin = os.path.expanduser("~/.cargo/bin/behood")
+    if os.path.isfile(cargo_bin) and os.access(cargo_bin, os.X_OK):
+        return cargo_bin
+    return None
 
 
 def _classify(descriptors, chunk_descriptors, np_descriptors, speaker_names):

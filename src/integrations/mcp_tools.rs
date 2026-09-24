@@ -1,6 +1,6 @@
 use crate::index::SearchResult;
 use crate::integrations::mcp_transport::ToolDefinition;
-use crate::pipeline::IndexStore;
+use crate::memory_api::MemoryService;
 use crate::source::SourceDocument;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -45,14 +45,76 @@ pub(crate) fn search_provider_filters(
     )]))
 }
 
+/// Extract the optional `session_id` search argument. A supplied value must be
+/// a non-empty, non-blank identifier; omit the argument for stateless search.
+/// A present-but-blank value, or a present non-string value, is rejected
+/// rather than silently treated as absent, so callers cannot accidentally
+/// lose session state. This is a conversation-state key only, never a corpus
+/// filter.
+pub(crate) fn search_session_id(arguments: &Value) -> Result<Option<String>, String> {
+    let Some(value) = arguments.get("session_id") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(session_id) = value.as_str() else {
+        return Err("session_id must be a string".to_string());
+    };
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("session_id must not be blank".to_string());
+    }
+    if session_id.len() > 256 {
+        return Err("session_id must be at most 256 bytes".to_string());
+    }
+    if session_id.chars().any(|character| character.is_control()) {
+        return Err("session_id must not contain control characters".to_string());
+    }
+    Ok(Some(session_id.to_string()))
+}
+
+/// Resolve the effective session id for an MCP search.
+///
+/// An explicit `session_id` argument always wins. When the argument is
+/// absent (or null), the search inherits the session most recently seen
+/// active in this workspace — hooks keep that pointer current through the
+/// service's conversation-state store, so an agent that never passes
+/// `session_id` still gets follow-up resolution against its live
+/// conversation. A present-but-blank argument is still rejected rather than
+/// falling back, so callers cannot accidentally lose session state. The
+/// resolved id (when any) refreshes the pointer, keeping it alive while the
+/// conversation continues through MCP searches.
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code"
+))]
+pub(crate) fn resolve_search_session_id(
+    arguments: &Value,
+    service: &MemoryService,
+    provider: &str,
+) -> Result<Option<String>, String> {
+    let session_id = match search_session_id(arguments)? {
+        Some(explicit) => Some(explicit),
+        None => service.current_session_id(provider),
+    };
+    if let Some(active) = session_id.as_deref() {
+        service.note_active_session(provider, active);
+    }
+    Ok(session_id)
+}
+
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.
-pub(crate) fn search_results(store: &IndexStore, results: Vec<SearchResult>) -> Value {
+pub(crate) fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
     let results = results
         .into_iter()
         .filter_map(|result| {
-            let document = store.source_document_by_id(&result.doc_id)?;
+            let document = service.source_document_by_id(&result.doc_id)?;
             Some(json!({
                 "id": result.doc_id,
                 "source": result.source,
@@ -71,8 +133,8 @@ pub(crate) fn search_results(store: &IndexStore, results: Vec<SearchResult>) -> 
 }
 
 /// Return a bounded, provider-neutral view of the indexed memories.
-pub(crate) fn list_memories(store: &IndexStore, limit: usize) -> Value {
-    let memories = store
+pub(crate) fn list_memories(service: &MemoryService, limit: usize) -> Value {
+    let memories = service
         .source_documents()
         .into_iter()
         .filter(|document| is_recorded_memory(document))
@@ -151,7 +213,7 @@ pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::PipelineOptions;
+    use crate::pipeline::{IndexStore, PipelineOptions};
     use crate::source::SourceDocument;
     use std::collections::BTreeMap;
 
@@ -206,6 +268,7 @@ mod tests {
                 timestamp: None,
                 doc_length: 38,
                 author_agent: Some(provider.to_string()),
+                key_phrases: Vec::new(),
             }
         }
 
@@ -252,6 +315,7 @@ mod tests {
             timestamp: None,
             doc_length: 14,
             author_agent: None,
+            key_phrases: Vec::new(),
         });
         store.upsert(SourceDocument {
             doc_id: "workspace-file".to_string(),
@@ -265,8 +329,10 @@ mod tests {
             timestamp: None,
             doc_length: 17,
             author_agent: None,
+            key_phrases: Vec::new(),
         });
-        let payload = list_memories(&store, 20);
+        let service = MemoryService::new(store);
+        let payload = list_memories(&service, 20);
         assert_eq!(payload["count"], 1);
         assert_eq!(
             payload["memories"][0]["source"],
@@ -274,5 +340,58 @@ mod tests {
         );
         assert_eq!(parse_list_memories_limit(&json!({"limit": 0})).unwrap(), 1);
         assert!(parse_list_memories_limit(&json!({"unexpected": true})).is_err());
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn resolve_search_session_id_prefers_explicit_over_pointer() {
+        let dir = std::env::temp_dir().join(format!(
+            "lint-ai-resolve-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0),
+        ));
+        let service =
+            MemoryService::at_path(&dir, PipelineOptions::default()).expect("service opens");
+        service.note_active_session("claude", "hook-session");
+        // Explicit argument wins over the hook-written pointer...
+        let resolved = resolve_search_session_id(
+            &json!({"query": "q", "session_id": "agent-session"}),
+            &service,
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(resolved.as_deref(), Some("agent-session"));
+        // ...and refreshes the pointer with the explicit id.
+        assert_eq!(
+            service.current_session_id("claude").as_deref(),
+            Some("agent-session")
+        );
+        // Absent argument falls back to the pointer.
+        let resolved =
+            resolve_search_session_id(&json!({"query": "q"}), &service, "claude").unwrap();
+        assert_eq!(resolved.as_deref(), Some("agent-session"));
+        // A present-but-blank argument is still rejected, not silently
+        // degraded to the pointer.
+        assert!(resolve_search_session_id(
+            &json!({"query": "q", "session_id": "  "}),
+            &service,
+            "claude"
+        )
+        .is_err());
+        // No argument and no pointer means stateless.
+        let fresh = MemoryService::at_path(&dir.join("fresh"), PipelineOptions::default())
+            .expect("service opens");
+        let resolved = resolve_search_session_id(&json!({"query": "q"}), &fresh, "claude").unwrap();
+        assert_eq!(resolved, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

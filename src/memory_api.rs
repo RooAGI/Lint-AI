@@ -1,7 +1,9 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
+use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
 use crate::pipeline::{PipelineOptions, PublishedIndexSnapshot};
 use crate::query_plan::PreparedQuery;
+use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -47,6 +49,13 @@ pub struct SearchRequest {
     pub options: Option<Vec<String>>,
     pub user_id: String,
     pub top_k: usize,
+    /// Optional conversation session. When supplied, the search loads the
+    /// bounded prior state for (user_id, session_id) and resolves follow-up
+    /// phrasing and temporal anchors against it before retrieval. Absent or
+    /// empty means stateless search: the query is analyzed on its own. This is
+    /// a state key only; it never becomes an implicit `group_id` filter.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +148,8 @@ pub struct MemoryService {
     store: IndexStore,
     superseded_ids: HashSet<(String, String)>,
     request_fingerprints: HashMap<(String, String), String>,
+    conversation_states:
+        std::sync::Arc<std::sync::Mutex<crate::conversation_state::ConversationStateStore>>,
 }
 
 #[derive(Clone)]
@@ -146,6 +157,10 @@ pub struct MemorySearchService {
     index: PublishedIndexSnapshot,
     superseded_ids: HashSet<(String, String)>,
     query_cache: Arc<Mutex<HashMap<String, Vec<crate::SearchResult>>>>,
+    conversation_states: Arc<Mutex<crate::conversation_state::ConversationStateStore>>,
+    /// Manual override for the conversational rerank; `None` (default) defers
+    /// to the index options. Primarily a test/benchmark hook.
+    rerank_override: Option<bool>,
 }
 
 impl MemoryService {
@@ -156,15 +171,20 @@ impl MemoryService {
     }
 
     /// Open a persistent memory service without exposing `IndexStore` in the
-    /// application-facing construction API.
+    /// application-facing construction API. Hooks and the MCP server open a
+    /// fresh service per invocation against the same index root; a disk-backed
+    /// conversation store lets session state (follow-up context, temporal
+    /// anchors) survive across those invocations.
     pub fn at_path(index_root: impl AsRef<Path>, options: PipelineOptions) -> anyhow::Result<Self> {
-        Ok(Self::new(IndexStore::at_path(
-            index_root.as_ref(),
-            options,
-        )?))
+        let index_root = index_root.as_ref();
+        let mut service = Self::new(IndexStore::at_path(index_root, options)?);
+        service.conversation_states = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::conversation_state::ConversationStateStore::open_under(index_root),
+        ));
+        Ok(service)
     }
 
-    fn new(store: IndexStore) -> Self {
+    pub(crate) fn new(store: IndexStore) -> Self {
         let superseded_ids = store
             .source_documents()
             .into_iter()
@@ -199,6 +219,9 @@ impl MemoryService {
             store,
             superseded_ids,
             request_fingerprints,
+            conversation_states: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::conversation_state::ConversationStateStore::new(None),
+            )),
         }
     }
 
@@ -299,6 +322,7 @@ impl MemoryService {
                 doc_length: message.content.len(),
                 author_agent: Some(message.role.clone()),
                 filters,
+                key_phrases: Vec::new(),
             });
         }
 
@@ -313,6 +337,9 @@ impl MemoryService {
 
     pub fn search(&mut self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
         validate_identifier(&request.user_id, "user_id")?;
+        if let Some(session_id) = request.session_id.as_deref() {
+            validate_identifier(session_id, "session_id")?;
+        }
         if request.query.trim().is_empty() {
             return Ok(SearchResponse { data: vec![] });
         }
@@ -325,6 +352,9 @@ impl MemoryService {
     /// Writers refresh the snapshot before releasing their lock.
     pub fn search_cached(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
         validate_identifier(&request.user_id, "user_id")?;
+        if let Some(session_id) = request.session_id.as_deref() {
+            validate_identifier(session_id, "session_id")?;
+        }
         if request.query.trim().is_empty() {
             return Ok(SearchResponse { data: vec![] });
         }
@@ -438,6 +468,8 @@ impl MemoryService {
             index: self.store.published_snapshot(),
             superseded_ids: self.superseded_ids.clone(),
             query_cache: Arc::new(Mutex::new(HashMap::new())),
+            conversation_states: Arc::clone(&self.conversation_states),
+            rerank_override: None,
         }
     }
 
@@ -448,8 +480,36 @@ impl MemoryService {
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
-        let prepared = PreparedQuery::new(&request.query);
-        self.store.query_prepared(&prepared, top_k, &filters)
+        let prepared = self.prepare_query(request);
+        let do_rerank = should_conversational_rerank(
+            self.store.options().conversational_rerank,
+            request.session_id.as_deref(),
+            &request.query,
+        );
+        let depth = if do_rerank {
+            top_k.max(RERANK_DEEP_TOP_K)
+        } else {
+            top_k
+        };
+        let mut results = self.store.query_prepared(&prepared, depth, &filters)?;
+        if do_rerank {
+            let entities = session_resolved_entities(
+                &self.conversation_states,
+                &request.user_id,
+                request.session_id.as_deref().unwrap_or(""),
+            );
+            results = conversational_rerank(
+                results,
+                &self.store,
+                &request.query,
+                &entities,
+                &filters,
+                RERANK_WEIGHTS,
+            );
+            results.truncate(top_k);
+        }
+        self.observe_search_turn(request, &prepared, &results);
+        Ok(results)
     }
 
     fn query_results_cached(
@@ -459,8 +519,42 @@ impl MemoryService {
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
         let mut filters = BTreeMap::new();
         filters.insert(USER_FILTER.to_string(), request.user_id.clone());
-        let prepared = PreparedQuery::new(&request.query);
-        self.store.query_prepared_cached(&prepared, top_k, &filters)
+        let prepared = self.prepare_query(request);
+        let do_rerank = should_conversational_rerank(
+            self.store.options().conversational_rerank,
+            request.session_id.as_deref(),
+            &request.query,
+        );
+        let results = if do_rerank {
+            // The rerank needs the deep candidate pool; query the current
+            // snapshot at depth without forcing a refresh, matching this
+            // path's read-only contract.
+            let deep = self.store.query_prepared_cached(
+                &prepared,
+                top_k.max(RERANK_DEEP_TOP_K),
+                &filters,
+            )?;
+            let entities = session_resolved_entities(
+                &self.conversation_states,
+                &request.user_id,
+                request.session_id.as_deref().unwrap_or(""),
+            );
+            let mut ranked = conversational_rerank(
+                deep,
+                &self.store,
+                &request.query,
+                &entities,
+                &filters,
+                RERANK_WEIGHTS,
+            );
+            ranked.truncate(top_k);
+            ranked
+        } else {
+            self.store
+                .query_prepared_cached(&prepared, top_k, &filters)?
+        };
+        self.observe_search_turn(request, &prepared, &results);
+        Ok(results)
     }
 
     fn is_visible(&self, doc: &SourceDocument) -> bool {
@@ -477,6 +571,424 @@ impl MemoryService {
         not_superseded && not_expired
     }
 
+    /// Prepare the query for search. Without a session id this is exactly
+    /// `PreparedQuery::new(&request.query)`; with one, the query is rewritten
+    /// against the session's bounded prior state (follow-up resolution and
+    /// temporal-anchor seeding) before analysis.
+    fn prepare_query(&self, request: &SearchRequest) -> PreparedQuery {
+        prepare_session_query(
+            &self.conversation_states,
+            &request.user_id,
+            request.session_id.as_deref(),
+            &request.query,
+        )
+    }
+
+    /// Record the search turn in the session state. No-op without a session
+    /// id. The original query text is recorded (not the rewritten one), along
+    /// with the retrieved document ids, entity mentions from the analysis,
+    /// and the temporal anchor when the query set one explicitly.
+    fn observe_search_turn(
+        &self,
+        request: &SearchRequest,
+        prepared: &PreparedQuery,
+        results: &[crate::SearchResult],
+    ) {
+        observe_session_search(
+            &self.conversation_states,
+            &request.user_id,
+            request.session_id.as_deref(),
+            &request.query,
+            prepared,
+            results,
+        );
+    }
+
+    /// Search with caller-supplied filters and an explicit session scope,
+    /// going through the full stateful path (prepare → search → observe).
+    /// The MCP dispatchers use this: `scope` is the provider name (MCP has
+    /// no user id), `session_id` is the conversation key within it.
+    pub(crate) fn search_with_filters(
+        &mut self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+        filters: &BTreeMap<String, String>,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        let prepared = prepare_session_query(&self.conversation_states, scope, session_id, query);
+        let do_rerank = should_conversational_rerank(
+            self.store.options().conversational_rerank,
+            session_id,
+            query,
+        );
+        let depth = if do_rerank {
+            top_k.max(RERANK_DEEP_TOP_K)
+        } else {
+            top_k
+        };
+        let mut results = self.store.query_prepared(&prepared, depth, filters)?;
+        if do_rerank {
+            let entities = session_resolved_entities(
+                &self.conversation_states,
+                scope,
+                session_id.unwrap_or(""),
+            );
+            results = conversational_rerank(
+                results,
+                &self.store,
+                query,
+                &entities,
+                filters,
+                RERANK_WEIGHTS,
+            );
+            results.truncate(top_k);
+        }
+        observe_session_search(
+            &self.conversation_states,
+            scope,
+            session_id,
+            query,
+            &prepared,
+            &results,
+        );
+        Ok(results)
+    }
+
+    /// Sync shared memory documents into the index. Runs before each MCP
+    /// search so the workspace sees memories recorded by other providers.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn sync_shared_memory(
+        &mut self,
+        memory_root: &std::path::Path,
+    ) -> anyhow::Result<bool> {
+        crate::integrations::mcp_index::sync_memory_documents(memory_root, self)
+    }
+
+    /// Refresh the index after syncing, so newly synced documents are
+    /// searchable. Only the Gemini CLI path needed this explicitly.
+    pub(crate) fn refresh_index(&mut self) -> anyhow::Result<()> {
+        self.store.refresh()
+    }
+
+    /// Compose a workspace service with one provider's memory service into a
+    /// single in-memory query view. Transfers already-published segments
+    /// rather than reprocessing source documents.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn compose_segmented(
+        workspace: Self,
+        provider_memory: Option<Self>,
+    ) -> anyhow::Result<Self> {
+        // The composed view must keep the conversation-state store the hooks
+        // write to: the provider memory's disk-backed store (opened under the
+        // same `.lint-ai/memory/` root the hooks use), falling back to the
+        // workspace store when there is no provider memory. A fresh
+        // memory-only store here would lose hook-written active sessions,
+        // drop explicit session state across MCP invocations, and break
+        // omitted-session_id inheritance.
+        let conversation_states = provider_memory
+            .as_ref()
+            .map(|service| Arc::clone(&service.conversation_states))
+            .unwrap_or_else(|| Arc::clone(&workspace.conversation_states));
+        let composed = crate::IndexStore::compose_segmented(
+            workspace.store,
+            provider_memory.map(|service| service.store),
+        )?;
+        let mut service = Self::new(composed);
+        service.conversation_states = conversation_states;
+        Ok(service)
+    }
+
+    /// True when the store holds no documents. Integration read paths use
+    /// this for the same early exit they had on the raw store.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.store.is_empty()
+    }
+
+    /// Upsert one source document. Integration capture paths call this, then
+    /// [`MemoryService::refresh_index`], exactly as they did on the raw store.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    /// Insert or replace a source document directly. Low-level bulk-load;
+    /// prefer `add` for application writes.
+    pub fn upsert(&mut self, document: crate::SourceDocument) {
+        self.store.upsert(document)
+    }
+
+    /// Remove one document by id, returning the removed document if present.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn remove(&mut self, doc_id: &str) -> Option<crate::SourceDocument> {
+        self.store.remove(doc_id)
+    }
+
+    /// Look up a raw index record by document id, for response formatting in
+    /// integration read paths.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn record_by_id(&self, doc_id: &str) -> Option<&crate::index::DocRecord> {
+        self.store.record_by_id(doc_id)
+    }
+
+    /// All source documents, for migration and sync iteration.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn source_documents(&self) -> Vec<&crate::SourceDocument> {
+        self.store.source_documents()
+    }
+
+    /// Stateless plain query for integration read paths (recall).
+    /// Runs the service query pipeline with no session: identical to the raw
+    /// store's `query`, with no conversation state read or recorded. Hook
+    /// retrieval uses [`MemoryService::observe_plain_query`] instead so hook
+    /// turns contribute session state.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn query_plain(
+        &mut self,
+        query: &str,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        self.search_with_filters(query, "integration", None, top_k, &BTreeMap::new())
+    }
+
+    /// Record the session most recently seen active for `provider` in this
+    /// workspace. Hooks call this on every event carrying a session id, and
+    /// the MCP search dispatch refreshes it when it resolves a session; the
+    /// dispatch reads it back as the default session when the caller did not
+    /// pass `session_id` explicitly. Fail-open: the write never fails.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn note_active_session(&self, provider: &str, session_id: &str) {
+        if let Ok(store) = self.conversation_states.lock() {
+            store.note_active_session(provider, session_id);
+        }
+    }
+
+    /// The session most recently marked active for `provider`, or `None`
+    /// when there is none, it is unreadable, or it is stale. Never fails:
+    /// every problem degrades to stateless search.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn current_session_id(&self, provider: &str) -> Option<String> {
+        self.conversation_states
+            .lock()
+            .ok()?
+            .current_session_id(provider)
+    }
+
+    /// Plain query that records the turn into the session's conversation
+    /// state without rewriting it. Hook retrieval uses this: hooks inject
+    /// background context rather than answering a conversational turn, so
+    /// they contribute state (what was asked, what was returned, entity
+    /// mentions) for later follow-up resolution without consuming it.
+    /// A blank session id degrades to stateless; hooks fail open and never
+    /// reject.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn observe_plain_query(
+        &mut self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        let session_id = session_id.filter(|id| !id.trim().is_empty());
+        let prepared = PreparedQuery::new(query);
+        let results = self
+            .store
+            .query_prepared(&prepared, top_k, &BTreeMap::new())?;
+        observe_session_search(
+            &self.conversation_states,
+            scope,
+            session_id,
+            query,
+            &prepared,
+            &results,
+        );
+        Ok(results)
+    }
+
+    /// Raw record access for tests asserting on capture idempotency and
+    /// document attribution. Production code uses the typed service methods.
+    #[cfg(test)]
+    pub(crate) fn records(&self) -> Vec<&crate::index::DocRecord> {
+        self.store.records()
+    }
+
+    /// Index-structure access for tests asserting on segment layout.
+    #[cfg(test)]
+    pub(crate) fn memory_index_snapshot(&self) -> Option<&crate::pipeline::MemoryIndexSnapshot> {
+        self.store.memory_index_snapshot()
+    }
+
+    /// Preferred-document selection for hook retrieval: one document per
+    /// `session_id`, preferring `session-summary` over `outcome` over
+    /// `checkpoint`, ties broken by timestamp. Ranked hits are deduplicated
+    /// by session and rewritten to the preferred record's identity.
+    /// This is the shared implementation of the logic previously duplicated
+    /// in the Claude Code and Codex hook modules.
+    #[cfg(any(feature = "claude-code", feature = "codex"))]
+    pub(crate) fn select_session_documents(
+        &self,
+        results: Vec<crate::SearchResult>,
+        limit: usize,
+    ) -> Vec<crate::SearchResult> {
+        use std::collections::{HashMap, HashSet};
+        fn document_type_priority(document_type: &str) -> u8 {
+            match document_type {
+                "session-summary" => 3,
+                "outcome" => 2,
+                "checkpoint" => 1,
+                _ => 0,
+            }
+        }
+        let mut preferred = HashMap::<String, (u8, &crate::index::DocRecord)>::new();
+        for record in self.store.records() {
+            let Some(session) = record.filters.get("session_id") else {
+                continue;
+            };
+            let priority = document_type_priority(
+                record
+                    .filters
+                    .get("document_type")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            );
+            match preferred.get(session) {
+                Some((current_priority, current))
+                    if (*current_priority, current.timestamp.as_deref())
+                        >= (priority, record.timestamp.as_deref()) => {}
+                _ => {
+                    preferred.insert(session.clone(), (priority, record));
+                }
+            }
+        }
+
+        let mut seen_sessions = HashSet::new();
+        let mut selected = Vec::new();
+        for mut result in results {
+            let Some(record) = self.store.record_by_id(&result.doc_id) else {
+                continue;
+            };
+            let session = record
+                .filters
+                .get("session_id")
+                .cloned()
+                .or_else(|| result.group_id.clone())
+                .unwrap_or_else(|| result.doc_id.clone());
+            if !seen_sessions.insert(session.clone()) {
+                continue;
+            }
+            if let Some((_, preferred_record)) = preferred.get(&session) {
+                result.doc_id = preferred_record.doc_id.clone();
+                result.source = preferred_record.source.clone();
+                result.group_id = preferred_record.group_id.clone();
+            }
+            selected.push(result);
+            if selected.len() == limit {
+                break;
+            }
+        }
+        selected
+    }
+
+    /// Number of source documents in the index, for the MCP info tool.
+    pub(crate) fn docs_count(&self) -> usize {
+        self.store.source_documents().len()
+    }
+
+    /// Format search results as the MCP search payload.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn search_results_payload(
+        &self,
+        results: Vec<crate::SearchResult>,
+    ) -> serde_json::Value {
+        crate::integrations::mcp_tools::search_results(self, results)
+    }
+
+    /// Format the memory list as the MCP list_memories payload.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    pub(crate) fn list_memories_payload(&self, limit: usize) -> serde_json::Value {
+        crate::integrations::mcp_tools::list_memories(self, limit)
+    }
+
+    /// Look up a source document by id, for tests that verify indexed
+    /// content through the service API.
+    pub(crate) fn source_document_by_id(&self, doc_id: &str) -> Option<&crate::SourceDocument> {
+        self.store.source_document_by_id(doc_id)
+    }
     fn format_search_response(&self, results: Vec<crate::SearchResult>) -> SearchResponse {
         let data = results
             .into_iter()
@@ -601,21 +1113,154 @@ fn memory_record(doc: &SourceDocument) -> MemoryRecord {
     }
 }
 
+/// Prepare a query against an optional conversation session. Without a
+/// session id this is exactly `PreparedQuery::new(query)`; with one, the
+/// query is rewritten against the session's bounded prior state (follow-up
+/// resolution and temporal-anchor seeding) before analysis.
+///
+/// `scope` namespaces the state (a user id for the API path, a provider
+/// name for the MCP path); `session_id` is the conversation key within it.
+/// Shared by `MemoryService` and the MCP dispatchers so both paths get the
+/// same stateful behavior.
+pub(crate) fn prepare_session_query(
+    states: &std::sync::Mutex<crate::conversation_state::ConversationStateStore>,
+    scope: &str,
+    session_id: Option<&str>,
+    query: &str,
+) -> PreparedQuery {
+    let Some(session_id) = session_id else {
+        return PreparedQuery::new(query);
+    };
+    let now_ms = unix_time_ms();
+    let rewritten = {
+        let mut states = states.lock().expect("conversation state lock poisoned");
+        let state = states.get(scope, session_id, now_ms);
+        crate::session_prepare::resolve_follow_up(query, state)
+    };
+    PreparedQuery::new(&rewritten)
+}
+
+/// Record a completed search turn in the session state. No-op without a
+/// session id. The original query text is recorded (not the rewritten one),
+/// along with the retrieved document ids, entity mentions from the analysis,
+/// and the temporal anchor when the query set one explicitly.
+pub(crate) fn observe_session_search(
+    states: &std::sync::Mutex<crate::conversation_state::ConversationStateStore>,
+    scope: &str,
+    session_id: Option<&str>,
+    original_query: &str,
+    prepared: &PreparedQuery,
+    results: &[crate::SearchResult],
+) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+    let analysis = prepared.analysis();
+    let entities: Vec<String> = analysis
+        .spans
+        .iter()
+        .map(|span| span.text.clone())
+        .collect();
+    let temporal_anchor = analysis
+        .temporal
+        .as_ref()
+        .and_then(|temporal| temporal.resolved_at.clone());
+    let doc_ids: Vec<String> = results.iter().map(|r| r.doc_id.clone()).collect();
+    let now_ms = unix_time_ms();
+    states
+        .lock()
+        .expect("conversation state lock poisoned")
+        .observe(
+            scope,
+            session_id,
+            original_query,
+            &doc_ids,
+            &entities,
+            temporal_anchor,
+            now_ms,
+        );
+}
+
+/// Entity mentions resolved from the session's recent turns, most recent
+/// first. Feeds the conversational rerank's speaker-match feature.
+fn session_resolved_entities(
+    states: &Mutex<crate::conversation_state::ConversationStateStore>,
+    scope: &str,
+    session_id: &str,
+) -> Vec<String> {
+    let now_ms = unix_time_ms();
+    states
+        .lock()
+        .expect("conversation state lock poisoned")
+        .get(scope, session_id, now_ms)
+        .map(|state| state.resolved_entities.clone())
+        .unwrap_or_default()
+}
+
+/// True when the conversational rerank should fire for this query: a
+/// follow-up inside a live session, with the feature enabled.
+fn should_conversational_rerank(enabled: bool, session_id: Option<&str>, query: &str) -> bool {
+    enabled && session_id.is_some() && is_follow_up(query)
+}
+
 impl MemorySearchService {
+    /// Override the conversational rerank for this searcher, regardless of
+    /// the index options. `None` restores the options-driven default.
+    pub fn set_conversational_rerank(&mut self, enabled: Option<bool>) -> &mut Self {
+        self.rerank_override = enabled;
+        self
+    }
+
+    fn conversational_rerank_enabled(&self) -> bool {
+        self.rerank_override
+            .unwrap_or_else(|| self.index.conversational_rerank_enabled())
+    }
+
     pub fn search(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
         validate_identifier(&request.user_id, "user_id")?;
+        if let Some(session_id) = request.session_id.as_deref() {
+            validate_identifier(session_id, "session_id")?;
+        }
         if request.query.trim().is_empty() {
             return Ok(SearchResponse { data: vec![] });
         }
-        let mut filters = BTreeMap::new();
-        let cache_key = format!(
-            "{}\0{}\0{}",
-            request.user_id,
-            request.query,
-            request.top_k.min(100)
+        let session_id = request.session_id.as_deref();
+        // With a session id, resolve follow-up phrasing and temporal anchors
+        // against the session's bounded prior state before retrieval,
+        // mirroring MemoryService::search. Absent means stateless.
+        let prepared = prepare_session_query(
+            &self.conversation_states,
+            &request.user_id,
+            session_id,
+            &request.query,
         );
-        filters.insert(USER_FILTER.to_string(), request.user_id);
-        let prepared = PreparedQuery::new(&request.query);
+        let top_k = request.top_k.min(100);
+        // Session follow-ups retrieve deep and rescore with the conversational
+        // rerank; everything else keeps the base ranking untouched.
+        let do_rerank = should_conversational_rerank(
+            self.conversational_rerank_enabled(),
+            session_id,
+            &request.query,
+        );
+        let depth = if do_rerank {
+            top_k.max(RERANK_DEEP_TOP_K)
+        } else {
+            top_k
+        };
+        // Key the cache on the effective query text: identical raw queries at
+        // different points in a session rewrite differently and must not
+        // share an entry. The rerank mode is part of the key: the override
+        // can flip between searches on the same searcher.
+        let cache_key = format!(
+            "{}\0{}\0{}\0{}\0{}",
+            request.user_id,
+            session_id.unwrap_or(""),
+            prepared.search_query(),
+            top_k,
+            do_rerank
+        );
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), request.user_id.clone());
         let cached = if std::env::var_os("LINT_AI_DISABLE_QUERY_CACHE").is_some() {
             None
         } else {
@@ -628,9 +1273,23 @@ impl MemorySearchService {
         let results = if let Some(cached) = cached {
             cached
         } else {
-            let results = self
-                .index
-                .query_prepared(&prepared, request.top_k.min(100), &filters)?;
+            let mut results = self.index.query_prepared(&prepared, depth, &filters)?;
+            if do_rerank {
+                let entities = session_resolved_entities(
+                    &self.conversation_states,
+                    &request.user_id,
+                    session_id.unwrap_or(""),
+                );
+                results = conversational_rerank(
+                    results,
+                    &self.index,
+                    &request.query,
+                    &entities,
+                    &filters,
+                    RERANK_WEIGHTS,
+                );
+                results.truncate(top_k);
+            }
             let mut cache = self.query_cache.lock().expect("query cache lock poisoned");
             if cache.len() >= 256 {
                 if let Some(key) = cache.keys().next().cloned() {
@@ -640,6 +1299,16 @@ impl MemorySearchService {
             cache.insert(cache_key, results.clone());
             results
         };
+        // Record the turn even on a cache hit: the session asked, and these
+        // are the documents it was given.
+        observe_session_search(
+            &self.conversation_states,
+            &request.user_id,
+            session_id,
+            &request.query,
+            &prepared,
+            &results,
+        );
         let now_ms = unix_time_ms();
         let data = results
             .into_iter()
@@ -741,6 +1410,16 @@ mod tests {
         MemoryService::in_memory(PipelineOptions::default())
     }
 
+    /// Temp dir with symlinks resolved (on macOS `TMPDIR` lives under
+    /// `/var`, which is a symlink to `/private/var`; comparing or
+    /// reopening paths through the unresolved prefix breaks).
+    fn canonical_temp_dir(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(format!("lint-ai-{name}-{}", std::process::id()))
+    }
+
     #[test]
     fn add_is_immediately_searchable() {
         let mut service = service();
@@ -764,6 +1443,7 @@ mod tests {
                 options: None,
                 user_id: "user-a".into(),
                 top_k: 100,
+                session_id: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -798,6 +1478,7 @@ mod tests {
                 options: None,
                 user_id: "user-a".into(),
                 top_k: 100,
+                session_id: None,
             })
             .unwrap();
         assert!(response
@@ -831,6 +1512,7 @@ mod tests {
                 options: None,
                 user_id: "user-a".into(),
                 top_k: 10,
+                session_id: None,
             })
             .unwrap();
         let b = service
@@ -839,6 +1521,7 @@ mod tests {
                 options: None,
                 user_id: "user-b".into(),
                 top_k: 10,
+                session_id: None,
             })
             .unwrap();
         assert_eq!(a.data.len(), 1);
@@ -953,6 +1636,7 @@ mod tests {
             options: None,
             user_id: "user-a".into(),
             top_k: 10,
+            session_id: None,
         };
         assert!(previous
             .search(request())
@@ -992,6 +1676,7 @@ mod tests {
                 options: None,
                 user_id: "user-a".into(),
                 top_k: 10,
+                session_id: None,
             })
             .unwrap();
         assert!(response.data.is_empty());
@@ -1027,6 +1712,7 @@ mod tests {
                 options: None,
                 user_id: "user-a".into(),
                 top_k: 10,
+                session_id: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -1072,6 +1758,7 @@ mod tests {
                 options: None,
                 user_id: "user-a".into(),
                 top_k: 10,
+                session_id: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -1190,5 +1877,408 @@ mod tests {
             .unwrap();
         assert_eq!(second.data.len(), 1);
         assert_ne!(first.data[0].id, second.data[0].id);
+    }
+
+    #[test]
+    fn group_id_is_an_exact_filter_only_when_explicitly_requested() {
+        use std::collections::BTreeMap;
+
+        let mut service = service();
+        // Two sessions for the same user; group_id comes from session_id.
+        for (session, text) in [
+            (
+                "session-one",
+                "the quartz database uses append-only segments",
+            ),
+            (
+                "session-two",
+                "the quartz database uses append-only segments",
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: format!("req-{session}"),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: text.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: session.to_string(),
+                })
+                .unwrap();
+        }
+
+        // No group filter: both sessions' documents are searchable. A
+        // session_id on the *search* is a state key only and must not
+        // implicitly scope the corpus.
+        let prepared = PreparedQuery::new("quartz database segments");
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        let unfiltered = service
+            .store
+            .query_prepared(&prepared, 10, &filters)
+            .unwrap();
+        assert_eq!(unfiltered.len(), 2);
+
+        // Explicit group_id filter: only the requested session's documents.
+        filters.insert("group_id".to_string(), "session-one".to_string());
+        let filtered = service
+            .store
+            .query_prepared(&prepared, 10, &filters)
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].group_id.as_deref(), Some("session-one"));
+    }
+
+    #[test]
+    fn session_temporal_anchor_carries_into_follow_up_retrieval() {
+        use chrono::Duration;
+
+        let options = PipelineOptions {
+            memory_index_layout: crate::pipeline::MemoryIndexLayout::Segmented {
+                query_top_n: 8,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut service = MemoryService::new(IndexStore::in_memory(options));
+        let today = Utc::now().date_naive();
+        let recent_date = (today - Duration::days(1)).format("%Y-%m-%d").to_string();
+        let old_date = (today - Duration::days(30)).format("%Y-%m-%d").to_string();
+
+        for (doc_id, group_id, timestamp, content) in [
+            (
+                "recent-doc",
+                "recent",
+                recent_date.as_str(),
+                "Budget planning notes: allocate 20 percent to research.",
+            ),
+            (
+                "old-doc",
+                "old",
+                old_date.as_str(),
+                "Budget planning notes: allocate 5 percent to research.",
+            ),
+        ] {
+            let mut doc_filters = BTreeMap::new();
+            doc_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+            service.store.upsert(SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: format!("artifact://{doc_id}"),
+                content: content.to_string(),
+                concept: doc_id.to_string(),
+                group_id: Some(group_id.to_string()),
+                headings: vec![],
+                links: vec![],
+                timestamp: Some(timestamp.to_string()),
+                doc_length: content.len(),
+                author_agent: None,
+                filters: doc_filters,
+                key_phrases: Vec::new(),
+            });
+        }
+        service.store.refresh().unwrap();
+
+        // Turn 1 sets a temporal anchor via a relative phrase ("yesterday").
+        service
+            .search(SearchRequest {
+                query: "What did we discuss yesterday?".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 5,
+                session_id: Some("s-temporal".into()),
+            })
+            .unwrap();
+
+        // Turn 2 is a follow-up: the carried anchor must restrict retrieval
+        // to the in-window segment.
+        let turn2 = service
+            .search(SearchRequest {
+                query: "what about the budget?".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 5,
+                session_id: Some("s-temporal".into()),
+            })
+            .unwrap();
+        let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
+        assert!(
+            ids.contains(&"recent-doc"),
+            "follow-up should retrieve in-window doc, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"old-doc"),
+            "follow-up should not retrieve out-of-window doc, got {ids:?}"
+        );
+
+        // Stateless baseline: the same wording without a session gets no
+        // carried anchor, so the out-of-window segment is still searchable.
+        let baseline = service
+            .search(SearchRequest {
+                query: "what about the budget?".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 5,
+                session_id: None,
+            })
+            .unwrap();
+        let baseline_ids: Vec<&str> = baseline
+            .data
+            .iter()
+            .map(|memory| memory.id.as_str())
+            .collect();
+        assert!(
+            baseline_ids.contains(&"old-doc"),
+            "stateless baseline should still see the out-of-window doc, got {baseline_ids:?}"
+        );
+    }
+
+    fn add_quartz_fixture(service: &mut MemoryService) {
+        for (doc_id, content) in [
+            (
+                "quartz-doc",
+                "The Quartz database is a distributed store with strong consistency and tunable replication.",
+            ),
+            (
+                "sourdough-doc",
+                "Baking sourdough bread requires patience, a hot oven, and a lively starter.",
+            ),
+        ] {
+            let mut doc_filters = BTreeMap::new();
+            doc_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+            service.store.upsert(SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: format!("artifact://{doc_id}"),
+                content: content.to_string(),
+                concept: doc_id.to_string(),
+                group_id: Some(doc_id.to_string()),
+                headings: vec![],
+                links: vec![],
+                timestamp: None,
+                doc_length: content.len(),
+                author_agent: None,
+                filters: doc_filters,
+                key_phrases: Vec::new(),
+            });
+        }
+        service.store.refresh().unwrap();
+    }
+
+    fn published_search(
+        published: &MemorySearchService,
+        query: &str,
+        session_id: Option<&str>,
+    ) -> SearchResponse {
+        published
+            .search(SearchRequest {
+                query: query.into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: session_id.map(str::to_string),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn published_search_resolves_follow_up_against_session() {
+        let mut service = service();
+        add_quartz_fixture(&mut service);
+        let published = service.published_search();
+
+        // Turn 1 establishes the session's entities.
+        let first = published_search(&published, "Tell me about the Quartz database", Some("s1"));
+        assert!(first.data.iter().any(|m| m.content.contains("Quartz")));
+
+        // A follow-up with no standalone meaning resolves against the session.
+        let follow_up = published_search(&published, "what are its limitations?", Some("s1"));
+        assert!(
+            follow_up.data.iter().any(|m| m.content.contains("Quartz")),
+            "follow-up should resolve against session state"
+        );
+
+        // Without a session the same query stays stateless and cannot borrow
+        // the session's entities.
+        let stateless = published_search(&published, "what are its limitations?", None);
+        assert!(
+            !stateless.data.iter().any(|m| m.content.contains("Quartz")),
+            "stateless search must not resolve against session state"
+        );
+    }
+
+    #[test]
+    fn published_search_rejects_blank_session_id() {
+        let service = service();
+        let published = service.published_search();
+        for session_id in [Some(""), Some("   ")] {
+            let error = published
+                .search(SearchRequest {
+                    query: "hello".into(),
+                    options: None,
+                    user_id: "user-a".into(),
+                    top_k: 10,
+                    session_id: session_id.map(str::to_string),
+                })
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("session_id must not be empty"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn observe_plain_query_contributes_session_state_for_follow_ups() {
+        let mut service = service();
+        add_quartz_fixture(&mut service);
+
+        // Hook-style retrieval: the query is not rewritten, but the turn is
+        // recorded into the session state.
+        let results = service
+            .observe_plain_query(
+                "Tell me about the Quartz database",
+                "claude",
+                Some("hook-session"),
+                10,
+            )
+            .unwrap();
+        assert!(results.iter().any(|r| r.doc_id == "quartz-doc"));
+
+        // A later MCP-style search in the same scope/session resolves the
+        // follow-up against what the hook observed.
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        let follow_up = service
+            .search_with_filters(
+                "what are its limitations?",
+                "claude",
+                Some("hook-session"),
+                10,
+                &filters,
+            )
+            .unwrap();
+        assert!(
+            follow_up.iter().any(|r| r.doc_id == "quartz-doc"),
+            "follow-up should resolve against hook-observed state"
+        );
+
+        // A blank hook session id degrades to stateless instead of failing.
+        let blank = service
+            .observe_plain_query(
+                "Tell me about the Quartz database",
+                "claude",
+                Some("  "),
+                10,
+            )
+            .unwrap();
+        assert!(blank.iter().any(|r| r.doc_id == "quartz-doc"));
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn at_path_persists_conversation_state_across_instances() {
+        let dir = canonical_temp_dir("conv-state");
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = PipelineOptions::default();
+        {
+            let mut service = MemoryService::at_path(&dir, options.clone()).unwrap();
+            add_quartz_fixture(&mut service);
+            service
+                .observe_plain_query(
+                    "Tell me about the Quartz database",
+                    "claude",
+                    Some("persist-s1"),
+                    10,
+                )
+                .unwrap();
+        }
+        // A fresh service against the same root reloads the session state
+        // from disk, so the follow-up still resolves.
+        let mut reopened = MemoryService::at_path(&dir, options).unwrap();
+        let mut filters = BTreeMap::new();
+        filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        let follow_up = reopened
+            .search_with_filters(
+                "what are its limitations?",
+                "claude",
+                Some("persist-s1"),
+                10,
+                &filters,
+            )
+            .unwrap();
+        assert!(
+            follow_up.iter().any(|r| r.doc_id == "quartz-doc"),
+            "follow-up should resolve against disk-persisted session state"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code"
+    ))]
+    #[test]
+    fn compose_segmented_preserves_provider_conversation_state() {
+        // Regression: compose_segmented() must not replace the disk-backed
+        // conversation-state store with a memory-only one. Hooks write the
+        // active-session pointer into the provider memory root; the composed
+        // service has to see it, and explicit session state must survive a
+        // new MCP process.
+        let base = canonical_temp_dir("compose-state");
+        let workspace_root = base.join("workspace-memory");
+        let provider_root = base.join("memory");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        std::fs::create_dir_all(&provider_root).unwrap();
+        let options = crate::pipeline::PipelineOptions {
+            memory_index_layout: crate::pipeline::MemoryIndexLayout::Segmented {
+                query_top_n: 3,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::LocalDistinctiveness,
+            },
+            ..crate::pipeline::PipelineOptions::default()
+        };
+        {
+            let provider = MemoryService::at_path(&provider_root, options.clone()).unwrap();
+            // Simulate a hook invocation marking a session active.
+            provider.note_active_session("claude", "sess-abc");
+        }
+        let workspace = MemoryService::at_path(&workspace_root, options.clone()).unwrap();
+        let provider = MemoryService::at_path(&provider_root, options.clone()).unwrap();
+        let composed = MemoryService::compose_segmented(workspace, Some(provider)).unwrap();
+        assert_eq!(
+            composed.current_session_id("claude"),
+            Some("sess-abc".to_string()),
+            "composed service must inherit the provider's conversation-state store"
+        );
+
+        // Without provider memory the composed service falls back to the
+        // workspace store rather than a memory-only store.
+        let workspace = MemoryService::at_path(&workspace_root, options.clone()).unwrap();
+        workspace.note_active_session("claude", "sess-ws");
+        let composed = MemoryService::compose_segmented(workspace, None).unwrap();
+        assert_eq!(
+            composed.current_session_id("claude"),
+            Some("sess-ws".to_string()),
+            "composed service must fall back to the workspace conversation-state store"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 }

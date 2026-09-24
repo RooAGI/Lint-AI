@@ -1,5 +1,6 @@
 use crate::query_semantics::QueryRoutingIntent;
 use crate::tier1::{RankedTerm, Tier1Entity};
+use chrono::NaiveDate;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -563,6 +564,17 @@ pub struct QueryDiagnostics {
 pub struct TemporalQueryContext<'a> {
     pub starts_from: Option<&'a str>,
     pub ends_at: Option<&'a str>,
+    /// Resolved absolute date (`YYYY-MM-DD`) of the query's relative time
+    /// anchor, e.g. "last Tuesday" asked on 2023-04-18 resolves to
+    /// "2023-04-11". When present, temporal scoring centers on this date
+    /// instead of `ends_at`.
+    pub anchor_date: Option<&'a str>,
+    /// Inclusive date range for anchored pre-filtering: when present, routing
+    /// is restricted to segments holding a record inside this range before
+    /// content ranking. Point anchors ("last Tuesday") resolve to ±7 days
+    /// around the anchor; range anchors ("in the past two months") resolve
+    /// to [anchor, reference]. Computed by `resolve_anchor_window`.
+    pub anchor_window: Option<(NaiveDate, NaiveDate)>,
     pub window_days: i64,
     pub hard_filter: bool,
     pub time_hint: Option<TemporalQueryHint>,
@@ -578,6 +590,8 @@ impl<'a> Default for TemporalQueryContext<'a> {
         Self {
             starts_from: None,
             ends_at: None,
+            anchor_date: None,
+            anchor_window: None,
             window_days: 7,
             hard_filter: false,
             time_hint: None,

@@ -2,15 +2,16 @@ use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
 use lint_ai::index::{DocRecord, TemporalQueryHint};
 use lint_ai::{
-    build_aggregate_output, build_index_store, build_query_snapshot_from_source_documents,
-    normalize_for_index, analyze_query, AggregateOutput, QueryTimeHint,
+    analyze_query, build_aggregate_output, build_doc_records, build_query_snapshot_from_records,
+    normalize_for_index, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
     segments::{
-        SegmentQueryDiagnostics, SegmentRoute, SegmentRoutingStrategy,
+        reciprocal_rank_fusion, SegmentQueryDiagnostics, SegmentRoute, SegmentRoutingStrategy,
         SegmentSpecificEnrichmentDiagnostics, SegmentedMemoryIndex,
     },
-    ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimings, SearchResult, SourceDocument,
-    TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
+    AggregateOutput, ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimeHint, QueryTimings,
+    SearchResult, SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -75,6 +76,8 @@ enum SegmentRouterArg {
     TeamCoverageLocal,
     CoverageTeam,
     TypedEvidence,
+    TypedEvidenceMultiplicative,
+    CoverageTeamTypedMultiplicative,
 }
 
 impl From<SegmentRouterArg> for SegmentRoutingStrategy {
@@ -89,6 +92,12 @@ impl From<SegmentRouterArg> for SegmentRoutingStrategy {
             }
             SegmentRouterArg::CoverageTeam => SegmentRoutingStrategy::CoverageTeamSelection,
             SegmentRouterArg::TypedEvidence => SegmentRoutingStrategy::TypedEvidence,
+            SegmentRouterArg::TypedEvidenceMultiplicative => {
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
+            }
+            SegmentRouterArg::CoverageTeamTypedMultiplicative => {
+                SegmentRoutingStrategy::CoverageTeamTypedMultiplicative
+            }
         }
     }
 }
@@ -155,6 +164,11 @@ struct SegmentComparisonMetrics {
     missing_coverage_recovered_segment_enriched: SegmentVariantMetrics,
     top_n_temporal_path_enriched: SegmentVariantMetrics,
     all_segments: SegmentVariantMetrics,
+    ensemble_global_temporal_adaptive: SegmentVariantMetrics,
+    ensemble_rrf: SegmentVariantMetrics,
+    fused_adaptive_global: SegmentVariantMetrics,
+    fused_temporal_global: SegmentVariantMetrics,
+    intent: SegmentVariantMetrics,
     top_n_connection: MultiSessionConnectionDiagnostics,
     top_n_rewrite_stability: QueryRewriteStability,
     top_n_segment_enrichment: SegmentSpecificEnrichmentDiagnostics,
@@ -181,6 +195,11 @@ struct SegmentComparisonAggregate {
     missing_coverage_recovered_segment_enriched: SegmentVariantAggregate,
     top_n_temporal_path_enriched: SegmentVariantAggregate,
     all_segments: SegmentVariantAggregate,
+    ensemble_global_temporal_adaptive: SegmentVariantAggregate,
+    ensemble_rrf: SegmentVariantAggregate,
+    fused_adaptive_global: SegmentVariantAggregate,
+    fused_temporal_global: SegmentVariantAggregate,
+    intent: SegmentVariantAggregate,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -389,9 +408,15 @@ fn run_scoped_benchmark(
         eprintln!("running {} scoped questions...", entries.len());
     }
     let max_k = ks.iter().copied().max().unwrap_or(10).max(10);
-    let mut per_query = Vec::with_capacity(entries.len());
+    let total_questions = entries.len();
 
-    for (idx, entry) in entries.into_iter().enumerate() {
+    // Questions are independent (each builds its own per-question index),
+    // so evaluate them in parallel. Rayon preserves input order on collect,
+    // keeping the JSON output deterministic.
+    let per_query: Vec<QueryMetrics> = entries
+        .into_par_iter()
+        .enumerate()
+        .map(|(idx, entry)| -> Result<QueryMetrics> {
         let analysis_start = Instant::now();
         let analysis = analyze_query(&entry.question);
         let analysis_ms = analysis_start.elapsed().as_secs_f64() * 1000.0;
@@ -411,22 +436,42 @@ fn run_scoped_benchmark(
             text_rerank_lcs,
             ..PipelineOptions::default()
         };
-        let index = build_query_snapshot_from_source_documents(
-            &source_docs,
-            &options.ner_provider,
-            &options.spacy_model,
-            &options.term_ranker,
-            &options.chunk_strategy,
-            options.chunk_lines,
-            options.chunk_overlap,
-            options.chunk_target_tokens,
-            options.chunk_max_tokens,
-            options.text_rerank_ngram,
-            options.text_rerank_lcs,
-        )?;
+        // Extract records once per question and share them between the
+        // single-layout snapshot (global baseline) and the segmented index
+        // (comparison arms). Previously each path re-ran the full
+        // NER plus term-ranking plus chunking extraction on the same documents.
+        let mut records = build_doc_records(&source_docs, &options)?;
+        // Dedupe by doc_id, keeping the LAST occurrence. Some LongMemEval
+        // questions list a session twice in their haystack (same turns,
+        // different haystack date); the old IndexStore path deduped these
+        // via HashMap insert (last wins), so replicate that here.
+        let mut by_id = HashMap::new();
+        for record in records {
+            by_id.insert(record.doc_id.clone(), record);
+        }
+        records = by_id.into_values().collect();
+        records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
+        let index = build_query_snapshot_from_records(&records, &options)?;
+        // Resolve the query's relative time anchor ("last Tuesday", "10 days
+        // ago") against the question date so temporal scoring centers on the
+        // anchor instead of the question date itself, and pre-filtering can
+        // restrict routing to the anchor window (a point window for "last
+        // Tuesday", the [anchor, question-date] range for "past two months").
+        let (anchor_date_string, anchor_window) = analysis
+            .temporal
+            .as_ref()
+            .and_then(|temporal| {
+                let reference = parse_reference_date(entry.question_date.as_str())?;
+                let anchor = resolve_temporal_anchor(&temporal.phrase, reference)?;
+                let window = resolve_anchor_window(&temporal.phrase, &entry.question, reference)?;
+                Some((anchor.format("%Y-%m-%d").to_string(), window))
+            })
+            .unzip();
         let temporal = TemporalQueryContext {
             starts_from: None,
             ends_at: Some(entry.question_date.as_str()),
+            anchor_date: anchor_date_string.as_deref(),
+            anchor_window,
             window_days: 7,
             hard_filter: false,
             time_hint: analysis
@@ -474,8 +519,7 @@ fn run_scoped_benchmark(
         let ndcg_at_10 = ndcg_at_k(&retrieved_session_ids, &relevant, 10);
         let segment_comparison = if segment_compare {
             Some(build_segment_comparison(
-                &source_docs,
-                &options,
+                &records,
                 &entry.question_id,
                 &entry.question,
                 Some(entry.question_type.as_str()),
@@ -495,7 +539,7 @@ fn run_scoped_benchmark(
             None
         };
 
-        per_query.push(QueryMetrics {
+        let metrics = QueryMetrics {
             id: entry.question_id,
             query: entry.question,
             question_type: Some(entry.question_type),
@@ -511,30 +555,31 @@ fn run_scoped_benchmark(
             timings,
             diagnostics,
             segment_comparison,
-        });
+        };
 
-        let last = per_query.last().expect("query metrics should exist");
         eprintln!(
             "[{}/{}] {} candidates={} q={} analysis={:.2}ms total={:.2}ms snapshot={:.2}ms rerank={:.2}ms sparse={:.2}ms lex_merge={:.2}ms post={:.2}ms routing={:.2}ms seq_rerank={:.2}ms evidence={:.2}ms group_build={:.2}ms group_sort={:.2}ms",
             idx + 1,
-            per_query.len(),
-            last.id,
-            last.candidate_session_ids.len(),
-            last.diagnostics.query_terms,
-            last.analysis_ms,
-            last.timings.total_ms,
-            last.timings.snapshot_query_ms,
-            last.timings.rerank_ms,
-            last.timings.sparse_scoring_ms,
-            last.timings.lexical_merge_ms,
-            last.timings.posting_scoring_ms,
-            last.timings.routing_seed_ms,
-            last.timings.sequence_rerank_ms,
-            last.timings.evidence_ms,
-            last.timings.group_build_ms,
-            last.timings.group_sort_ms,
+            total_questions,
+            metrics.id,
+            metrics.candidate_session_ids.len(),
+            metrics.diagnostics.query_terms,
+            metrics.analysis_ms,
+            metrics.timings.total_ms,
+            metrics.timings.snapshot_query_ms,
+            metrics.timings.rerank_ms,
+            metrics.timings.sparse_scoring_ms,
+            metrics.timings.lexical_merge_ms,
+            metrics.timings.posting_scoring_ms,
+            metrics.timings.routing_seed_ms,
+            metrics.timings.sequence_rerank_ms,
+            metrics.timings.evidence_ms,
+            metrics.timings.group_build_ms,
+            metrics.timings.group_sort_ms,
         );
-    }
+        Ok(metrics)
+    })
+    .collect::<Result<Vec<_>>>()?;
 
     let router_miss_failures = router_miss_failure_reports(&per_query);
 
@@ -576,6 +621,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
                 timestamp: Some(session_date.clone()),
                 doc_length: turn.content.len(),
                 author_agent: None,
+                key_phrases: Vec::new(),
             });
         }
     }
@@ -584,8 +630,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
 
 #[allow(clippy::too_many_arguments)]
 fn build_segment_comparison(
-    source_docs: &[SourceDocument],
-    options: &PipelineOptions,
+    records: &[DocRecord],
     query_id: &str,
     original_query: &str,
     question_type: Option<&str>,
@@ -601,14 +646,8 @@ fn build_segment_comparison(
     temporal: TemporalQueryContext<'_>,
     reference_date: Option<&str>,
 ) -> Result<SegmentComparisonMetrics> {
-    let index_store = build_index_store(source_docs, options)?;
-    let records = index_store
-        .records()
-        .into_iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let segmented = SegmentedMemoryIndex::from_records_by_group_id(&records);
-    verify_segment_group_alignment(&records, &segmented)?;
+    let segmented = SegmentedMemoryIndex::from_records_by_group_id(records);
+    verify_segment_group_alignment(records, &segmented)?;
     let top_n = segment_top_n.max(1);
     let all_routed_segments =
         segmented.route_with_temporal_context_and_strategy(query_text, segment_router, temporal);
@@ -775,6 +814,77 @@ fn build_segment_comparison(
         .query_all_segments_with_temporal_context_and_diagnostics(query_text, max_k, temporal);
     let all_latency_ms = all_start.elapsed().as_secs_f64() * 1000.0;
 
+    // Real (non-oracle) ensemble: pool scored candidates from the global,
+    // temporal-path, and adaptive segmented modes and re-rank by score.
+    // NOTE: measured raw-score merging underperforms every component mode
+    // (score scales differ across modes); kept here as the naive baseline.
+    let ensemble_start = Instant::now();
+    let ensemble_results = merge_ensemble_results(
+        &[
+            global_results,
+            &temporal_path_output.results,
+            &adaptive_segment_enriched_output.results,
+        ],
+        max_k,
+    );
+    let ensemble_latency_ms = ensemble_start.elapsed().as_secs_f64() * 1000.0
+        + global_latency_ms
+        + temporal_path_latency_ms
+        + adaptive_segment_enriched_latency_ms;
+
+    // Label-free rank fusion (uniform reciprocal rank fusion, k=60, equal
+    // mode weights): fuses the three modes' ranked lists without using
+    // scores or gold labels, so cross-mode score-scale mismatch cannot
+    // crowd out any single mode's ranking.
+    let rrf_start = Instant::now();
+    let rrf_results = reciprocal_rank_fusion(
+        &[
+            global_results,
+            &temporal_path_output.results,
+            &adaptive_segment_enriched_output.results,
+        ],
+        max_k,
+    );
+    let rrf_latency_ms = rrf_start.elapsed().as_secs_f64() * 1000.0
+        + global_latency_ms
+        + temporal_path_latency_ms
+        + adaptive_segment_enriched_latency_ms;
+
+    // Production path: the corpus-wide ("global") arm is always part of the
+    // path. Each routed arm's ranking is fused with the all-segments ranking
+    // via reciprocal rank fusion — exactly what the production executor does.
+    let fused_adaptive_start = Instant::now();
+    let fused_adaptive_results = reciprocal_rank_fusion(
+        &[
+            &adaptive_segment_enriched_output.results,
+            &all_output.results,
+        ],
+        max_k,
+    );
+    let fused_adaptive_latency_ms = fused_adaptive_start.elapsed().as_secs_f64() * 1000.0
+        + all_latency_ms
+        + adaptive_segment_enriched_latency_ms;
+
+    let fused_temporal_start = Instant::now();
+    let fused_temporal_results =
+        reciprocal_rank_fusion(&[&temporal_path_output.results, &all_output.results], max_k);
+    let fused_temporal_latency_ms = fused_temporal_start.elapsed().as_secs_f64() * 1000.0
+        + all_latency_ms
+        + temporal_path_latency_ms;
+
+    // Intent-revealing multi-operand mode: reveal operation + operand roles,
+    // per-operand fan-out, union by raw BM25. Falls back to the adaptive
+    // output when the question reveals no multi-operand operation with
+    // >= 2 corpus-validated operands.
+    let intent_start = Instant::now();
+    let intent_output =
+        segmented.query_with_intent(query_text, max_k, 5, 10, segment_router, temporal);
+    let intent_latency_ms = intent_start.elapsed().as_secs_f64() * 1000.0;
+    let intent_results: &[SearchResult] = match &intent_output {
+        Some((output, _)) => &output.results,
+        None => &adaptive_segment_enriched_output.results,
+    };
+
     Ok(SegmentComparisonMetrics {
         segment_count: segmented.len(),
         top_n,
@@ -871,6 +981,29 @@ fn build_segment_comparison(
             relevant,
             Some(all_output.diagnostics),
         ),
+        ensemble_global_temporal_adaptive: variant_metrics(
+            &ensemble_results,
+            ensemble_latency_ms,
+            ks,
+            relevant,
+            None,
+        ),
+        ensemble_rrf: variant_metrics(&rrf_results, rrf_latency_ms, ks, relevant, None),
+        fused_adaptive_global: variant_metrics(
+            &fused_adaptive_results,
+            fused_adaptive_latency_ms,
+            ks,
+            relevant,
+            None,
+        ),
+        fused_temporal_global: variant_metrics(
+            &fused_temporal_results,
+            fused_temporal_latency_ms,
+            ks,
+            relevant,
+            None,
+        ),
+        intent: variant_metrics(intent_results, intent_latency_ms, ks, relevant, None),
         top_n_connection,
         top_n_rewrite_stability,
         top_n_segment_enrichment,
@@ -1576,6 +1709,35 @@ fn dedupe_preserve_order(items: Vec<String>) -> Vec<String> {
     out
 }
 
+/// Merge scored candidates from several retrieval modes into one ranked list:
+/// dedupe by doc_id keeping the max score, sort by score desc (doc_id
+/// tie-break), truncate to top_k. This is the real-ensemble counterpart to
+/// the oracle union: no labels are used, only the modes' own scores.
+fn merge_ensemble_results(mode_results: &[&[SearchResult]], top_k: usize) -> Vec<SearchResult> {
+    let mut best: HashMap<&str, SearchResult> = HashMap::new();
+    for results in mode_results {
+        for result in *results {
+            best.entry(result.doc_id.as_str())
+                .and_modify(|existing| {
+                    if result.score > existing.score {
+                        existing.score = result.score;
+                    }
+                })
+                .or_insert_with(|| result.clone());
+        }
+    }
+    let mut merged: Vec<SearchResult> = best.into_values().collect();
+    merged.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+    });
+    merged.truncate(top_k);
+    merged
+}
+
 fn recall_at_k_fn(retrieved: &[String], relevant: &HashSet<String>, k: usize) -> f64 {
     if relevant.is_empty() {
         return 0.0;
@@ -1839,6 +2001,21 @@ fn aggregate_segment_comparison(
         all_segments: aggregate_segment_variant(&comparisons, ks, |comparison| {
             &comparison.all_segments
         }),
+        ensemble_global_temporal_adaptive: aggregate_segment_variant(
+            &comparisons,
+            ks,
+            |comparison| &comparison.ensemble_global_temporal_adaptive,
+        ),
+        ensemble_rrf: aggregate_segment_variant(&comparisons, ks, |comparison| {
+            &comparison.ensemble_rrf
+        }),
+        fused_adaptive_global: aggregate_segment_variant(&comparisons, ks, |comparison| {
+            &comparison.fused_adaptive_global
+        }),
+        fused_temporal_global: aggregate_segment_variant(&comparisons, ks, |comparison| {
+            &comparison.fused_temporal_global
+        }),
+        intent: aggregate_segment_variant(&comparisons, ks, |comparison| &comparison.intent),
     })
 }
 

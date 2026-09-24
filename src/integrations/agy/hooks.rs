@@ -4,7 +4,8 @@ use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -67,6 +68,19 @@ pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
     } else {
         &input.conversation_id
     };
+    // The MCP search dispatch inherits this session when the agent does not
+    // pass session_id explicitly. Skip the "unknown" placeholder; the
+    // conversation-state store opens without touching the index (a full
+    // MemoryService open would load it); skipped until memory exists so
+    // hooks never create store directories for memory-less projects.
+    // Fail-open: the write never breaks the hook.
+    if !input.conversation_id.is_empty() {
+        let memory = crate::integrations::mcp_index::shared_memory_root(&root);
+        if memory.exists() {
+            crate::conversation_state::ConversationStateStore::open_under(&memory)
+                .note_active_session(RecordingProvider::Agy.as_str(), session_id);
+        }
+    }
     if let Err(error) = record_event_if_enabled(
         RecordingProvider::Agy,
         &root,
@@ -161,7 +175,7 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
     if !memory.exists() {
         return Ok(AgyHookOutput::default());
     }
-    let mut store = IndexStore::at_path(
+    let mut store = MemoryService::at_path(
         &memory,
         PipelineOptions {
             memory_index_layout: MemoryIndexLayout::Segmented {
@@ -175,7 +189,10 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
         return Ok(AgyHookOutput::default());
     }
     let started = std::time::Instant::now();
-    let results = store.query(&query, 5);
+    let hook_session_id =
+        (!input.conversation_id.is_empty()).then_some(input.conversation_id.as_str());
+    let results =
+        store.observe_plain_query(&query, RecordingProvider::Agy.as_str(), hook_session_id, 5);
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,
@@ -315,6 +332,7 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         doc_length: body.len(),
         author_agent: Some("agy".to_string()),
         filters,
+        key_phrases: Vec::new(),
     };
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
@@ -323,12 +341,12 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(
+    let mut store = MemoryService::at_path(
         &crate::integrations::mcp_index::shared_memory_root(root),
         options,
     )?;
     store.upsert(document);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(())
 }
 

@@ -211,6 +211,7 @@ impl SegmentedMemoryIndex {
                     segment_id: segment_id.to_string(),
                     doc_ids: previous_segment.doc_ids.clone(),
                     index: Arc::clone(&previous_segment.index),
+                    record_dates: std::sync::OnceLock::new(),
                 }),
                 None => {
                     let mut segment_records = Vec::with_capacity(new_doc_ids.len());
@@ -638,4 +639,37 @@ impl SegmentedMemoryIndex {
             self.generation,
         )
     }
+}
+
+/// Uniform reciprocal rank fusion over several retrieval modes' ranked
+/// lists (Cormack et al., SIGIR 2009): `score(doc) = sum_modes 1 / (60 +
+/// rank)`. Label-free — uses only ranks, never scores or gold labels — so
+/// cross-mode score-scale mismatch cannot crowd out any single mode's
+/// ranking. Deterministic: ties broken by `doc_id` ascending.
+///
+/// This is how the corpus-wide ("global") arm stays part of the query path:
+/// the routed segment arm's ranking is fused with an all-segments ranking,
+/// so a router miss (wrong segments selected) can still surface the
+/// relevant document through the global arm's rank.
+pub fn reciprocal_rank_fusion(mode_results: &[&[SearchResult]], top_k: usize) -> Vec<SearchResult> {
+    const RRF_K: f64 = 60.0;
+    let mut fused: HashMap<&str, (SearchResult, f64)> = HashMap::new();
+    for results in mode_results {
+        for (rank, result) in results.iter().enumerate() {
+            let entry = fused
+                .entry(result.doc_id.as_str())
+                .or_insert_with(|| (result.clone(), 0.0));
+            entry.1 += 1.0 / (RRF_K + rank as f64 + 1.0);
+        }
+    }
+    let mut merged: Vec<(SearchResult, f64)> = fused.into_values().collect();
+    merged.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.doc_id.cmp(&right.0.doc_id))
+    });
+    merged.truncate(top_k);
+    merged.into_iter().map(|(result, _)| result).collect()
 }

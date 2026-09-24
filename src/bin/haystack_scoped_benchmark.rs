@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
 use lint_ai::index::TemporalQueryHint;
 use lint_ai::{
-    build_aggregate_output, build_index_store, build_query_snapshot_from_source_documents,
-    normalize_for_index, analyze_query, AggregateOutput, QueryTimeHint,
+    analyze_query, build_aggregate_output, build_index_store,
+    build_query_snapshot_from_source_documents, normalize_for_index, parse_reference_date,
+    resolve_anchor_window, resolve_temporal_anchor,
     segments::{SegmentQueryDiagnostics, SegmentRoutingStrategy, SegmentedMemoryIndex},
-    ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimings, SearchResult, SourceDocument,
-    TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
+    AggregateOutput, ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimeHint, QueryTimings,
+    SearchResult, SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -320,9 +321,21 @@ fn run_scoped_benchmark(
             options.text_rerank_ngram,
             options.text_rerank_lcs,
         )?;
+        let (anchor_date_string, anchor_window) = analysis
+            .temporal
+            .as_ref()
+            .and_then(|temporal| {
+                let reference = parse_reference_date(entry.question_date.as_str())?;
+                let anchor = resolve_temporal_anchor(&temporal.phrase, reference)?;
+                let window = resolve_anchor_window(&temporal.phrase, &entry.question, reference)?;
+                Some((anchor.format("%Y-%m-%d").to_string(), window))
+            })
+            .unzip();
         let temporal = TemporalQueryContext {
             starts_from: None,
             ends_at: Some(entry.question_date.as_str()),
+            anchor_date: anchor_date_string.as_deref(),
+            anchor_window,
             window_days: 7,
             hard_filter: false,
             time_hint: analysis
@@ -462,6 +475,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
                 timestamp: Some(session_date.clone()),
                 doc_length: turn.content.len(),
                 author_agent: None,
+                key_phrases: Vec::new(),
             });
         }
     }

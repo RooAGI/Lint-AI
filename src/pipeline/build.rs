@@ -12,7 +12,8 @@ use crate::temporal::extract_temporal_terms;
 use crate::tier1::{
     default_spacy_script_path, CValueStyleTermRanker, HeuristicKeyEntityRanker,
     ImportantTermRanker, KeyEntityRanker, RakeStyleTermRanker, SpacyKeyEntityRanker,
-    TextRankStyleTermRanker, Tier1DocInput, YakeStyleTermRanker,
+    TextRankStyleTermRanker, Tier1DocInput, Tier1Entity, YakeStyleTermRanker,
+    BEHOOD_NP_ENTITY_SOURCE,
 };
 use anyhow::Result;
 use sha2::{Digest, Sha256};
@@ -394,7 +395,12 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
-fn build_doc_records(
+/// Extracts [`DocRecord`]s from source documents (NER + term ranking +
+/// chunking). This is the expensive per-document pipeline phase; the
+/// benchmark harness calls it once per question and builds both the
+/// single-layout snapshot and the segmented index from the same records
+/// instead of extracting twice.
+pub fn build_doc_records(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
 ) -> Result<Vec<DocRecord>> {
@@ -509,12 +515,29 @@ pub(crate) fn build_doc_record(
 fn assemble_doc_record(
     source_doc: &SourceDocument,
     doc: &Tier1DocInput,
-    key_entities: Vec<crate::tier1::Tier1Entity>,
+    key_entities: Vec<Tier1Entity>,
     important_terms: Vec<crate::tier1::RankedTerm>,
     ner_provider_name: &str,
     term_ranker_name: &str,
     options: &PipelineOptions,
 ) -> DocRecord {
+    // Grammar-accepted entity mentions (behood noun-phrase layer) join the
+    // key entities with full score and provenance. The segment summary
+    // indexes their literal (unstemmed) tokens in the entity channel, which
+    // is exempt from the local-memory term cap.
+    //
+    // Grammar-accepted mentions get 2x score: the dependency grammar +
+    // ontology is higher precision than heuristic NER, so these are stronger
+    // retrieval signals in both routing and per-document entity scoring.
+    let mut key_entities = key_entities;
+    key_entities.extend(source_doc.key_phrases.iter().map(|kp| Tier1Entity {
+        text: kp.text.clone(),
+        label: kp.kind.clone(),
+        start: 0,
+        end: 0,
+        score: Some(2.0),
+        source: BEHOOD_NP_ENTITY_SOURCE.to_string(),
+    }));
     let probable_topic = if let Some(first_heading) = doc.headings.first() {
         Some(first_heading.clone())
     } else {
@@ -583,7 +606,10 @@ fn assemble_doc_record(
     record
 }
 
-fn build_query_snapshot_from_records(
+/// Builds a single-layout [`MemoryIndex`] from pre-extracted records.
+/// Paired with [`build_doc_records`]: extract once, then build the snapshot
+/// and any segmented indexes from the same records.
+pub fn build_query_snapshot_from_records(
     records: &[DocRecord],
     options: &PipelineOptions,
 ) -> Result<MemoryIndex> {
@@ -634,6 +660,8 @@ pub fn build_query_snapshot_from_source_documents(
         supersession: crate::semantic_relations::SupersessionOptions::default(),
         index_location: IndexLocation::InMemory,
         memory_index_layout: MemoryIndexLayout::Single,
+        fuse_global_arm: false,
+        conversational_rerank: true,
     };
     build_query_snapshot(source_docs, &options)
 }

@@ -939,6 +939,12 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
     Ok(())
 }
 
+/// Low-level index diagnostic for the CLI `inspect` command.
+///
+/// Approved exception to the MemoryService routing rule: this intentionally
+/// opens the raw [`IndexStore`] to dump index internals (records, snapshot)
+/// for debugging. It never serves agent traffic; all serving paths go
+/// through [`crate::memory_api::MemoryService`].
 fn inspect_index_store(index_path: &Path, view: IndexInspectView) -> Result<()> {
     if !index_path.exists() {
         anyhow::bail!("index path does not exist: {}", index_path.display());

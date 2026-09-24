@@ -8,6 +8,14 @@ For the reproducible Lint-AI versus AgentMemory service comparison, including
 latency scripts, seeders, recorded JSON results, and methodology, see
 [`comparison/`](../comparison/).
 
+## Strong evaluation (pillars 1–4)
+
+The full evaluation protocol — retrieval quality, efficiency/cost, write-path
+scaling, and LLM-judged answer quality — lives in
+[`strong_eval/`](strong_eval/). Five independent runs per pillar, mean ± std
+dev, with pinned dataset SHA, code commit, and hardware. Start there for any
+published claim.
+
 ## Conversation Recency Benchmark
 
 Run the controlled end-to-end freshness evaluation with:

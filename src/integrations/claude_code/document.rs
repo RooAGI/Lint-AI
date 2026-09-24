@@ -73,6 +73,7 @@ impl ClaudeCodeDocument {
             doc_length,
             author_agent: Some(RecordingProvider::Claude.as_str().to_string()),
             filters,
+            key_phrases: Vec::new(),
         })
     }
 }

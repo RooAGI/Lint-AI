@@ -32,6 +32,13 @@ pub struct Tier1Entity {
     pub source: String,
 }
 
+/// Provenance marker for key entities that came from the behood noun-phrase
+/// (grammar-accepted entity mention) layer rather than NER. The segment
+/// summary treats these specially: their literal (unstemmed) tokens join
+/// the entity channel so stemming cannot conflate the phrase head
+/// ("conference" must not become "confer").
+pub const BEHOOD_NP_ENTITY_SOURCE: &str = "behood-np";
+
 #[derive(Serialize)]
 pub struct Tier1DocEntities {
     pub id: String,

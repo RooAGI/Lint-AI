@@ -7,6 +7,9 @@ use super::{
 };
 use crate::index::{DocRecord, MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult};
 use crate::query_plan::PreparedQuery;
+use crate::query_semantics::{
+    parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
+};
 use crate::segments::SegmentManifest;
 use crate::semantic_relations::SemanticRelationStore;
 use crate::source::SourceDocument;
@@ -112,11 +115,43 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                     }
                 };
             let mut context = prepared.temporal_context();
+            // Resolve the query's relative time anchor ("last Tuesday",
+            // "10 days ago") against the reference date so temporal scoring
+            // centers on the anchor instead of the question date itself, and
+            // pre-filtering can restrict routing to the anchor window (a
+            // point window for "last Tuesday", the [anchor, reference] range
+            // for "in the past two months"). No-op when the query carries no
+            // resolvable anchor phrase or no reference date.
+            let (anchor_date_string, anchor_window) = prepared
+                .analysis()
+                .temporal
+                .as_ref()
+                .and_then(|temporal| {
+                    let reference = prepared.reference_date().and_then(parse_reference_date)?;
+                    let anchor = resolve_temporal_anchor(&temporal.phrase, reference)?;
+                    let window = resolve_anchor_window(
+                        &temporal.phrase,
+                        prepared.search_query(),
+                        reference,
+                    )?;
+                    Some((anchor.format("%Y-%m-%d").to_string(), window))
+                })
+                .unzip();
+            // Only overwrite the context's anchor when this path resolves one:
+            // temporal_context() may already carry a seeded absolute anchor
+            // (no reference clock needed), and a None here must not wipe it.
+            if anchor_date_string.is_some() {
+                context.anchor_date = anchor_date_string.as_deref();
+            }
+            if anchor_window.is_some() {
+                context.anchor_window = anchor_window;
+            }
             context.allowed_doc_ids = allowed_doc_ids.as_ref();
             context.allowed_doc_bitmap = filter_bitmap.as_ref();
             context.allowed_segment_doc_bitmaps = filter_segment_bitmaps.as_ref();
             let started = std::time::Instant::now();
-            let output = if segmented.segment_count() == 1 {
+            let multi_segment = segmented.segment_count() > 1;
+            let output = if !multi_segment {
                 let local_bitmap = filter_segment_bitmaps
                     .as_ref()
                     .and_then(|maps| maps.values().next());
@@ -157,26 +192,59 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                     prepared.reference_date(),
                 )
             };
+            // The corpus-wide ("global") arm is fused with the routed arm via
+            // reciprocal rank fusion when `fuse_global_arm` is set: a routed
+            // segment arm can miss when the router selects the wrong segments,
+            // so its ranking is fused with an all-segments ranking. Label-free
+            // (ranks only), so the two arms' score scales never crowd each
+            // other out. With a strong router the global arm rescues little
+            // and costs most of the query latency, so it can be disabled.
+            let fuse_global = options.fuse_global_arm && multi_segment;
+            let (results, global_diagnostics) = if fuse_global {
+                let global_output = segmented
+                    .query_all_segments_with_temporal_context_and_diagnostics(
+                        prepared.search_query(),
+                        top_k,
+                        context,
+                    );
+                let fused = crate::segments::reciprocal_rank_fusion(
+                    &[output.results.as_slice(), global_output.results.as_slice()],
+                    top_k,
+                );
+                (fused, Some(global_output.diagnostics))
+            } else {
+                (output.results, None)
+            };
             let timings = QueryTimings {
                 total_ms: started.elapsed().as_secs_f64() * 1000.0,
                 ..QueryTimings::default()
             };
+            // Diagnostics account for both arms: the fused ranking is drawn
+            // from the routed arm's candidates plus the global arm's.
+            let global_merged = global_diagnostics
+                .as_ref()
+                .map(|d| d.merged_result_count)
+                .unwrap_or(0);
+            let global_queried = global_diagnostics
+                .as_ref()
+                .map(|d| d.queried_segment_count)
+                .unwrap_or(0);
             if profile {
                 eprintln!(
                     "query_timing segmented_ms={:.3} total_ms={:.3} segments={}",
                     timings.total_ms,
                     query_started.elapsed().as_secs_f64() * 1000.0,
-                    output.diagnostics.queried_segment_count
+                    output.diagnostics.queried_segment_count + global_queried
                 );
             }
             let diagnostics = QueryDiagnostics {
-                candidates: output.diagnostics.merged_result_count,
+                candidates: output.diagnostics.merged_result_count + global_merged,
                 snapshot_generation: output.diagnostics.snapshot_generation,
                 shard_completeness: output.diagnostics.shard_completeness,
                 ..QueryDiagnostics::default()
             };
             (
-                prepared.annotate_semantic_results(output.results, semantic_relations, top_k),
+                prepared.annotate_semantic_results(results, semantic_relations, top_k),
                 timings,
                 diagnostics,
             )
@@ -412,6 +480,7 @@ pub(crate) fn source_document_from_record(record: &DocRecord) -> SourceDocument 
         timestamp: record.timestamp.clone(),
         doc_length: record.doc_length,
         author_agent: record.author_agent.clone(),
+        key_phrases: Vec::new(),
     }
 }
 

@@ -151,6 +151,7 @@ fn make_synthetic_doc(doc_idx: usize, session_idx: usize, provider: &str) -> Sou
         timestamp: None,
         doc_length: content.len(),
         author_agent: Some(provider.into()),
+        key_phrases: Vec::new(),
     }
 }
 
@@ -174,6 +175,7 @@ fn make_longmemeval_doc(session: &SessionText, replica: usize) -> SourceDocument
         timestamp: None,
         doc_length: content.len(),
         author_agent: None,
+        key_phrases: Vec::new(),
     }
 }
 

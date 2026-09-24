@@ -2,9 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use lint_ai::index::DocRecord;
-use lint_ai::{
-    build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument,
-};
+use lint_ai::{build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -61,6 +59,7 @@ fn source_document(record: DocRecord) -> SourceDocument {
         timestamp: record.timestamp,
         doc_length: record.doc_length,
         author_agent: record.author_agent,
+        key_phrases: Vec::new(),
     }
 }
 

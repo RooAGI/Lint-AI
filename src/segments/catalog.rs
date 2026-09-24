@@ -1,5 +1,9 @@
-use crate::index::{DocRecord, MemoryIndex, TemporalQueryContext, TemporalQueryHint};
+use crate::index::{
+    prepare_query_terms, DocRecord, MemoryIndex, TemporalQueryContext, TemporalQueryHint,
+};
 use crate::query_expansion::normalize_for_index;
+use crate::query_semantics::parse_reference_date;
+use crate::tier1::BEHOOD_NP_ENTITY_SOURCE;
 use crate::tokenizer::{self, TokenizerMode};
 use chrono::NaiveDate;
 use std::cmp::Ordering;
@@ -578,11 +582,17 @@ impl SegmentRoutingSummary {
                 add_weight(&mut profile.terms, &term.term, term.score.max(0.1));
             }
             for entity in &record.key_entities {
-                add_weight(
-                    &mut profile.entities,
-                    &entity.text,
-                    entity.score.unwrap_or(1.0),
-                );
+                let weight = entity.score.unwrap_or(1.0);
+                add_weight(&mut profile.entities, &entity.text, weight);
+                if entity.source == BEHOOD_NP_ENTITY_SOURCE {
+                    // Grammar-accepted entity mentions are indexed literally
+                    // (in addition to the stemmed form above): the Porter
+                    // stem would conflate the phrase head ("conference" ->
+                    // "confer"), destroying the discriminative mention.
+                    // The 2x score (set in assemble_doc_record) reflects the
+                    // higher precision of grammar-accepted mentions.
+                    add_weight_literal(&mut profile.entities, &entity.text, weight);
+                }
             }
             if let Some(topic) = &record.probable_topic {
                 add_weight(&mut profile.topics, topic, 1.0);
@@ -624,6 +634,12 @@ impl SegmentRoutingSummary {
                 self.coverage_local_distinctiveness_score(query_terms, corpus_stats)
             }
             SegmentRoutingStrategy::TypedEvidence => {
+                self.coverage_local_distinctiveness_score(query_terms, corpus_stats)
+            }
+            SegmentRoutingStrategy::TypedEvidenceMultiplicative => {
+                self.coverage_local_distinctiveness_score(query_terms, corpus_stats)
+            }
+            SegmentRoutingStrategy::CoverageTeamTypedMultiplicative => {
                 self.coverage_local_distinctiveness_score(query_terms, corpus_stats)
             }
         }
@@ -1356,6 +1372,29 @@ pub(crate) fn query_tokens(query: &str) -> HashSet<String> {
         .collect()
 }
 
+/// Routing term set: the plain stemmed query tokens plus the lexical
+/// expansion terms the per-segment scorer will also match. Routing on the
+/// unexpanded tokens alone strands expansion-only queries (e.g. "diploma",
+/// which expands to "degree") on arbitrary fallback segments, so the
+/// expansion vocabulary never reaches the segment that actually holds it.
+pub(crate) fn query_tokens_expanded(query: &str) -> HashSet<String> {
+    let mut terms = query_tokens(query);
+    if let Some(prepared) = prepare_query_terms(query) {
+        // Expanded terms are already index-normalized; split multi-word
+        // expansions into their component tokens but never re-stem them
+        // (the stemmer is not idempotent: "degre" would become "degr").
+        terms.extend(
+            prepared
+                .expanded_terms
+                .iter()
+                .flat_map(|term| term.split_whitespace())
+                .filter(|token| !is_routing_stopword(token))
+                .map(str::to_string),
+        );
+    }
+    terms
+}
+
 /// Query terms in sorted order, for order-independent float summation:
 /// HashSet iteration order is nondeterministic and float summation is
 /// order-sensitive at the last ULP, which would otherwise make route scores
@@ -1370,6 +1409,27 @@ fn add_weight(distribution: &mut HashMap<String, f32>, text: &str, weight: f32) 
     for token in query_tokens(text) {
         *distribution.entry(token).or_default() += weight;
     }
+}
+
+/// Add literal (unstemmed, lowercased) tokens to a distribution. Used for
+/// grammar-accepted entity mentions, where the Porter stem conflates the
+/// phrase head with an unrelated word ("conference" -> "confer", colliding
+/// with the verb "confer"). Literal phrase tokens are rare by construction
+/// and carry high IDF, so they dominate acronym-only evidence.
+fn add_weight_literal(distribution: &mut HashMap<String, f32>, text: &str, weight: f32) {
+    for token in literal_query_tokens(text) {
+        *distribution.entry(token).or_default() += weight;
+    }
+}
+
+/// Query tokens without stemming: lowercase alphanumeric tokens (min 3
+/// chars), stopwords removed. Matches the entity channel's literal indexing
+/// of grammar-accepted phrases.
+pub(crate) fn literal_query_tokens(input: &str) -> Vec<String> {
+    tokenizer::tokenize(input, TokenizerMode::Unstemmed)
+        .into_iter()
+        .filter(|token| !tokenizer::is_stopword(token, TokenizerMode::Unstemmed))
+        .collect()
 }
 
 pub(crate) fn collect_profile_candidates(
@@ -1404,7 +1464,14 @@ pub(crate) fn collect_temporal_candidates(
     if !temporal_active {
         return false;
     }
-    let Some(query_date) = temporal.ends_at.and_then(parse_iso_date) else {
+    // Center on the resolved relative-time anchor when the query carries one
+    // ("last Tuesday" -> that Tuesday's date); otherwise the reference date.
+    // `parse_reference_date` tolerates non-ISO separators.
+    let Some(query_date) = temporal
+        .anchor_date
+        .and_then(parse_reference_date)
+        .or_else(|| temporal.ends_at.and_then(parse_reference_date))
+    else {
         return collect_segment_temporal_terms(candidates, segment, temporal_active, query_terms);
     };
 
@@ -1421,7 +1488,7 @@ pub(crate) fn collect_temporal_candidates(
     }
 
     for record in segment.index.docs.values() {
-        let Some(record_date) = record.timestamp.as_deref().and_then(parse_iso_date) else {
+        let Some(record_date) = record.timestamp.as_deref().and_then(parse_reference_date) else {
             continue;
         };
         let delta_days = record_date.signed_duration_since(query_date).num_days();
@@ -1443,6 +1510,18 @@ pub(crate) fn collect_temporal_candidates(
     signal
 }
 
+/// Temporal route signal as an additive nudge in `[0.0, 1.0]`.
+///
+/// The caller adds the factor to the segment's content route score, so temporal
+/// proximity breaks ties toward temporally relevant segments but can never let
+/// a content-weak segment overtake a content-strong one. A segment with no
+/// content overlap keeps its (zero) score and cannot be elected on temporal
+/// evidence alone.
+///
+/// The factor is derived from the segment's *best* temporal evidence (max,
+/// not sum): one same-day record contributes the full proximity weight, and N
+/// mediocre in-window records can no longer saturate the boost and drown the
+/// content scores.
 pub(crate) fn segment_temporal_route_boost(
     segment: &MemoryIndexSegment,
     temporal: TemporalQueryContext<'_>,
@@ -1450,39 +1529,72 @@ pub(crate) fn segment_temporal_route_boost(
     if !temporal.has_explicit_temporal && temporal.time_hint.is_none() {
         return 0.0;
     }
-    let mut boost = 0.0f32;
-    let query_date = temporal.ends_at.and_then(parse_iso_date);
+    // Center on the resolved relative-time anchor when the query carries one
+    // ("last Tuesday" -> that Tuesday's date); otherwise the reference date.
+    // `parse_reference_date` tolerates non-ISO separators.
+    let query_date = temporal
+        .anchor_date
+        .and_then(parse_reference_date)
+        .or_else(|| temporal.ends_at.and_then(parse_reference_date));
     let window_days = temporal.window_days.max(1);
 
-    for record in segment.index.docs.values() {
-        if !record.temporal_terms.is_empty() {
-            boost += 0.08;
-        }
-        let Some(record_date) = record.timestamp.as_deref().and_then(parse_iso_date) else {
-            continue;
-        };
-        let Some(query_date) = query_date else {
-            boost += 0.05;
-            continue;
-        };
-        let delta_days = record_date.signed_duration_since(query_date).num_days();
-        let distance = delta_days.abs();
-        if distance <= window_days {
-            let proximity = 1.0 - (distance as f32 / window_days as f32);
-            boost += proximity.clamp(0.0, 1.0) * 1.25;
-        }
-        match temporal.time_hint {
-            Some(TemporalQueryHint::Past) if delta_days <= 0 => boost += 0.18,
-            Some(TemporalQueryHint::Present) | Some(TemporalQueryHint::Ongoing)
-                if distance <= 30 =>
-            {
-                boost += 0.22
+    let mut best_proximity = 0.0f32;
+    let mut best_hint = 0.0f32;
+    // Date math runs over the segment's cached sorted record dates. The
+    // factor only depends on the set of dates (max/any are order- and
+    // duplicate-independent), so no per-query timestamp parsing is needed.
+    if let Some(query_date) = query_date {
+        for record_date in segment.record_dates() {
+            let delta_days = record_date.signed_duration_since(query_date).num_days();
+            let distance = delta_days.abs();
+            if distance <= window_days {
+                let proximity = 1.0 - (distance as f32 / window_days as f32);
+                best_proximity = best_proximity.max(proximity.clamp(0.0, 1.0));
             }
-            Some(TemporalQueryHint::Mixed) if distance <= 30 => boost += 0.12,
-            _ => {}
+            let hint_boost = match temporal.time_hint {
+                Some(TemporalQueryHint::Past) if delta_days <= 0 => 0.18,
+                Some(TemporalQueryHint::Present) | Some(TemporalQueryHint::Ongoing)
+                    if distance <= 30 =>
+                {
+                    0.22
+                }
+                Some(TemporalQueryHint::Mixed) if distance <= 30 => 0.12,
+                _ => 0.0,
+            };
+            best_hint = best_hint.max(hint_boost);
         }
     }
-    boost.min(2.0)
+    let has_temporal_terms = segment
+        .index
+        .docs
+        .values()
+        .any(|record| !record.temporal_terms.is_empty());
+
+    let mut factor = best_proximity + best_hint;
+    if has_temporal_terms {
+        factor += 0.08;
+    }
+    factor.min(1.0)
+}
+
+/// Whether the segment holds any record whose timestamp falls inside the
+/// resolved anchor window.
+///
+/// Used for anchored temporal pre-filtering: when a query resolves to a
+/// concrete date range, routing is first restricted to segments with in-window
+/// evidence, then those are ranked by content. A record with no parseable
+/// timestamp never counts as in-window evidence.
+///
+/// The check binary-searches the segment's cached sorted record dates, so it
+/// costs O(log n) per query with no timestamp parsing on the hot path.
+pub(crate) fn segment_has_record_in_anchor_window(
+    segment: &MemoryIndexSegment,
+    window: (NaiveDate, NaiveDate),
+) -> bool {
+    let (start, end) = window;
+    let dates = segment.record_dates();
+    let idx = dates.partition_point(|date| *date < start);
+    idx < dates.len() && dates[idx] <= end
 }
 
 fn collect_segment_temporal_terms(
@@ -1724,7 +1836,9 @@ pub(crate) fn route_has_signal(
         | SegmentRoutingStrategy::CoverageLocalDistinctiveness
         | SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness
         | SegmentRoutingStrategy::CoverageTeamSelection
-        | SegmentRoutingStrategy::TypedEvidence => route.score > 0.0,
+        | SegmentRoutingStrategy::TypedEvidence
+        | SegmentRoutingStrategy::TypedEvidenceMultiplicative
+        | SegmentRoutingStrategy::CoverageTeamTypedMultiplicative => route.score > 0.0,
     }
 }
 

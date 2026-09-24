@@ -13,10 +13,10 @@ use crate::integrations::mcp_transport::{
 use crate::integrations::session_recording::{
     lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
 };
+#[cfg(test)]
 use crate::pipeline::IndexStore;
 #[cfg(test)]
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
-use crate::query_plan::PreparedQuery;
 #[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
@@ -69,7 +69,7 @@ struct ClaudeMcp {
     max_total_bytes: usize,
     ignore_paths: Vec<String>,
     workspace_watcher: Option<mcp_index::WorkspaceWatcher>,
-    store: Mutex<Option<IndexStore>>,
+    store: Mutex<Option<crate::memory_api::MemoryService>>,
 }
 
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
@@ -244,7 +244,7 @@ pub fn run_server(root: &Path, options: ClaudeCodeServerOptions<'_>) -> Result<(
 }
 
 impl ClaudeMcp {
-    fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<IndexStore>>> {
+    fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<crate::memory_api::MemoryService>>> {
         let mut store = self
             .store
             .lock()
@@ -357,7 +357,9 @@ impl ClaudeMcp {
 
         match tool_name {
             "search" => {
-                if let Some(name) = unknown_argument(&arguments, &["query", "top_k", "provider"]) {
+                if let Some(name) =
+                    unknown_argument(&arguments, &["query", "top_k", "provider", "session_id"])
+                {
                     return Ok(error_response(
                         id,
                         -32602,
@@ -381,14 +383,31 @@ impl ClaudeMcp {
                     Ok(filters) => filters,
                     Err(message) => return Ok(error_response(id, -32602, &message)),
                 };
-                let mut store = self.store()?;
-                let store = store.as_mut().expect("MCP store initialized");
-                mcp_index::sync_memory_documents(
-                    &mcp_index::shared_memory_root(&self.root),
-                    &mut *store,
-                )?;
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("MCP store initialized");
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                // Stateful search: an explicit session id scopes follow-up
+                // resolution and temporal-anchor carry to this provider's
+                // conversation; when omitted, the search inherits the session
+                // most recently seen active in this workspace (hooks keep that
+                // pointer current in the service's conversation-state store).
+                // Absent means stateless.
+                let session_id = match mcp_tools::resolve_search_session_id(
+                    &arguments,
+                    &*service,
+                    RecordingProvider::Claude.as_str(),
+                ) {
+                    Ok(session_id) => session_id,
+                    Err(message) => return Ok(error_response(id, -32602, &message)),
+                };
                 let started = std::time::Instant::now();
-                let results = store.query_prepared(&PreparedQuery::new(query), top_k, &filters);
+                let results = service.search_with_filters(
+                    query,
+                    crate::integrations::session_recording::RecordingProvider::Claude.as_str(),
+                    session_id.as_deref(),
+                    top_k,
+                    &filters,
+                );
                 let _ = crate::telemetry::record_project_query(
                     &self.root,
                     started.elapsed().as_millis() as u64,
@@ -396,7 +415,7 @@ impl ClaudeMcp {
                     results.as_ref().is_ok_and(Vec::is_empty),
                 );
                 let results = results?;
-                let payload = mcp_tools::search_results(store, results);
+                let payload = service.search_results_payload(results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -500,8 +519,8 @@ impl ClaudeMcp {
                         &format!("unknown info argument: {name}"),
                     ));
                 }
-                let store = self.store()?;
-                let store = store.as_ref().expect("MCP store initialized");
+                let service = self.store()?;
+                let service = service.as_ref().expect("MCP store initialized");
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -511,7 +530,7 @@ impl ClaudeMcp {
                                 "type": "text",
                                 "text": serde_json::to_string_pretty(&json!({
                                     "root": self.root,
-                                    "docs_count": store.source_documents().len(),
+                                    "docs_count": service.docs_count(),
                                 }))?,
                             }
                         ]
@@ -526,19 +545,16 @@ impl ClaudeMcp {
                         return Ok(error_response(id, -32602, "unknown list_memories argument"))
                     }
                 };
-                let mut store = self.store()?;
-                let store = store.as_mut().expect("MCP store initialized");
-                mcp_index::sync_memory_documents(
-                    &mcp_index::shared_memory_root(&self.root),
-                    &mut *store,
-                )?;
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("MCP store initialized");
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
                     result: Some(json!({
                         "content": [{
                             "type": "text",
-                            "text": serde_json::to_string_pretty(&mcp_tools::list_memories(store, limit))?,
+                            "text": serde_json::to_string_pretty(&service.list_memories_payload(limit))?,
                         }]
                     })),
                     error: None,
@@ -561,6 +577,7 @@ impl ClaudeMcp {
                         "query": { "type": "string" },
                         "top_k": { "type": "integer", "minimum": 1, "maximum": 20, "default": DEFAULT_QUERY_TOP_K },
                         "provider": mcp_tools::provider_argument_schema(),
+                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search." },
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -793,7 +810,7 @@ mod tests {
             max_total_bytes: 0,
             ignore_paths: Vec::new(),
             workspace_watcher: None,
-            store: Mutex::new(Some(store)),
+            store: Mutex::new(Some(crate::memory_api::MemoryService::new(store))),
         }
     }
 
@@ -1058,6 +1075,7 @@ mod tests {
             timestamp: None,
             doc_length: "docker install guide".len(),
             author_agent: None,
+            key_phrases: Vec::new(),
         };
         let mcp = test_mcp(root.clone(), vec![document]);
         let response = mcp
@@ -1111,6 +1129,33 @@ mod tests {
     }
 
     #[test]
+    fn search_tool_accepts_session_id_argument() {
+        // Regression: the schema advertises session_id and the handler
+        // resolves it, so the argument allowlist must not reject it.
+        let root = temp_dir("mcp-session-id");
+        let mcp = test_mcp(root.clone(), vec![]);
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(4)),
+                method: "tools/call".to_string(),
+                params: Some(json!({
+                    "name": "search",
+                    "arguments": { "query": "docker", "session_id": "sess-abc" }
+                })),
+            })
+            .unwrap();
+        match response.error {
+            None => {}
+            Some(error) => assert!(
+                !error.message.contains("unknown search argument"),
+                "session_id was rejected: {}",
+                error.message
+            ),
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn search_tool_synchronizes_memory_captured_after_startup() {
         let root = temp_dir("mcp-live-memory");
         let mcp = test_mcp(root.clone(), vec![]);
@@ -1128,6 +1173,7 @@ mod tests {
             timestamp: None,
             doc_length: 38,
             author_agent: Some(RecordingProvider::Claude.as_str().to_string()),
+            key_phrases: Vec::new(),
         });
         memory.refresh().unwrap();
         drop(memory);

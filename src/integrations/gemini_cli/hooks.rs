@@ -1,7 +1,8 @@
 use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
@@ -120,6 +121,18 @@ fn handle_hook(
     if input.hook_event_name != kind.event_name() {
         anyhow::bail!("{provider_label} hook event mismatch")
     }
+    // The MCP search dispatch inherits this session when the agent does not
+    // pass session_id explicitly. The conversation-state store opens without
+    // touching the index (a full MemoryService open would load it); skipped
+    // until memory exists so hooks never create store directories for
+    // memory-less projects. Fail-open: the write never breaks the hook.
+    {
+        let memory = crate::integrations::mcp_index::shared_memory_root(_root);
+        if memory.exists() {
+            crate::conversation_state::ConversationStateStore::open_under(&memory)
+                .note_active_session(provider.as_str(), &input.session_id);
+        }
+    }
     if kind == GeminiHookKind::SessionStart {
         return Ok(GeminiHookOutput {
             system_message: Some(
@@ -166,7 +179,7 @@ fn handle_hook(
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(&memory, options)?;
+    let mut store = MemoryService::at_path(&memory, options)?;
     if store.is_empty() {
         let _ = crate::telemetry::record_memory_retrieval(
             _root,
@@ -178,7 +191,7 @@ fn handle_hook(
         );
         return Ok(GeminiHookOutput::default());
     }
-    let results = store.query(&query, 5);
+    let results = store.observe_plain_query(&query, provider.as_str(), Some(&input.session_id), 5);
     let _ = crate::telemetry::record_project_query(
         _root,
         started.elapsed().as_millis() as u64,
@@ -267,6 +280,7 @@ fn capture(
         doc_length: content.len(),
         author_agent: Some(provider.as_str().to_string()),
         filters,
+        key_phrases: Vec::new(),
     };
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
@@ -275,12 +289,12 @@ fn capture(
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(
+    let mut store = MemoryService::at_path(
         &crate::integrations::mcp_index::shared_memory_root(root),
         options,
     )?;
     store.upsert(document);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(GeminiHookOutput::default())
 }
 
@@ -381,6 +395,7 @@ fn resolve_root(cwd: &Path, fallback: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::IndexStore;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 

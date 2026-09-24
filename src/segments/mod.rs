@@ -1,7 +1,9 @@
 mod catalog;
 mod diagnostics;
+pub mod intent;
 mod model;
 mod query;
+pub mod relations;
 mod routing;
 mod segmented;
 
@@ -13,8 +15,10 @@ mod tests;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use catalog::*;
 pub use diagnostics::*;
+pub use intent::*;
 pub use model::*;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use query::*;
+pub use relations::*;
 pub use routing::*;
 pub use segmented::*;

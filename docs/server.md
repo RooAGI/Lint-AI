@@ -60,6 +60,11 @@ expand up to `N` when the initial routes do not cover enough query evidence.
 Use `--single-index` for the non-segmented layout or `--global-index` to query
 every segmented shard. These modes are intended primarily for controlled
 comparisons instead of the default routed segmented layout.
+
+By default, each multi-segment query runs the routed arm only, using the gated
+coverage-local router. Pass `--fuse-global` to also run the corpus-wide
+all-segments arm and fuse it with the routed arm via reciprocal rank fusion.
+See `docs/benchmark-results.md` for the measured trade-off.
 The server is intentionally localhost-only. `--bind` may select a loopback
 address and port, such as `127.0.0.1:8080` or `[::1]:8080`, but non-loopback
 addresses are rejected at startup. Authentication remains available for

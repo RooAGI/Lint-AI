@@ -23,7 +23,7 @@ Codex, Gemini CLI, or AGY to use the core index, HTTP API, or MCP interface.
 
 | Tool | Purpose |
 |---|---|
-| `search` | Search the indexed workspace and return ranked results. Requires `query`; accepts `top_k` (1–20). |
+| `search` | Search the indexed workspace and return ranked results. Requires `query`; accepts `top_k` (1–20). Each hit carries `created_at` and `session_id`, and the hit text is prefixed with `[session date: ...]` when the memory has a timestamp, so relative date expressions ("yesterday", "last month") resolve against an absolute date. |
 | `info` | Return basic information about the indexed workspace. |
 | `list_memories` | List bounded previews of indexed agent memories. Accepts `limit` (1–100, default 20). |
 | `record_session` | Start, stop, or inspect capture-only session recording. Use `action: start`, `stop`, or `status`. |

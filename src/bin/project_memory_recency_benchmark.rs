@@ -60,6 +60,7 @@ fn source_document(record: DocRecord) -> SourceDocument {
         doc_length: record.doc_length,
         author_agent: record.author_agent,
         key_phrases: Vec::new(),
+        key_phrase_extraction_hash: String::new(),
     }
 }
 

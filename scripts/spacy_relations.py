@@ -598,6 +598,9 @@ def _np_mention_descriptors(docs, sent_index, turns):
                         if c.dep_ in NP_MOD_DEPS
                     ],
                     "session_id": session_id,
+                    # Carried so key-phrase output can be joined back to the
+                    # exact source document (not just the session).
+                    "doc_id": turn.get("doc_id", ""),
                 })
     return out
 
@@ -652,7 +655,9 @@ def _phrase_kind_fallback(desc):
 def _key_phrases(np_descriptors, phrase_verdicts):
     """Deduped entity-mention key phrases for the segment index.
 
-    One entry per (session, phrase): {"text", "kind", "session_id"}.
+    One entry per (doc, phrase) when the descriptor carries a doc_id,
+    falling back to the old per-(session, phrase) dedup otherwise:
+    {"text", "kind", "session_id", "doc_id", "turn_idx"}.
     These are the grammar's name-worthy mentions ("Harry Potter
     conference") -- the segment summary protects them from the term cap
     so rare discriminative phrases survive routing.
@@ -663,7 +668,8 @@ def _key_phrases(np_descriptors, phrase_verdicts):
         verdict = (phrase_verdicts or {}).get(desc["id"])
         if not verdict or not verdict.get("is_entity_mention"):
             continue
-        key = (desc["session_id"], desc["text"].lower())
+        scope = desc.get("doc_id") or desc["session_id"]
+        key = (scope, desc["text"].lower())
         if key in seen:
             continue
         seen.add(key)
@@ -671,6 +677,7 @@ def _key_phrases(np_descriptors, phrase_verdicts):
             "text": desc["text"],
             "kind": verdict.get("kind", "thing"),
             "session_id": desc["session_id"],
+            "doc_id": desc.get("doc_id", ""),
             # Turn-local token linkage: join to frame args via
             # (session_id, turn_idx, tok in arg.entity_ids) to recover the
             # verb-frame context of each mention for contextual typing.

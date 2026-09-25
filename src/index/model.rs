@@ -1,4 +1,5 @@
 use crate::query_semantics::QueryRoutingIntent;
+use crate::source::KeyPhrase;
 use crate::tier1::{RankedTerm, Tier1Entity};
 use chrono::NaiveDate;
 use roaring::RoaringBitmap;
@@ -63,6 +64,19 @@ pub struct DocRecord {
     pub key_entities: Vec<Tier1Entity>,
     pub important_terms: Vec<RankedTerm>,
     pub section_chunks: Vec<SectionChunk>,
+    /// Key phrases extracted from the source content. They feed the lexical
+    /// side of retrieval; persisting them here (in addition to the derived
+    /// `key_entities`) lets a reopened index restore the source document
+    /// verbatim, including its extraction state.
+    #[serde(default)]
+    pub key_phrases: Vec<KeyPhrase>,
+    /// Content hash the key phrases above were extracted from. An empty
+    /// string means extraction has never completed for the current content;
+    /// a hash matching the content means extraction is done (even when
+    /// `key_phrases` is legitimately empty). A mismatch means the content
+    /// changed after extraction and the phrases must be recomputed.
+    #[serde(default)]
+    pub key_phrase_extraction_hash: String,
     pub embedding: Option<Vec<f32>>,
     pub top_claims: Vec<Claim>,
     pub provenance: Provenance,

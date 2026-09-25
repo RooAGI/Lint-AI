@@ -25,6 +25,7 @@ fn document(topic: &str, bucket: &str, age_days: i64, today: chrono::NaiveDate) 
         doc_length: 0,
         author_agent: Some("recency-benchmark".to_string()),
         key_phrases: Vec::new(),
+        key_phrase_extraction_hash: String::new(),
     }
 }
 

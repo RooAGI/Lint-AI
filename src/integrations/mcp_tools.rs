@@ -110,16 +110,26 @@ pub(crate) fn resolve_search_session_id(
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.
-pub(crate) fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
+pub fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
     let results = results
         .into_iter()
         .filter_map(|result| {
             let document = service.source_document_by_id(&result.doc_id)?;
+            let content: String = document.content.chars().take(4_000).collect();
+            // Anchor relative date expressions ("yesterday", "last month") to
+            // an absolute date the agent can see. Fail-open: memories without
+            // a timestamp keep their original text.
+            let content = match document.timestamp.as_deref() {
+                Some(date) => format!("[session date: {date}]\n{content}"),
+                None => content,
+            };
             Some(json!({
                 "id": result.doc_id,
                 "source": result.source,
-                "content": document.content.chars().take(4_000).collect::<String>(),
+                "content": content,
                 "score": result.score,
+                "created_at": document.timestamp.clone(),
+                "session_id": document.group_id.clone(),
                 "matched_terms": result.matched_terms,
                 "matched_entities": result.matched_entities,
                 "semantic_status": result.semantic_status,
@@ -269,6 +279,7 @@ mod tests {
                 doc_length: 38,
                 author_agent: Some(provider.to_string()),
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             }
         }
 
@@ -316,6 +327,7 @@ mod tests {
             doc_length: 14,
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         });
         store.upsert(SourceDocument {
             doc_id: "workspace-file".to_string(),
@@ -330,6 +342,7 @@ mod tests {
             doc_length: 17,
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         });
         let service = MemoryService::new(store);
         let payload = list_memories(&service, 20);
@@ -340,6 +353,67 @@ mod tests {
         );
         assert_eq!(parse_list_memories_limit(&json!({"limit": 0})).unwrap(), 1);
         assert!(parse_list_memories_limit(&json!({"unexpected": true})).is_err());
+    }
+
+    #[test]
+    fn search_results_anchor_memories_to_their_session_date() {
+        fn memory(doc_id: &str, timestamp: Option<&str>) -> SourceDocument {
+            SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: "codex://project/session-1/outcome".to_string(),
+                content: "we deployed yesterday".to_string(),
+                concept: "outcome".to_string(),
+                group_id: Some("session-1".to_string()),
+                filters: BTreeMap::new(),
+                headings: vec![],
+                links: vec![],
+                timestamp: timestamp.map(str::to_string),
+                doc_length: 21,
+                author_agent: None,
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            }
+        }
+        fn hit(doc_id: &str) -> SearchResult {
+            SearchResult {
+                doc_id: doc_id.to_string(),
+                source: "codex://project/session-1/outcome".to_string(),
+                group_id: Some("session-1".to_string()),
+                score: 1.0,
+                score_breakdown: crate::index::ScoreBreakdown::default(),
+                matched_entities: Vec::new(),
+                matched_terms: Vec::new(),
+                probable_topic: None,
+                doc_type_guess: None,
+                semantic_status: None,
+                superseded_by: None,
+                relation_confidence: None,
+                relation_evidence: Vec::new(),
+            }
+        }
+
+        let mut store = IndexStore::in_memory(PipelineOptions::default());
+        store.upsert(memory("dated", Some("2026-09-20T10:00:00Z")));
+        store.upsert(memory("undated", None));
+        let service = MemoryService::new(store);
+        let payload = search_results(&service, vec![hit("dated"), hit("undated")]);
+        let results = payload["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+
+        let dated = &results[0];
+        assert_eq!(dated["created_at"], "2026-09-20T10:00:00Z");
+        assert_eq!(dated["session_id"], "session-1");
+        let content = dated["content"].as_str().unwrap();
+        assert!(
+            content.starts_with("[session date: 2026-09-20T10:00:00Z]\n"),
+            "date prefix missing: {content}"
+        );
+        assert!(content.ends_with("we deployed yesterday"));
+
+        // Fail-open: a memory without a timestamp keeps its original text.
+        let undated = &results[1];
+        assert!(undated["created_at"].is_null());
+        assert_eq!(undated["content"], "we deployed yesterday");
     }
 
     #[cfg(any(

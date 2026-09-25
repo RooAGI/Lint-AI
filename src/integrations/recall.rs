@@ -669,6 +669,8 @@ mod tests {
             temporal_terms: Vec::new(),
             key_entities: Vec::new(),
             important_terms: Vec::new(),
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
             section_chunks,
             embedding: None,
             top_claims: Vec::new(),
@@ -744,6 +746,7 @@ mod tests {
                 doc_length: 0,
                 author_agent: Some(provider.to_string()),
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             });
         }
         memory.refresh().unwrap();

@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -128,11 +129,18 @@ pub fn parse_session_date(s: &str) -> Option<Ymd> {
 
 /// One raw key phrase from `scripts/spacy_relations.py` (JSON field-for-field):
 /// a grammar-accepted entity mention with behood's ontological kind.
+/// `doc_id`/`turn_idx` are echoed from the input turn so phrases join back
+/// to their exact source document; older script output omits them (serde
+/// defaults) and falls back to per-session matching.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawKeyPhrase {
     pub text: String,
     pub kind: String,
     pub session_id: String,
+    #[serde(default)]
+    pub doc_id: String,
+    #[serde(default)]
+    pub turn_idx: usize,
 }
 
 /// Full output of the dependency-parse extractor: triples plus key phrases.
@@ -260,7 +268,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// Python executable for the extractor scripts. Mirrors the project's
 /// `detect_python_executable` convention (`PYTHON_EXECUTABLE` / `PYTHON` /
 /// `VIRTUAL_ENV`, else `python3`).
-fn python_executable() -> String {
+pub(crate) fn python_executable() -> String {
     if let Ok(value) = std::env::var("PYTHON_EXECUTABLE") {
         let value = value.trim();
         if !value.is_empty() {
@@ -281,14 +289,109 @@ fn python_executable() -> String {
 ///
 /// Never panics: any failure (missing Python/spaCy, bad output) yields an
 /// empty output and the caller declines to the adaptive retrieval path.
-pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> ExtractorOutput {
-    let script =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_relations.py");
+///
+/// The production path (no script override) goes through the long-lived
+/// extractor daemon so the spaCy model load is paid once per process; every
+/// daemon failure falls back to a one-shot subprocess, which is also what
+/// script overrides always use.
+pub fn extract_relations_via_spacy(turns: &[RelationTurn], timeout: Duration) -> ExtractorOutput {
+    run_extractor(turns, false, None, timeout).unwrap_or_default()
+}
+
+/// Key-phrase half of the extractor: grammar-accepted entity mentions for
+/// the segment entity channel. Runs the script in `key_phrases_only` mode
+/// (skips triple/frame extraction) and returns phrases keyed by `doc_id`.
+/// Fail-open like the relations path: any failure yields no phrases.
+pub fn extract_key_phrases_via_spacy(
+    turns: &[RelationTurn],
+    script_override: Option<&std::path::Path>,
+    timeout: Duration,
+) -> Vec<RawKeyPhrase> {
+    try_extract_key_phrases_via_spacy(turns, script_override, timeout).unwrap_or_default()
+}
+
+/// Fallible variant: `None` when the extractor subprocess failed to run or
+/// produced unusable output; `Some` (possibly empty) when it ran to
+/// completion. Lets callers distinguish a failed extraction — which must
+/// stay retryable — from a genuinely empty one.
+pub fn try_extract_key_phrases_via_spacy(
+    turns: &[RelationTurn],
+    script_override: Option<&std::path::Path>,
+    timeout: Duration,
+) -> Option<Vec<RawKeyPhrase>> {
+    run_extractor(turns, true, script_override, timeout).map(|output| output.key_phrases)
+}
+
+/// Parse one extractor response object (one-shot stdout or one daemon
+/// protocol line). Returns `None` when the response carries an `error` —
+/// the extractor declined the payload — or is not valid extractor JSON;
+/// `Some` (possibly empty) on a completed run. An error response must never
+/// become a successful-empty result: callers stamp completed-empty runs as
+/// done, and stamping a failed run would retire it permanently.
+pub(crate) fn parse_extractor_output(response: &str) -> Option<ExtractorOutput> {
+    let value: serde_json::Value = serde_json::from_str(response.trim()).ok()?;
+    if value.get("error").is_some() {
+        return None;
+    }
+    #[derive(Deserialize)]
+    struct Output {
+        #[serde(default)]
+        relations: Vec<RawRelation>,
+        #[serde(default)]
+        key_phrases: Vec<RawKeyPhrase>,
+    }
+    let parsed: Output = serde_json::from_value(value).ok()?;
+    Some(ExtractorOutput {
+        relations: parsed.relations,
+        key_phrases: parsed.key_phrases,
+    })
+}
+
+/// Runs the spaCy extractor script. Returns `None` when the subprocess
+/// could not run or its output was unusable; `Some` on a completed run even
+/// when it produced no relations or phrases.
+fn run_extractor(
+    turns: &[RelationTurn],
+    key_phrases_only: bool,
+    script_override: Option<&std::path::Path>,
+    timeout: Duration,
+) -> Option<ExtractorOutput> {
+    if script_override.is_none() {
+        if let Some(output) = super::extractor_daemon::ExtractorDaemon::global().extract(
+            turns,
+            key_phrases_only,
+            timeout,
+        ) {
+            return Some(output);
+        }
+        // Daemon unavailable (first-start failure, dead child, timeout,
+        // contention): fall through to a one-shot subprocess.
+    }
+    run_extractor_oneshot(turns, key_phrases_only, script_override)
+}
+
+/// One-shot extractor subprocess: spawn Python, feed the payload on stdin,
+/// parse stdout. Used for script overrides and as the daemon fallback.
+fn run_extractor_oneshot(
+    turns: &[RelationTurn],
+    key_phrases_only: bool,
+    script_override: Option<&std::path::Path>,
+) -> Option<ExtractorOutput> {
+    let script = match script_override {
+        Some(path) => path.to_path_buf(),
+        None => {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_relations.py")
+        }
+    };
     if !script.exists() {
         eprintln!("relations: extractor script missing: {}", script.display());
-        return ExtractorOutput::default();
+        return None;
     }
-    let payload = serde_json::json!({"model": "en_core_web_sm", "turns": turns});
+    let payload = serde_json::json!({
+        "model": "en_core_web_sm",
+        "turns": turns,
+        "key_phrases_only": key_phrases_only,
+    });
     let mut child = match Command::new(python_executable())
         .arg(&script)
         .stdin(Stdio::piped())
@@ -299,7 +402,7 @@ pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> ExtractorOutput {
         Ok(child) => child,
         Err(e) => {
             eprintln!("relations: failed to spawn extractor: {e}");
-            return ExtractorOutput::default();
+            return None;
         }
     };
     let write_result = child
@@ -312,13 +415,13 @@ pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> ExtractorOutput {
         .unwrap_or(Ok(()));
     if let Err(e) = write_result {
         eprintln!("relations: failed to write extractor input: {e}");
-        return ExtractorOutput::default();
+        return None;
     }
     let output = match child.wait_with_output() {
         Ok(output) => output,
         Err(e) => {
             eprintln!("relations: extractor wait failed: {e}");
-            return ExtractorOutput::default();
+            return None;
         }
     };
     if !output.status.success() {
@@ -329,23 +432,17 @@ pub fn extract_relations_via_spacy(turns: &[RelationTurn]) -> ExtractorOutput {
                 .take(300)
                 .collect::<String>()
         );
-        return ExtractorOutput::default();
+        return None;
     }
-    #[derive(Deserialize)]
-    struct Output {
-        #[serde(default)]
-        relations: Vec<RawRelation>,
-        #[serde(default)]
-        key_phrases: Vec<RawKeyPhrase>,
-    }
-    match serde_json::from_slice::<Output>(&output.stdout) {
-        Ok(parsed) => ExtractorOutput {
-            relations: parsed.relations,
-            key_phrases: parsed.key_phrases,
-        },
-        Err(e) => {
-            eprintln!("relations: bad extractor output: {e}");
-            ExtractorOutput::default()
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match parse_extractor_output(&stdout) {
+        Some(parsed) => Some(parsed),
+        None => {
+            eprintln!(
+                "relations: bad extractor output: {}",
+                stdout.chars().take(300).collect::<String>()
+            );
+            None
         }
     }
 }
@@ -899,6 +996,126 @@ pub fn analyze_fact_question(question: &str) -> Option<StructuredFactQuery> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Production path: build the relation index from indexed source documents
+// and run the structured-fact query inside the serving search path.
+//
+// The benchmark shim used to own this wiring per-conversation; it now lives
+// here so every serving path (HTTP server, MCP, Python bindings) gets the
+// structured-fact behavior from the same code.
+// ---------------------------------------------------------------------------
+
+/// One structured-fact hit: the evidence document id, its score, and the
+/// relation evidence label (e.g. "shared relation: Rome") for consumers.
+#[derive(Debug, Clone)]
+pub struct StructuredHit {
+    pub doc_id: String,
+    pub score: f32,
+    pub confidence: f32,
+    pub evidence_label: String,
+}
+
+/// Split a leading "Speaker: " prefix off document content.
+/// Benchmark corpora store turns as "Name: text" with no author_agent;
+/// production documents may carry the speaker in author_agent instead.
+fn split_speaker_prefix(content: &str) -> (Option<String>, String) {
+    let mut parts = content.splitn(2, ':');
+    let head = parts.next().unwrap_or("").trim();
+    if let Some(rest) = parts.next() {
+        let looks_like_name = !head.is_empty()
+            && head.len() <= 40
+            && head
+                .chars()
+                .all(|c| c.is_alphabetic() || c == ' ' || c == '-' || c == '\'')
+            && rest.starts_with(' ');
+        if looks_like_name {
+            return (Some(head.to_string()), rest.trim_start().to_string());
+        }
+    }
+    (None, content.to_string())
+}
+
+/// Build relation turns from indexed source documents.
+///
+/// This is the production counterpart to the benchmark's per-conversation
+/// turn list: speaker from the "Name: " content prefix (falling back to
+/// author_agent), session from the document's group, date from its
+/// timestamp. Turn index parses from a trailing "/turn/{n}" source marker
+/// when present, else 0 (it is carried as evidence metadata, not ranked on).
+pub fn relation_turns_from_docs(docs: &[&crate::SourceDocument]) -> Vec<RelationTurn> {
+    let mut turns: Vec<RelationTurn> = Vec::with_capacity(docs.len());
+    for doc in docs {
+        let (prefix_speaker, text) = split_speaker_prefix(&doc.content);
+        let speaker = prefix_speaker
+            .or_else(|| doc.author_agent.clone())
+            .unwrap_or_default();
+        let turn_idx = doc
+            .source
+            .rsplit("/turn/")
+            .next()
+            .and_then(|t| t.parse::<usize>().ok())
+            .unwrap_or(0);
+        turns.push(RelationTurn {
+            speaker,
+            text,
+            session_id: doc.group_id.clone().unwrap_or_else(|| doc.doc_id.clone()),
+            turn_idx,
+            doc_id: doc.doc_id.clone(),
+            session_date: doc.timestamp.clone(),
+        });
+    }
+    turns.sort_by(|a, b| {
+        a.session_id
+            .cmp(&b.session_id)
+            .then(a.turn_idx.cmp(&b.turn_idx))
+    });
+    turns
+}
+
+/// Run the structured-fact path over a question against a relation index.
+///
+/// Returns `None` when the question is not a structured fact question or
+/// the index holds no evidence for it, so callers fall through to the
+/// lexical path. Evidence flattens to document ids (deduped, best score
+/// wins), ready to blend ahead of lexical `SearchResult`s.
+pub fn query_structured(index: &RelationIndex, question: &str) -> Option<Vec<StructuredHit>> {
+    let fq = analyze_fact_question(question)?;
+    let (label, objects): (&str, Vec<SharedObject>) = match (fq.persons.len(), fq.time_window) {
+        (2.., _) => (
+            "shared relation",
+            index.query_shared(&fq.persons, fq.family, fq.expect_place)?,
+        ),
+        (1, Some((start, end))) => (
+            "temporal relation",
+            if fq.family == PredicateFamily::Any {
+                index.query_temporal_span_general(&fq.persons[0], start, end, question)?
+            } else {
+                index.query_temporal_span(&fq.persons[0], fq.family, start, end, fq.expect_place)?
+            },
+        ),
+        _ => return None,
+    };
+    let mut seen = HashSet::new();
+    let mut hits = Vec::new();
+    for obj in &objects {
+        for ev in &obj.evidence {
+            if seen.insert(ev.doc_id.clone()) {
+                hits.push(StructuredHit {
+                    doc_id: ev.doc_id.clone(),
+                    score: 1000.0 + obj.score,
+                    confidence: obj.score,
+                    evidence_label: format!("{label}: {}", obj.object),
+                });
+            }
+        }
+    }
+    if hits.is_empty() {
+        None
+    } else {
+        Some(hits)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1293,8 +1510,16 @@ mod tests {
     #[test]
     fn query_temporal_span_general_ranks_content_overlap() {
         let idx = fixture_index_general();
-        let start = Ymd { year: 2023, month: 10, day: 1 };
-        let end = Ymd { year: 2023, month: 10, day: 31 };
+        let start = Ymd {
+            year: 2023,
+            month: 10,
+            day: 1,
+        };
+        let end = Ymd {
+            year: 2023,
+            month: 10,
+            day: 31,
+        };
         let hits = idx
             .query_temporal_span_general(
                 "Melanie",
@@ -1323,8 +1548,16 @@ mod tests {
         assert!(idx
             .query_temporal_span_general(
                 "Zelda",
-                Ymd { year: 2023, month: 10, day: 1 },
-                Ymd { year: 2023, month: 10, day: 31 },
+                Ymd {
+                    year: 2023,
+                    month: 10,
+                    day: 1
+                },
+                Ymd {
+                    year: 2023,
+                    month: 10,
+                    day: 31
+                },
                 "What did Zelda do in October 2023?",
             )
             .is_none());
@@ -1407,5 +1640,139 @@ mod tests {
         assert_eq!(objs.len(), 1);
         assert_eq!(objs[0].object, "Chicago");
         assert_eq!(objs[0].evidence[0].session_id, "D6:1");
+    }
+
+    // --- Production path: docs -> turns -> structured hits ---
+
+    fn prod_doc(
+        doc_id: &str,
+        content: &str,
+        group_id: Option<&str>,
+        timestamp: Option<&str>,
+        author_agent: Option<&str>,
+        user: &str,
+    ) -> crate::SourceDocument {
+        let mut filters = std::collections::BTreeMap::new();
+        filters.insert("memory_user_id".to_string(), user.to_string());
+        crate::SourceDocument {
+            doc_id: doc_id.to_string(),
+            source: format!("test/{doc_id}"),
+            content: content.to_string(),
+            concept: "test".to_string(),
+            group_id: group_id.map(|s| s.to_string()),
+            headings: Vec::new(),
+            links: Vec::new(),
+            timestamp: timestamp.map(|s| s.to_string()),
+            doc_length: content.len(),
+            author_agent: author_agent.map(|s| s.to_string()),
+            filters,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn relation_turns_from_docs_maps_speaker_session_date() {
+        let docs = vec![
+            prod_doc(
+                "d1",
+                "Gina: Been only to Rome once.",
+                Some("sess-a"),
+                Some("2020-05-01"),
+                None,
+                "u1",
+            ),
+            // No "Name: " prefix and no group: speaker falls back to
+            // author_agent, session falls back to the doc id.
+            prod_doc("d2", "no prefix here", None, None, Some("agent-x"), "u1"),
+        ];
+        let refs: Vec<&crate::SourceDocument> = docs.iter().collect();
+        let turns = relation_turns_from_docs(&refs);
+        assert_eq!(turns.len(), 2);
+        // Sorted by (session_id, turn_idx): d2's session falls back to "d2",
+        // which sorts before "sess-a".
+        assert_eq!(turns[0].doc_id, "d2");
+        assert_eq!(turns[0].speaker, "agent-x");
+        assert_eq!(turns[0].text, "no prefix here");
+        assert_eq!(turns[0].session_id, "d2");
+        assert_eq!(turns[1].doc_id, "d1");
+        assert_eq!(turns[1].speaker, "Gina");
+        assert_eq!(turns[1].text, "Been only to Rome once.");
+        assert_eq!(turns[1].session_id, "sess-a");
+        assert_eq!(turns[1].session_date.as_deref(), Some("2020-05-01"));
+    }
+
+    fn shared_place_index() -> RelationIndex {
+        let turns = vec![
+            RelationTurn {
+                speaker: "Gina".to_string(),
+                text: "Been only to Rome once.".to_string(),
+                session_id: "sess-a".to_string(),
+                turn_idx: 0,
+                doc_id: "d1".to_string(),
+                session_date: None,
+            },
+            RelationTurn {
+                speaker: "Jon".to_string(),
+                text: "Took a short trip last week to Rome.".to_string(),
+                session_id: "sess-b".to_string(),
+                turn_idx: 0,
+                doc_id: "d2".to_string(),
+                session_date: None,
+            },
+        ];
+        let raw = vec![
+            RawRelation {
+                subject: "Gina".to_string(),
+                predicate: "go_to".to_string(),
+                object: "Rome".to_string(),
+                is_place: true,
+                session_id: "sess-a".to_string(),
+                turn_idx: 0,
+                doc_id: "d1".to_string(),
+                session_date: None,
+                evidence: "Gina: Been only to Rome once.".to_string(),
+                confidence: 0.9,
+                coref: None,
+            },
+            RawRelation {
+                subject: "Jon".to_string(),
+                predicate: "take_to".to_string(),
+                object: "Rome".to_string(),
+                is_place: true,
+                session_id: "sess-b".to_string(),
+                turn_idx: 0,
+                doc_id: "d2".to_string(),
+                session_date: None,
+                evidence: "Jon: Took a short trip last week to Rome.".to_string(),
+                confidence: 0.9,
+                coref: None,
+            },
+        ];
+        RelationIndex::build(&turns, &raw)
+    }
+
+    #[test]
+    fn query_structured_shared_place_returns_evidence_hits() {
+        let index = shared_place_index();
+        let hits = query_structured(&index, "Which city have both Gina and Jon visited?")
+            .expect("structured fact question should hit");
+        let mut ids: Vec<&str> = hits.iter().map(|h| h.doc_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["d1", "d2"]);
+        for h in &hits {
+            assert!(
+                h.score > 1000.0,
+                "structured evidence blends ahead of lexical"
+            );
+            assert_eq!(h.evidence_label, "shared relation: Rome");
+        }
+    }
+
+    #[test]
+    fn query_structured_declines_non_fact_questions() {
+        let index = shared_place_index();
+        assert!(query_structured(&index, "What did Gina and Jon discuss?").is_none());
+        assert!(query_structured(&index, "Tell me about Rome.").is_none());
     }
 }

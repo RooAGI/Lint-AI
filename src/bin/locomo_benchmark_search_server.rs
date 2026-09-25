@@ -1,15 +1,24 @@
 //! Long-lived Lint-AI search server over LoCoMo conversations (pillar-4 agent tool).
 //!
-//! Builds one in-memory [`MemorySearchService`] per conversation at startup
-//! (same pipeline options as `locomo_benchmark.rs`, segmented layout with the
-//! gated-local routing strategy), then serves:
+//! Builds one in-memory [`MemoryService`] per conversation at startup
+//! (production pipeline options, segmented layout with the gated-local
+//! routing strategy), then serves:
 //!   GET /health                        -> {"ok":true}
 //!   GET /search?conv=<sample_id>&q=<query>&k=<n>
 //!       -> {"results":[{"session_id":"...","score":1.23,"text":"..."}]}
 //!
-//! Searches run through the production [`MemoryService`] query path with a
-//! per-conversation `session_id`, so the conversational reranker fires on
-//! follow-up queries exactly as it does in production.
+//! Searches run through the agent's entry point --
+//! [`MemoryService::search_with_filters`], the same function the MCP `search`
+//! tools call -- with results shaped by the shared `search_results`
+//! formatter, so the benchmark measures exactly what an agent experiences:
+//! follow-up phrasing resolved against observed session state, the
+//! conversational reranker, structured-fact relation evidence, and the
+//! query-time key-phrase backfill. The server owns no query logic of its
+//! own; it only indexes the turns and serves the agent's ranking.
+//!
+//! Hits return the matched turn text (not the whole session) with the
+//! session date prefixed, so the reader can resolve relative dates
+//! ("yesterday", "last month") without a wall of full-session text.
 //!
 //! This is benchmark scaffolding, not part of the shipped product.
 
@@ -22,22 +31,25 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use lint_ai::memory_api::{MemorySearchService, MemoryService, SearchRequest};
-use lint_ai::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, PredicateFamily, RelationIndex, RelationTurn,
-    SharedObject,
-};
-use lint_ai::segments::SegmentRoutingStrategy;
-use lint_ai::{IndexStore, MemoryIndexLayout, PipelineOptions, SourceDocument};
+use lint_ai::memory_api::MemoryService;
+use lint_ai::segments::relations::{extract_relations_via_spacy, RelationTurn};
+use lint_ai::{default_production_pipeline_options, search_results, SourceDocument};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-/// User id stamped on every LoCoMo document; the production query path
-/// filters on it, mirroring how `AddRequest` stamps real writes.
+/// User id stamped on every LoCoMo document; the agent query path filters on
+/// it, mirroring how `AddRequest` stamps real writes.
 const LOCOMO_USER_ID: &str = "locomo-agent";
+
+/// Scope key for the benchmark's conversation state. The MCP `search` tools
+/// pass their provider name here ("muse", "claude-code", ...); the benchmark
+/// is its own scope, so follow-up resolution and the conversational reranker
+/// behave exactly as they do for an agent.
+const BENCHMARK_SCOPE: &str = "benchmark";
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -71,25 +83,11 @@ struct LocomoTurn {
 }
 
 struct ConvIndex {
-    searcher: MemorySearchService,
-    session_text: HashMap<String, String>,
-    session_date: HashMap<String, String>,
-    doc_group: HashMap<String, String>,
-    relations: RelationIndex,
+    searcher: Mutex<MemoryService>,
 }
 
 struct AppState {
     convs: HashMap<String, Arc<ConvIndex>>,
-}
-
-/// Prepend the session's absolute date to hit text so the reader can convert
-/// relative expressions ("yesterday", "last month") instead of echoing them.
-/// Sessions without a date keep their original text (fail-open).
-fn with_date_prefix(conv: &ConvIndex, session_id: &str, text: String) -> String {
-    match conv.session_date.get(session_id) {
-        Some(date) => format!("[session date: {date}]\n{text}"),
-        None => text,
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,9 +132,6 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     session_nums.dedup();
 
     let mut docs = Vec::new();
-    let mut session_text: HashMap<String, String> = HashMap::new();
-    let mut session_date: HashMap<String, String> = HashMap::new();
-    let mut doc_group: HashMap<String, String> = HashMap::new();
     let mut rel_turns: Vec<RelationTurn> = Vec::new();
     for n in session_nums {
         let key = format!("session_{n}");
@@ -154,24 +149,31 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         )
         .with_context(|| format!("failed to parse turns for {key}"))?;
         let group_id = format!("{}::session_{n}", conv.sample_id);
-        let mut lines = Vec::new();
         for (turn_idx, turn) in turns.iter().enumerate() {
             // Image turns carry their visual content in blip_caption/query;
             // index it inline so it is routable and reader-visible. One
-            // systematic place: the turn line that feeds both the session
-            // text and the indexed document content.
+            // systematic place: the turn line that feeds the indexed
+            // document content.
             let mut line = format!("{}: {}", turn.speaker, turn.text);
-            if let Some(caption) = turn.blip_caption.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(caption) = turn
+                .blip_caption
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
                 line.push_str(&format!(" [image: {}]", caption));
             }
-            if let Some(q) = turn.query.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some(q) = turn
+                .query
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+            {
                 line.push_str(&format!(" [image topic: {}]", q));
             }
-            lines.push(line.clone());
             let mut filters = BTreeMap::new();
             filters.insert("memory_user_id".to_string(), LOCOMO_USER_ID.to_string());
             let doc_id = format!("{group_id}::turn{turn_idx}");
-            doc_group.insert(doc_id.clone(), group_id.clone());
             rel_turns.push(RelationTurn {
                 speaker: turn.speaker.clone(),
                 text: turn.text.clone(),
@@ -193,27 +195,26 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
                 doc_length: turn.text.len(),
                 author_agent: None,
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             });
-        }
-        session_text.insert(group_id.clone(), lines.join("\n"));
-        if let Some(d) = date {
-            session_date.insert(group_id, d);
         }
     }
 
-    // Segmented layout with the gated-local routing strategy (the settled
-    // default), top_n=5 matching the retrieval benchmark.
-    let mut options = PipelineOptions::default();
-    options.memory_index_layout = MemoryIndexLayout::Segmented {
-        query_top_n: 5,
-        routing_strategy: SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-    };
+    // Production retrieval options: the benchmark measures the production
+    // path, so it builds from the same defaults the server uses rather
+    // than a hand-duplicated copy. Only LoCoMo-harness-specific choices
+    // are overridden below (per-conversation index, pre-attached phrases).
+    let mut options = default_production_pipeline_options();
     // Grammar-accepted entity mentions (behood noun-phrase layer) run in one
     // spaCy subprocess per conversation, BEFORE upsert, so each turn-doc
     // carries its session's key phrases into the segment summaries.
     // Any failure degrades to empty phrases and the adaptive path.
-    let extractor_output = extract_relations_via_spacy(&rel_turns);
-    let raw_relations = extractor_output.relations;
+    // Enrichment is off: this is a one-shot snapshot builder and the
+    // phrases are already attached above; queuing them again would only
+    // redo identical extraction in the background.
+    options.key_phrase_enrichment = false;
+    let extractor_output =
+        extract_relations_via_spacy(&rel_turns, std::time::Duration::from_secs(120));
     let mut phrases_by_session: HashMap<String, Vec<lint_ai::KeyPhrase>> = HashMap::new();
     for kp in extractor_output.key_phrases {
         phrases_by_session
@@ -236,29 +237,65 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         service.upsert(doc);
     }
     service.refresh().context("failed to build conv index")?;
-    let searcher = service.published_search();
-    // Entity-relation sidecar: dependency-parse (subject, predicate, object)
-    // triples over the raw turns for structured fact queries
-    // ("both X and Y", "where was X between <dates>"). Built from the same
-    // extractor run as the key phrases above.
-    let relations = RelationIndex::build(&rel_turns, &raw_relations);
-    eprintln!(
-        "  relations for {}: {} triples, {} persons",
-        conv.sample_id,
-        relations.triple_count(),
-        relations.persons.len()
-    );
     Ok(ConvIndex {
-        searcher,
-        session_text,
-        session_date,
-        doc_group,
-        relations,
+        searcher: Mutex::new(service),
     })
 }
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"ok": true}))
+}
+
+/// Run one benchmark query through the agent's search entry point:
+/// [`MemoryService::search_with_filters`], the same function the MCP `search`
+/// tools call, with hits shaped by the shared `search_results` formatter so
+/// the reader sees exactly what an agent sees. The per-conversation session
+/// id scopes follow-up resolution and the conversational reranker; hits are
+/// matched turns only (no full-session expansion).
+fn run_search(index: &ConvIndex, conv: &str, query: &str, k: usize) -> Result<Vec<Hit>> {
+    let mut filters = BTreeMap::new();
+    filters.insert("memory_user_id".to_string(), LOCOMO_USER_ID.to_string());
+    let shaped: Value = {
+        let mut searcher = index
+            .searcher
+            .lock()
+            .expect("benchmark searcher lock poisoned");
+        let results =
+            searcher.search_with_filters(query, BENCHMARK_SCOPE, Some(conv), k, &filters)?;
+        search_results(&searcher, results)
+    };
+    let mut out = Vec::new();
+    for hit in shaped
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        // The reader is text-only: flatten the agent-facing JSON the way the
+        // benchmark always has -- content (date-prefixed and truncated
+        // exactly as the agent sees it) with relation evidence inline.
+        let content = hit.get("content").and_then(Value::as_str).unwrap_or("");
+        let evidence: Vec<&str> = hit
+            .get("relation_evidence")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let text = if evidence.is_empty() {
+            content.to_string()
+        } else {
+            format!("[{}] {content}", evidence.join("; "))
+        };
+        out.push(Hit {
+            session_id: hit
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            score: hit.get("score").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+            text,
+        });
+    }
+    Ok(out)
 }
 
 async fn search(
@@ -270,105 +307,9 @@ async fn search(
         .get(&p.conv)
         .ok_or((StatusCode::NOT_FOUND, format!("unknown conv {}", p.conv)))?;
     let k = p.k.clamp(1, 20);
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    // Structured fact path: independent analyzers extract (persons, time
-    // window, answer type) from the question; composition picks the
-    // shared-relation or temporal-span query. Evidence sessions go first,
-    // then the normal search backfills the rest.
-    if let Some(fq) = analyze_fact_question(&p.q) {
-        let temporal = fq.persons.len() == 1 && fq.time_window.is_some();
-        let hits: Option<Vec<SharedObject>> = match (fq.persons.len(), fq.time_window) {
-            (2.., _) => conv
-                .relations
-                .query_shared(&fq.persons, fq.family, fq.expect_place),
-            (1, Some((start, end))) => {
-                // Family-agnostic temporal span (PredicateFamily::Any): person
-                // + time window + content overlap, for 1-person + window
-                // questions whose answer type is not a known family.
-                if fq.family == PredicateFamily::Any {
-                    conv.relations
-                        .query_temporal_span_general(&fq.persons[0], start, end, &p.q)
-                } else {
-                    conv.relations.query_temporal_span(
-                        &fq.persons[0],
-                        fq.family,
-                        start,
-                        end,
-                        fq.expect_place,
-                    )
-                }
-            }
-            _ => None,
-        };
-        if let Some(objs) = hits {
-            let label = if temporal {
-                "temporal relation"
-            } else {
-                "shared relation"
-            };
-            for obj in &objs {
-                for ev in &obj.evidence {
-                    if seen.insert(ev.session_id.clone()) {
-                        if let Some(text) = conv.session_text.get(&ev.session_id) {
-                            let text = with_date_prefix(
-                                conv,
-                                &ev.session_id,
-                                format!("[{label}: {}] {text}", obj.object),
-                            );
-                            out.push(Hit {
-                                session_id: ev.session_id.clone(),
-                                score: 1000.0 + obj.score,
-                                text,
-                            });
-                        }
-                    }
-                    if out.len() >= k {
-                        break;
-                    }
-                }
-                if out.len() >= k {
-                    break;
-                }
-            }
-        }
-    }
-    // Per-conversation session id: the production path resolves follow-up
-    // phrasing against prior observed queries and fires the conversational
-    // reranker when the query classifies as a follow-up. Over-fetch docs,
-    // then collapse to sessions in rank order.
-    let request = SearchRequest {
-        query: p.q.clone(),
-        options: None,
-        user_id: LOCOMO_USER_ID.to_string(),
-        top_k: k * 6,
-        session_id: Some(p.conv.clone()),
-    };
-    let response = conv
-        .searcher
-        .search(request)
+    let results = run_search(conv, &p.conv, &p.q, k)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    for r in response.data {
-        let gid = conv
-            .doc_group
-            .get(&r.id)
-            .cloned()
-            .unwrap_or_else(|| r.id.clone());
-        if !seen.insert(gid.clone()) {
-            continue;
-        }
-        if let Some(text) = conv.session_text.get(&gid) {
-            out.push(Hit {
-                session_id: gid.clone(),
-                score: r.score,
-                text: with_date_prefix(conv, &gid, text.clone()),
-            });
-        }
-        if out.len() >= k {
-            break;
-        }
-    }
-    Ok(Json(SearchResp { results: out }))
+    Ok(Json(SearchResp { results }))
 }
 
 #[tokio::main]
@@ -397,4 +338,84 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal per-conversation index built directly (bypassing
+    /// `build_conv_index`, which shells out to spaCy) to test the aligned
+    /// search path: `search_with_filters` + the shared agent-facing shaping.
+    fn test_index() -> ConvIndex {
+        let mut options = default_production_pipeline_options();
+        options.key_phrase_enrichment = false;
+        let mut service = MemoryService::in_memory(options);
+        let mut filters = BTreeMap::new();
+        filters.insert("memory_user_id".to_string(), LOCOMO_USER_ID.to_string());
+        service.upsert(SourceDocument {
+            doc_id: "conv-1::session_1::turn0".to_string(),
+            source: "locomo/conv-1/session/1/turn/0".to_string(),
+            content: "Ted: I visited the Eiffel Tower in Paris".to_string(),
+            concept: "locomo-turn".to_string(),
+            group_id: Some("conv-1::session_1".to_string()),
+            filters,
+            headings: vec![],
+            links: vec![],
+            timestamp: Some("2024-05-01".to_string()),
+            doc_length: 41,
+            author_agent: None,
+            key_phrases: vec![lint_ai::KeyPhrase {
+                text: "Eiffel Tower".to_string(),
+                kind: "place".to_string(),
+            }],
+            key_phrase_extraction_hash: String::new(),
+        });
+        service.refresh().expect("refresh test index");
+        ConvIndex {
+            searcher: Mutex::new(service),
+        }
+    }
+
+    #[test]
+    fn benchmark_search_uses_agent_entry_point_and_shaping() {
+        let index = test_index();
+        let hits = run_search(&index, "conv-1", "Eiffel Tower Paris", 5).expect("search");
+        assert_eq!(hits.len(), 1, "expected the indexed turn, got {hits:?}");
+        let hit = &hits[0];
+        // Agent-facing shaping from the shared `search_results` formatter:
+        // absolute date prefix and the turn text an agent would see.
+        assert!(
+            hit.text.contains("[session date: 2024-05-01]"),
+            "missing date prefix: {}",
+            hit.text
+        );
+        assert!(hit.text.contains("Eiffel Tower"), "text: {}", hit.text);
+        assert_eq!(hit.session_id, "conv-1::session_1");
+        assert!(hit.score > 0.0);
+    }
+
+    #[test]
+    fn benchmark_search_resolves_follow_ups_through_session_state() {
+        let index = test_index();
+        // The first query is observed into the (scope, session) state, the
+        // way the MCP tools observe it; a follow-up phrasing then runs the
+        // same resolution + conversational rerank an agent gets.
+        let first = run_search(&index, "conv-1", "Eiffel Tower Paris", 5).expect("search");
+        assert_eq!(first.len(), 1);
+        let follow_up = run_search(&index, "conv-1", "when did he visit it", 5).expect("follow-up");
+        assert_eq!(
+            follow_up.len(),
+            1,
+            "follow-up should still retrieve the turn, got {follow_up:?}"
+        );
+        assert!(follow_up[0].text.contains("Eiffel Tower"));
+    }
+
+    #[test]
+    fn benchmark_search_unknown_query_returns_no_hits() {
+        let index = test_index();
+        let hits = run_search(&index, "conv-1", "quantum chromodynamics", 5).expect("search");
+        assert!(hits.is_empty(), "unexpected hits: {hits:?}");
+    }
 }

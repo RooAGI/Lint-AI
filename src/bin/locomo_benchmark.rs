@@ -194,6 +194,7 @@ fn build_conversation_docs(conv: &LocomoConversation) -> Result<Vec<SourceDocume
                 doc_length: turn.text.len(),
                 author_agent: None,
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             });
         }
     }

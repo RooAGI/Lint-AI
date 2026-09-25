@@ -553,6 +553,7 @@ pub fn promote_recorded_session(
             doc_id: doc_id.clone(),
             content: event_content(&event),
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         };
         store.upsert(document);
         imported_document_ids.push(doc_id);

@@ -476,6 +476,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
                 doc_length: turn.content.len(),
                 author_agent: None,
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             });
         }
     }

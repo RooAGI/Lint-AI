@@ -29,9 +29,8 @@
 //!     the query names a person, and an interrogative-turn penalty for
 //!     wh-questions.
 //!
-//! Retrieval goes through the public `MemoryService` / `MemorySearchService`
-//! path (prepare -> retrieve -> observe), the same path the MCP server uses.
-//! The query cache is disabled so every arm executes retrieval fresh.
+//! Retrieval goes through the public `MemoryService` path
+//! (prepare -> retrieve -> observe), the same path the MCP server uses.
 //! Sessions are fresh per pair, so there is no cross-pair contamination.
 
 use anyhow::{Context, Result};
@@ -812,9 +811,6 @@ fn category_label(category: u8) -> &'static str {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    // Every arm must execute retrieval; never serve one arm from another's
-    // cache entry.
-    std::env::set_var("LINT_AI_DISABLE_QUERY_CACHE", "1");
 
     let data = fs::read_to_string(&args.locomo)
         .with_context(|| format!("failed to read {}", args.locomo.display()))?;
@@ -861,7 +857,15 @@ fn main() -> Result<()> {
             .collect();
         session_nums.sort_unstable();
 
-        let mut service = MemoryService::in_memory(options.clone());
+        // Control arm: base ranking only. Production arm: the library's
+        // conversational rerank, enabled via the index options. One service
+        // per arm -- there is a single search entry point.
+        let mut options_base = options.clone();
+        options_base.conversational_rerank = false;
+        let mut options_prod = options.clone();
+        options_prod.conversational_rerank = true;
+        let mut service = MemoryService::in_memory(options_base);
+        let mut service_prod = MemoryService::in_memory(options_prod);
         // doc_id -> "s{session}t{turn_idx}" turn key for turn-level scoring.
         let mut doc_to_turn: HashMap<String, String> = HashMap::new();
         // (session_n, turn_idx) -> (speaker, text) for the conversational
@@ -912,14 +916,8 @@ fn main() -> Result<()> {
                 session_id: group_id,
             });
         }
-        service.add_batch(add_requests)?;
-        let mut searcher = service.published_search();
-        // Controls use the base ranking only; the production rerank arm below
-        // enables the library implementation explicitly.
-        searcher.set_conversational_rerank(Some(false));
-        // Production rerank arm: the library's conversational rerank, enabled.
-        let mut searcher_prod = service.published_search();
-        searcher_prod.set_conversational_rerank(Some(true));
+        service.add_batch(add_requests.clone())?;
+        service_prod.add_batch(add_requests)?;
         eprintln!(
             "conversation {} indexed ({} sessions)",
             conv.sample_id,
@@ -931,7 +929,7 @@ fn main() -> Result<()> {
                              top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
-            let response = searcher.search(SearchRequest {
+            let response = service.search(SearchRequest {
                 query: query.to_string(),
                 options: None,
                 user_id: USER_ID.to_string(),
@@ -961,7 +959,7 @@ fn main() -> Result<()> {
                                   top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
-            let response = searcher_prod.search(SearchRequest {
+            let response = service_prod.search(SearchRequest {
                 query: query.to_string(),
                 options: None,
                 user_id: USER_ID.to_string(),

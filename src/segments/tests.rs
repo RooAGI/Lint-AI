@@ -53,6 +53,8 @@ fn record(doc_id: &str, group_id: &str, content: &str, terms: &[&str]) -> DocRec
                 source: "test".to_string(),
             })
             .collect(),
+        key_phrases: vec![],
+        key_phrase_extraction_hash: String::new(),
         section_chunks: vec![],
         embedding: None,
         top_claims: vec![],

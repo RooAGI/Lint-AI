@@ -10,15 +10,18 @@ use axum::{
 use clap::Parser;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use lint_ai::memory_api::{
-    AddRequest, DeleteRequest, GetRequest, ListRequest, MemorySearchService, MemoryService,
-    SearchRequest, SupersedeRequest, UpdateRequest,
+    AddRequest, DeleteRequest, GetRequest, ListRequest, MemoryService, SearchRequest,
+    SupersedeRequest, UpdateRequest,
 };
 use lint_ai::segments::SegmentRoutingStrategy;
 use lint_ai::telemetry::{
     project_query_snapshot, provider_lifecycle_status, OperationalTelemetry,
     ProviderLifecycleEvent, TelemetrySnapshot,
 };
-use lint_ai::{IndexStoreInspection, MemoryIndexLayout, PipelineOptions};
+use lint_ai::{
+    default_production_pipeline_options, IndexStoreInspection, MemoryIndexLayout, PipelineOptions,
+    DEFAULT_SEGMENT_QUERY_TOP_N,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -58,15 +61,57 @@ struct Args {
     /// Disable the two-stage conversational rerank for session follow-ups.
     #[arg(long)]
     no_conversational_rerank: bool,
+    /// Segment routing strategy for the segmented layout.
+    /// Names match docs/benchmark-results.md; the default is the measured
+    /// best recall-per-latency trade-off (gated coverage-local).
+    #[arg(long, value_enum, default_value_t = SegmentRoutingArg::GatedCoverageLocal)]
+    segment_routing: SegmentRoutingArg,
     /// Project root containing provider hook telemetry under `.lint-ai`.
     #[arg(long)]
     project_root: Option<PathBuf>,
 }
 
+/// CLI-selectable segment routing strategies. Variant names map to the router
+/// names in docs/benchmark-results.md; see SegmentRoutingStrategy for the
+/// scoring each one applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SegmentRoutingArg {
+    Sparse,
+    LocalDistinctiveness,
+    CoverageLocal,
+    CoverageTeam,
+    TeamCoverageLocal,
+    TypedEvidenceAdditive,
+    GatedCoverageLocal,
+    GatedCoverageTeam,
+}
+
+impl SegmentRoutingArg {
+    fn strategy(self) -> SegmentRoutingStrategy {
+        match self {
+            SegmentRoutingArg::Sparse => SegmentRoutingStrategy::SparseOverlap,
+            SegmentRoutingArg::LocalDistinctiveness => SegmentRoutingStrategy::LocalDistinctiveness,
+            SegmentRoutingArg::CoverageLocal => {
+                SegmentRoutingStrategy::CoverageLocalDistinctiveness
+            }
+            SegmentRoutingArg::CoverageTeam => SegmentRoutingStrategy::CoverageTeamSelection,
+            SegmentRoutingArg::TeamCoverageLocal => {
+                SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness
+            }
+            SegmentRoutingArg::TypedEvidenceAdditive => SegmentRoutingStrategy::TypedEvidence,
+            SegmentRoutingArg::GatedCoverageLocal => {
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
+            }
+            SegmentRoutingArg::GatedCoverageTeam => {
+                SegmentRoutingStrategy::CoverageTeamTypedMultiplicative
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     service: Arc<RwLock<MemoryService>>,
-    published_search: Arc<RwLock<MemorySearchService>>,
     writer_gate: Arc<tokio::sync::Mutex<()>>,
     token: Option<Arc<str>>,
     jwt_secret: Option<Arc<str>>,
@@ -183,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
         args.global_index,
         args.fuse_global,
         !args.no_conversational_rerank,
+        args.segment_routing.strategy(),
     );
     let project_root = args
         .project_root
@@ -213,10 +259,8 @@ async fn main() -> anyhow::Result<()> {
             .transpose()?
             .unwrap_or_else(|| MemoryService::in_memory(options)),
     };
-    let published_search = service.published_search();
     let state = AppState {
         service: Arc::new(RwLock::new(service)),
-        published_search: Arc::new(RwLock::new(published_search)),
         writer_gate: Arc::new(tokio::sync::Mutex::new(())),
         token: args
             .server_token
@@ -228,6 +272,17 @@ async fn main() -> anyhow::Result<()> {
         telemetry: OperationalTelemetry::new(),
         project_root,
     };
+    // Warm the spaCy extractor daemon in the background: the first query
+    // that needs key-phrase backfill or structured relations then pays
+    // inference only (~100ms) instead of interpreter+model load (~2-3s).
+    // Best-effort — extraction falls back to one-shot subprocesses if the
+    // daemon cannot start.
+    std::thread::Builder::new()
+        .name("extractor-daemon-prewarm".to_string())
+        .spawn(|| {
+            lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
+        })
+        .ok();
     let app = Router::new()
         .route("/health", get(health))
         .route("/dashboard", get(dashboard))
@@ -278,42 +333,45 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Production pipeline options with the server's CLI flags applied as
+/// overrides on top of [`default_production_pipeline_options`].
 fn memory_pipeline_options(
     adaptive_segment_max_n: Option<usize>,
     single_index: bool,
     global_index: bool,
     fuse_global: bool,
     conversational_rerank: bool,
+    routing_strategy: SegmentRoutingStrategy,
 ) -> PipelineOptions {
     if single_index {
         return PipelineOptions {
             memory_index_layout: MemoryIndexLayout::Single,
-            ..PipelineOptions::default()
+            ..default_production_pipeline_options()
         };
     }
     let layout = if global_index {
         MemoryIndexLayout::Segmented {
             query_top_n: usize::MAX,
-            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
+            routing_strategy,
         }
     } else {
         adaptive_segment_max_n
-            .filter(|max_n| *max_n > 3)
+            .filter(|max_n| *max_n > DEFAULT_SEGMENT_QUERY_TOP_N)
             .map(|max_n| MemoryIndexLayout::AdaptiveSegmented {
-                query_top_n: 3,
+                query_top_n: DEFAULT_SEGMENT_QUERY_TOP_N,
                 max_query_n: max_n,
-                routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
+                routing_strategy,
             })
             .unwrap_or(MemoryIndexLayout::Segmented {
-                query_top_n: 3,
-                routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
+                query_top_n: DEFAULT_SEGMENT_QUERY_TOP_N,
+                routing_strategy,
             })
     };
     PipelineOptions {
         memory_index_layout: layout,
         fuse_global_arm: fuse_global,
         conversational_rerank,
-        ..PipelineOptions::default()
+        ..default_production_pipeline_options()
     }
 }
 
@@ -751,7 +809,14 @@ fn dashboard_provider_indexes(
             }
             let inspection = MemoryService::at_path(
                 &path,
-                memory_pipeline_options(None, false, false, false, true),
+                memory_pipeline_options(
+                    None,
+                    false,
+                    false,
+                    false,
+                    true,
+                    SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+                ),
             )
             .ok()?
             .inspection();
@@ -841,11 +906,9 @@ async fn add(
     };
     let result = {
         let state = state.clone();
-        tokio::task::spawn_blocking(move || {
-            publish_mutation(&state, |service| service.add(request))
-        })
-        .await
-        .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
+        tokio::task::spawn_blocking(move || write_mutation(&state, |service| service.add(request)))
+            .await
+            .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
     };
     match result {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(result).unwrap())).into_response(),
@@ -887,7 +950,7 @@ async fn add_batch(
     };
     let result = tokio::task::spawn_blocking({
         let state = state.clone();
-        move || publish_mutation(&state, |service| service.add_batch(requests))
+        move || write_mutation(&state, |service| service.add_batch(requests))
     })
     .await
     .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")));
@@ -919,13 +982,52 @@ async fn search(
                 .into_response()
         }
     };
-    // Published snapshots are immutable and search is read-only. Execute it
-    // directly so concurrent requests do not queue behind the blocking-pool
-    // handoff; mutation/index rebuild work remains on spawn_blocking paths.
+    // MemoryService::search takes a shared borrow: reads hold the read lock
+    // and never block writers. Execute it directly so concurrent requests do
+    // not queue behind the blocking-pool handoff; mutation/index rebuild
+    // work remains on spawn_blocking paths.
+    //
+    // Query-time key-phrase backfill: documents written by provider hooks
+    // (separate short-lived processes) never see this process's background
+    // enrichment worker, so the first query that needs their phrases
+    // extracts them synchronously here. The read-lock check is cheap, so
+    // the steady state costs nothing; the extractor (the slow part) runs
+    // with no service lock held, and only the fast apply step takes the
+    // write lock. A concurrent write landing mid-backfill is safe:
+    // application re-validates content hashes and skips stale results.
+    // Bounded and fail-open.
+    let backfill_needed = state
+        .service
+        .read()
+        .map(|service| service.key_phrase_backfill_needed())
+        .unwrap_or(false);
+    if backfill_needed {
+        let owned_state = state.clone();
+        let backfill = tokio::task::spawn_blocking(move || {
+            let (docs, script) = owned_state
+                .service
+                .read()
+                .map(|service| service.key_phrase_backfill_snapshot())
+                .map_err(|_| anyhow::anyhow!("memory service lock poisoned"))?;
+            if docs.is_empty() {
+                return Ok(0);
+            }
+            let raw = MemoryService::extract_key_phrases_for_docs(&docs, script.as_deref());
+            write_mutation(&owned_state, |service| {
+                Ok(service.apply_key_phrase_backfill(&docs, raw))
+            })
+        })
+        .await
+        .map_err(|join| anyhow::anyhow!("backfill task failed: {join}"))
+        .and_then(|inner| inner);
+        if let Err(error) = backfill {
+            eprintln!("key-phrase backfill failed (fail-open): {error:#}");
+        }
+    }
     let started = Instant::now();
-    let result = match state.published_search.read() {
+    let result = match state.service.read() {
         Ok(service) => service.search(request),
-        Err(_) => Err(anyhow::anyhow!("published search lock poisoned")),
+        Err(_) => Err(anyhow::anyhow!("memory service lock poisoned")),
     };
     match result {
         Ok(result) => {
@@ -1028,7 +1130,7 @@ async fn update_memory(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            publish_mutation(&state, |service| service.update(request))
+            write_mutation(&state, |service| service.update(request))
         })
         .await
         .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
@@ -1071,7 +1173,7 @@ async fn delete_memory(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            publish_mutation(&state, |service| {
+            write_mutation(&state, |service| {
                 service.delete(&request.user_id, &request.doc_id)
             })
         })
@@ -1099,7 +1201,7 @@ async fn refresh_memories(State(state): State<AppState>) -> impl IntoResponse {
     };
     let result = {
         let state = state.clone();
-        tokio::task::spawn_blocking(move || publish_mutation(&state, |service| service.refresh()))
+        tokio::task::spawn_blocking(move || write_mutation(&state, |service| service.refresh()))
             .await
             .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
     };
@@ -1141,7 +1243,7 @@ async fn delete(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            publish_mutation(&state, |s| s.delete(&request.user_id, &request.doc_id))
+            write_mutation(&state, |s| s.delete(&request.user_id, &request.doc_id))
         })
         .await
         .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
@@ -1184,7 +1286,7 @@ async fn supersede(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
-            publish_mutation(&state, |s| {
+            write_mutation(&state, |s| {
                 s.supersede(&request.user_id, &request.replacement_id, &request.old_id)
             })
         })
@@ -1223,7 +1325,7 @@ async fn expire(
         .to_owned();
     let state_for_mutation = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        publish_mutation(&state_for_mutation, |service| service.expire(&user_id))
+        write_mutation(&state_for_mutation, |service| service.expire(&user_id))
     })
     .await
     .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")));
@@ -1237,21 +1339,18 @@ async fn expire(
     }
 }
 
-fn publish_mutation<T>(
+fn write_mutation<T>(
     state: &AppState,
     mutation: impl FnOnce(&mut MemoryService) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
+    // Writes refresh the store's snapshot before releasing the lock, so
+    // subsequent reads (shared lock, no re-publish step) are always current.
     let mut service = state
         .service
         .write()
         .map_err(|_| anyhow::anyhow!("memory writer lock poisoned"))?;
     let result = mutation(&mut service)?;
-    let next = service.published_search();
     drop(service);
-    *state
-        .published_search
-        .write()
-        .map_err(|_| anyhow::anyhow!("published search lock poisoned"))? = next;
     Ok(result)
 }
 
@@ -1293,7 +1392,15 @@ mod tests {
     #[test]
     fn server_uses_segmented_memory_index() {
         assert!(matches!(
-            memory_pipeline_options(None, false, false, false, true).memory_index_layout,
+            memory_pipeline_options(
+                None,
+                false,
+                false,
+                false,
+                true,
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
+            )
+            .memory_index_layout,
             MemoryIndexLayout::Segmented { .. }
         ));
     }
@@ -1301,9 +1408,17 @@ mod tests {
     #[test]
     fn server_adaptive_mode_is_opt_in() {
         assert!(matches!(
-            memory_pipeline_options(Some(8), false, false, false, true).memory_index_layout,
+            memory_pipeline_options(
+                Some(8),
+                false,
+                false,
+                false,
+                true,
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
+            )
+            .memory_index_layout,
             MemoryIndexLayout::AdaptiveSegmented {
-                query_top_n: 3,
+                query_top_n: 5,
                 max_query_n: 8,
                 ..
             }
@@ -1312,10 +1427,93 @@ mod tests {
 
     #[test]
     fn server_adaptive_limit_at_or_below_base_keeps_fixed_mode() {
-        for limit in [0, 2, 3] {
+        for limit in [0, 2, 3, 4, 5] {
             assert!(matches!(
-                memory_pipeline_options(Some(limit), false, false, false, true).memory_index_layout,
+                memory_pipeline_options(
+                    Some(limit),
+                    false,
+                    false,
+                    false,
+                    true,
+                    SegmentRoutingStrategy::TypedEvidenceMultiplicative
+                )
+                .memory_index_layout,
                 MemoryIndexLayout::Segmented { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn server_default_routing_is_the_chosen_gated_coverage_local() {
+        // The benchmark comparison in docs/benchmark-results.md settled on
+        // gated coverage-local as the best recall-per-latency trade-off; the
+        // server default must track that decision, not a stale hardcoded
+        // variant.
+        assert_eq!(
+            SegmentRoutingArg::GatedCoverageLocal.strategy(),
+            SegmentRoutingStrategy::TypedEvidenceMultiplicative
+        );
+        let options = memory_pipeline_options(
+            None,
+            false,
+            false,
+            false,
+            true,
+            SegmentRoutingArg::GatedCoverageLocal.strategy(),
+        );
+        assert!(matches!(
+            options.memory_index_layout,
+            MemoryIndexLayout::Segmented {
+                routing_strategy: SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn segment_routing_flag_selects_each_strategy() {
+        for (arg, expected) in [
+            (
+                SegmentRoutingArg::Sparse,
+                SegmentRoutingStrategy::SparseOverlap,
+            ),
+            (
+                SegmentRoutingArg::LocalDistinctiveness,
+                SegmentRoutingStrategy::LocalDistinctiveness,
+            ),
+            (
+                SegmentRoutingArg::CoverageLocal,
+                SegmentRoutingStrategy::CoverageLocalDistinctiveness,
+            ),
+            (
+                SegmentRoutingArg::CoverageTeam,
+                SegmentRoutingStrategy::CoverageTeamSelection,
+            ),
+            (
+                SegmentRoutingArg::TeamCoverageLocal,
+                SegmentRoutingStrategy::TeamCoverageLocalDistinctiveness,
+            ),
+            (
+                SegmentRoutingArg::TypedEvidenceAdditive,
+                SegmentRoutingStrategy::TypedEvidence,
+            ),
+            (
+                SegmentRoutingArg::GatedCoverageLocal,
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+            ),
+            (
+                SegmentRoutingArg::GatedCoverageTeam,
+                SegmentRoutingStrategy::CoverageTeamTypedMultiplicative,
+            ),
+        ] {
+            assert_eq!(arg.strategy(), expected);
+            let options = memory_pipeline_options(None, false, false, false, true, arg.strategy());
+            assert!(matches!(
+                options.memory_index_layout,
+                MemoryIndexLayout::Segmented {
+                    routing_strategy,
+                    ..
+                } if routing_strategy == expected
             ));
         }
     }
@@ -1326,13 +1524,31 @@ mod tests {
     }
 
     #[test]
-    fn published_search_lock_is_independent_from_writer_lock() {
-        let service =
-            MemoryService::in_memory(memory_pipeline_options(None, false, false, false, true));
-        let published = service.published_search();
+    fn search_reads_see_writes_through_the_single_service_lock() {
+        let mut service = MemoryService::in_memory(memory_pipeline_options(
+            None,
+            false,
+            false,
+            false,
+            true,
+            SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+        ));
+        service
+            .add(AddRequest {
+                request_id: "r1".into(),
+                messages: vec![lint_ai::memory_api::Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "project codename zephyr".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap();
         let state = AppState {
             service: Arc::new(RwLock::new(service)),
-            published_search: Arc::new(RwLock::new(published)),
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
             token: None,
             jwt_secret: None,
@@ -1340,8 +1556,20 @@ mod tests {
             telemetry: OperationalTelemetry::new(),
             project_root: std::env::current_dir().unwrap(),
         };
-        let _writer = state.service.write().unwrap();
-        assert!(state.published_search.try_read().is_ok());
+        // Reads take the shared lock and see the write with no re-publish step.
+        let response = state
+            .service
+            .read()
+            .unwrap()
+            .search(SearchRequest {
+                query: "codename zephyr".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+            })
+            .unwrap();
+        assert!(response.data.iter().any(|m| m.content.contains("zephyr")));
     }
 
     #[test]

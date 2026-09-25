@@ -51,6 +51,16 @@ pub mod index;
     feature = "muse-code"
 ))]
 mod integrations;
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code"
+))]
+/// Agent-facing search-result shaping, shared by the MCP `search` tools and
+/// the retrieval benchmark so both present hits identically.
+pub use crate::integrations::mcp_tools::search_results;
 pub mod memory_api;
 pub mod pipeline;
 pub mod query_plan;
@@ -91,10 +101,11 @@ pub use crate::index::{
 };
 pub use crate::pipeline::{
     build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
-    build_query_snapshot_from_source_documents, resolve_store_paths, ChunkStrategy, IndexDump,
-    IndexLocation, IndexStore, IndexStoreInspection, MemoryIndexLayout,
-    MemoryIndexSegmentInspection, MemoryIndexSnapshot, MemoryIndexSnapshotInspection,
-    PipelineOptions, PublishedIndexSnapshot, StorePaths, Tier1NerProvider, Tier1TermRankerKind,
+    build_query_snapshot_from_source_documents, default_production_pipeline_options,
+    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, IndexStoreInspection,
+    MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
+    MemoryIndexSnapshotInspection, PipelineOptions, StorePaths, Tier1NerProvider,
+    Tier1TermRankerKind, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
 pub use crate::segments::{
     SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,
@@ -354,7 +365,14 @@ impl PyMemoryCore {
             session_id: None,
         };
         let response = match &mut self.backend {
-            MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,
+            MemoryBackend::Local(service) => {
+                // Query-time key-phrase backfill: documents written by
+                // provider hooks (separate short-lived processes) get their
+                // phrases extracted synchronously so this query benefits.
+                // Bounded to one extractor batch and fail-open.
+                service.backfill_key_phrases();
+                service.search(request).map_err(runtime_error)?
+            }
             MemoryBackend::Remote(client) => py
                 .detach(|| client.search(&request))
                 .map_err(runtime_error)?,

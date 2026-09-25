@@ -340,6 +340,7 @@ mod tests {
             doc_length: 13,
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         };
         let symbol = SymbolRecord::declared(
             "doc-1",

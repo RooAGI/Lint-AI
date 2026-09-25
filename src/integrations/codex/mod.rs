@@ -1160,6 +1160,7 @@ args = ["old"]
             doc_length: "docker install guide".len(),
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         };
         let mcp = test_mcp(root.clone(), vec![document]);
         let response = mcp
@@ -1258,6 +1259,7 @@ args = ["old"]
             doc_length: 38,
             author_agent: Some("codex".to_string()),
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         });
         memory.refresh().unwrap();
         drop(memory);

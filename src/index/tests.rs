@@ -34,6 +34,8 @@ fn timestamped_chunk_detects_chunk_level_temporal_anchor() {
         temporal_terms: vec![],
         key_entities: vec![],
         important_terms: vec![],
+        key_phrases: vec![],
+        key_phrase_extraction_hash: String::new(),
         section_chunks: vec![SectionChunk {
             chunk_id: "doc-1::0".to_string(),
             heading: "Overview".to_string(),

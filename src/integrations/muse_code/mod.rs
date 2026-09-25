@@ -1172,6 +1172,7 @@ mod tests {
                 author_agent: None,
                 filters: std::collections::BTreeMap::new(),
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             }],
         );
         let list = call_tool(&mcp, "list_memories", json!({"limit": 5}));
@@ -1203,6 +1204,7 @@ mod tests {
                 author_agent: None,
                 filters: std::collections::BTreeMap::new(),
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             }],
         );
 

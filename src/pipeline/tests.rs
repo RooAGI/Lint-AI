@@ -25,6 +25,7 @@ fn sample_doc(id: &str, content: &str) -> SourceDocument {
         doc_length: content.len(),
         author_agent: None,
         key_phrases: Vec::new(),
+        key_phrase_extraction_hash: String::new(),
     }
 }
 
@@ -65,6 +66,7 @@ fn sample_doc_with_group(id: &str, group_id: &str, content: &str) -> SourceDocum
     SourceDocument {
         group_id: Some(group_id.to_string()),
         key_phrases: Vec::new(),
+        key_phrase_extraction_hash: String::new(),
         ..sample_doc(id, content)
     }
 }
@@ -1364,6 +1366,17 @@ fn doc_record_content_hash_is_stable_and_sensitive() {
     let mut headed = doc.clone();
     headed.headings = vec!["Changed".to_string()];
     assert_ne!(baseline, doc_record_content_hash(&headed, &options));
+
+    let mut phrased = doc.clone();
+    phrased.key_phrases = vec![crate::source::KeyPhrase {
+        text: "Harry Potter conference".to_string(),
+        kind: "event".to_string(),
+    }];
+    assert_ne!(
+        baseline,
+        doc_record_content_hash(&phrased, &options),
+        "backfilled key phrases must invalidate the hash so refresh reprocesses the doc"
+    );
 
     let mut claim_options = PipelineOptions::default();
     claim_options.claim_extraction = true;

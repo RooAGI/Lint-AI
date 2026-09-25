@@ -281,6 +281,7 @@ fn capture(
         author_agent: Some(provider.as_str().to_string()),
         filters,
         key_phrases: Vec::new(),
+        key_phrase_extraction_hash: String::new(),
     };
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {

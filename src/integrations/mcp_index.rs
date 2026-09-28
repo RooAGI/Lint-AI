@@ -65,6 +65,7 @@ const LEGACY_PROVIDERS: &[RecordingProvider] = &[
     RecordingProvider::Gemini,
     RecordingProvider::Agy,
     RecordingProvider::Muse,
+    RecordingProvider::OpenClaw,
 ];
 
 /// Directory name (under `.lint-ai/`) of the legacy per-provider memory silo

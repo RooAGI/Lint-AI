@@ -19,7 +19,8 @@ use crate::integrations::recall::{relevant_excerpt, truncate_utf8};
 use crate::integrations::session_recording::{
     lint_ai_enabled, record_event_if_enabled, RecordingProvider,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::memory_api::MemoryService;
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use chrono::DateTime;
@@ -228,10 +229,12 @@ fn session_id(input: &OpenClawHookInput, kind: OpenClawHookKind) -> String {
 }
 
 fn memory_root(root: &Path) -> PathBuf {
-    root.join(".lint-ai").join("openclaw-memory")
+    // Shared store (unified on main): hook captures land where the MCP
+    // adapter reads, with provider attribution on the documents.
+    crate::integrations::mcp_index::shared_memory_root(root)
 }
 
-fn open_store(root: &Path) -> Result<IndexStore> {
+fn open_store(root: &Path) -> Result<MemoryService> {
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
             query_top_n: 3,
@@ -239,7 +242,7 @@ fn open_store(root: &Path) -> Result<IndexStore> {
         },
         ..PipelineOptions::default()
     };
-    IndexStore::at_path(&memory_root(root), options)
+    MemoryService::at_path(&memory_root(root), options)
 }
 
 fn current_timestamp() -> String {
@@ -305,7 +308,7 @@ fn retrieve_memories(root: &Path, query: &str) -> Result<String> {
     if store.is_empty() {
         return Ok(String::new());
     }
-    let results = store.query(query, DEFAULT_TOP_K * 3)?;
+    let results = store.observe_plain_query(query, "openclaw", None, DEFAULT_TOP_K * 3)?;
     let mut seen = HashSet::new();
     let mut output = String::new();
     for result in results.into_iter().take(DEFAULT_TOP_K) {
@@ -438,7 +441,7 @@ fn capture_outcome(
     };
     let mut store = open_store(root)?;
     store.upsert(document.into_source_document()?);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(ack(None))
 }
 
@@ -521,7 +524,7 @@ fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> 
     };
     let mut store = open_store(root)?;
     store.upsert(document.into_source_document()?);
-    store.refresh()?;
+    store.refresh_index()?;
     Ok(ack(None))
 }
 
@@ -590,7 +593,7 @@ mod tests {
             .into_source_document()
             .unwrap(),
         );
-        store.refresh().unwrap();
+        store.refresh_index().unwrap();
     }
 
     fn bootstrap_input(
@@ -742,7 +745,7 @@ mod tests {
         assert_eq!(third["ok"], true);
 
         let mut store = open_store(&root).unwrap();
-        let results = store.query("deployment steps", 10).unwrap();
+        let results = store.observe_plain_query("deployment steps", "openclaw", None, 10).unwrap();
         let outcomes: Vec<_> = results
             .iter()
             .filter_map(|r| store.record_by_id(&r.doc_id))
@@ -789,7 +792,7 @@ mod tests {
         assert_eq!(output["ok"], true);
 
         let mut store = open_store(&root).unwrap();
-        let results = store.query("reset the gateway", 10).unwrap();
+        let results = store.observe_plain_query("reset the gateway", "openclaw", None, 10).unwrap();
         let summaries: Vec<_> = results
             .iter()
             .filter_map(|r| store.record_by_id(&r.doc_id))

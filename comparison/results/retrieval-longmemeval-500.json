@@ -1,5 +1,5 @@
 {
-  "date": "2026-09-26",
+  "date": "2026-09-28",
   "dataset": "LongMemEval-S",
   "questions": 500,
   "scorer": "benchmark/score_retrieval.py",
@@ -12,11 +12,11 @@
     "NDCG@10"
   ],
   "Lint-AI": {
-    "Recall@5": 0.938,
-    "Recall@10": 0.966,
-    "Recall@20": 0.972,
-    "MRR": 0.8566,
-    "NDCG@10": 0.845
+    "Recall@5": 0.942,
+    "Recall@10": 0.968,
+    "Recall@20": 0.976,
+    "MRR": 0.8696,
+    "NDCG@10": 0.8499
   },
   "AgentMemory": {
     "Recall@5": 0.87,
@@ -25,5 +25,5 @@
     "MRR": 0.7164099239,
     "NDCG@10": 0.7299873453
   },
-  "note": "Single index (not segmented), heuristic backend, no embeddings. Commit 6561402."
+  "note": "Single index (not segmented), heuristic backend, no embeddings. Commit dbf6496a."
 }

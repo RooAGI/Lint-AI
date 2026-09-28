@@ -10,8 +10,8 @@ Search can find the right topic. Lint-AI helps an agent answer the harder questi
 
 [Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
 
-**Current benchmark:** 500-question aggregate · 83.5% fractional Recall@5 ·
-95.6% any-hit Recall@10 · ~1.88 ms average query latency · single CPU · no GPU
+**Current benchmark:** 500-question aggregate · 85.6% fractional Recall@5 ·
+96.8% any-hit Recall@10 · 13.0 ms average query latency · single CPU · no GPU
 
 ---
 
@@ -213,15 +213,15 @@ The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 
 
 | Metric | Result |
 |---|---:|
-| Fractional Recall@5 | **83.5%** |
-| Fractional Recall@10 | **89.5%** |
-| Fractional Recall@20 | **91.1%** |
-| Any-hit Recall@5 | **92.4%** |
-| Any-hit Recall@10 | **95.6%** |
-| Any-hit Recall@20 | **97.0%** |
-| MRR | **84.0%** |
-| NDCG@10 | **81.8%** |
-| Average query latency | **~1.88 ms** |
+| Fractional Recall@5 | **85.6%** |
+| Fractional Recall@10 | **92.0%** |
+| Fractional Recall@20 | **93.1%** |
+| Any-hit Recall@5 | **94.2%** |
+| Any-hit Recall@10 | **96.8%** |
+| Any-hit Recall@20 | **97.6%** |
+| MRR | **87.0%** |
+| NDCG@10 | **85.0%** |
+| Average query latency | **13.0 ms** |
 
 `Fractional Recall@k` is the average fraction of all correct answer sessions recovered in the top *k*. `Any-hit Recall@k` counts a query as successful when any correct answer session appears in the top *k*.
 

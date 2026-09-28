@@ -62,6 +62,45 @@ fn workspace_watcher_publishes_relative_file_change_events_without_content() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn workspace_watcher_ignores_access_events_on_the_root() {
+    // Regression test: rebuilding the cached service does read_dir(root),
+    // which the OS reports as Access(Open) on the root directory. Treating
+    // access as a change made every rebuild schedule the next invalidation,
+    // so the cached MemoryService (and its in-memory key-phrase stamps) was
+    // discarded on every query and each query paid a full rebuild plus a
+    // key-phrase re-extraction.
+    let root = std::env::temp_dir().join(format!(
+        "lint-ai-workspace-watcher-access-{}-{}",
+        std::process::id(),
+        workspace_now_ms()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let watcher = WorkspaceWatcher::new(&root, &[]).unwrap();
+    // Drain any startup noise before simulating the rebuild's directory read.
+    thread::sleep(Duration::from_millis(100));
+    let _ = watcher.take_events();
+    let _ = fs::read_dir(&root).unwrap().count();
+    // Wait past the 350ms debounce window so the Access event (on platforms
+    // that emit one) is delivered, then assert it is not treated as a change.
+    thread::sleep(Duration::from_millis(800));
+    assert!(
+        watcher.take_events().is_empty(),
+        "access events must not invalidate the cached workspace service"
+    );
+    // Sanity check: a real modification is still reported.
+    fs::write(root.join("notes.md"), "hello").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut saw_change = false;
+    while !saw_change && std::time::Instant::now() < deadline {
+        saw_change = watcher.take_change();
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(saw_change, "real file writes must still invalidate the watcher");
+    drop(watcher);
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn sample_doc_with_group(id: &str, group_id: &str, content: &str) -> SourceDocument {
     SourceDocument {
         group_id: Some(group_id.to_string()),

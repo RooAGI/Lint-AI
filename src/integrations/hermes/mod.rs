@@ -85,7 +85,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 }
 
 pub fn run_server(root: &Path, options: HermesServerOptions<'_>) -> Result<()> {
-    gemini_cli::run_server_for(root, RecordingProvider::Hermes, "hermes", options)
+    gemini_cli::run_server_for(root, RecordingProvider::Hermes, "hermes", "Hermes", options)
 }
 
 fn home_dir() -> Result<PathBuf> {

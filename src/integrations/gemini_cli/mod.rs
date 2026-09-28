@@ -55,6 +55,10 @@ struct GeminiMcp {
     store: Mutex<Option<crate::memory_api::MemoryService>>,
     provider: RecordingProvider,
     provider_label: &'static str,
+    /// Display name used in the user-visible MCP tool descriptions.
+    /// Passed per adapter ("Gemini" for gemini-cli/agy, "Hermes" for hermes)
+    /// so shared scaffolding never leaks one adapter's name into another's.
+    provider_display_name: &'static str,
     max_bytes: usize,
     max_files: usize,
     max_depth: usize,
@@ -122,13 +126,20 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
 }
 
 pub fn run_server(root: &Path, options: GeminiCliServerOptions<'_>) -> Result<()> {
-    run_server_for(root, RecordingProvider::Gemini, "gemini-cli", options)
+    run_server_for(
+        root,
+        RecordingProvider::Gemini,
+        "gemini-cli",
+        "Gemini",
+        options,
+    )
 }
 
 pub fn run_server_for(
     root: &Path,
     provider: RecordingProvider,
     provider_label: &'static str,
+    provider_display_name: &'static str,
     options: GeminiCliServerOptions<'_>,
 ) -> Result<()> {
     mcp_index::trace_event("gemini-server-start");
@@ -137,6 +148,7 @@ pub fn run_server_for(
         store: Mutex::new(None),
         provider,
         provider_label,
+        provider_display_name,
         max_bytes: options.max_bytes,
         max_files: options.max_files,
         max_depth: options.max_depth,
@@ -218,7 +230,7 @@ impl GeminiMcp {
             "tools/list" => Ok(JsonRpcResponse {
                 jsonrpc: "2.0",
                 id,
-                result: Some(json!({"tools": tool_definitions()})),
+                result: Some(json!({"tools": tool_definitions(self.provider_display_name)})),
                 error: None,
             }),
             "tools/call" => self.call_tool(id, request.params.unwrap_or_else(|| json!({}))),
@@ -369,12 +381,13 @@ impl GeminiMcp {
     }
 }
 
-fn tool_definitions() -> Vec<ToolDefinition> {
+fn tool_definitions(provider_display_name: &str) -> Vec<ToolDefinition> {
     let schema = |properties: Value, required: Vec<&str>| json!({"type":"object", "properties":properties, "required":required});
+    let name = provider_display_name;
     let tools = vec![
         ToolDefinition {
             name: "search".into(),
-            description: "Search Gemini project memory.".into(),
+            description: format!("Search {name} project memory."),
             input_schema: schema(
                 json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema(),"session_id": {"type": "string", "description": "Optional conversation session id for follow-up resolution against prior session state. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search."}}),
                 vec!["query"],
@@ -382,7 +395,7 @@ fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "info".into(),
-            description: "Show Gemini Lint-AI memory status.".into(),
+            description: format!("Show {name} Lint-AI memory status."),
             input_schema: schema(json!({}), vec![]),
         },
         mcp_tools::list_memories_tool_definition(),
@@ -396,17 +409,17 @@ fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "enable_lint_ai".into(),
-            description: "Enable Gemini Lint-AI memory and recording.".into(),
+            description: format!("Enable {name} Lint-AI memory and recording."),
             input_schema: schema(json!({}), vec![]),
         },
         ToolDefinition {
             name: "disable_lint_ai".into(),
-            description: "Disable Gemini Lint-AI memory injection.".into(),
+            description: format!("Disable {name} Lint-AI memory injection."),
             input_schema: schema(json!({}), vec![]),
         },
         ToolDefinition {
             name: "lint_ai_status".into(),
-            description: "Show Gemini Lint-AI and recording state.".into(),
+            description: format!("Show {name} Lint-AI and recording state."),
             input_schema: schema(json!({}), vec![]),
         },
     ];
@@ -537,10 +550,10 @@ mod tests {
         // Hit-parity gate: the shared adapter search path (gemini/agy/openclaw)
         // must return hits for user-ID-less local docs. A 0-hits outcome here
         // would reproduce the Hermes finding (unconditional ownership filter).
-        for (provider, label) in [
-            (RecordingProvider::Gemini, "gemini-cli"),
-            (RecordingProvider::Agy, "agy"),
-            (RecordingProvider::OpenClaw, "openclaw"),
+        for (provider, label, display_name) in [
+            (RecordingProvider::Gemini, "gemini-cli", "Gemini"),
+            (RecordingProvider::Agy, "agy", "Gemini"),
+            (RecordingProvider::OpenClaw, "openclaw", "OpenClaw"),
         ] {
             let root = temp_root(label);
             // Seed through the shared memory root, like hook captures do:
@@ -575,6 +588,7 @@ mod tests {
                 store: Mutex::new(None),
                 provider,
                 provider_label: label,
+                provider_display_name: display_name,
                 max_bytes: 5_000_000,
                 max_files: 50_000,
                 max_depth: 20,
@@ -656,11 +670,11 @@ mod tests {
 
     #[test]
     fn gemini_compatible_mcp_contract_applies_to_all_adapters() {
-        for (provider, label) in [
-            (RecordingProvider::Gemini, "gemini-cli"),
-            (RecordingProvider::Agy, "agy"),
-            (RecordingProvider::OpenClaw, "openclaw"),
-            (RecordingProvider::Hermes, "hermes"),
+        for (provider, label, display_name) in [
+            (RecordingProvider::Gemini, "gemini-cli", "Gemini"),
+            (RecordingProvider::Agy, "agy", "Gemini"),
+            (RecordingProvider::OpenClaw, "openclaw", "OpenClaw"),
+            (RecordingProvider::Hermes, "hermes", "Hermes"),
         ] {
             let root = temp_root(label);
             let memory_root = mcp_index::shared_memory_root(&root);
@@ -688,6 +702,7 @@ mod tests {
                 store: Mutex::new(None),
                 provider,
                 provider_label: label,
+                provider_display_name: display_name,
                 max_bytes: 5_000_000,
                 max_files: 50_000,
                 max_depth: 20,
@@ -731,6 +746,22 @@ mod tests {
             ] {
                 assert!(names.contains(&required), "{label} must expose {required}");
             }
+            // Tool descriptions carry the adapter's own display name, never
+            // another adapter's.
+            for tool in tools["tools"].as_array().unwrap() {
+                let description = tool["description"].as_str().unwrap_or("");
+                assert!(
+                    !description.contains("Gemini") || display_name == "Gemini",
+                    "{label} tool {} leaks a Gemini description: {description}",
+                    tool["name"].as_str().unwrap_or("?")
+                );
+                if tool["name"] == "search" {
+                    assert_eq!(
+                        description,
+                        format!("Search {display_name} project memory.")
+                    );
+                }
+            }
 
             let memories = call_tool(&mcp, "list_memories", json!({"limit": 20}));
             assert_eq!(memories["count"], 1);
@@ -757,17 +788,18 @@ mod tests {
     #[test]
     fn board_and_memory_tools_round_trip_for_gemini_compatible_providers() {
         let providers = [
-            (RecordingProvider::Gemini, "gemini-cli"),
-            (RecordingProvider::Agy, "agy"),
-            (RecordingProvider::OpenClaw, "openclaw"),
+            (RecordingProvider::Gemini, "gemini-cli", "Gemini"),
+            (RecordingProvider::Agy, "agy", "Gemini"),
+            (RecordingProvider::OpenClaw, "openclaw", "OpenClaw"),
         ];
-        for (provider, label) in providers {
+        for (provider, label, display_name) in providers {
             let root = temp_root(label);
             let mcp = GeminiMcp {
                 root: root.clone(),
                 store: Mutex::new(None),
                 provider,
                 provider_label: label,
+                provider_display_name: display_name,
                 max_bytes: 5_000_000,
                 max_files: 50_000,
                 max_depth: 20,

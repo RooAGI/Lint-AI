@@ -89,7 +89,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 }
 
 pub fn run_server(root: &Path, options: OpenClawServerOptions<'_>) -> Result<()> {
-    gemini_cli::run_server_for(root, RecordingProvider::OpenClaw, "openclaw", options)
+    gemini_cli::run_server_for(root, RecordingProvider::OpenClaw, "openclaw", "OpenClaw", options)
 }
 
 /// Install the internal-hook wrapper for recall/injection.

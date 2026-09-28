@@ -73,10 +73,10 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
-    /// Content language override (`"en"`, `"zh"`, `"ko"`, `"es"`). Absent
-    /// (default) auto-detects per text from script statistics. Currently
-    /// selects the spaCy model for the structured-relations path; lexical
-    /// retrieval is script-aware regardless.
+    /// Content language override (`"en"`, `"zh"`, `"ko"`). Absent (default)
+    /// auto-detects per text from script statistics. Currently selects the
+    /// spaCy model for the structured-relations path; lexical retrieval is
+    /// script-aware regardless.
     #[serde(default)]
     pub lang: Option<Lang>,
 }
@@ -528,112 +528,6 @@ fn blend_structured_first(
             .take(room),
     );
     blended
-}
-
-/// Fixed additive boost for temporal-scope matches (Luyi 2026-09-28).
-///
-/// bekind's scope verdicts are a RANK BOOST ONLY — never a filter. A fact
-/// whose scope verdict matches the question's gets this added to its score;
-/// every other fact is untouched, whatever its verdict. The amount is
-/// recorded per hit in `score_breakdown.scope_boost` so the boost is
-/// measurable in serialized responses. Activity compatibility
-/// (running ⊂ exercise) is deliberately out of scope: that stays
-/// caller-side knowledge work.
-const SCOPE_BOOST: f32 = 25.0;
-
-/// Pure scope-match predicate, unit-testable without the daemon.
-///
-/// Temporal: the canonicalized temporal-word sets must intersect
-/// (e.g. question ["weekend"] vs fact ["weekend"] — bekind emits canonical
-/// lowercase, so this is an exact comparison). Habitual: a habitual
-/// question wants habitual facts; a non-habitual question accepts any fact.
-/// A `false` here only withholds the boost — it never removes or demotes.
-fn scope_verdicts_match(
-    question: &crate::behood_query::ScopeVerdict,
-    fact: &crate::behood_query::ScopeVerdict,
-) -> bool {
-    let temporal_match = question
-        .temporal_words
-        .iter()
-        .any(|qw| fact.temporal_words.iter().any(|fw| qw == fw));
-    if !temporal_match {
-        return false;
-    }
-    !question.habitual || fact.habitual
-}
-
-/// Apply the fixed boost to the given result indices and re-sort by score
-/// (stable sort, so unboosted relative order is preserved). Records the
-/// amount in each hit's `score_breakdown.scope_boost`. Returns the number
-/// boosted. Pure: no daemon, no I/O. Boost only — results are never
-/// removed, demoted, or filtered here.
-fn boost_result_indices(results: &mut [crate::SearchResult], indices: &[usize]) -> usize {
-    let mut seen = std::collections::HashSet::new();
-    let mut n = 0usize;
-    for &ri in indices {
-        if ri < results.len() && seen.insert(ri) {
-            results[ri].score += SCOPE_BOOST;
-            results[ri].score_breakdown.scope_boost += SCOPE_BOOST;
-            n += 1;
-        }
-    }
-    if n > 0 {
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
-    n
-}
-
-/// Temporal-scope rank boost over blended search results.
-///
-/// Query-time only, no reindexing: the question's scope verdict comes from
-/// the behood daemon, then all candidate fact texts go through the daemon
-/// in ONE batched request (milliseconds). Fail-open throughout: no daemon,
-/// no binary, no scope support, or no temporal words in the question
-/// verdict → results returned unchanged.
-fn apply_scope_boost(
-    store: &IndexStore,
-    query: &str,
-    mut results: Vec<crate::SearchResult>,
-) -> Vec<crate::SearchResult> {
-    if results.is_empty() {
-        return results;
-    }
-    let q_verdict = match crate::behood_query::analyze_scope_verdicts(&[query])
-        .into_iter()
-        .next()
-    {
-        Some(v) if !v.temporal_words.is_empty() => v,
-        _ => return results,
-    };
-    // Map each blended result to its document text; results whose documents
-    // are missing are skipped (their verdict slot is simply absent).
-    let mut text_to_result: Vec<usize> = Vec::new();
-    let mut texts: Vec<String> = Vec::new();
-    for (ri, r) in results.iter().enumerate() {
-        if let Some(doc) = store.source_document_by_id(&r.doc_id) {
-            text_to_result.push(ri);
-            texts.push(doc.content.clone());
-        }
-    }
-    if texts.is_empty() {
-        return results;
-    }
-    let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    let verdicts = crate::behood_query::analyze_scope_verdicts(&text_refs);
-    let matched: Vec<usize> = verdicts
-        .iter()
-        .filter_map(|v| {
-            let ti: usize = v.id.strip_prefix("s:")?.parse().ok()?;
-            let ri = *text_to_result.get(ti)?;
-            scope_verdicts_match(&q_verdict, v).then_some(ri)
-        })
-        .collect();
-    boost_result_indices(&mut results, &matched);
-    results
 }
 
 impl MemoryService {
@@ -1320,8 +1214,14 @@ impl MemoryService {
         // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
         let analysis = analyze_query(query);
         let query_text = analysis.augmented_query.as_str();
-        let prepared =
-            prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        let mut prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        // Definitional semantic tags (Luyi 2026-09-28): computed from the
+        // ORIGINAL user query, not the augmented text. Closed-set temporal
+        // words ("weekend"/"weekday") and "habitual" become SHOULD
+        // TermQueries on the index's `semantic_tags` field, scored by BM25
+        // inside tantivy — a match, not a bonus. Fail-open: no tags when
+        // the daemon is unavailable or the question carries no scope.
+        prepared.set_semantic_tags(crate::semantic_tags::query_scope_tags(query));
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,
@@ -1366,7 +1266,6 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
-
                     lang: None,
                 };
                 let docs: Vec<&SourceDocument> = self.store.source_documents();
@@ -1380,10 +1279,6 @@ impl MemoryService {
             }
         };
         let results = blend_structured_first(structured, lexical, top_k);
-        // Temporal-scope rank boost (Luyi 2026-09-28): additive only, never
-        // a filter. No-op when the behood daemon is unavailable or the
-        // question carries no temporal scope.
-        let results = apply_scope_boost(&self.store, query, results);
         observe_session_search(
             &self.conversation_states,
             scope,
@@ -1537,8 +1432,7 @@ impl MemoryService {
                         )
                     })?;
                 if ensure_default {
-                    let board =
-                        self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
+                    let board = self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
                     Ok(board.board_id)
                 } else {
                     Ok(default_board_id(owner, workspace, sid))
@@ -1737,16 +1631,15 @@ impl MemoryService {
                     return Ok(None);
                 }
                 if d.filters.get(BOARD_OWNER_FILTER).map(String::as_str) != Some(owner)
-                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str) != Some(workspace)
+                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str)
+                        != Some(workspace)
                 {
                     return Ok(None);
                 }
                 let Some(board) = board_from_doc_content(&d.content) else {
                     return Ok(None);
                 };
-                if board.owner != owner
-                    || board.workspace != workspace
-                    || board.board_id != board_id
+                if board.owner != owner || board.workspace != workspace || board.board_id != board_id
                 {
                     return Ok(None);
                 }
@@ -1789,10 +1682,7 @@ impl MemoryService {
         let board_id = self.resolve_board_id(board_id, owner, workspace, session_id, true)?;
         // The board must exist; posting never creates one implicitly
         // (the session board is ensured by resolve_board_id above).
-        if self
-            .board_info(&board_id, owner, workspace, session_id)?
-            .is_none()
-        {
+        if self.board_info(&board_id, owner, workspace, session_id)?.is_none() {
             anyhow::bail!("unknown board_id: {board_id}");
         }
         // Idempotency: a retried request_id returns the original post.
@@ -1813,9 +1703,10 @@ impl MemoryService {
             if let Some(post_id) = self.board_find_request_id(&board_id, request_id)? {
                 // Repopulate the map so later retries stay cheap.
                 let mut state = self.board_state.lock().expect("board state lock poisoned");
-                state
-                    .request_ids
-                    .insert((board_id.clone(), request_id.to_string()), post_id.clone());
+                state.request_ids.insert(
+                    (board_id.clone(), request_id.to_string()),
+                    post_id.clone(),
+                );
                 drop(state);
                 return self
                     .board_get(Some(&board_id), owner, workspace, session_id, &post_id)?
@@ -1955,7 +1846,10 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: doc.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
+                author_agent_id: f
+                    .get(BOARD_AUTHOR_FILTER)
+                    .cloned()
+                    .unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: doc.content.clone(),
                 sequence,
@@ -2003,7 +1897,10 @@ impl MemoryService {
                 Ok(Some(BoardPost {
                     post_id: d.doc_id.clone(),
                     board_id: board_id.clone(),
-                    author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
+                    author_agent_id: f
+                        .get(BOARD_AUTHOR_FILTER)
+                        .cloned()
+                        .unwrap_or_default(),
                     provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                     content: d.content.clone(),
                     sequence,
@@ -2048,9 +1945,12 @@ impl MemoryService {
         for r in results {
             // search_with_filters already applied the board_id filter, but
             // verify again: never leak across boards.
-            let doc = self.store.source_document_by_id(&r.doc_id).filter(|d| {
-                d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
-            });
+            let doc = self
+                .store
+                .source_document_by_id(&r.doc_id)
+                .filter(|d| {
+                    d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
+                });
             let Some(d) = doc else { continue };
             let f = &d.filters;
             let sequence: u64 = f
@@ -2060,7 +1960,10 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: d.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
+                author_agent_id: f
+                    .get(BOARD_AUTHOR_FILTER)
+                    .cloned()
+                    .unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: d.content.clone(),
                 sequence,
@@ -2636,7 +2539,6 @@ mod tests {
             spacy_model_for_request(Some(Lang::Auto), &zh_turns),
             "zh_core_web_sm"
         );
-        assert_eq!(spacy_model_for_request(None, &zh_turns), "zh_core_web_sm");
 
         let es_turns = vec![RelationTurn {
             speaker: "María".to_string(),
@@ -2658,10 +2560,6 @@ mod tests {
             "ko_core_news_sm"
         );
         assert_eq!(
-            spacy_model_for_request(Some(Lang::Zh), &zh_turns),
-            "zh_core_web_sm"
-        );
-        assert_eq!(
             spacy_model_for_request(Some(Lang::En), &ko_turns),
             "en_core_web_sm"
         );
@@ -2679,102 +2577,6 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         base.join(format!("lint-ai-{name}-{}", std::process::id()))
-    }
-
-    fn scope_verdict(temporal_words: &[&str], habitual: bool) -> crate::behood_query::ScopeVerdict {
-        crate::behood_query::ScopeVerdict {
-            id: "s:0".to_string(),
-            activity_phrase: "test activity".to_string(),
-            temporal_words: temporal_words.iter().map(|s| s.to_string()).collect(),
-            habitual,
-        }
-    }
-
-    fn bare_search_result(doc_id: &str, score: f32) -> crate::SearchResult {
-        crate::SearchResult {
-            doc_id: doc_id.to_string(),
-            source: "test".to_string(),
-            group_id: None,
-            score,
-            score_breakdown: Default::default(),
-            matched_entities: vec![],
-            matched_terms: vec![],
-            probable_topic: None,
-            doc_type_guess: None,
-            semantic_status: None,
-            superseded_by: None,
-            relation_confidence: None,
-            relation_evidence: vec![],
-        }
-    }
-
-    #[test]
-    fn scope_match_weekend_pair_and_weekday_reject() {
-        let q = scope_verdict(&["weekend"], true);
-        assert!(scope_verdicts_match(&q, &scope_verdict(&["weekend"], true)));
-        assert!(!scope_verdicts_match(
-            &q,
-            &scope_verdict(&["weekday"], true)
-        ));
-    }
-
-    #[test]
-    fn scope_match_requires_temporal_intersection() {
-        let q = scope_verdict(&["weekend"], true);
-        assert!(!scope_verdicts_match(&q, &scope_verdict(&[], true)));
-        assert!(!scope_verdicts_match(&scope_verdict(&[], true), &q));
-    }
-
-    #[test]
-    fn scope_match_habitual_alignment() {
-        // Habitual question wants habitual facts.
-        let q_habitual = scope_verdict(&["weekend"], true);
-        assert!(!scope_verdicts_match(
-            &q_habitual,
-            &scope_verdict(&["weekend"], false)
-        ));
-        // Non-habitual question accepts any fact.
-        let q_plain = scope_verdict(&["weekend"], false);
-        assert!(scope_verdicts_match(
-            &q_plain,
-            &scope_verdict(&["weekend"], false)
-        ));
-        assert!(scope_verdicts_match(
-            &q_plain,
-            &scope_verdict(&["weekend"], true)
-        ));
-    }
-
-    #[test]
-    fn scope_boost_adds_resorts_and_never_removes() {
-        // Lexical order: b (10) > a (9) > c (1). Boost a and c.
-        let mut results = vec![
-            bare_search_result("b", 10.0),
-            bare_search_result("a", 9.0),
-            bare_search_result("c", 1.0),
-        ];
-        let n = boost_result_indices(&mut results, &[1, 2]);
-        assert_eq!(n, 2);
-        assert_eq!(results.len(), 3, "boost must never remove results");
-        // a: 9 + 25 = 34, c: 1 + 25 = 26 — both float above b's 10.
-        assert_eq!(results[0].doc_id, "a");
-        assert_eq!(results[1].doc_id, "c");
-        assert_eq!(results[2].doc_id, "b");
-        assert_eq!(results[0].score, 9.0 + SCOPE_BOOST);
-        assert_eq!(results[0].score_breakdown.scope_boost, SCOPE_BOOST);
-        assert_eq!(results[1].score_breakdown.scope_boost, SCOPE_BOOST);
-        // Untouched hits carry no boost and keep their score.
-        assert_eq!(results[2].score_breakdown.scope_boost, 0.0);
-        assert_eq!(results[2].score, 10.0);
-    }
-
-    #[test]
-    fn scope_boost_no_match_is_identity() {
-        let mut results = vec![bare_search_result("b", 10.0), bare_search_result("a", 9.0)];
-        let n = boost_result_indices(&mut results, &[]);
-        assert_eq!(n, 0);
-        assert_eq!(results[0].doc_id, "b");
-        assert_eq!(results[1].doc_id, "a");
     }
 
     #[test]
@@ -2803,9 +2605,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
@@ -2950,9 +2751,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert!(response
             .data
@@ -3008,7 +2808,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
             })
             .unwrap();
@@ -3073,7 +2872,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
             })
             .unwrap();
@@ -3120,9 +2918,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         let b = service
             .search(SearchRequest {
@@ -3133,9 +2930,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert_eq!(a.data.len(), 1);
         assert_eq!(b.data.len(), 1);
@@ -3254,9 +3050,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert!(response
             .data
@@ -3290,9 +3085,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert!(response.data.is_empty());
         assert!(!service.delete("user-a", "missing").unwrap());
@@ -3330,9 +3124,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("new deployment"));
@@ -3380,9 +3173,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("shared deployment"));
@@ -3616,9 +3408,8 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
 
         // Turn 2 is a follow-up: the carried anchor must restrict retrieval
@@ -3632,9 +3423,8 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
         assert!(
@@ -3657,9 +3447,8 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
             .data
@@ -3704,11 +3493,7 @@ mod tests {
         service.store.refresh().unwrap();
     }
 
-    fn search(
-        service: &mut MemoryService,
-        query: &str,
-        session_id: Option<&str>,
-    ) -> SearchResponse {
+    fn search(service: &mut MemoryService, query: &str, session_id: Option<&str>) -> SearchResponse {
         service
             .search(SearchRequest {
                 query: query.into(),
@@ -3718,9 +3503,8 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap()
     }
 
@@ -3730,11 +3514,7 @@ mod tests {
         add_quartz_fixture(&mut service);
 
         // Turn 1 establishes the session's entities.
-        let first = search(
-            &mut service,
-            "Tell me about the Quartz database",
-            Some("s1"),
-        );
+        let first = search(&mut service, "Tell me about the Quartz database", Some("s1"));
         assert!(first.data.iter().any(|m| m.content.contains("Quartz")));
 
         // A follow-up with no standalone meaning resolves against the session.
@@ -3766,9 +3546,8 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
-
-                    lang: None,
-                })
+                lang: None,
+})
                 .unwrap_err();
             assert!(
                 error.to_string().contains("session_id must not be empty"),
@@ -4386,9 +4165,8 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert!(response
             .data
@@ -4423,9 +4201,8 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("jazz festival"));
@@ -4534,9 +4311,8 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
-
-                            lang: None,
-                        });
+                lang: None,
+});
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
                     }
@@ -4579,9 +4355,8 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         assert!(!response.data.is_empty());
     }
@@ -4899,9 +4674,8 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
                 lang: None,
-            })
+})
             .unwrap();
         let _ = response;
     }
@@ -5122,9 +4896,7 @@ mod board_integration_tests {
     fn board_open_is_idempotent() {
         let mut service = svc();
         let a = service.board_open(OWNER, WS, "task-a", "Task A").unwrap();
-        let b = service
-            .board_open(OWNER, WS, "task-a", "Different title")
-            .unwrap();
+        let b = service.board_open(OWNER, WS, "task-a", "Different title").unwrap();
         assert_eq!(a.board_id, b.board_id);
         assert_eq!(a.title, "Task A");
     }
@@ -5260,20 +5032,8 @@ mod board_integration_tests {
     #[test]
     fn board_search_finds_posts() {
         let mut service = svc();
-        post(
-            &mut service,
-            None,
-            Some(S1),
-            "the parser failure comes from empty input",
-            "r1",
-        );
-        post(
-            &mut service,
-            None,
-            Some(S1),
-            "unrelated status update",
-            "r2",
-        );
+        post(&mut service, None, Some(S1), "the parser failure comes from empty input", "r1");
+        post(&mut service, None, Some(S1), "unrelated status update", "r2");
         let hits = service
             .board_search(None, OWNER, WS, Some(S1), "parser failure", 10)
             .unwrap();

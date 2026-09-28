@@ -19,6 +19,22 @@ pub(crate) const IMPORTANT_TERM_PREFIX_MULTIPLIER: f32 = 0.25;
 
 pub(crate) const QUERY_TERM_CACHE_CAPACITY: usize = 256;
 
+/// Multiplier on definitional semantic-tag TermQueries inside the tantivy
+/// scorer (Luyi 2026-09-28). Same kind of parameter as the LEXICAL_*_BOOST
+/// field boosts the system already tunes: set by measurement, minimally.
+/// The tag match itself is scored by BM25 (IDF/length-norm/saturation);
+/// this only scales that in-scorer weight.
+///
+/// Tuning (mem-05 toy pair, 2026-09-28): 2.0/1.5/1.25/1.1/1.05 pass;
+/// 1.0 is the minimum where the tag match itself (tantivy lexical score)
+/// ranks the Saturday fact above the Monday distractor (A.lex 4.32 >
+/// B.lex 4.26); at 0.9 the final-score win comes from non-lexical signals
+/// (A.lex 4.23 < B.lex 4.24), and 0.8 ties/fails. 1.0 is also the neutral
+/// value (no inflation, no discount), matching LEXICAL_CONTENT_BOOST.
+/// Caveat: the 2-doc toy gives weak IDF (ln2 for the weekend tag); in a
+/// real corpus rarer tags carry higher IDF, so 1.0 is conservative.
+pub(crate) const TAG_BOOST: f32 = 1.0;
+
 #[derive(Clone)]
 pub(crate) struct PreparedQueryTerms {
     pub(crate) normalized: String,
@@ -32,9 +48,12 @@ pub(crate) static RAW_PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Prepa
     OnceLock::new();
 // All MemoryIndex lexical shards use the same fixed schema, so Tantivy's parsed
 // query object can be shared safely between shards. This avoids rebuilding the
-// QueryParser and query tree once per selected segment.
-pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn Query>>>> =
-    OnceLock::new();
+// QueryParser and query tree once per selected segment. The key includes the
+// definitional semantic tags: the same query text with different tags is a
+// different tantivy query.
+pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<
+    Mutex<HashMap<(String, Vec<String>), Arc<dyn Query>>>,
+> = OnceLock::new();
 
 pub(crate) fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
     const MAX_QUERY_CHARS: usize = 4096;

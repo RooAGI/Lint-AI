@@ -165,7 +165,7 @@ impl LexicalState {
         // Definitional semantic tags for this record (one daemon round-trip,
         // fail-open). Skipped entirely on pre-tags on-disk indexes.
         if let Some(tags_f) = tags_f {
-            let tags = crate::semantic_tags::batch_doc_scope_tags(&[content_text.as_str()]);
+            let tags = crate::semantic_tags::batch_doc_semantic_tags(&[content_text.as_str()]);
             let tags_text = tags.into_iter().next().unwrap_or_default().join(" ");
             document.add_text(tags_f, tags_text);
         }

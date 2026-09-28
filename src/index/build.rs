@@ -721,7 +721,7 @@ impl MemoryIndex {
         // One batched daemon round-trip for the whole index. Fail-open:
         // no daemon/binary yields no tags and the index builds exactly as
         // before (every doc simply indexes an empty tags field).
-        let tags_per_doc = crate::semantic_tags::batch_doc_scope_tags(&content_refs);
+        let tags_per_doc = crate::semantic_tags::batch_doc_semantic_tags(&content_refs);
         let index = if let Some(dir) = lexical_dir {
             fs::create_dir_all(dir)?;
             // An on-disk index predating the tags field has documents

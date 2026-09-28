@@ -11,11 +11,18 @@
 //! Tags are purely additive (SHOULD clauses): a tag match can only raise a
 //! document's score, never lower it, and a missing tag changes nothing.
 
-use crate::behood_query::{analyze_scope_verdicts, ScopeVerdict};
+use crate::behood_query::{
+    analyze_kind_verdicts, analyze_query_entities, analyze_scope_verdicts, KindVerdict, ScopeVerdict,
+};
 use std::collections::HashMap;
 
 /// Tag emitted when a scope verdict reports habitual/recurring content.
 pub const HABITUAL_TAG: &str = "habitual";
+
+/// Admitted closed-set kind tags (Luyi 2026-09-28). Each new category needs
+/// its own explicit admission here: bekind reporting a kind does NOT
+/// automatically tag it.
+pub const ADMITTED_KIND_TAGS: &[&str] = &["herb"];
 
 /// Pure tag emission from one document's scope verdict. Unit-testable, no
 /// I/O. Emits the canonical temporal words verbatim (bekind already emits
@@ -81,6 +88,87 @@ pub fn query_scope_tags(query: &str) -> Vec<String> {
     tags
 }
 
+/// Pure tag emission from one document's kind verdict: admitted kinds only.
+/// Unit-testable, no I/O.
+pub fn doc_kind_tags(verdict: &KindVerdict) -> Vec<String> {
+    let mut tags: Vec<String> = verdict
+        .kinds
+        .iter()
+        .map(|hit| hit.kind.to_lowercase())
+        .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str()))
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+/// One batched kind-verdict daemon call for all document contents; maps
+/// `k:<index>` verdict ids back to input order. Fail-open: daemon failure
+/// yields no tags for every document.
+pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
+    let verdicts = analyze_kind_verdicts(contents);
+    let mut by_index: HashMap<usize, &KindVerdict> = HashMap::new();
+    for verdict in &verdicts {
+        if let Some(index) = verdict
+            .id
+            .strip_prefix("k:")
+            .and_then(|rest| rest.parse::<usize>().ok())
+        {
+            by_index.insert(index, verdict);
+        }
+    }
+    (0..contents.len())
+        .map(|i| {
+            by_index
+                .get(&i)
+                .map(|verdict| doc_kind_tags(verdict))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Tags for the ORIGINAL user query from its entity kinds: admitted kinds
+/// only. "Is there an herb the user avoids?" emits ["herb"] when bekind
+/// judges the "herb" mention herb-kind. Fail-open: no daemon/binary or no
+/// admitted kind in the question yields an empty vec.
+pub fn query_kind_tags(query: &str) -> Vec<String> {
+    let mut tags: Vec<String> = analyze_query_entities(query)
+        .into_iter()
+        .map(|entity| entity.kind.to_lowercase())
+        .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str()))
+        .collect();
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+/// All definitional tags for document contents: scope tags + admitted kind
+/// tags, merged and deduplicated. One batched daemon call per layer.
+pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
+    let scope_tags = batch_doc_scope_tags(contents);
+    let kind_tags = batch_doc_kind_tags(contents);
+    scope_tags
+        .into_iter()
+        .zip(kind_tags)
+        .map(|(mut scope, kind)| {
+            scope.extend(kind);
+            scope.sort();
+            scope.dedup();
+            scope
+        })
+        .collect()
+}
+
+/// All definitional tags for the ORIGINAL user query: scope tags + admitted
+/// kind tags, merged and deduplicated.
+pub fn query_semantic_tags(query: &str) -> Vec<String> {
+    let mut tags = query_scope_tags(query);
+    tags.extend(query_kind_tags(query));
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +208,41 @@ mod tests {
         assert_eq!(
             doc_scope_tags(&verdict(&["weekend", "weekend"], true)),
             vec!["habitual".to_string(), "weekend".to_string()]
+        );
+    }
+
+    fn kind_verdict(kinds: &[(&str, &str)]) -> KindVerdict {
+        KindVerdict {
+            id: "k:0".to_string(),
+            kinds: kinds
+                .iter()
+                .map(|(text, kind)| crate::behood_query::KindHit {
+                    text: text.to_string(),
+                    kind: kind.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn doc_kind_tags_emit_admitted_herb_only() {
+        assert_eq!(
+            doc_kind_tags(&kind_verdict(&[("cilantro", "herb"), ("coffee", "food")])),
+            vec!["herb".to_string()]
+        );
+    }
+
+    #[test]
+    fn doc_kind_tags_empty_without_admitted_kinds() {
+        assert!(doc_kind_tags(&kind_verdict(&[("coffee", "food")])).is_empty());
+        assert!(doc_kind_tags(&kind_verdict(&[])).is_empty());
+    }
+
+    #[test]
+    fn doc_kind_tags_lowercase_and_dedup() {
+        assert_eq!(
+            doc_kind_tags(&kind_verdict(&[("Basil", "Herb"), ("cilantro", "herb")])),
+            vec!["herb".to_string()]
         );
     }
 

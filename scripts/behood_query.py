@@ -107,6 +107,52 @@ def _descriptor_for_token(tok, did):
     }
 
 
+# Dependency labels that fill a nominal slot (subject/object/...). When the
+# parser gets the relation right but mis-tags the POS (e.g. "cilantro" as
+# ADV in "dislikes cilantro and always asks ..."), noun_chunks drops the
+# token; recovering by dep is robust to that quirk.
+_NOMINAL_DEPS = frozenset(
+    {"nsubj", "nsubjpass", "dobj", "pobj", "iobj", "attr", "appos", "conj"}
+)
+# POS tags that can never head a recovered nominal descriptor.
+_NON_NOMINAL_POS = frozenset(
+    {"VERB", "AUX", "ADP", "CCONJ", "SCONJ", "PART", "PUNCT", "SYM", "X", "NUM"}
+)
+
+
+def _recover_unchunked_nominals(doc, descriptors):
+    """Recover nominal-slot tokens the chunker dropped (parser POS quirk).
+
+    Systematic, not per-question: any token filling a nominal dependency
+    slot (dobj/pobj/nsubj/...) that no noun chunk covers becomes an
+    additional descriptor. The dependency label is trusted over the POS
+    tag for slot-filling: in "The user dislikes cilantro and always asks
+    ...", spaCy tags "cilantro" ADV but its dep is dobj -- the relation
+    is right, the tag is wrong, and noun_chunks misses it.
+    """
+    covered = set()
+    for chunk in doc.noun_chunks:
+        covered.update(range(chunk.start, chunk.end))
+    seen_texts = {d["text"] for d in descriptors}
+    recovered = []
+    for tok in doc:
+        if tok.i in covered:
+            continue
+        if tok.dep_ not in _NOMINAL_DEPS:
+            continue
+        if tok.pos_ in _NON_NOMINAL_POS:
+            continue
+        if not tok.is_alpha:
+            continue
+        if tok.text in seen_texts:
+            continue
+        d = _descriptor_for_token(tok, f"q:rec{len(descriptors) + len(recovered)}")
+        if d["text"]:
+            recovered.append(d)
+            seen_texts.add(tok.text)
+    return recovered
+
+
 def question_np_descriptors(doc):
     """Noun-phrase descriptors for behood's phrase layer, with a fallback.
 
@@ -135,6 +181,8 @@ def question_np_descriptors(doc):
             fb = _descriptor_for_token(nominal, f"q:fb{len(descriptors)}")
             if fb["text"] and not any(d["text"] == fb["text"] for d in descriptors):
                 descriptors.append(fb)
+    # Systematic recovery: nominal-slot tokens the chunker dropped.
+    descriptors.extend(_recover_unchunked_nominals(doc, descriptors))
     return descriptors
 
 
@@ -254,6 +302,74 @@ def _scope_verdicts_via_binary(texts, binary):
     return data.get("scope_verdicts", [])
 
 
+def _kind_verdicts_via_binary(texts, binary, nlp):
+    """Kind verdicts per text for definitional kind tags. Fail-open: [].
+
+    Builds noun-phrase descriptors (with unchunked-nominal recovery) for
+    each text and judges them in a single bekind call, so per-fact cost
+    stays at one subprocess. Returns one dict per input text:
+        {"id", "kinds": [{"text", "kind"}]}
+    Unlike analyze_question, ALL descriptor verdicts contribute their
+    kind -- not just entity mentions: bekind reports kind_of for rejected
+    mentions too (e.g. a POS-mistagged "cilantro" still judges herb-kind),
+    and the tag only needs the kind signal.
+    """
+    if not texts or nlp is None:
+        return []
+    all_descriptors = []
+    per_text_ids = []
+    for i, text in enumerate(texts):
+        try:
+            doc = nlp(text)
+        except Exception:
+            per_text_ids.append((i, []))
+            continue
+        ids = []
+        for d in question_np_descriptors(doc):
+            d = dict(d)
+            d["id"] = f"k:{i}:{d['id']}"
+            ids.append(d["id"])
+            all_descriptors.append(d)
+        per_text_ids.append((i, ids))
+    if not all_descriptors:
+        return [{"id": f"k:{i}", "kinds": []} for i, _ in per_text_ids]
+    payload = {
+        "strategy": "discourse",
+        "mentions": [],
+        "chunks": [],
+        "np_mentions": all_descriptors,
+        "context": {"speaker_names": []},
+    }
+    try:
+        proc = subprocess.run(
+            [binary],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    try:
+        data = json.loads(proc.stdout)
+    except Exception:
+        return []
+    id_to_kind = {}
+    for v in data.get("phrase_verdicts", []):
+        id_to_kind[v.get("id", "")] = v.get("kind", "thing")
+    id_to_text = {d["id"]: d["text"] for d in all_descriptors}
+    out = []
+    for i, ids in per_text_ids:
+        kinds = [
+            {"text": id_to_text.get(vid, ""), "kind": id_to_kind.get(vid, "thing")}
+            for vid in ids
+        ]
+        out.append({"id": f"k:{i}", "kinds": kinds})
+    return out
+
+
 def analyze_scope(texts, binary=None):
     """Return bekind scope verdicts for raw text spans.
 
@@ -274,7 +390,9 @@ def serve():
 
     One {"question": ...} per stdin line → one {"entities": [...]} per stdout
     line; or one {"scope_texts": [{"id", "text"}, ...]} per stdin line →
-    one {"scope_verdicts": [...]} per stdout line. spaCy and the bekind
+    one {"scope_verdicts": [...]} per stdout line; or one {"kind_texts":
+    [{"id", "text"}, ...]} per stdin line → one {"kind_verdicts": [...]}
+    per stdout line. spaCy and the bekind
     binary are resolved once at startup so per-query cost is milliseconds,
     not seconds. Exits non-zero when the backend cannot be initialized, so
     the caller can fail over to the heuristic path without paying per-query
@@ -308,6 +426,17 @@ def serve():
             except Exception:
                 verdicts = []
             sys.stdout.write(json.dumps({"scope_verdicts": verdicts}) + "\n")
+        elif "kind_texts" in payload:
+            try:
+                texts = [
+                    t.get("text", "")
+                    for t in payload["kind_texts"]
+                    if isinstance(t, dict)
+                ]
+                verdicts = _kind_verdicts_via_binary(texts, binary, nlp)
+            except Exception:
+                verdicts = []
+            sys.stdout.write(json.dumps({"kind_verdicts": verdicts}) + "\n")
         else:
             question = payload.get("question", "")
             try:

@@ -26,7 +26,8 @@ use crate::daemon::JsonLinesDaemon;
 pub struct QueryEntity {
     /// The entity text as it appears in the question.
     pub text: String,
-    /// Behood's ontological kind: person, place, org, event, work, food, thing.
+    /// Behood's ontological kind: person, place, org, event, work, food,
+    /// herb (admitted closed set), thing.
     pub kind: String,
 }
 
@@ -212,6 +213,51 @@ impl BehoodQueryDaemon {
         Some(parse_scope_verdicts(&response))
     }
 
+    /// Kind verdicts for raw text spans via the daemon.
+    ///
+    /// Sends `{"kind_texts": [{"id": "k:{i}", "text": ...}, ...]}` and
+    /// parses `{"kind_verdicts": [...]}`. Returns `None` on any failure
+    /// (including lock contention); the caller treats that as "no kind
+    /// information" and emits no kind tags. `Some(vec)` is authoritative even
+    /// when empty. Shares the serve-failure cooldown with [`Self::analyze`]
+    /// and [`Self::analyze_scope`].
+    pub fn analyze_kind(
+        &self,
+        texts: &[&str],
+        timeout: Duration,
+    ) -> Option<Vec<KindVerdict>> {
+        if texts.is_empty() {
+            return Some(Vec::new());
+        }
+        if let Ok(last) = self.last_serve_failure.lock() {
+            if let Some(failed_at) = *last {
+                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
+                    return None;
+                }
+            }
+        }
+        let kind_texts: Vec<serde_json::Value> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| serde_json::json!({ "id": format!("k:{i}"), "text": text }))
+            .collect();
+        let payload = serde_json::json!({ "kind_texts": kind_texts });
+        let line = serde_json::to_string(&payload).ok()?;
+        let response = match self.daemon.query(&line, timeout) {
+            Some(response) => response,
+            None => {
+                if let Ok(mut last) = self.last_serve_failure.lock() {
+                    *last = Some(Instant::now());
+                }
+                return None;
+            }
+        };
+        if let Ok(mut last) = self.last_serve_failure.lock() {
+            *last = None;
+        }
+        Some(parse_kind_verdicts(&response))
+    }
+
     /// Test hook: simulate child death so tests can verify respawn behavior.
     #[cfg(test)]
     pub fn kill_child_for_test(&self) {
@@ -353,6 +399,93 @@ fn parse_scope_verdicts(json_str: &str) -> Vec<ScopeVerdict> {
                 temporal_words,
                 habitual,
             });
+        }
+    }
+    verdicts
+}
+
+// ---------------------------------------------------------------------------
+// Closed-set kind verdicts (bekind's kind layer).
+//
+// A kind verdict judges one raw text span's noun-phrase descriptors,
+// reporting every descriptor's ontological kind. Lint-ai turns admitted
+// closed-set kinds into definitional semantic tags (Luyi 2026-09-28):
+// index-time and query-time SHOULD matches inside tantivy BM25 — never a
+// filter, never a bonus. Currently only "culinary_herb" -> kind "herb" is
+// admitted. Per-set admission: each new category needs its own explicit
+// admission; this machinery does not generalize them automatically.
+// ---------------------------------------------------------------------------
+
+/// One descriptor's kind judgment within a [`KindVerdict`].
+#[derive(Debug, Clone)]
+pub struct KindHit {
+    /// Descriptor text as it appears in the judged span.
+    pub text: String,
+    /// bekind's ontological kind ("herb", "food", "thing", ...).
+    pub kind: String,
+}
+
+/// bekind kind verdicts for one text span: every descriptor's kind.
+///
+/// Unlike [`QueryEntity`] (entity mentions only), this includes
+/// descriptors that are NOT entity mentions: bekind reports `kind_of`
+/// for rejected mentions too (e.g. a POS-mistagged "cilantro" still
+/// judges herb-kind), and the tag only needs the kind signal.
+#[derive(Debug, Clone)]
+pub struct KindVerdict {
+    /// Caller-assigned id, echoed back ("k:{i}").
+    pub id: String,
+    /// Per-descriptor (text, kind) judgments.
+    pub kinds: Vec<KindHit>,
+}
+
+/// Kind verdicts for raw text spans via the global daemon.
+///
+/// Fail-open: any daemon failure — or a daemon whose script predates kind
+/// support — yields an empty vec, and the caller emits no kind tags.
+/// Search never breaks because of kind verdicts. Like scope, there is
+/// deliberately no one-shot subprocess fallback: per-fact one-shots would
+/// pay the interpreter+spaCy spawn per candidate; the daemon is the path.
+pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
+    BehoodQueryDaemon::global()
+        .analyze_kind(texts, Duration::from_secs(30))
+        .unwrap_or_default()
+}
+
+fn parse_kind_verdicts(json_str: &str) -> Vec<KindVerdict> {
+    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut verdicts = Vec::new();
+    if let Some(arr) = parsed.get("kind_verdicts").and_then(|v| v.as_array()) {
+        for item in arr {
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let kinds = item
+                .get("kinds")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .map(|k| KindHit {
+                            text: k
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            kind: k
+                                .get("kind")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            verdicts.push(KindVerdict { id, kinds });
         }
     }
     verdicts
@@ -604,6 +737,85 @@ for line in sys.stdin:
         let daemon = test_daemon(write_fake_scope_serve_script(&dir));
         let verdicts = daemon
             .analyze_scope(&[], Duration::from_secs(10))
+            .expect("empty input must not touch the daemon");
+        assert!(verdicts.is_empty());
+    }
+
+    #[test]
+    fn parse_kind_verdicts_reads_fields() {
+        let json = r#"{"kind_verdicts": [
+            {"id": "k:0", "kinds": [
+                {"text": "cilantro", "kind": "herb"},
+                {"text": "The user", "kind": "person"}]},
+            {"id": "k:1", "kinds": [{"text": "coffee", "kind": "food"}]}
+        ]}"#;
+        let verdicts = parse_kind_verdicts(json);
+        assert_eq!(verdicts.len(), 2);
+        assert_eq!(verdicts[0].id, "k:0");
+        assert_eq!(verdicts[0].kinds.len(), 2);
+        assert_eq!(verdicts[0].kinds[0].text, "cilantro");
+        assert_eq!(verdicts[0].kinds[0].kind, "herb");
+        assert_eq!(verdicts[1].kinds[0].kind, "food");
+    }
+
+    #[test]
+    fn parse_kind_verdicts_fail_open() {
+        assert!(parse_kind_verdicts("not json").is_empty());
+        assert!(parse_kind_verdicts("{}").is_empty());
+        // A pre-kind daemon answers {"entities": [...]} to anything.
+        assert!(parse_kind_verdicts(r#"{"entities": []}"#).is_empty());
+        // Missing "kinds" degrades to an empty hit list, not an error.
+        let v = parse_kind_verdicts(r#"{"kind_verdicts": [{"id": "k:0"}]}"#);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].kinds.is_empty());
+    }
+
+    /// Fake `--serve` script that answers kind requests the way the real
+    /// script does: {"kind_texts": [...]} -> {"kind_verdicts": [...]}.
+    fn write_fake_kind_serve_script(dir: &std::path::Path) -> PathBuf {
+        let path = dir.join("fake_kind_serve.py");
+        std::fs::write(
+            &path,
+            r#"import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    payload = json.loads(line)
+    if "kind_texts" in payload:
+        verdicts = [
+            {"id": t["id"], "kinds": [{"text": t["text"], "kind": "herb"}]}
+            for t in payload["kind_texts"]
+        ]
+        sys.stdout.write(json.dumps({"kind_verdicts": verdicts}) + "\n")
+    else:
+        sys.stdout.write(json.dumps({"entities": []}) + "\n")
+    sys.stdout.flush()
+"#,
+        )
+        .expect("write fake kind serve script");
+        path
+    }
+
+    #[test]
+    fn daemon_kind_round_trip() {
+        let dir = unique_temp_dir("kind");
+        let daemon = test_daemon(write_fake_kind_serve_script(&dir));
+        let verdicts = daemon
+            .analyze_kind(&["first text", "second text"], Duration::from_secs(60))
+            .expect("daemon should answer kind requests");
+        assert_eq!(verdicts.len(), 2);
+        assert_eq!(verdicts[0].id, "k:0");
+        assert_eq!(verdicts[1].id, "k:1");
+        assert_eq!(verdicts[0].kinds[0].kind, "herb");
+    }
+
+    #[test]
+    fn daemon_kind_empty_input_short_circuits() {
+        let dir = unique_temp_dir("kind-empty");
+        let daemon = test_daemon(write_fake_kind_serve_script(&dir));
+        let verdicts = daemon
+            .analyze_kind(&[], Duration::from_secs(10))
             .expect("empty input must not touch the daemon");
         assert!(verdicts.is_empty());
     }

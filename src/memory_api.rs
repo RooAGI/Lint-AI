@@ -1192,11 +1192,12 @@ impl MemoryService {
         let mut prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
         // Definitional semantic tags (Luyi 2026-09-28): computed from the
         // ORIGINAL user query, not the augmented text. Closed-set temporal
-        // words ("weekend"/"weekday") and "habitual" become SHOULD
-        // TermQueries on the index's `semantic_tags` field, scored by BM25
-        // inside tantivy — a match, not a bonus. Fail-open: no tags when
-        // the daemon is unavailable or the question carries no scope.
-        prepared.set_semantic_tags(crate::semantic_tags::query_scope_tags(query));
+        // words ("weekend"/"weekday"), "habitual", and admitted kind tags
+        // ("herb") become SHOULD TermQueries on the index's `semantic_tags`
+        // field, scored by BM25 inside tantivy — a match, not a bonus.
+        // Fail-open: no tags when the daemon is unavailable or the question
+        // carries no definitional content.
+        prepared.set_semantic_tags(crate::semantic_tags::query_semantic_tags(query));
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,

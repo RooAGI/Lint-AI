@@ -51,6 +51,72 @@ impl Drop for StoreInitLock {
     }
 }
 
+/// Bounded cross-process write lock for the shared memory store.
+///
+/// `StoreInitLock` guards one-time initialization; this guards every *write*
+/// (MCP board/memory writes and hook captures) so two processes never
+/// interleave their write-then-refresh sequences on the same persistent
+/// store. The lock file lives inside the store directory it protects.
+/// Acquisition waits ~10s with retries, then errors — hooks must never hang
+/// indefinitely on a stale lock.
+const STORE_WRITE_LOCK_WAIT: Duration = Duration::from_secs(10);
+const STORE_WRITE_LOCK_RETRY: Duration = Duration::from_millis(50);
+
+struct StoreWriteLock {
+    path: std::path::PathBuf,
+    _file: File,
+}
+
+impl StoreWriteLock {
+    fn acquire(store_root: &Path) -> Result<Self> {
+        fs::create_dir_all(store_root)?;
+        let path = store_root.join(".write.lock");
+        let started = std::time::Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok(Self { path, _file: file }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if started.elapsed() >= STORE_WRITE_LOCK_WAIT {
+                        return Err(anyhow::anyhow!(
+                            "timed out waiting for shared store write lock at {}",
+                            path.display()
+                        ));
+                    }
+                    thread::sleep(STORE_WRITE_LOCK_RETRY);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+impl Drop for StoreWriteLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Open the persistent shared memory store under the cross-process write
+/// lock, run `f` against it, and release the lock. This is the write path
+/// for MCP board/memory tools and for hook captures: unlike the in-memory
+/// composed view the adapters query, everything written here survives the
+/// process and is visible to hooks and other providers. Persistence happens
+/// inside `f` via the usual `upsert` / `add` / `board_open` / `board_post`
+/// calls (they refresh internally).
+///
+/// Luyi's architectural rule: external paths go through `MemoryService`;
+/// this helper opens one on the shared store — it never touches
+/// `IndexStore` directly.
+pub fn with_shared_store_write<T>(
+    root: &Path,
+    f: impl FnOnce(&mut MemoryService) -> Result<T>,
+) -> Result<T> {
+    let shared = shared_memory_root(root);
+    let _lock = StoreWriteLock::acquire(&shared)?;
+    let mut service = MemoryService::at_path(&shared, segmented_store_options())?;
+    f(&mut service)
+}
+
 /// Directory name (under `.lint-ai/`) for the shared cross-provider memory
 /// store. All agents read and write the same memory; the provider is kept as
 /// per-document attribution (`filters.provider`, `author_agent`, and the
@@ -720,5 +786,61 @@ mod tests {
         assert_eq!(unfiltered.len(), 2);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn write_lock_test_root(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "lint-ai-{name}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    /// A second writer must time out instead of hanging forever when the
+    /// write lock is held (e.g. by a crashed process's stale lock or a
+    /// genuinely concurrent writer).
+    #[test]
+    fn shared_store_write_lock_times_out_when_held() {
+        let root = write_lock_test_root("write-lock-held");
+        let shared = shared_memory_root(&root);
+        let _held = StoreWriteLock::acquire(&shared).expect("first acquire");
+        let error = with_shared_store_write(&root, |_| Ok(())).unwrap_err();
+        assert!(
+            error.to_string().contains("timed out"),
+            "expected a timeout error, got: {error:#}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Sequential writes through the helper both succeed (the lock is
+    /// released between calls — no self-deadlock) and land on disk,
+    /// visible to a fresh opener.
+    #[test]
+    fn shared_store_write_persists_and_releases_lock() {
+        let root = write_lock_test_root("write-lock-persist");
+        with_shared_store_write(&root, |store| {
+            store.upsert(document("doc-1", "test", "persistent content"));
+            store.refresh_index()
+        })
+        .expect("first write");
+        with_shared_store_write(&root, |store| {
+            store.upsert(document("doc-2", "test", "more content"));
+            store.refresh_index()
+        })
+        .expect("second write");
+        assert!(
+            !shared_memory_root(&root).join(".write.lock").exists(),
+            "lock file must be released after the write"
+        );
+        let store = MemoryService::at_path(
+            shared_memory_root(&root),
+            segmented_store_options(),
+        )
+        .expect("reopen");
+        assert!(store.source_document_by_id("doc-1").is_some());
+        assert!(store.source_document_by_id("doc-2").is_some());
+        let _ = fs::remove_dir_all(&root);
     }
 }

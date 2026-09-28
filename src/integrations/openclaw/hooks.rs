@@ -439,9 +439,13 @@ fn capture_outcome(
         timestamp: Some(current_timestamp()),
         channel: channel.map(str::to_string),
     };
-    let mut store = open_store(root)?;
-    store.upsert(document.into_source_document()?);
-    store.refresh_index()?;
+    // Writes go through the persistent shared store under the cross-process
+    // write lock (never the in-memory view): hook captures must survive the
+    // hook process and be visible to MCP servers and other hooks.
+    crate::integrations::mcp_index::with_shared_store_write(root, |store| {
+        store.upsert(document.into_source_document()?);
+        store.refresh_index()
+    })?;
     Ok(ack(None))
 }
 
@@ -522,9 +526,13 @@ fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> 
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    let mut store = open_store(root)?;
-    store.upsert(document.into_source_document()?);
-    store.refresh_index()?;
+    // Writes go through the persistent shared store under the cross-process
+    // write lock (never the in-memory view): hook captures must survive the
+    // hook process and be visible to MCP servers and other hooks.
+    crate::integrations::mcp_index::with_shared_store_write(root, |store| {
+        store.upsert(document.into_source_document()?);
+        store.refresh_index()
+    })?;
     Ok(ack(None))
 }
 

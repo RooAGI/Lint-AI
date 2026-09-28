@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from behood_query import _load_spacy, question_np_descriptors  # noqa: E402
+from behood_query import _load_spacy, analyze_scope, question_np_descriptors  # noqa: E402
 
 
 class QuestionPhraseExtractionTests(unittest.TestCase):
@@ -64,6 +64,18 @@ class QuestionPhraseExtractionTests(unittest.TestCase):
         # "what time" is contentful for noun_chunks; no fallback injected.
         ds = self.descriptors("What time is the meeting?")
         self.assertFalse(any(d["id"].startswith("q:fb") for d in ds))
+
+
+class ScopeVerdictWiringTests(unittest.TestCase):
+    """analyze_scope is additive and fail-open; no bekind binary needed."""
+
+    def test_fail_open_without_binary(self):
+        # Deterministic: a missing binary path must fail open to [].
+        self.assertEqual(analyze_scope(["weekend routine"], binary="/nonexistent"), [])
+
+    def test_empty_input_returns_empty(self):
+        # Empty input short-circuits before touching the binary.
+        self.assertEqual(analyze_scope([], binary="/nonexistent"), [])
 
 
 if __name__ == "__main__":

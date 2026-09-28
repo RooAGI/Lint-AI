@@ -12,7 +12,10 @@ Usage:
     echo "Which city have both Jean and John visited?" | python3 behood_query.py
     python3 behood_query.py "Which city have both Jean and John visited?"
     python3 behood_query.py --serve   # one {"question": ...} per stdin line,
-                                     # one {"entities": [...]} per stdout line
+                                     # one {"entities": [...]} per stdout line;
+                                     # or one {"scope_texts": [...]} per stdin
+                                     # line, one {"scope_verdicts": [...]} per
+                                     # stdout line
 
 Output (JSON to stdout):
     {"entities": [{"text": "Jean", "kind": "person"}, ...]}
@@ -225,12 +228,57 @@ def analyze_question(question, nlp=None, binary=None):
     return entities
 
 
+def _scope_verdicts_via_binary(texts, binary):
+    """Query the bekind JSON bridge for scope verdicts. Fail-open: []."""
+    if not texts:
+        return []
+    payload = {
+        "scope_texts": [{"id": f"s:{i}", "text": t} for i, t in enumerate(texts)],
+    }
+    try:
+        proc = subprocess.run(
+            [binary],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    try:
+        data = json.loads(proc.stdout)
+    except Exception:
+        return []
+    return data.get("scope_verdicts", [])
+
+
+def analyze_scope(texts, binary=None):
+    """Return bekind scope verdicts for raw text spans.
+
+    Additive: does not change analyze_question's output shape. Each input
+    text gets one verdict dict:
+        {"id", "activity_phrase", "temporal_words", "habitual", "evidence"}
+    Fail-open: on any error, returns [].
+    """
+    if binary is None:
+        binary = _behood_bin()
+    if binary is None:
+        return []
+    return _scope_verdicts_via_binary(texts, binary)
+
+
 def serve():
-    """Line-delimited JSON protocol: one {"question": ...} per stdin line,
-    one {"entities": [...]} per stdout line. spaCy and the bekind binary are
-    resolved once at startup so per-query cost is milliseconds, not seconds.
-    Exits non-zero when the backend cannot be initialized, so the caller can
-    fail over to the heuristic path without paying per-query spawn costs.
+    """Line-delimited JSON protocol.
+
+    One {"question": ...} per stdin line → one {"entities": [...]} per stdout
+    line; or one {"scope_texts": [{"id", "text"}, ...]} per stdin line →
+    one {"scope_verdicts": [...]} per stdout line. spaCy and the bekind
+    binary are resolved once at startup so per-query cost is milliseconds,
+    not seconds. Exits non-zero when the backend cannot be initialized, so
+    the caller can fail over to the heuristic path without paying per-query
+    spawn costs.
     """
     # Fail fast: the binary check is cheap; the spaCy load costs seconds.
     binary = _behood_bin()
@@ -247,14 +295,26 @@ def serve():
             continue
         try:
             payload = json.loads(line)
+        except Exception:
+            payload = {}
+        if "scope_texts" in payload:
+            try:
+                texts = [
+                    t.get("text", "")
+                    for t in payload["scope_texts"]
+                    if isinstance(t, dict)
+                ]
+                verdicts = _scope_verdicts_via_binary(texts, binary)
+            except Exception:
+                verdicts = []
+            sys.stdout.write(json.dumps({"scope_verdicts": verdicts}) + "\n")
+        else:
             question = payload.get("question", "")
-        except Exception:
-            question = ""
-        try:
-            entities = analyze_question(question, nlp=nlp, binary=binary)
-        except Exception:
-            entities = []
-        sys.stdout.write(json.dumps({"entities": entities}) + "\n")
+            try:
+                entities = analyze_question(question, nlp=nlp, binary=binary)
+            except Exception:
+                entities = []
+            sys.stdout.write(json.dumps({"entities": entities}) + "\n")
         sys.stdout.flush()
     return 0
 

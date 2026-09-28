@@ -124,9 +124,9 @@ mod tests {
     }
 
     /// The `semantic_tags` index field uses tantivy's default TEXT analyzer;
-    /// tag tokens ("weekend", "weekday", "habitual", and later kind tags like
-    /// "herb") must survive it as single lowercase tokens, otherwise the
-    /// SHOULD TermQueries would silently match nothing.
+    /// every tag token ("weekend", "weekday", "habitual", "herb") must survive
+    /// it as a single lowercase token, otherwise the SHOULD TermQueries
+    /// would silently match nothing.
     #[test]
     fn default_text_analyzer_preserves_tag_tokens() {
         use tantivy::collector::Count;
@@ -139,22 +139,16 @@ mod tests {
         let index = Index::create_in_ram(schema_builder.build());
         let mut writer = index.writer(15_000_000).expect("writer");
         writer
-            .add_document(doc!(tags => "habitual weekend"))
+            .add_document(doc!(tags => "habitual weekend weekday herb"))
             .expect("index doc");
         writer.commit().expect("commit");
         let reader = index.reader().expect("reader");
         let searcher = reader.searcher();
-        for token in ["habitual", "weekend", "herb", "weekday"] {
+        for token in ["habitual", "weekend", "weekday", "herb"] {
             let term = Term::from_field_text(tags, token);
             let query = TermQuery::new(term, IndexRecordOption::Basic);
-            let count = searcher
-                .search(&query, &Count)
-                .expect("search") as usize;
-            if token == "habitual" || token == "weekend" {
-                assert_eq!(count, 1, "tag token '{token}' must survive the analyzer");
-            } else {
-                assert_eq!(count, 0, "absent tag token '{token}' must not match");
-            }
+            let count = searcher.search(&query, &Count).expect("search") as usize;
+            assert_eq!(count, 1, "tag token '{token}' must survive the analyzer");
         }
     }
 }

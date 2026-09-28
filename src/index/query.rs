@@ -268,6 +268,7 @@ impl MemoryIndex {
             query,
             top_k.saturating_mul(5).max(20),
             statistics.map(|value| value as &dyn Bm25StatisticsProvider),
+            temporal.semantic_tags,
         ) {
             Ok(hits) => Some(hits),
             Err(err) => {

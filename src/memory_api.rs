@@ -505,112 +505,6 @@ fn blend_structured_first(
     blended
 }
 
-/// Fixed additive boost for temporal-scope matches (Luyi 2026-09-28).
-///
-/// bekind's scope verdicts are a RANK BOOST ONLY — never a filter. A fact
-/// whose scope verdict matches the question's gets this added to its score;
-/// every other fact is untouched, whatever its verdict. The amount is
-/// recorded per hit in `score_breakdown.scope_boost` so the boost is
-/// measurable in serialized responses. Activity compatibility
-/// (running ⊂ exercise) is deliberately out of scope: that stays
-/// caller-side knowledge work.
-const SCOPE_BOOST: f32 = 25.0;
-
-/// Pure scope-match predicate, unit-testable without the daemon.
-///
-/// Temporal: the canonicalized temporal-word sets must intersect
-/// (e.g. question ["weekend"] vs fact ["weekend"] — bekind emits canonical
-/// lowercase, so this is an exact comparison). Habitual: a habitual
-/// question wants habitual facts; a non-habitual question accepts any fact.
-/// A `false` here only withholds the boost — it never removes or demotes.
-fn scope_verdicts_match(
-    question: &crate::behood_query::ScopeVerdict,
-    fact: &crate::behood_query::ScopeVerdict,
-) -> bool {
-    let temporal_match = question
-        .temporal_words
-        .iter()
-        .any(|qw| fact.temporal_words.iter().any(|fw| qw == fw));
-    if !temporal_match {
-        return false;
-    }
-    !question.habitual || fact.habitual
-}
-
-/// Apply the fixed boost to the given result indices and re-sort by score
-/// (stable sort, so unboosted relative order is preserved). Records the
-/// amount in each hit's `score_breakdown.scope_boost`. Returns the number
-/// boosted. Pure: no daemon, no I/O. Boost only — results are never
-/// removed, demoted, or filtered here.
-fn boost_result_indices(results: &mut [crate::SearchResult], indices: &[usize]) -> usize {
-    let mut seen = std::collections::HashSet::new();
-    let mut n = 0usize;
-    for &ri in indices {
-        if ri < results.len() && seen.insert(ri) {
-            results[ri].score += SCOPE_BOOST;
-            results[ri].score_breakdown.scope_boost += SCOPE_BOOST;
-            n += 1;
-        }
-    }
-    if n > 0 {
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
-    n
-}
-
-/// Temporal-scope rank boost over blended search results.
-///
-/// Query-time only, no reindexing: the question's scope verdict comes from
-/// the behood daemon, then all candidate fact texts go through the daemon
-/// in ONE batched request (milliseconds). Fail-open throughout: no daemon,
-/// no binary, no scope support, or no temporal words in the question
-/// verdict → results returned unchanged.
-fn apply_scope_boost(
-    store: &IndexStore,
-    query: &str,
-    mut results: Vec<crate::SearchResult>,
-) -> Vec<crate::SearchResult> {
-    if results.is_empty() {
-        return results;
-    }
-    let q_verdict = match crate::behood_query::analyze_scope_verdicts(&[query])
-        .into_iter()
-        .next()
-    {
-        Some(v) if !v.temporal_words.is_empty() => v,
-        _ => return results,
-    };
-    // Map each blended result to its document text; results whose documents
-    // are missing are skipped (their verdict slot is simply absent).
-    let mut text_to_result: Vec<usize> = Vec::new();
-    let mut texts: Vec<String> = Vec::new();
-    for (ri, r) in results.iter().enumerate() {
-        if let Some(doc) = store.source_document_by_id(&r.doc_id) {
-            text_to_result.push(ri);
-            texts.push(doc.content.clone());
-        }
-    }
-    if texts.is_empty() {
-        return results;
-    }
-    let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    let verdicts = crate::behood_query::analyze_scope_verdicts(&text_refs);
-    let matched: Vec<usize> = verdicts
-        .iter()
-        .filter_map(|v| {
-            let ti: usize = v.id.strip_prefix("s:")?.parse().ok()?;
-            let ri = *text_to_result.get(ti)?;
-            scope_verdicts_match(&q_verdict, v).then_some(ri)
-        })
-        .collect();
-    boost_result_indices(&mut results, &matched);
-    results
-}
-
 impl MemoryService {
     /// Create an in-memory service without exposing the storage implementation
     /// to application callers.
@@ -1295,7 +1189,14 @@ impl MemoryService {
         // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
         let analysis = analyze_query(query);
         let query_text = analysis.augmented_query.as_str();
-        let prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        let mut prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        // Definitional semantic tags (Luyi 2026-09-28): computed from the
+        // ORIGINAL user query, not the augmented text. Closed-set temporal
+        // words ("weekend"/"weekday") and "habitual" become SHOULD
+        // TermQueries on the index's `semantic_tags` field, scored by BM25
+        // inside tantivy — a match, not a bonus. Fail-open: no tags when
+        // the daemon is unavailable or the question carries no scope.
+        prepared.set_semantic_tags(crate::semantic_tags::query_scope_tags(query));
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,
@@ -1352,10 +1253,6 @@ impl MemoryService {
             }
         };
         let results = blend_structured_first(structured, lexical, top_k);
-        // Temporal-scope rank boost (Luyi 2026-09-28): additive only, never
-        // a filter. No-op when the behood daemon is unavailable or the
-        // question carries no temporal scope.
-        let results = apply_scope_boost(&self.store, query, results);
         observe_session_search(
             &self.conversation_states,
             scope,
@@ -2582,108 +2479,6 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         base.join(format!("lint-ai-{name}-{}", std::process::id()))
-    }
-
-    fn scope_verdict(
-        temporal_words: &[&str],
-        habitual: bool,
-    ) -> crate::behood_query::ScopeVerdict {
-        crate::behood_query::ScopeVerdict {
-            id: "s:0".to_string(),
-            activity_phrase: "test activity".to_string(),
-            temporal_words: temporal_words.iter().map(|s| s.to_string()).collect(),
-            habitual,
-        }
-    }
-
-    fn bare_search_result(doc_id: &str, score: f32) -> crate::SearchResult {
-        crate::SearchResult {
-            doc_id: doc_id.to_string(),
-            source: "test".to_string(),
-            group_id: None,
-            score,
-            score_breakdown: Default::default(),
-            matched_entities: vec![],
-            matched_terms: vec![],
-            probable_topic: None,
-            doc_type_guess: None,
-            semantic_status: None,
-            superseded_by: None,
-            relation_confidence: None,
-            relation_evidence: vec![],
-        }
-    }
-
-    #[test]
-    fn scope_match_weekend_pair_and_weekday_reject() {
-        let q = scope_verdict(&["weekend"], true);
-        assert!(scope_verdicts_match(&q, &scope_verdict(&["weekend"], true)));
-        assert!(!scope_verdicts_match(
-            &q,
-            &scope_verdict(&["weekday"], true)
-        ));
-    }
-
-    #[test]
-    fn scope_match_requires_temporal_intersection() {
-        let q = scope_verdict(&["weekend"], true);
-        assert!(!scope_verdicts_match(&q, &scope_verdict(&[], true)));
-        assert!(!scope_verdicts_match(&scope_verdict(&[], true), &q));
-    }
-
-    #[test]
-    fn scope_match_habitual_alignment() {
-        // Habitual question wants habitual facts.
-        let q_habitual = scope_verdict(&["weekend"], true);
-        assert!(!scope_verdicts_match(
-            &q_habitual,
-            &scope_verdict(&["weekend"], false)
-        ));
-        // Non-habitual question accepts any fact.
-        let q_plain = scope_verdict(&["weekend"], false);
-        assert!(scope_verdicts_match(
-            &q_plain,
-            &scope_verdict(&["weekend"], false)
-        ));
-        assert!(scope_verdicts_match(
-            &q_plain,
-            &scope_verdict(&["weekend"], true)
-        ));
-    }
-
-    #[test]
-    fn scope_boost_adds_resorts_and_never_removes() {
-        // Lexical order: b (10) > a (9) > c (1). Boost a and c.
-        let mut results = vec![
-            bare_search_result("b", 10.0),
-            bare_search_result("a", 9.0),
-            bare_search_result("c", 1.0),
-        ];
-        let n = boost_result_indices(&mut results, &[1, 2]);
-        assert_eq!(n, 2);
-        assert_eq!(results.len(), 3, "boost must never remove results");
-        // a: 9 + 25 = 34, c: 1 + 25 = 26 — both float above b's 10.
-        assert_eq!(results[0].doc_id, "a");
-        assert_eq!(results[1].doc_id, "c");
-        assert_eq!(results[2].doc_id, "b");
-        assert_eq!(results[0].score, 9.0 + SCOPE_BOOST);
-        assert_eq!(results[0].score_breakdown.scope_boost, SCOPE_BOOST);
-        assert_eq!(results[1].score_breakdown.scope_boost, SCOPE_BOOST);
-        // Untouched hits carry no boost and keep their score.
-        assert_eq!(results[2].score_breakdown.scope_boost, 0.0);
-        assert_eq!(results[2].score, 10.0);
-    }
-
-    #[test]
-    fn scope_boost_no_match_is_identity() {
-        let mut results = vec![
-            bare_search_result("b", 10.0),
-            bare_search_result("a", 9.0),
-        ];
-        let n = boost_result_indices(&mut results, &[]);
-        assert_eq!(n, 0);
-        assert_eq!(results[0].doc_id, "b");
-        assert_eq!(results[1].doc_id, "a");
     }
 
     #[test]

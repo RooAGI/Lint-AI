@@ -7,14 +7,27 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{Bm25StatisticsProvider, Query, QueryParser};
+use tantivy::query::{
+    Bm25StatisticsProvider, BooleanQuery, BoostQuery, Occur, Query, QueryParser, TermQuery,
+};
 use tantivy::schema::document::TantivyDocument;
-use tantivy::schema::{Schema, STORED, STRING, TEXT};
-use tantivy::{doc, Index};
+use tantivy::schema::{Field, IndexRecordOption, Schema, STORED, STRING, TEXT};
+use tantivy::{doc, Index, Term};
 
 use super::helpers::*;
 use super::model::*;
 use super::query_terms::*;
+
+/// The chunk-content text indexed in the tantivy `content` field (and the
+/// text bekind judges for definitional semantic tags). Single helper so the
+/// indexed text and the judged text cannot drift apart.
+fn lexical_content_text(doc: &DocRecord) -> String {
+    doc.section_chunks
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 impl MemoryIndex {
     pub fn from_records(records: Vec<DocRecord>) -> Self {
@@ -685,104 +698,59 @@ impl MemoryIndex {
     fn build_lexical_index(
         docs: &HashMap<String, DocRecord>,
         lexical_dir: Option<&Path>,
-    ) -> Result<LexicalIndex> {
-        let mut schema_builder = Schema::builder();
+    ) -> Result<LexicalIndex> {        let mut schema_builder = Schema::builder();
         let doc_id_f = schema_builder.add_text_field("doc_id", STRING | STORED);
         let content_f = schema_builder.add_text_field("content", TEXT);
         let headings_f = schema_builder.add_text_field("headings", TEXT);
         let terms_f = schema_builder.add_text_field("important_terms", TEXT);
         let entities_f = schema_builder.add_text_field("entities", TEXT);
         let temporal_f = schema_builder.add_text_field("temporal_terms", TEXT);
+        // Definitional semantic tags (Luyi 2026-09-28): closed-set temporal
+        // words ("weekend"/"weekday"), "habitual", admitted kind tags.
+        // Plain lowercase single words; the default TEXT analyzer keeps
+        // them intact (covered by unit test below).
+        let tags_f = schema_builder.add_text_field("semantic_tags", TEXT);
         let schema = schema_builder.build();
+        // Deterministic doc order so the batched bekind verdicts map back
+        // to documents by position.
+        let mut ordered: Vec<&DocRecord> = docs.values().collect();
+        ordered.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
+        let content_texts: Vec<String> =
+            ordered.iter().map(|doc| lexical_content_text(doc)).collect();
+        let content_refs: Vec<&str> = content_texts.iter().map(String::as_str).collect();
+        // One batched daemon round-trip for the whole index. Fail-open:
+        // no daemon/binary yields no tags and the index builds exactly as
+        // before (every doc simply indexes an empty tags field).
+        let tags_per_doc = crate::semantic_tags::batch_doc_scope_tags(&content_refs);
         let index = if let Some(dir) = lexical_dir {
             fs::create_dir_all(dir)?;
-            match Index::open_in_dir(dir) {
-                Ok(existing) => existing,
-                Err(_) => {
-                    if dir.exists() {
-                        let _ = fs::remove_dir_all(dir);
-                        fs::create_dir_all(dir)?;
-                    }
-                    let created = Index::create_in_dir(dir, schema.clone())?;
-                    let mut writer = created.writer(50_000_000)?;
-                    for doc in docs.values() {
-                        let headings_text = doc
-                            .section_chunks
-                            .iter()
-                            .map(|c| c.heading.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let terms_text = doc
-                            .section_chunks
-                            .iter()
-                            .flat_map(|c| c.important_terms.iter().map(String::as_str))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let entities_text = doc
-                            .section_chunks
-                            .iter()
-                            .flat_map(|c| c.key_entities.iter().map(String::as_str))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let content_text = doc
-                            .section_chunks
-                            .iter()
-                            .map(|c| c.content.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let temporal_text = doc.temporal_terms.join(" ");
-                        writer.add_document(doc!(
-                            doc_id_f => doc.doc_id.clone(),
-                            content_f => content_text,
-                            headings_f => headings_text,
-                            terms_f => terms_text,
-                            entities_f => entities_text,
-                            temporal_f => temporal_text
-                        ))?;
-                    }
-                    writer.commit()?;
-                    created
+            // An on-disk index predating the tags field has documents
+            // without tags: wipe and rebuild once so every document carries
+            // them. Afterwards the existing index is reused as before.
+            let needs_rebuild = match Index::open_in_dir(dir) {
+                Ok(existing) => existing.schema().get_field("semantic_tags").is_err(),
+                Err(_) => true,
+            };
+            if needs_rebuild {
+                if dir.exists() {
+                    let _ = fs::remove_dir_all(dir);
+                    fs::create_dir_all(dir)?;
                 }
+                let created = Index::create_in_dir(dir, schema.clone())?;
+                Self::populate_lexical_index(
+                    &created, 50_000_000, &ordered, &tags_per_doc, doc_id_f, content_f,
+                    headings_f, terms_f, entities_f, temporal_f, tags_f,
+                )?;
+                created
+            } else {
+                Index::open_in_dir(dir)?
             }
         } else {
             let ram = Index::create_in_ram(schema);
-            let mut writer = ram.writer(15_000_001)?;
-            for doc in docs.values() {
-                let headings_text = doc
-                    .section_chunks
-                    .iter()
-                    .map(|c| c.heading.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let terms_text = doc
-                    .section_chunks
-                    .iter()
-                    .flat_map(|c| c.important_terms.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let entities_text = doc
-                    .section_chunks
-                    .iter()
-                    .flat_map(|c| c.key_entities.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let content_text = doc
-                    .section_chunks
-                    .iter()
-                    .map(|c| c.content.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let temporal_text = doc.temporal_terms.join(" ");
-                writer.add_document(doc!(
-                    doc_id_f => doc.doc_id.clone(),
-                    content_f => content_text,
-                    headings_f => headings_text,
-                    terms_f => terms_text,
-                    entities_f => entities_text,
-                    temporal_f => temporal_text
-                ))?;
-            }
-            writer.commit()?;
+            Self::populate_lexical_index(
+                &ram, 15_000_001, &ordered, &tags_per_doc, doc_id_f, content_f,
+                headings_f, terms_f, entities_f, temporal_f, tags_f,
+            )?;
             ram
         };
         let reader = index.reader()?;
@@ -793,6 +761,7 @@ impl MemoryIndex {
         let terms_f = schema_ref.get_field("important_terms")?;
         let entities_f = schema_ref.get_field("entities")?;
         let temporal_f = schema_ref.get_field("temporal_terms")?;
+        let tags_f = schema_ref.get_field("semantic_tags")?;
         Ok(LexicalIndex {
             index,
             reader,
@@ -802,25 +771,97 @@ impl MemoryIndex {
             terms_f,
             entities_f,
             temporal_f,
+            tags_f,
         })
     }
 
+    /// Writes every document (plus its precomputed semantic tags) into a
+    /// fresh tantivy index and commits. Shared by the on-disk and
+    /// in-RAM build paths.
+    #[allow(clippy::too_many_arguments)]
+    fn populate_lexical_index(
+        index: &Index,
+        writer_heap: usize,
+        ordered: &[&DocRecord],
+        tags_per_doc: &[Vec<String>],
+        doc_id_f: Field,
+        content_f: Field,
+        headings_f: Field,
+        terms_f: Field,
+        entities_f: Field,
+        temporal_f: Field,
+        tags_f: Field,
+    ) -> Result<()> {
+        let mut writer = index.writer(writer_heap)?;
+        for (doc, tags) in ordered.iter().zip(tags_per_doc.iter()) {
+            let headings_text = doc
+                .section_chunks
+                .iter()
+                .map(|c| c.heading.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let terms_text = doc
+                .section_chunks
+                .iter()
+                .flat_map(|c| c.important_terms.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let entities_text = doc
+                .section_chunks
+                .iter()
+                .flat_map(|c| c.key_entities.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let content_text = lexical_content_text(doc);
+            let temporal_text = doc.temporal_terms.join(" ");
+            let tags_text = tags.join(" ");
+            writer.add_document(doc!(
+                doc_id_f => doc.doc_id.clone(),
+                content_f => content_text,
+                headings_f => headings_text,
+                terms_f => terms_text,
+                entities_f => entities_text,
+                temporal_f => temporal_text,
+                tags_f => tags_text
+            ))?;
+        }
+        writer.commit()?;
+        Ok(())
+    }
+
+    /// Lexical BM25 over the tantivy index, plus definitional semantic-tag
+    /// matching (Luyi 2026-09-28).
+    ///
+    /// `tags` are closed-set definitional tags derived from the ORIGINAL
+    /// user query (temporal words, "habitual", admitted kind tags). Each
+    /// tag becomes a SHOULD TermQuery on the `semantic_tags` field with a
+    /// [`TAG_BOOST`] multiplier — inside the scorer, weighted by BM25
+    /// (IDF, length norm, saturation) like every other term. Tags are
+    /// never added to the multi-field QueryParser (avoids cross-field
+    /// tokenization noise) and never filter: an empty `tags` runs the
+    /// lexical query exactly as before.
     pub(crate) fn lexical_bm25(
         &self,
         query: &str,
         top_k: usize,
         statistics: Option<&dyn Bm25StatisticsProvider>,
+        tags: &[String],
     ) -> Result<HashMap<String, f32>> {
         let Some(lex) = self.lexical.as_ref() else {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
+        // Canonical tag order so equal tag sets share a cache entry.
+        let mut sorted_tags: Vec<String> = tags.to_vec();
+        sorted_tags.sort();
+        sorted_tags.dedup();
+        let cache_key = (query.to_string(), sorted_tags.clone());
         let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let cached = {
             let cache = parsed_cache
                 .lock()
                 .expect("parsed lexical query cache lock poisoned");
-            cache.get(query).cloned()
+            cache.get(&cache_key).cloned()
         };
         let parsed = if let Some(parsed) = cached {
             parsed
@@ -840,7 +881,7 @@ impl MemoryIndex {
             query_parser.set_field_boost(lex.terms_f, LEXICAL_TERMS_BOOST);
             query_parser.set_field_boost(lex.entities_f, LEXICAL_ENTITIES_BOOST);
             query_parser.set_field_boost(lex.temporal_f, 1.1);
-            let parsed = match query_parser.parse_query(query) {
+            let parsed_lexical = match query_parser.parse_query(query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {
                     let fallback_query = sanitize_bm25_query(query);
@@ -853,7 +894,25 @@ impl MemoryIndex {
                     }
                 }
             };
-            let parsed: Arc<dyn Query> = Arc::from(parsed);
+            let parsed_lexical: Box<dyn Query> = Box::new(parsed_lexical);
+            // Definitional tags join as SHOULD clauses: purely additive,
+            // scored by BM25 inside the tantivy scorer — a match, not a
+            // bonus bolted on after scoring.
+            let combined: Arc<dyn Query> = if sorted_tags.is_empty() {
+                Arc::from(parsed_lexical)
+            } else {
+                let mut subqueries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+                subqueries.push((Occur::Should, parsed_lexical));
+                for tag in &sorted_tags {
+                    let term_query = TermQuery::new(
+                        Term::from_field_text(lex.tags_f, tag),
+                        IndexRecordOption::Basic,
+                    );
+                    let boosted = BoostQuery::new(Box::new(term_query), TAG_BOOST);
+                    subqueries.push((Occur::Should, Box::new(boosted)));
+                }
+                Arc::new(BooleanQuery::new(subqueries))
+            };
             let mut cache = parsed_cache
                 .lock()
                 .expect("parsed lexical query cache lock poisoned");
@@ -862,8 +921,8 @@ impl MemoryIndex {
                     cache.remove(&oldest_key);
                 }
             }
-            cache.insert(query.to_string(), parsed.clone());
-            parsed
+            cache.insert(cache_key, combined.clone());
+            combined
         };
         let collector = TopDocs::with_limit(top_k);
         let top_docs = match statistics {

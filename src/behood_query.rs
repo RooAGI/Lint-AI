@@ -172,7 +172,7 @@ impl BehoodQueryDaemon {
     /// Sends `{"scope_texts": [{"id": "s:{i}", "text": ...}, ...]}` and
     /// parses `{"scope_verdicts": [...]}`. Returns `None` on any failure
     /// (including lock contention); the caller treats that as "no scope
-    /// information" and skips the boost. `Some(vec)` is authoritative even
+    /// information" and emits no scope tags. `Some(vec)` is authoritative even
     /// when empty. Shares the serve-failure cooldown with [`Self::analyze`]:
     /// a dead child suppresses respawn attempts for both request kinds.
     pub fn analyze_scope(
@@ -282,9 +282,11 @@ pub fn query_has_kind(entities: &[QueryEntity], kind: &str) -> bool {
 //
 // A scope verdict judges one raw text span: the activity it describes, its
 // canonicalized temporal words (closed 7-day set only: "weekend"/"weekday"),
-// and whether it is habitual. Lint-ai uses these verdicts for a RANK BOOST
-// ONLY — never a filter. Activity compatibility (running ⊂ exercise) is
-// deliberately out of scope here; that stays caller-side knowledge work.
+// and whether it is habitual. Lint-ai turns these verdicts into
+// definitional semantic tags (Luyi 2026-09-28): index-time and query-time
+// SHOULD matches inside tantivy BM25 — never a filter, never a bonus.
+// Activity compatibility (running ⊂ exercise) is deliberately out of
+// scope here; that stays caller-side knowledge work.
 // ---------------------------------------------------------------------------
 
 /// A temporal-scope verdict judged by bekind for one text span.
@@ -303,7 +305,7 @@ pub struct ScopeVerdict {
 /// Scope verdicts for raw text spans via the global daemon.
 ///
 /// Fail-open: any daemon failure — or a daemon whose script predates scope
-/// support — yields an empty vec, and the caller skips the scope boost.
+/// support — yields an empty vec, and the caller emits no scope tags.
 /// Search never breaks because of scope. There is deliberately no one-shot
 /// subprocess fallback: per-fact one-shots would pay the interpreter+spaCy
 /// spawn per candidate; the daemon is the scope path.

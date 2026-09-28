@@ -88,6 +88,7 @@ mod ownership;
 mod query_expansion;
 pub mod question_focus;
 pub mod behood_query;
+pub mod semantic_tags;
 mod query_semantics;
 mod report;
 mod review;

@@ -26,7 +26,7 @@ use tantivy::query::QueryParser;
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::Value;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term};
 /// How long to wait for another session to finish writing before giving up.
 const WRITER_LOCK_WAIT: Duration = Duration::from_secs(10);
 const WRITER_LOCK_RETRY: Duration = Duration::from_millis(150);
@@ -44,6 +44,10 @@ pub(crate) struct LexicalState {
     headings_f: Field,
     terms_f: Field,
     entities_f: Field,
+    /// Definitional semantic tags field. `None` for on-disk indexes created
+    /// before the tags field existed: those documents simply carry no tags
+    /// (fail-open; a rebuild adds them).
+    tags_f: Option<Field>,
 }
 
 impl LexicalState {
@@ -54,6 +58,9 @@ impl LexicalState {
         schema_builder.add_text_field("headings", TEXT);
         schema_builder.add_text_field("important_terms", TEXT);
         schema_builder.add_text_field("entities", TEXT);
+        // Definitional semantic tags (Luyi 2026-09-28): same vocabulary as
+        // the MemoryIndex lexical shard's `semantic_tags` field.
+        schema_builder.add_text_field("semantic_tags", TEXT);
         let schema = schema_builder.build();
 
         let index = match index_dir.as_deref() {
@@ -71,6 +78,9 @@ impl LexicalState {
         let headings_f = schema_ref.get_field("headings")?;
         let terms_f = schema_ref.get_field("important_terms")?;
         let entities_f = schema_ref.get_field("entities")?;
+        // Old on-disk indexes predate the tags field: None there, and
+        // upserts skip tags (fail-open) instead of erroring.
+        let tags_f = schema_ref.get_field("semantic_tags").ok();
         Ok(Self {
             index,
             writer,
@@ -80,6 +90,7 @@ impl LexicalState {
             headings_f,
             terms_f,
             entities_f,
+            tags_f,
         })
     }
 
@@ -125,23 +136,31 @@ impl LexicalState {
             .join("\n");
 
         // Field handles are Copy, so they are taken before the writer borrow.
-        let (doc_id_f, content_f, headings_f, terms_f, entities_f) = (
+        let (doc_id_f, content_f, headings_f, terms_f, entities_f, tags_f) = (
             self.doc_id_f,
             self.content_f,
             self.headings_f,
             self.terms_f,
             self.entities_f,
+            self.tags_f,
         );
         let doc_id = record.doc_id.clone();
         let writer = self.writer()?;
         writer.delete_term(Term::from_field_text(doc_id_f, &doc_id));
-        writer.add_document(doc!(
-            doc_id_f => doc_id,
-            content_f => content_text,
-            headings_f => headings_text,
-            terms_f => terms_text,
-            entities_f => entities_text
-        ))?;
+        let mut document = TantivyDocument::new();
+        document.add_text(doc_id_f, &doc_id);
+        document.add_text(content_f, &content_text);
+        document.add_text(headings_f, &headings_text);
+        document.add_text(terms_f, &terms_text);
+        document.add_text(entities_f, &entities_text);
+        // Definitional semantic tags for this record (one daemon round-trip,
+        // fail-open). Skipped entirely on pre-tags on-disk indexes.
+        if let Some(tags_f) = tags_f {
+            let tags = crate::semantic_tags::batch_doc_scope_tags(&[content_text.as_str()]);
+            let tags_text = tags.into_iter().next().unwrap_or_default().join(" ");
+            document.add_text(tags_f, tags_text);
+        }
+        writer.add_document(document)?;
         Ok(())
     }
 

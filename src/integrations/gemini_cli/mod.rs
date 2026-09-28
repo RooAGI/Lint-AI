@@ -655,11 +655,12 @@ mod tests {
     }
 
     #[test]
-    fn gemini_compatible_mcp_contract_applies_to_gemini_agy_and_openclaw() {
+    fn gemini_compatible_mcp_contract_applies_to_all_adapters() {
         for (provider, label) in [
             (RecordingProvider::Gemini, "gemini-cli"),
             (RecordingProvider::Agy, "agy"),
             (RecordingProvider::OpenClaw, "openclaw"),
+            (RecordingProvider::Hermes, "hermes"),
         ] {
             let root = temp_root(label);
             let memory_root = mcp_index::shared_memory_root(&root);

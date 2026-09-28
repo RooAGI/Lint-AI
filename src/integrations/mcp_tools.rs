@@ -9,13 +9,13 @@ use std::path::Path;
 /// Canonical provider values for `filters.provider`, the per-document
 /// attribution stamped on every captured memory.
 pub(crate) const PROVIDER_FILTER_VALUES: &[&str] =
-    &["claude", "codex", "gemini-cli", "agy", "muse", "openclaw"];
+    &["claude", "codex", "gemini-cli", "agy", "muse", "openclaw", "hermes"];
 
 /// JSON Schema fragment for the optional `provider` search argument.
 pub(crate) fn provider_argument_schema() -> Value {
     json!({
         "type": "string",
-        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse, openclaw). Omit to search the shared pool.",
+        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse, openclaw, hermes). Omit to search the shared pool.",
         "enum": PROVIDER_FILTER_VALUES,
     })
 }
@@ -170,6 +170,7 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
         || document.source.starts_with("agy://")
         || document.source.starts_with("muse://")
         || document.source.starts_with("openclaw://")
+        || document.source.starts_with("hermes://")
         || document.source.starts_with("lint-ai://")
         || document
             .filters
@@ -184,6 +185,7 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
                 "agy-session:",
                 "muse-session:",
                 "openclaw-session:",
+                "hermes-session:",
             ]
             .iter()
             .any(|prefix| group_id.starts_with(prefix))

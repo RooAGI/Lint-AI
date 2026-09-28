@@ -20,6 +20,12 @@ use crate::integrations::agy::{
     install_memory_skill as install_agy_memory_skill,
     install_user_config as install_agy_user_config, run_server as run_agy_server, AgyServerOptions,
 };
+#[cfg(feature = "hermes")]
+use crate::integrations::hermes::{
+    install_memory_skill as install_hermes_memory_skill,
+    install_user_config as install_hermes_user_config, run_server as run_hermes_server,
+    HermesServerOptions,
+};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
@@ -112,6 +118,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "gemini-cli",
             feature = "agy",
             feature = "openclaw",
+            feature = "hermes",
             feature = "muse-code"
         ))]
         {
@@ -148,6 +155,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "gemini-cli",
             feature = "agy",
             feature = "openclaw",
+            feature = "hermes",
             feature = "muse-code"
         )))]
         {
@@ -162,6 +170,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "gemini-cli",
             feature = "agy",
             feature = "openclaw",
+            feature = "hermes",
             feature = "muse-code"
         ))]
         {
@@ -186,6 +195,10 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::OpenClaw => {
                     crate::integrations::session_recording::RecordingProvider::OpenClaw
                 }
+                #[cfg(feature = "hermes")]
+                crate::cli::SessionProvider::Hermes => {
+                    crate::integrations::session_recording::RecordingProvider::Hermes
+                }
             };
             let report = crate::integrations::session_recording::promote_recorded_session(
                 provider,
@@ -202,6 +215,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "gemini-cli",
             feature = "agy",
             feature = "openclaw",
+            feature = "hermes",
             feature = "muse-code"
         )))]
         {
@@ -216,6 +230,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "gemini-cli",
             feature = "agy",
             feature = "openclaw",
+            feature = "hermes",
             feature = "muse-code"
         ))]
         {
@@ -240,6 +255,10 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::OpenClaw => {
                     crate::integrations::session_recording::RecordingProvider::OpenClaw
                 }
+                #[cfg(feature = "hermes")]
+                crate::cli::SessionProvider::Hermes => {
+                    crate::integrations::session_recording::RecordingProvider::Hermes
+                }
             };
             let report = crate::integrations::session_recording::replay_recorded_session(
                 provider,
@@ -257,6 +276,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "gemini-cli",
             feature = "agy",
             feature = "openclaw",
+            feature = "hermes",
             feature = "muse-code"
         )))]
         {
@@ -525,6 +545,21 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "hermes")]
+    if args.hermes_install {
+        let written = install_hermes_memory_skill(
+            args.hermes_skill_dir.as_deref().map(Path::new),
+            args.hermes_force_skill,
+        )?;
+        println!("Wrote Hermes memory skill to {}", written.display());
+        let written = install_hermes_user_config(
+            Path::new(&args.path),
+            args.hermes_config.as_deref().map(Path::new),
+        )?;
+        println!("Wrote Hermes MCP config to {}", written.display());
+        return Ok(());
+    }
+
     #[cfg(feature = "openclaw")]
     if args.openclaw_serve {
         let cfg = load_config(
@@ -547,11 +582,43 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "hermes")]
+    if args.hermes_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_hermes_server(
+            Path::new(&args.path),
+            HermesServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
     #[cfg(feature = "openclaw")]
     if args.openclaw_verify_mcp {
         crate::integrations::mcp_health::verify(
             Path::new(&args.path),
             "--openclaw-serve",
+            args.mcp_timeout_ms,
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "hermes")]
+    if args.hermes_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--hermes-serve",
             args.mcp_timeout_ms,
         )?;
         return Ok(());

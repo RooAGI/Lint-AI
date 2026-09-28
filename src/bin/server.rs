@@ -720,6 +720,7 @@ fn dashboard_integrations(root: &std::path::Path) -> Vec<DashboardIntegrationSta
         ),
         dashboard_integration("AGY", cfg!(feature = "agy"), "agy", root),
         dashboard_integration("OpenClaw", cfg!(feature = "openclaw"), "openclaw", root),
+        dashboard_integration("Hermes", cfg!(feature = "hermes"), "hermes", root),
     ]
 }
 

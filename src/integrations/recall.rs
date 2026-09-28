@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn project_recall_sees_every_providers_memories_in_the_shared_store() {
-        let providers = ["claude", "codex", "gemini-cli", "agy", "muse", "openclaw"];
+        let providers = ["claude", "codex", "gemini-cli", "agy", "muse", "openclaw", "hermes"];
 
         let temp_base = std::env::temp_dir()
             .canonicalize()

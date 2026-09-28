@@ -30,6 +30,8 @@ pub enum SessionProvider {
     Muse,
     #[value(name = "openclaw")]
     OpenClaw,
+    #[cfg(feature = "hermes")]
+    Hermes,
 }
 
 #[cfg(feature = "claude-code")]
@@ -348,6 +350,30 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "openclaw")]
     pub openclaw_plugin_dir: Option<String>,
+    /// Install the lint-ai MCP server and memory skill for Hermes.
+    #[arg(long)]
+    #[cfg(feature = "hermes")]
+    pub hermes_install: bool,
+    /// Replace an existing user-modified Hermes lint-ai skill.
+    #[arg(long)]
+    #[cfg(feature = "hermes")]
+    pub hermes_force_skill: bool,
+    /// Run the lint-ai MCP server over stdio for Hermes.
+    #[arg(long)]
+    #[cfg(feature = "hermes")]
+    pub hermes_serve: bool,
+    /// Spawn `--hermes-serve` and verify the MCP handshake.
+    #[arg(long)]
+    #[cfg(feature = "hermes")]
+    pub hermes_verify_mcp: bool,
+    /// Override the Hermes config path (default `~/.hermes/config.yaml`).
+    #[arg(long)]
+    #[cfg(feature = "hermes")]
+    pub hermes_config: Option<String>,
+    /// Override the Hermes skills directory (default `~/.hermes/skills`).
+    #[arg(long)]
+    #[cfg(feature = "hermes")]
+    pub hermes_skill_dir: Option<String>,
     /// Query the unified store (project documents and recorded memories) once
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
     #[arg(long)]

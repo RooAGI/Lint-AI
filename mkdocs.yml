@@ -57,6 +57,8 @@ nav:
       - Gemini CLI: gemini-cli.md
       - Antigravity CLI: agy.md
       - Muse Code: muse-code.md
+      - OpenClaw: openclaw.md
+      - Hermes: hermes.md
       - Other agent frameworks: agent-frameworks.md
   - Architecture:
       - Ingestion architecture: ingestion-architecture.md

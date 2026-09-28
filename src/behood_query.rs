@@ -14,11 +14,12 @@
 //! caller falls back to a one-shot subprocess exactly as before. Behood
 //! owns judgment; the caller owns knowledge.
 
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use crate::daemon::JsonLinesDaemon;
 
 /// A (text, kind) pair judged by behood at query time.
 #[derive(Debug, Clone)]
@@ -81,36 +82,19 @@ fn script_path() -> Option<std::path::PathBuf> {
 
 /// Long-lived `scripts/behood_query.py --serve` child.
 ///
-/// Spawning a fresh Python interpreter and loading the spaCy model costs
-/// seconds per search. The daemon keeps one `--serve` child alive and speaks
-/// the line-delimited JSON protocol over its stdin/stdout, so the model load
-/// is paid once per process instead of once per search.
+/// Thin typed wrapper over [`crate::daemon::JsonLinesDaemon`]: it builds the
+/// `{"question": ...}` request line and parses the `{"entities": [...]`}
+/// response. See that module for the spawn/IO/timeout/fail-open mechanics.
 ///
-/// Fail-open by construction: every failure mode (missing script, spawn
-/// failure, dead child, timeout, bad output, lock contention) yields `None`,
-/// and the caller falls back to a one-shot subprocess exactly as before. The
-/// daemon is a latency optimization only; it never changes judgment
-/// semantics.
+/// Fail-open by construction: every daemon failure yields `None` and the
+/// caller falls back to a one-shot subprocess exactly as before. The daemon
+/// is a latency optimization only; it never changes judgment semantics.
 #[derive(Clone)]
 pub struct BehoodQueryDaemon {
-    inner: std::sync::Arc<DaemonState>,
-}
-
-struct DaemonState {
-    script: PathBuf,
-    python: String,
-    mutable: Mutex<DaemonMutable>,
-}
-
-/// The child process and its I/O. `None` fields mean "not running"; the
-/// next `analyze` respawns (subject to the spawn-failure cooldown).
-struct DaemonMutable {
-    child: Option<Child>,
-    stdin: Option<ChildStdin>,
-    responses: Option<mpsc::Receiver<String>>,
+    daemon: JsonLinesDaemon,
     /// When the child cannot serve (e.g. no bekind binary: it exits 3 at
     /// startup), don't pay a fresh interpreter spawn on every query.
-    last_serve_failure: Option<Instant>,
+    last_serve_failure: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
 /// How long a serve failure suppresses respawn attempts. The backend does
@@ -125,23 +109,18 @@ impl BehoodQueryDaemon {
         static DAEMON: OnceLock<BehoodQueryDaemon> = OnceLock::new();
         DAEMON.get_or_init(|| {
             let script = script_path().unwrap_or_default();
-            BehoodQueryDaemon::new(script, crate::segments::relations::python_executable())
+            BehoodQueryDaemon::new(
+                script,
+                crate::segments::relations::python_executable(),
+            )
         })
     }
 
     /// A daemon over an explicit script (tests, benchmarks).
     pub fn new(script: PathBuf, python: String) -> Self {
         BehoodQueryDaemon {
-            inner: std::sync::Arc::new(DaemonState {
-                script,
-                python,
-                mutable: Mutex::new(DaemonMutable {
-                    child: None,
-                    stdin: None,
-                    responses: None,
-                    last_serve_failure: None,
-                }),
-            }),
+            daemon: JsonLinesDaemon::new("behood-query", script, python),
+            last_serve_failure: std::sync::Arc::new(Mutex::new(None)),
         }
     }
 
@@ -149,145 +128,49 @@ impl BehoodQueryDaemon {
     /// cost. Best-effort: failures are silent; queries fall back to the
     /// one-shot subprocess.
     pub fn prewarm(&self) {
-        if let Ok(mut mutable) = self.inner.mutable.lock() {
-            let _ = mutable.ensure_running(&self.inner.script, &self.inner.python);
-        }
+        self.daemon.prewarm();
     }
 
     /// Analyze `question` via the daemon. Returns `None` on any failure
     /// (including lock contention — the daemon is a fast path, never a
     /// queue); the caller falls back to a one-shot subprocess. `Some(vec)`
     /// is authoritative even when empty.
-    pub fn analyze(&self, question: &str, timeout: Duration) -> Option<Vec<QueryEntity>> {
-        // Fast path only: never block behind another in-flight query.
-        let mut mutable = self.inner.mutable.try_lock().ok()?;
-        if let Some(failed_at) = mutable.last_serve_failure {
-            if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
-                return None;
+    pub fn analyze(
+        &self,
+        question: &str,
+        timeout: Duration,
+    ) -> Option<Vec<QueryEntity>> {
+        // Cooldown: after a serve failure, don't pay a fresh interpreter
+        // spawn on every query; the one-shot fallback covers the gap.
+        // The mutex is never held across `query`, so lock ordering is safe.
+        if let Ok(last) = self.last_serve_failure.lock() {
+            if let Some(failed_at) = *last {
+                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
+                    return None;
+                }
             }
-            mutable.last_serve_failure = None;
-        }
-        if mutable
-            .ensure_running(&self.inner.script, &self.inner.python)
-            .is_none()
-        {
-            mutable.last_serve_failure = Some(Instant::now());
-            return None;
         }
         let payload = serde_json::json!({ "question": question });
         let line = serde_json::to_string(&payload).ok()?;
-        if mutable.write_line(&line).is_err() {
-            mutable.serve_failed();
-            return None;
-        }
-        let response = match mutable
-            .responses
-            .as_ref()
-            .and_then(|rx| rx.recv_timeout(timeout).ok())
-        {
-            Some(line) => line,
+        let response = match self.daemon.query(&line, timeout) {
+            Some(response) => response,
             None => {
-                // Timeout or dead child: abandon the in-flight request and
-                // kill the child so a stale late response can never be
-                // misattributed to a later request. The next call respawns
-                // (subject to cooldown).
-                mutable.serve_failed();
+                if let Ok(mut last) = self.last_serve_failure.lock() {
+                    *last = Some(Instant::now());
+                }
                 return None;
             }
         };
+        if let Ok(mut last) = self.last_serve_failure.lock() {
+            *last = None;
+        }
         Some(parse_entities(&response))
     }
-}
 
-impl DaemonMutable {
-    /// Mark the child unusable and start the respawn cooldown.
-    fn serve_failed(&mut self) {
-        self.kill();
-        self.last_serve_failure = Some(Instant::now());
-    }
-
-    /// Spawn the `--serve` child unless one is already alive. Returns
-    /// `None` when the child cannot be started.
-    fn ensure_running(&mut self, script: &std::path::Path, python: &str) -> Option<()> {
-        if let Some(child) = self.child.as_mut() {
-            match child.try_wait() {
-                Ok(None) => return Some(()), // alive
-                _ => self.kill(),            // exited or unwaitable: respawn
-            }
-        }
-        if !script.is_file() {
-            return None;
-        }
-        let mut child = Command::new(python)
-            .arg(script)
-            .arg("--serve")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // Diagnostics surface on stderr; the one-shot fallback captures
-            // stderr when the daemon cannot run.
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let stdin: ChildStdin = child.stdin.take()?;
-        let stdout = child.stdout.take()?;
-        let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("behood-query-daemon-reader".to_string())
-            .spawn(move || {
-                for line in BufReader::new(stdout).lines() {
-                    match line {
-                        Ok(text) => {
-                            if tx.send(text).is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            })
-            .ok()?;
-        self.child = Some(child);
-        self.stdin = Some(stdin);
-        self.responses = Some(rx);
-        Some(())
-    }
-
-    fn write_line(&mut self, line: &str) -> std::io::Result<()> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "daemon not running")
-        })?;
-        stdin.write_all(line.as_bytes())?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()
-    }
-
-    /// Kill the child and drop its I/O. The reader thread observes EOF and
-    /// exits on its own; the next `ensure_running` respawns.
-    fn kill(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            // Reap the zombie. SIGKILL cannot be caught or ignored, so this
-            // does not block indefinitely.
-            let _ = child.wait();
-        }
-        self.stdin = None;
-        self.responses = None;
-    }
-}
-
-impl Drop for DaemonMutable {
-    fn drop(&mut self) {
-        self.kill();
-    }
-}
-
-#[cfg(test)]
-impl BehoodQueryDaemon {
-    /// Simulate child death so tests can verify respawn behavior.
+    /// Test hook: simulate child death so tests can verify respawn behavior.
+    #[cfg(test)]
     pub fn kill_child_for_test(&self) {
-        if let Ok(mut mutable) = self.inner.mutable.lock() {
-            mutable.kill();
-        }
+        self.daemon.kill_child_for_test();
     }
 }
 

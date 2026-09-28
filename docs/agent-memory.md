@@ -75,11 +75,11 @@ On the current 500-question LongMemEval-S retrieval track, the heuristic release
 
 | Metric | Result |
 |---|---:|
-| Any-hit Recall@5 | 92.4% |
-| Any-hit Recall@10 | 95.6% |
-| Any-hit Recall@20 | 97.0% |
-| MRR | 84.0% |
-| NDCG@10 | 81.8% |
+| Any-hit Recall@5 | 93.8% |
+| Any-hit Recall@10 | 96.6% |
+| Any-hit Recall@20 | 97.2% |
+| MRR | 85.7% |
+| NDCG@10 | 84.5% |
 
 These are the 500-question aggregate any-hit results. They are separate from
 the 133-question multi-session segmented comparison in the benchmark overview;

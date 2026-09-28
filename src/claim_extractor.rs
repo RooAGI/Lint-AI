@@ -156,6 +156,8 @@ mod tests {
                 score: 1.0,
                 source: "yake".to_string(),
             }],
+            key_phrases: vec![],
+            key_phrase_extraction_hash: String::new(),
             section_chunks: vec![SectionChunk {
                 chunk_id: "doc-1::chunk-0".to_string(),
                 heading: "Overview".to_string(),

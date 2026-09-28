@@ -68,25 +68,25 @@ fractional recall measures how much of the relevant evidence it found.
 
 | Metric | Result |
 |---|---:|
-| Any-hit Recall@5 | 92.4% |
-| Any-hit Recall@10 | 95.6% |
-| Any-hit Recall@20 | 97.0% |
-| Fractional Recall@5 | 83.5% |
-| Fractional Recall@10 | 89.5% |
-| Fractional Recall@20 | 91.1% |
-| MRR | 84.0% |
-| NDCG@10 | 81.8% |
+| Any-hit Recall@5 | 94.2% |
+| Any-hit Recall@10 | 96.8% |
+| Any-hit Recall@20 | 97.6% |
+| Fractional Recall@5 | 85.6% |
+| Fractional Recall@10 | 92.0% |
+| Fractional Recall@20 | 93.1% |
+| MRR | 87.0% |
+| NDCG@10 | 85.0% |
 
-Lint-AI's fractional recall is 83.5% at 5, 89.5% at 10, and 91.1% at 20.
+Lint-AI's fractional recall is 85.6% at 5, 92.0% at 10, and 93.1% at 20.
 
 | Question type | n | Any-hit @5 | Any-hit @10 | Any-hit @20 | MRR | NDCG@10 |
 |---|---:|---:|---:|---:|---:|---:|
-| Single-session assistant | 56 | 100.0% | 100.0% | 100.0% | 98.2% | 98.7% |
-| Single-session user | 70 | 94.3% | 98.6% | 98.6% | 77.5% | 82.7% |
-| Single-session preference | 30 | 80.0% | 93.3% | 93.3% | 65.8% | 72.2% |
-| Knowledge update | 78 | 98.7% | 100.0% | 100.0% | 94.6% | 92.4% |
-| Temporal reasoning | 133 | 86.5% | 91.7% | 96.2% | 81.8% | 78.0% |
-| Multi-session | 133 | 93.2% | 94.0% | 94.7% | 81.5% | 73.8% |
+| Single-session assistant | 56 | 100.0% | 100.0% | 100.0% | 99.1% | 99.3% |
+| Single-session user | 70 | 97.1% | 98.6% | 98.6% | 88.2% | 90.9% |
+| Single-session preference | 30 | 80.0% | 90.0% | 93.3% | 66.2% | 71.6% |
+| Knowledge update | 78 | 100.0% | 100.0% | 100.0% | 96.2% | 94.3% |
+| Temporal reasoning | 133 | 89.5% | 94.0% | 96.2% | 82.5% | 80.0% |
+| Multi-session | 133 | 94.7% | 97.0% | 97.0% | 84.9% | 78.4% |
 
 | Benchmark detail | Value |
 |---|---|
@@ -95,7 +95,7 @@ Lint-AI's fractional recall is 83.5% at 5, 89.5% at 10, and 91.1% at 20.
 | Backend | Heuristic release backend |
 | Embeddings | Disabled |
 | Cutoffs | 5, 10, and 20 |
-| Average query latency | 1.88 ms |
+| Average query latency | 13.0 ms |
 | Reproduction command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20` |
 
 ### Segmented-index comparison

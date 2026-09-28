@@ -401,7 +401,7 @@ def extract_full(turns, env=None):
 
 
 def _behood_speaks_v3():
-    binary = os.environ.get("BEHOOD_BIN") or shutil.which("behood")
+    binary = os.environ.get("BEHOOD_BIN") or shutil.which("bekind") or shutil.which("behood")
     if not binary:
         return None
     try:

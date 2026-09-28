@@ -76,6 +76,26 @@ pub struct PipelineOptions {
     /// (session selection, then neighbor-context / speaker-match pinpoint).
     /// When false, session follow-ups keep the base ranking.
     pub conversational_rerank: bool,
+    /// When true (default), search consults the dependency-parse relation
+    /// index for structured fact questions ("which place did both X and Y
+    /// visit", "where was X between <dates>") and blends that evidence
+    /// ahead of the lexical results. The index builds lazily on first use
+    /// from the indexed documents (one batched extractor run, bounded by a
+    /// timeout) and is fail-open: extraction failures fall back to the
+    /// lexical path. The write path never pays for it.
+    pub structured_fact_retrieval: bool,
+    /// When true (default), newly written documents are enriched with
+    /// grammar-accepted entity key phrases in the background: a worker
+    /// thread batches pending documents through the extractor's
+    /// `key_phrases_only` mode and backfills each document's `key_phrases`,
+    /// which the next refresh folds into the cap-exempt segment entity
+    /// channel (literal, unstemmed). Writes stay fast; enrichment is
+    /// fail-open and applies on the next refresh cycle. When false, no
+    /// background extraction runs and documents keep empty key phrases.
+    pub key_phrase_enrichment: bool,
+    /// Override path for the extractor script. `None` (default) uses the
+    /// bundled `scripts/spacy_relations.py`; set to a test double in tests.
+    pub extractor_script: Option<std::path::PathBuf>,
 }
 
 impl Default for PipelineOptions {
@@ -97,7 +117,32 @@ impl Default for PipelineOptions {
             memory_index_layout: MemoryIndexLayout::Single,
             fuse_global_arm: false,
             conversational_rerank: true,
+            structured_fact_retrieval: true,
+            key_phrase_enrichment: true,
+            extractor_script: None,
         }
+    }
+}
+
+/// Base per-query segment breadth for the production server: each search
+/// routes to this many candidate segments before adaptive expansion.
+/// Shared by the server and the retrieval benchmark so both see the same
+/// candidate pool.
+pub const DEFAULT_SEGMENT_QUERY_TOP_N: usize = 5;
+
+/// The pipeline options the production server uses by default: segmented
+/// layout at [`DEFAULT_SEGMENT_QUERY_TOP_N`] with the gated coverage-local
+/// router (the measured best recall-per-latency trade-off). The server
+/// binary applies its CLI flags as overrides on top of this; the retrieval
+/// benchmark builds from it directly so benchmark numbers track production
+/// instead of a hand-duplicated copy of its defaults.
+pub fn default_production_pipeline_options() -> PipelineOptions {
+    PipelineOptions {
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: DEFAULT_SEGMENT_QUERY_TOP_N,
+            routing_strategy: SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+        },
+        ..PipelineOptions::default()
     }
 }
 
@@ -154,5 +199,32 @@ impl MemoryIndexSnapshot {
             Self::Single(_) => 1,
             Self::Segmented(index) => index.len(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_defaults_are_segmented_top5_gated() {
+        let options = default_production_pipeline_options();
+        match options.memory_index_layout {
+            MemoryIndexLayout::Segmented {
+                query_top_n,
+                routing_strategy,
+            } => {
+                assert_eq!(query_top_n, DEFAULT_SEGMENT_QUERY_TOP_N);
+                assert!(matches!(
+                    routing_strategy,
+                    SegmentRoutingStrategy::TypedEvidenceMultiplicative
+                ));
+            }
+            other => panic!("expected Segmented layout, got {other:?}"),
+        }
+        assert!(options.conversational_rerank);
+        assert!(options.structured_fact_retrieval);
+        assert!(options.key_phrase_enrichment);
+        assert!(!options.fuse_global_arm);
     }
 }

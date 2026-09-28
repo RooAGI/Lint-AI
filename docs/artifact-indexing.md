@@ -25,9 +25,9 @@ Implemented pieces:
   - compatibility-named builder for the frozen search snapshot
 - `IndexStore`
   - public mutable store that owns source docs, cached records, tombstones,
-    an internal Tantivy lexical index, and the current built semantic snapshot
-- `PublishedIndexSnapshot`
-  - cheaply clonable immutable query view of the latest complete generation
+    an internal Tantivy lexical index, and the current built semantic snapshot.
+    Readers query the latest complete generation through
+    `IndexStore::query_prepared_cached` without taking the writer lock.
 
 Relevant API surface:
 
@@ -43,7 +43,6 @@ Relevant API surface:
   - `build_query_snapshot_from_source_documents(...)`
   - `IndexStore`
   - `MemoryIndexLayout`
-  - `PublishedIndexSnapshot`
 - `src/index.rs`
   - `MemoryIndex`
   - `SearchResult`
@@ -61,10 +60,10 @@ The intended artifact flow is:
 5. Insert or update it inside `IndexStore`.
 6. Query through the current snapshot.
 
-For a read path that must remain independent of later writer refreshes, call
-`IndexStore::published_snapshot()` and retain the returned
-`PublishedIndexSnapshot`. It excludes mutable writer and persistence state and
-continues to represent the generation that was published when it was cloned.
+For a read path that must see a consistent generation without blocking on
+writer refreshes, query through `IndexStore::query_prepared_cached`, which
+runs against the latest complete generation. It excludes mutable writer and
+persistence state and never exposes a partially updated index.
 
 Example:
 

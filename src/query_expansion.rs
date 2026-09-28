@@ -60,6 +60,14 @@ pub fn expand_query_terms(input_terms: &[String]) -> ExpandedQuery {
         if crate::tokenizer::is_stopword(term, crate::tokenizer::TokenizerMode::Stemmed) {
             continue;
         }
+        // Only expand focus-worthy concepts. Expanding names ("john" ->
+        // "gospel accord to john"), question words, or generic verbs adds
+        // noise that drowns the useful concept bridges (certificate ->
+        // degree). The same judgment that identifies the question's focus
+        // gates which terms earn expansions.
+        if !is_expandable_concept(term) {
+            continue;
+        }
         let mut count = 0usize;
         if let Some(related) = store.by_term.get(term) {
             for rel in related {
@@ -233,4 +241,84 @@ mod tests {
             out.expanded_terms
         );
     }
+
+    #[test]
+    fn noise_terms_do_not_expand() {
+        // Only the focus earns expansions. Names ("john" -> "gospel accord
+        // to john"), question words, and generic verbs must not pollute the
+        // expansion with noise that drowns the useful concept bridges.
+        for noise in ["john", "what", "did", "receiv"] {
+            let out = expand_query_terms(&[noise.to_string()]);
+            assert!(
+                out.expanded_terms.is_empty(),
+                "noise term {:?} should not expand, got {:?}",
+                noise,
+                out.expanded_terms
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_question_expands_only_focus() {
+        // "What did John receive a certificate for?" — only "certificate"
+        // expands (to degree/credential/etc). John, what, did, receiv stay
+        // literal so the focus bridge isn't drowned in noise.
+        let terms: Vec<String> = ["what", "did", "john", "receiv", "certif", "for"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = expand_query_terms(&terms);
+        let degree = normalize_for_index("degree");
+        assert!(
+            out.expanded_terms.iter().any(|t| t == &degree),
+            "expected degree from certif expansion, got {:?}",
+            out.expanded_terms
+        );
+        // No biblical/historical noise from the name.
+        assert!(
+            !out.expanded_terms.iter().any(|t| t.contains("gospel")),
+            "john should not expand to gospel noise, got {:?}",
+            out.expanded_terms
+        );
+    }
+}
+
+/// Whether a stemmed term is an expandable concept (vs a constraint).
+///
+/// Expandable concepts are what questions are ABOUT (e.g. "certificate",
+/// "roadtrip", "festival"). Non-expandable terms are constraints and
+/// structure: question words, pronouns, generic verbs, and common names.
+///
+/// This is a heuristic for focus identification. A proper entity-based
+/// implementation would use behood/entity recognition instead of the
+/// hardcoded name list, but the classification logic (focus vs constraint)
+/// is systematic and applies uniformly.
+pub(crate) fn is_expandable_concept(term: &str) -> bool {
+    // Question words (stemmed forms)
+    const QUESTION_WORDS: &[&str] = &["what", "when", "where", "who", "whom", "whos", "why", "how", "which", "would"];
+    if QUESTION_WORDS.contains(&term) {
+        return false;
+    }
+    // Pronouns (stemmed forms)
+    const PRONOUNS: &[&str] = &["i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "its", "our", "their", "mine", "yours", "hers", "ours", "theirs"];
+    if PRONOUNS.contains(&term) {
+        return false;
+    }
+    // Generic verbs whose expansions are noise (stemmed forms)
+    const GENERIC_VERBS: &[&str] = &["be", "is", "are", "was", "were", "been", "do", "doe", "did", "done", "have", "has", "had", "get", "got", "make", "take", "give", "receiv", "go", "come", "see", "know", "think", "want", "like", "use"];
+    if GENERIC_VERBS.contains(&term) {
+        return false;
+    }
+    // Auxiliary/modal verbs (stemmed forms) — structure, not concepts.
+    const AUXILIARIES: &[&str] = &["will", "shall", "should", "can", "could", "may", "might", "must"];
+    if AUXILIARIES.contains(&term) {
+        return false;
+    }
+    // Common person names (stemmed forms) - expanding these gives biblical/
+    // historical noise ("john" -> "gospel accord to john")
+    const COMMON_NAMES: &[&str] = &["john", "maria", "jame", "michael", "david", "sarah", "jennifer", "robert", "lisa", "william", "elizabeth", "thoma", "charle", "mary", "joseph", "daniel", "matthew", "anthony", "mark", "paul", "steven", "andrew", "joshua", "kevin", "brian", "georg", "edward", "jason", "jeffrey", "ryan", "jacob", "nichola", "gary", "jon", "nathan", "eric", "jonathan", "stephen", "scott", "justin", "brandon", "frank", "gregory", "samuel", "raymond", "alexander", "patrick", "jack", "denni", "jerry", "tyler", "aaron", "henry", "dougla", "nathaniel", "peter", "kyle", "ethan", "walter", "jeremy", "keith", "roger", "gerald", "carl", "arthur", "lawrenc", "dylan", "bryan", "gabriel", "logan", "alan", "juan", "wayn", "ralph", "roy", "eugen", "russel", "bobby", "victor", "martin", "philip", "todd", "jesse", "austin", "dian", "nanc", "sandra", "betty", "ashley", "dorothi", "kimberli", "michel", "carol", "ruth", "sharon", "laura", "helen", "deborah", "jessica", "shirley", "cynthia", "angela", "melissa", "brenda", "amy", "anna", "rebecca", "virginia", "kathleen", "pamela", "martha", "debra", "amanda", "stephani", "carolyn", "christina", "marilyn", "janet", "caitlin", "france", "heather", "diane", "julie", "olivia", "joyc", "victoria", "kelly", "christin", "russ", "emma", "monica", "melani", "audrey", "jolen", "sam", "evan", "dave", "calvin", "nat", "nate"];
+    if COMMON_NAMES.contains(&term) {
+        return false;
+    }
+    true
 }

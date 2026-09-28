@@ -56,7 +56,7 @@ struct Args {
     segment_top_n: usize,
 
     /// Segment routing strategy to use for segmented comparison modes.
-    #[arg(long, value_enum, default_value_t = SegmentRouterArg::Sparse)]
+    #[arg(long, value_enum, default_value_t = SegmentRouterArg::TypedEvidenceMultiplicative)]
     segment_router: SegmentRouterArg,
 }
 
@@ -65,6 +65,7 @@ enum SegmentRouterArg {
     Sparse,
     Kl,
     Local,
+    TypedEvidenceMultiplicative,
 }
 
 impl From<SegmentRouterArg> for SegmentRoutingStrategy {
@@ -73,6 +74,7 @@ impl From<SegmentRouterArg> for SegmentRoutingStrategy {
             SegmentRouterArg::Sparse => SegmentRoutingStrategy::SparseOverlap,
             SegmentRouterArg::Kl => SegmentRoutingStrategy::KlDivergence,
             SegmentRouterArg::Local => SegmentRoutingStrategy::LocalDistinctiveness,
+            SegmentRouterArg::TypedEvidenceMultiplicative => SegmentRoutingStrategy::TypedEvidenceMultiplicative,
         }
     }
 }
@@ -476,6 +478,7 @@ fn build_scoped_source_docs(entry: &LongMemEvalEntry) -> Vec<SourceDocument> {
                 doc_length: turn.content.len(),
                 author_agent: None,
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             });
         }
     }

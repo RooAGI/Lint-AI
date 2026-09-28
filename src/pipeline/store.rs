@@ -13,6 +13,7 @@ use crate::index::{
 use crate::query_plan::PreparedQuery;
 use crate::segments::{MemoryIndexSegment, SegmentedMemoryIndex};
 use crate::semantic_relations::SemanticRelationStore;
+use crate::source::KeyPhrase;
 use crate::source::SourceDocument;
 use crate::temporal_fact::TemporalFactStore;
 use anyhow::Result;
@@ -97,6 +98,12 @@ pub(crate) struct PersistedDocRecord {
     temporal_terms: Vec<String>,
     key_entities: Vec<crate::tier1::Tier1Entity>,
     important_terms: Vec<crate::tier1::RankedTerm>,
+    #[serde(default)]
+    key_phrases: Vec<KeyPhrase>,
+    /// Content hash the key phrases were extracted from; empty means
+    /// extraction never completed for the persisted content.
+    #[serde(default)]
+    key_phrase_extraction_hash: String,
     section_chunks: Vec<crate::index::SectionChunk>,
     embedding: Option<Vec<f32>>,
     top_claims: Vec<crate::index::Claim>,
@@ -123,6 +130,8 @@ impl From<DocRecord> for PersistedDocRecord {
             temporal_terms: record.temporal_terms,
             key_entities: record.key_entities,
             important_terms: record.important_terms,
+            key_phrases: record.key_phrases,
+            key_phrase_extraction_hash: record.key_phrase_extraction_hash,
             section_chunks: record.section_chunks,
             embedding: record.embedding,
             top_claims: record.top_claims,
@@ -150,6 +159,8 @@ impl From<PersistedDocRecord> for DocRecord {
             temporal_terms: record.temporal_terms,
             key_entities: record.key_entities,
             important_terms: record.important_terms,
+            key_phrases: record.key_phrases,
+            key_phrase_extraction_hash: record.key_phrase_extraction_hash,
             section_chunks: record.section_chunks,
             embedding: record.embedding,
             top_claims: record.top_claims,
@@ -204,6 +215,18 @@ pub struct IndexDump {
     pub core_bytes: Vec<u8>,
 }
 
+/// Cheap staleness hash for background key-phrase enrichment: identifies
+/// the exact document content a queued enrichment batch was computed from.
+/// Not security-sensitive; only used to drop phrases for documents that
+/// were replaced while their batch was in flight.
+pub(crate) fn key_phrase_content_hash(content: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 pub struct IndexStore {
     options: PipelineOptions,
     pub(crate) store_paths: StorePaths,
@@ -223,47 +246,6 @@ pub struct IndexStore {
     store_revision: u64,
     background_refresh: Option<BackgroundRefresh>,
     dirty: bool,
-}
-
-/// Immutable, cheaply clonable view of the last fully published index generation.
-/// It intentionally excludes all mutable writer and persistence state.
-#[derive(Clone)]
-pub struct PublishedIndexSnapshot {
-    options: PipelineOptions,
-    source_docs: Arc<HashMap<String, SourceDocument>>,
-    records: Arc<HashMap<String, DocRecord>>,
-    semantic_relations: Arc<SemanticRelationStore>,
-    snapshot: Option<Arc<MemoryIndexSnapshot>>,
-}
-
-impl PublishedIndexSnapshot {
-    pub fn query_prepared(
-        &self,
-        prepared: &PreparedQuery,
-        top_k: usize,
-        filters: &std::collections::BTreeMap<String, String>,
-    ) -> Result<Vec<SearchResult>> {
-        execute_prepared_on_snapshot_parts(
-            &self.options,
-            &self.source_docs,
-            &self.records,
-            &self.semantic_relations,
-            self.snapshot.as_deref(),
-            prepared,
-            top_k,
-            filters,
-        )
-        .map(|(results, _, _)| results)
-    }
-
-    pub fn source_document_by_id(&self, doc_id: &str) -> Option<&SourceDocument> {
-        self.source_docs.get(doc_id)
-    }
-
-    /// Pipeline options this snapshot was built with.
-    pub fn conversational_rerank_enabled(&self) -> bool {
-        self.options.conversational_rerank
-    }
 }
 
 /// Group members visible to the conversational rerank: documents in `group_id`
@@ -294,20 +276,6 @@ fn filtered_group_member_ids(
         }
     }
     ids
-}
-
-impl RerankDocSource for PublishedIndexSnapshot {
-    fn rerank_doc(&self, doc_id: &str) -> Option<RerankDocView> {
-        self.source_docs.get(doc_id).map(rerank_doc_view)
-    }
-
-    fn group_member_ids(
-        &self,
-        group_id: &str,
-        filters: &std::collections::BTreeMap<String, String>,
-    ) -> Vec<String> {
-        filtered_group_member_ids(&self.source_docs, group_id, filters)
-    }
 }
 
 /// Shared view construction for the conversational rerank: the indexed text,
@@ -392,15 +360,6 @@ fn take_segmented_snapshot(
 }
 
 impl IndexStore {
-    pub fn published_snapshot(&self) -> PublishedIndexSnapshot {
-        PublishedIndexSnapshot {
-            options: self.options.clone(),
-            source_docs: Arc::new(self.source_docs.clone()),
-            records: Arc::new(self.records.clone()),
-            semantic_relations: Arc::new(self.semantic_relations.clone()),
-            snapshot: self.snapshot.clone(),
-        }
-    }
     pub fn new(options: PipelineOptions) -> Self {
         match Self::try_new(options.clone()) {
             Ok(store) => store,
@@ -814,6 +773,41 @@ impl IndexStore {
         self.tombstones.remove(&doc_id);
         self.source_docs.insert(doc_id.clone(), doc);
         self.dirty_docs.insert(doc_id);
+        self.store_revision = self.store_revision.saturating_add(1);
+        self.dirty = true;
+    }
+
+    /// Backfill grammar-accepted entity key phrases for a document
+    /// (background enrichment on the write path).
+    ///
+    /// The update applies only when `expected_content_hash` matches the
+    /// document's current content: a document replaced while its
+    /// enrichment batch was in flight keeps its newer state, and the
+    /// replacement re-queued itself via `add`. Matching documents are
+    /// marked dirty so the next refresh rebuilds their records — the
+    /// record content hash covers `key_phrases`, so the rebuild is not
+    /// skipped as a no-op.
+    pub fn set_key_phrases(
+        &mut self,
+        doc_id: &str,
+        expected_content_hash: &str,
+        key_phrases: Vec<KeyPhrase>,
+    ) {
+        let current_matches = self
+            .source_docs
+            .get(doc_id)
+            .is_some_and(|doc| key_phrase_content_hash(&doc.content) == expected_content_hash);
+        if !current_matches {
+            return;
+        }
+        if let Some(doc) = self.source_docs.get_mut(doc_id) {
+            doc.key_phrases = key_phrases;
+            // Stamp the content this extraction ran against: an empty phrase
+            // list with a matching stamp is a completed extraction, not a
+            // document still waiting for one.
+            doc.key_phrase_extraction_hash = expected_content_hash.to_string();
+        }
+        self.dirty_docs.insert(doc_id.to_string());
         self.store_revision = self.store_revision.saturating_add(1);
         self.dirty = true;
     }
@@ -1499,6 +1493,7 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         }
     }
 

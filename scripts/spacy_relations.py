@@ -66,12 +66,18 @@ Protocol mirrors scripts/spacy_ner.py:
               "turn_idx": int, "doc_id": str, "session_date": str|null}]}
   stdout: {"relations": [
              {"subject": str, "predicate": str, "object": str,
-              "is_place": bool, "session_id": str, "turn_idx": int,
-              "doc_id": str, "evidence": str, "confidence": float,
-              "coref": str|null}],
+              "is_place": bool, "object_kind": str, "session_id": str,
+              "turn_idx": int, "doc_id": str, "evidence": str,
+              "confidence": float, "coref": str|null}],
            "key_phrases": [
              {"text": str, "kind": str, "session_id": str}]}
 Errors go to stderr as {"error": ...} with a non-zero exit code.
+
+`object_kind` is behood's ontological kind ("event", "place", "org",
+"person", "work", "food", "thing") for the object noun phrase, joined
+from the same phrase verdicts that feed `key_phrases`; "thing" when the
+object is not a judged mention (fail-open). `is_place` stays the
+spaCy-NER-only flag (GPE/LOC/FAC overlap).
 """
 
 import json
@@ -248,7 +254,7 @@ def fail(message, code):
 
 
 def _behood_bin():
-    """Path to the compiled `behood` classifier, if available.
+    """Path to the compiled `bekind` classifier, if available.
 
     The classifier lives in its own repo
     (https://github.com/RooAGI/Behood); install it with
@@ -261,31 +267,35 @@ def _behood_bin():
     env = os.environ.get("BEHOOD_BIN")
     if env:
         return env
-    found = shutil.which("behood")
+    # Project renamed behood -> bekind; try the new binary name first,
+    # fall back to the old one during transition.
+    found = shutil.which("bekind") or shutil.which("behood")
     if found:
         return found
-    cargo_bin = os.path.expanduser("~/.cargo/bin/behood")
-    if os.path.isfile(cargo_bin) and os.access(cargo_bin, os.X_OK):
-        return cargo_bin
+    for name in ("bekind", "behood"):
+        cargo_bin = os.path.expanduser(f"~/.cargo/bin/{name}")
+        if os.path.isfile(cargo_bin) and os.access(cargo_bin, os.X_OK):
+            return cargo_bin
     return None
 
 
-def _classify(descriptors, chunk_descriptors, np_descriptors, speaker_names):
-    """Classify mentions, chunks, and noun phrases via the Rust behood lib.
+def _classify(descriptors, chunk_descriptors, np_descriptors, vp_descriptors, speaker_names):
+    """Classify mentions, chunks, noun phrases, and verb phrases via the Rust behood lib.
 
-    Returns (personhood_verdicts, entity_verdicts, phrase_verdicts), each
+    Returns (personhood_verdicts, entity_verdicts, phrase_verdicts, activity_verdicts), each
     keyed by the caller-assigned string id, or (None, None, None) when the
     binary is missing or fails, in which case the pure-Python fallbacks
     apply.
     """
     binary = _behood_bin()
     if binary is None:
-        return None, None, None
+        return None, None, None, None
     payload = {
         "strategy": "discourse",
         "mentions": descriptors,
         "chunks": chunk_descriptors,
         "np_mentions": np_descriptors,
+        "vp_mentions": vp_descriptors,
         "context": {"speaker_names": [s.lower() for s in speaker_names]},
     }
     try:
@@ -299,25 +309,27 @@ def _classify(descriptors, chunk_descriptors, np_descriptors, speaker_names):
     except Exception as exc:
         print(json.dumps({"warning": f"behood_spawn_failed: {exc}"}),
               file=sys.stderr)
-        return None, None, None
+        return None, None, None, None
     if proc.returncode != 0:
         print(json.dumps({"warning": "behood_classifier_failed: "
                           f"{proc.stderr.strip()[:200]}"}), file=sys.stderr)
-        return None, None, None
+        return None, None, None, None
     try:
         data = json.loads(proc.stdout)
         verdicts = data["verdicts"]
         entity_verdicts = data.get("entity_verdicts", [])
         phrase_verdicts = data.get("phrase_verdicts", [])
+        activity_verdicts = data.get("activity_verdicts", [])
     except Exception as exc:
         print(json.dumps({"warning": f"behood_bad_output: {exc}"}),
               file=sys.stderr)
-        return None, None, None
+        return None, None, None, None
     return ({v["id"]: v["is_person"] for v in verdicts},
             {v["id"]: v["is_entity"] for v in entity_verdicts},
             {v["id"]: {"is_entity_mention": v["is_entity_mention"],
                        "kind": v["kind"]}
-             for v in phrase_verdicts})
+             for v in phrase_verdicts},
+            {v["id"]: v["is_activity"] for v in activity_verdicts})
 
 
 def is_person_token(tok, ctx=None, sent_idx=None):
@@ -348,13 +360,22 @@ def _python_is_person_token(tok, ctx=None):
     """Pure-Python personhood fallback (mirrors the Rust DiscourseEvidence).
 
     Used only when the compiled classifier cannot run.
+
+    Only proper nouns (PROPN) can be persons via fallback. Common nouns,
+    even capitalized (e.g. "Nature", "Hiking", "Moments" as subjects),
+    are parser noise, not persons. This is systematic, not per-question:
+    a common noun is never a person name.
     """
     if tok.ent_type_ == "PERSON":
         return True
     if tok.ent_type_ in NON_PERSON_ENTS:
         return False
-    if not (tok.pos_ == "PROPN"
-            or (tok.text[:1].isupper() and tok.pos_ in ("NOUN", "PROPN"))):
+    # Luyi 2026-09-26: require PROPN. Capitalized common NOUNs like
+    # "Nature"/"Hiking" are subjects by parser accident, not persons.
+    # The only exception is a known speaker name.
+    if tok.pos_ != "PROPN":
+        if ctx is not None and tok.text.lower() in ctx.speaker_names:
+            return True
         return False
     if ctx is None:
         return True
@@ -372,15 +393,15 @@ def fallback_name_counts(docs):
     Only tokens that would reach the proper-noun fallback in
     is_person_token are counted: NER PERSON needs no discourse
     support, and NER non-person labels are never persons.
+    Only PROPN counts (Luyi 2026-09-26): capitalized common NOUNs
+    are parser noise, not person candidates.
     """
     counts = {}
     for doc in docs:
         for tok in doc:
             if tok.ent_type_ == "PERSON" or tok.ent_type_ in NON_PERSON_ENTS:
                 continue
-            if tok.pos_ == "PROPN" or (
-                tok.text[:1].isupper() and tok.pos_ in ("NOUN", "PROPN")
-            ):
+            if tok.pos_ == "PROPN":
                 key = tok.text.lower()
                 counts[key] = counts.get(key, 0) + 1
     return counts
@@ -598,6 +619,9 @@ def _np_mention_descriptors(docs, sent_index, turns):
                         if c.dep_ in NP_MOD_DEPS
                     ],
                     "session_id": session_id,
+                    # Carried so key-phrase output can be joined back to the
+                    # exact source document (not just the session).
+                    "doc_id": turn.get("doc_id", ""),
                 })
     return out
 
@@ -615,6 +639,7 @@ _FALLBACK_PLACE_HEADS = {
     "street", "avenue", "road", "park", "beach", "island",
     "mountain", "lake", "restaurant", "hotel", "airport",
     "station", "museum", "school",
+    "place", "location", "venue", "spot",
 }
 _FALLBACK_ORG_HEADS = {
     "company", "team", "club", "band", "firm", "agency",
@@ -652,7 +677,9 @@ def _phrase_kind_fallback(desc):
 def _key_phrases(np_descriptors, phrase_verdicts):
     """Deduped entity-mention key phrases for the segment index.
 
-    One entry per (session, phrase): {"text", "kind", "session_id"}.
+    One entry per (doc, phrase) when the descriptor carries a doc_id,
+    falling back to the old per-(session, phrase) dedup otherwise:
+    {"text", "kind", "session_id", "doc_id", "turn_idx"}.
     These are the grammar's name-worthy mentions ("Harry Potter
     conference") -- the segment summary protects them from the term cap
     so rare discriminative phrases survive routing.
@@ -663,7 +690,8 @@ def _key_phrases(np_descriptors, phrase_verdicts):
         verdict = (phrase_verdicts or {}).get(desc["id"])
         if not verdict or not verdict.get("is_entity_mention"):
             continue
-        key = (desc["session_id"], desc["text"].lower())
+        scope = desc.get("doc_id") or desc["session_id"]
+        key = (scope, desc["text"].lower())
         if key in seen:
             continue
         seen.add(key)
@@ -671,6 +699,7 @@ def _key_phrases(np_descriptors, phrase_verdicts):
             "text": desc["text"],
             "kind": verdict.get("kind", "thing"),
             "session_id": desc["session_id"],
+            "doc_id": desc.get("doc_id", ""),
             # Turn-local token linkage: join to frame args via
             # (session_id, turn_idx, tok in arg.entity_ids) to recover the
             # verb-frame context of each mention for contextual typing.
@@ -783,12 +812,16 @@ class CorefCtx:
     """
 
     def __init__(self, speakers, name_counts=None, verdicts=None,
-                 entity_verdicts=None):
+                 entity_verdicts=None, activity_verdicts=None):
         # Distinct speaker display names, in first-seen order.
         self.speakers = speakers
         # Lowercased participant names: exempt from the discourse-support
         # requirement for proper-noun personhood.
         self.speaker_names = {s.lower() for s in speakers}
+        # Behood activity verdicts: {verb_id: is_activity}. The caller
+        # extracts verb frames; Behood judges whether the verb denotes
+        # an activity (vs copula/auxiliary/light/stative).
+        self.activity_verdicts = activity_verdicts or {}
         # Conversation-wide counts of proper-noun fallback candidates,
         # for the repeated-mention personhood rule (Python fallback only;
         # the Rust classifier counts internally).
@@ -1129,6 +1162,9 @@ def resolve_subject(verb, sent, speaker, ctx, sent_idx):
 
     General grammatical rules, in order:
     1. the verb's own nominal subject (pronouns via coreference);
+    1b. an imperative verb (base form, no subject): the listener
+        ("Keep at it" from Dave to Calvin -> Calvin). Imperatives have an
+        implicit "you" subject, resolved via the 2-speaker rule;
     2. a subject-less ROOT (fragment): the speaker;
     3. a subject-less sentence-initial verb (dropped subject): the speaker;
     4. subject inheritance from the nearest ancestor verb with a subject
@@ -1138,6 +1174,24 @@ def resolve_subject(verb, sent, speaker, ctx, sent_idx):
     for child in verb.children:
         if child.dep_ in ("nsubj", "nsubjpass"):
             return resolve_name(child, speaker, 1.0, ctx, sent_idx)
+    # Imperative: VB (base form) with no subject. The implicit subject is
+    # "you", which resolves to the other participant in a 2-speaker
+    # conversation. This must come before the ROOT->speaker fallback,
+    # which would incorrectly attribute the imperative to the speaker.
+    #
+    # DESIGN (2026-09-25): this rule is intentionally hand-coded here and
+    # NOT migrated into behood, and NOT learned. "Imperatives address the
+    # listener" is grammar -- true by definition, with nothing to learn
+    # from data (a learner would only rediscover it with noise). And the
+    # listener half needs caller-owned knowledge (who the participants
+    # are), which behood never sees: behood judges noun phrases, the
+    # caller resolves who did what. The learning loop is for empirical
+    # facts that need evidence (verb frame -> kind, head-word ambiguity),
+    # not grammatical universals.
+    if verb.tag_ == "VB" and verb.dep_ in ("ROOT", "conj"):
+        listener = ctx.other_speaker(speaker)
+        if listener is not None:
+            return [(listener, 0.9, "imperative->" + listener)]
     if verb.dep_ == "ROOT":
         return [(speaker, 0.9, None)]
     verbs = [t for t in sent if t.pos_ in ("VERB", "AUX")]
@@ -1177,13 +1231,102 @@ def low_lemma(verb, doc_low):
     return verb.lemma_.lower()
 
 
+def nominal_gerund_exclamation(sent, speaker, ctx, sent_idx):
+    """Hand-coded grammatical construction: nominal exclamation + gerund.
+
+    Pattern: a nominal ROOT (interjection-like noun) takes a prepositional
+    phrase whose complement is a gerund, with a vocative identifying who
+    acted. The gerund is the real relation verb:
+
+      "Congrats on finishing your degree, John!" -> (John, finish, degree)
+      "Thanks for helping me, Sarah!"            -> (Sarah, help, me)
+
+    "Congrats" is grammatically a noun (not a verb), so the ordinary
+    verb-driven extraction skips these. But the gerund phrase describes
+    what the vocative did -- that is the relation.
+
+    Like the imperative rule, this is grammar -- true by definition, not
+    learned. It lives here (not in behood) because resolving the vocative
+    and the possessive ("your" -> John) needs caller-owned participant
+    knowledge that stateless behood never sees.
+
+    Returns (gerund_verb, subjects, objects) or None when the construction
+    is absent.
+    """
+    root = next((t for t in sent if t.dep_ == "ROOT"), None)
+    if root is None:
+        return None
+    # Nominal root: the exclamation head is a noun, not a verb.
+    if root.pos_ not in ("NOUN", "PROPN", "INTJ"):
+        return None
+    # Preposition + gerund complement: "on finishing", "for helping".
+    gerund = None
+    for child in root.children:
+        if child.dep_ == "prep" and child.lemma_.lower() in ("on", "for"):
+            for gc in child.children:
+                if gc.dep_ == "pcomp" and gc.pos_ == "VERB":
+                    gerund = gc
+                    break
+        if gerund is not None:
+            break
+    if gerund is None:
+        return None
+    # Vocative: "John" in "..., John!"
+    vocative = next(
+        (c for c in root.children if c.dep_ == "npadvmod" and c.pos_ == "PROPN"),
+        None,
+    )
+    subjects = []
+    if vocative is not None:
+        subjects = resolve_name(vocative, speaker, 0.9, ctx, sent_idx)
+    # Object: the gerund's dobj ("degree" in "finishing your degree").
+    # The possessive ("your") corefers with the vocative via the ordinary
+    # pronoun machinery when the vocative is known.
+    objects = []
+    for child in gerund.children:
+        if child.dep_ == "dobj":
+            objects.append(child)
+    if not subjects or not objects:
+        return None
+    return (gerund, subjects, objects)
+
+
 def extract_doc(turn, doc, doc_low, ctx, sent_map):
     speaker = turn.get("speaker", "")
     out = []  # flat triples (unchanged; retrieval index consumes these)
     frames = []  # one frame per (subject, verb): all arguments grouped
     for sent in doc.sents:
         sent_idx = sent_map[sent.start]
+        # Nominal exclamation + gerund ("Congrats on finishing your degree,
+        # John!"): the nominal head is skipped by the verb loop, so handle
+        # the construction directly -- the gerund is the relation verb.
+        nominal_excl = nominal_gerund_exclamation(sent, speaker, ctx, sent_idx)
+        nominal_verb = None
+        if nominal_excl is not None:
+            gerund, csubjects, cobjects = nominal_excl
+            nominal_verb = gerund
+            lemma = low_lemma(gerund, doc_low)
+            subj_keys = frozenset(s.lower() for s, _, _ in csubjects)
+            for cobj in cobjects:
+                objs = noun_phrase(cobj, doc, ctx, sent_idx, speaker,
+                                   exclude_keys=subj_keys)
+                for obj, ids, onote in objs:
+                    for subject, sconf, snote in csubjects:
+                        notes = [n for n in (snote, onote) if n]
+                        conf = sconf if not notes else min(sconf, COREF_CONF)
+                        # Behood activity verdict for the gerund verb.
+                        gerund_id = f"{sent_idx}:{gerund.i}"
+                        gerund_is_activity = ctx.activity_verdicts.get(gerund_id, True)
+                        out.append(
+                            (subject, predicate_for(gerund, lemma),
+                             obj, ids, conf,
+                             ";".join(notes) if notes else None,
+                             gerund_is_activity)
+                        )
         for verb in sent:
+            # Skip the gerund already handled by the nominal-exclamation rule.
+            if nominal_verb is not None and verb.i == nominal_verb.i:
+                continue
             is_root = verb.dep_ == "ROOT"
             if verb.pos_ not in ("VERB", "AUX") and not is_root:
                 continue
@@ -1208,10 +1351,14 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                             notes = [n for n in (snote, onote) if n]
                             conf = sconf if not notes else min(sconf,
                                                               COREF_CONF)
+                            # Behood activity verdict for this verb.
+                            verb_id = f"{sent_idx}:{verb.i}"
+                            verb_is_activity = ctx.activity_verdicts.get(verb_id, True)
                             out.append(
                                 (subject, predicate_for(verb, lemma),
                                  obj, ids, conf,
-                                 ";".join(notes) if notes else None)
+                                 ";".join(notes) if notes else None,
+                                 verb_is_activity)
                             )
                 elif child.dep_ == "prep":
                     prep_lemma = child.lemma_.lower()
@@ -1226,11 +1373,15 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                                 notes = [n for n in (snote, onote) if n]
                                 conf = sconf if not notes else min(sconf,
                                                                   COREF_CONF)
+                                # Behood activity verdict for this verb.
+                                verb_id = f"{sent_idx}:{verb.i}"
+                                verb_is_activity = ctx.activity_verdicts.get(verb_id, True)
                                 out.append(
                                     (subject,
                                      predicate_for(verb, lemma, child.lemma_),
                                      obj, ids, conf,
-                                     ";".join(notes) if notes else None)
+                                     ";".join(notes) if notes else None,
+                                     verb_is_activity)
                                 )
                     # Stranded preposition ("the shelter I volunteer at"):
                     # the relative clause's antecedent is the real object.
@@ -1247,11 +1398,15 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                                 conf = min(sconf, 0.85)
                                 if notes:
                                     conf = min(conf, COREF_CONF)
+                                # Behood activity verdict for this verb.
+                                verb_id = f"{sent_idx}:{verb.i}"
+                                verb_is_activity = ctx.activity_verdicts.get(verb_id, True)
                                 out.append(
                                     (subject,
                                      predicate_for(verb, lemma, child.lemma_),
                                      obj, ids, conf,
-                                     ";".join(notes) if notes else None)
+                                     ";".join(notes) if notes else None,
+                                     verb_is_activity)
                                 )
             # One frame per subject: the verb with all its arguments grouped.
             # This is the "real activity" unit; the flat triples above stay
@@ -1269,8 +1424,22 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                         "entity_ids": sorted(ids),
                         "note": onote,
                     })
-                if not args:
+                # Luyi's direction: an xcomp verb like "biking" in "went biking"
+                # IS the real activity, even with no object. The light verb
+                # ("went") is just structure. Don't drop the activity because
+                # it's intransitive -- "what does X do" needs the verb itself.
+                is_xcomp_activity = (
+                    not args
+                    and verb.dep_ == "xcomp"
+                    and verb.head.pos_ == "VERB"
+                    and verb.head.lemma_.lower() in ("go", "come")
+                )
+                if not args and not is_xcomp_activity:
                     continue
+                # Behood activity verdict: is this verb an activity?
+                # The caller extracts the frame; Behood judges the verb.
+                verb_id = f"{sent_idx}:{verb.i}"
+                is_activity = ctx.activity_verdicts.get(verb_id, True)
                 frames.append({
                     "verb": verb.text,
                     "verb_lemma": lemma,
@@ -1278,6 +1447,7 @@ def extract_doc(turn, doc, doc_low, ctx, sent_map):
                     "subject_conf": sconf,
                     "subject_note": snote,
                     "args": args,
+                    "is_activity": is_activity,
                     "session_id": turn.get("session_id", ""),
                     "turn_idx": turn.get("turn_idx", 0),
                     "doc_id": turn.get("doc_id", ""),
@@ -1349,7 +1519,7 @@ def run_payload(payload, get_nlp):
         (verb, prep), _n = max(freq.items(), key=lambda kv: kv[1])
         d["verb_lemma"] = verb
         d["prep"] = prep
-    personhood_verdicts, entity_verdicts, phrase_verdicts = _classify(
+    personhood_verdicts, entity_verdicts, phrase_verdicts, activity_verdicts = _classify(
         [{"id": f"{s_idx}:{tok.i}",
           "text": tok.text,
           "ner_label": tok.ent_type_,
@@ -1360,16 +1530,39 @@ def run_payload(payload, get_nlp):
          for tok in sent],
         _chunk_descriptors(docs, sent_index),
         np_descriptors,
+        # Verb-phrase mentions for Behood's activity layer: every VERB token.
+        # Behood judges whether the verb denotes an activity (vs copula,
+        # auxiliary, light verb, stative). The caller owns the subject.
+        [{"id": f"{s_idx}:{tok.i}",
+          "text": tok.text,
+          "head_lemma": tok.lemma_,
+          "head_pos": tok.pos_}
+         for doc, per_turn in zip(docs, sent_index)
+         for sent, s_idx in per_turn
+         for tok in sent
+         if tok.pos_ == "VERB"],
         speakers)
     if phrase_verdicts is None:
         # Pure-Python fallback when the behood binary is unavailable.
         phrase_verdicts = _phrase_verdicts_fallback(
             np_descriptors, name_counts, speakers)
+    if activity_verdicts is None:
+        activity_verdicts = {}
+    # Behood's ontological kind per noun-phrase head, keyed by
+    # (turn position, head token index): lets each emitted relation carry
+    # the kind of its object NP ("event" for "tournament", "place" for
+    # "game convention") instead of relying on spaCy NER alone.
+    kind_by_turn_tok = {}
+    for desc in np_descriptors:
+        verdict = (phrase_verdicts or {}).get(desc["id"])
+        kind = verdict.get("kind", "thing") if verdict else "thing"
+        kind_by_turn_tok[(desc["turn_idx"], desc["tok"])] = kind
     ctx = None
     sent_maps = []
     if not key_phrases_only:
         ctx = CorefCtx(speakers, name_counts,
-                       personhood_verdicts, entity_verdicts)
+                       personhood_verdicts, entity_verdicts,
+                       activity_verdicts)
         for turn, doc, per_turn in zip(turns, docs, sent_index):
             speaker = turn.get("speaker", "")
             sent_map = {}
@@ -1382,8 +1575,8 @@ def run_payload(payload, get_nlp):
     frames = []
     # In learner mode docs_low/sent_maps are empty, so this loop is a no-op
     # and only key_phrases are emitted below.
-    for turn, doc, doc_low, sent_map in zip(turns, docs, docs_low,
-                                            sent_maps):
+    for turn_pos, (turn, doc, doc_low, sent_map) in enumerate(
+            zip(turns, docs, docs_low, sent_maps)):
         try:
             triples, doc_frames = extract_doc(turn, doc, doc_low, ctx, sent_map)
             frames.extend(doc_frames)
@@ -1397,17 +1590,31 @@ def run_payload(payload, get_nlp):
             t.i for ent in doc.ents
             if ent.label_ in PLACE_LABELS for t in ent
         }
-        for subject, predicate, obj, ids, conf, coref in triples:
+        for subject, predicate, obj, ids, conf, coref, is_activity in triples:
             key = (subject, predicate, obj)
             if key in seen:
                 continue
             seen.add(key)
+            # Object role from behood's kind verdict on the object's head
+            # token; "thing" when the object is not a judged NP mention
+            # (pronouns resolved to non-mentions, time adverbials, ...).
+            # Rightmost match wins: the head of an English noun phrase
+            # sits at its end ("video game tournament" -> "tournament").
+            object_kind = "thing"
+            for tid in sorted(ids, reverse=True):
+                kind = kind_by_turn_tok.get((turn_pos, tid))
+                if kind:
+                    object_kind = kind
+                    break
             relations.append(
                 {
                     "subject": subject,
                     "predicate": predicate,
                     "object": obj,
                     "is_place": bool(ids & place_ids),
+                    "object_kind": object_kind,
+                    # Behood's activity verdict: is the verb an activity?
+                    "is_activity": is_activity,
                     "session_id": turn.get("session_id", ""),
                     "turn_idx": turn.get("turn_idx", 0),
                     "doc_id": turn.get("doc_id", ""),

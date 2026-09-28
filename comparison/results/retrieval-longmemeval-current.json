@@ -1,21 +1,21 @@
 {
-  "date": "2026-09-01",
+  "date": "2026-09-28",
   "dataset": "LongMemEval-S",
   "query_count": 500,
   "backend": "heuristic release backend",
   "scope": "question-scoped haystack sessions",
   "embeddings": false,
   "metrics": {
-    "Recall@5": 0.8354,
-    "Recall@10": 0.8954666667,
-    "Recall@20": 0.9107666667,
-    "Any-hit Recall@5": 0.924,
-    "Any-hit Recall@10": 0.956,
-    "Any-hit Recall@20": 0.97,
-    "MRR": 0.8398937876,
-    "NDCG@10": 0.8176314136,
-    "average_query_latency_ms": 1.881253016
+    "Recall@5": 0.8557,
+    "Recall@10": 0.9196,
+    "Recall@20": 0.9306,
+    "Any-hit Recall@5": 0.942,
+    "Any-hit Recall@10": 0.968,
+    "Any-hit Recall@20": 0.976,
+    "MRR": 0.8696,
+    "NDCG@10": 0.8499,
+    "average_query_latency_ms": 12.986182008
   },
-  "command": "cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20 --out /tmp/lintai-longmemeval-k20.json",
-  "note": "Revalidated against the repository's raw LongMemEval-S dataset and current benchmark code with the same top-k cutoffs used by the AgentMemory comparison."
+  "command": "cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 1 --k 3 --k 5 --k 10 --k 20 --out comparison/results/retrieval-longmemeval-current.json",
+  "note": "Revalidated on the 500-question LongMemEval-S set with the current benchmark code and the same top-k cutoffs used by the AgentMemory comparison."
 }

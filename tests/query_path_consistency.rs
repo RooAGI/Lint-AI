@@ -16,6 +16,7 @@ fn document(id: &str, content: &str, timestamp: &str, group: &str) -> SourceDocu
         author_agent: None,
         filters: BTreeMap::new(),
         key_phrases: Vec::new(),
+        key_phrase_extraction_hash: String::new(),
     }
 }
 

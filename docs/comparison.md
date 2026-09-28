@@ -58,7 +58,7 @@ correct answer session appears in the top K results.
 
 | System | Any-hit Recall@5 | Any-hit Recall@10 | Any-hit Recall@20 | MRR | NDCG@10 |
 |---|---:|---:|---:|---:|---:|
-| Lint-AI | 92.4% | 95.6% | 97.0% | 84.0% | 81.8% |
+| Lint-AI | 94.2% | 96.8% | 97.6% | 87.0% | 85.0% |
 | AgentMemory | 87.0% | 94.8% | 98.4% | 71.6% | 73.0% |
 
 The full scorer and per-question outputs are available in

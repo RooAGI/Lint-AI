@@ -19,6 +19,37 @@ Build multiple indexes from Tier 1 outputs:
 
 Keep provenance fields (`source`, timestamps, ranker version) to support reindexing and reproducibility.
 
+## Background key-phrase enrichment
+
+New documents are enriched with grammar-accepted entity key phrases
+("Harry Potter conference") after they are written, so the segment
+entity channel sees the same entity mentions the benchmark extractor
+produces — without slowing down the write path.
+
+How it works:
+
+- `add` writes the document immediately with empty `key_phrases` and
+  queues it for enrichment. The write never waits for extraction.
+- A single worker thread drains the queue in batches of up to 32 (after a
+  500ms linger so rapid writes coalesce into one extractor run) and runs
+  the extractor's `key_phrases_only` mode off-thread, bounded by the same
+  120-second timeout as the relations path.
+- Finished phrases are posted to an inbox; the next write or `refresh`
+  backfills them into the documents and marks them dirty. Because the
+  record content hash covers `key_phrases`, the refresh rebuilds those
+  records and the segment profiles pick the phrases up in the cap-exempt,
+  literally-indexed entity channel.
+- A document replaced while its batch was in flight is recognized as
+  stale (content hash mismatch) and its phrases are dropped; the
+  replacement re-queued itself when it was written. Deleting a document
+  drops its queued and finished enrichment work.
+
+Fail-open: a missing or slow extractor simply leaves documents with
+empty key phrases — today's behavior — and writes and searches are
+never blocked or failed by enrichment. Disable it with
+`PipelineOptions.key_phrase_enrichment = false`. `update` clears a
+document's phrases and re-queues it, since they described the old text.
+
 ## Search and Retrieval Strategy
 Use hybrid retrieval:
 - BM25 or keyword retrieval on content and important terms

@@ -480,7 +480,12 @@ pub(crate) fn source_document_from_record(record: &DocRecord) -> SourceDocument 
         timestamp: record.timestamp.clone(),
         doc_length: record.doc_length,
         author_agent: record.author_agent.clone(),
-        key_phrases: Vec::new(),
+        // Restore the persisted phrases and their extraction stamp so a
+        // reopened index knows which documents are already done (an empty
+        // phrase list with a matching stamp is a legitimate empty result,
+        // not a document still waiting for extraction).
+        key_phrases: record.key_phrases.clone(),
+        key_phrase_extraction_hash: record.key_phrase_extraction_hash.clone(),
     }
 }
 

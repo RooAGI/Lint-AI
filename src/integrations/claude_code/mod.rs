@@ -560,6 +560,62 @@ impl ClaudeMcp {
                     error: None,
                 })
             }
+            "board_open" | "board_list" | "board_info" | "board_post" | "board_read"
+            | "board_get" | "board_search" => {
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("MCP store initialized");
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                // Board owner/workspace: the workspace root scopes boards;
+                // "mcp" is the stable owner for agent-posted boards.
+                let workspace = self.root.to_string_lossy().to_string();
+                let result = mcp_tools::dispatch_board_tool(
+                    tool_name,
+                    &arguments,
+                    service,
+                    "mcp",
+                    &workspace,
+                    RecordingProvider::Claude.as_str(),
+                );
+                match result {
+                    Ok(payload) => Ok(JsonRpcResponse {
+                        jsonrpc: "2.0",
+                        id,
+                        result: Some(json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&payload)?,
+                            }]
+                        })),
+                        error: None,
+                    }),
+                    Err(message) => Ok(error_response(id, -32602, &message)),
+                }
+            }
+            "add_memory" | "get_memory" => {
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("MCP store initialized");
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                let result = mcp_tools::dispatch_memory_tool(
+                    tool_name,
+                    &arguments,
+                    service,
+                    RecordingProvider::Claude.as_str(),
+                );
+                match result {
+                    Ok(payload) => Ok(JsonRpcResponse {
+                        jsonrpc: "2.0",
+                        id,
+                        result: Some(json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&payload)?,
+                            }]
+                        })),
+                        error: None,
+                    }),
+                    Err(message) => Ok(error_response(id, -32602, &message)),
+                }
+            }
             _ => Ok(error_response(id, -32602, "unknown tool")),
         }
     }
@@ -620,6 +676,10 @@ impl ClaudeMcp {
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
         ]
+        .into_iter()
+        .chain(mcp_tools::board_tool_definitions())
+        .chain(mcp_tools::memory_tool_definitions())
+        .collect()
     }
 }
 
@@ -974,7 +1034,16 @@ mod tests {
                 "record_session".to_string(),
                 "enable_lint_ai".to_string(),
                 "disable_lint_ai".to_string(),
-                "lint_ai_status".to_string()
+                "lint_ai_status".to_string(),
+                "board_open".to_string(),
+                "board_list".to_string(),
+                "board_info".to_string(),
+                "board_post".to_string(),
+                "board_read".to_string(),
+                "board_get".to_string(),
+                "board_search".to_string(),
+                "add_memory".to_string(),
+                "get_memory".to_string()
             ]
         );
         fs::remove_dir_all(root).unwrap();
@@ -1076,6 +1145,7 @@ mod tests {
             doc_length: "docker install guide".len(),
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         };
         let mcp = test_mcp(root.clone(), vec![document]);
         let response = mcp
@@ -1174,6 +1244,7 @@ mod tests {
             doc_length: 38,
             author_agent: Some(RecordingProvider::Claude.as_str().to_string()),
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         });
         memory.refresh().unwrap();
         drop(memory);

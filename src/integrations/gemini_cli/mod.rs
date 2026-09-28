@@ -558,6 +558,7 @@ mod tests {
                 doc_length: 32,
                 author_agent: Some(provider.as_str().to_string()),
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             });
             memory.refresh().unwrap();
             drop(memory);

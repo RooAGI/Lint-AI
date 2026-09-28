@@ -347,7 +347,12 @@ pub(crate) fn doc_record_content_hash_with_version(
     let mut hasher = Sha256::new();
     // Domain separator: bump if the hashed field set ever changes, so old
     // hashes never compare equal to new ones.
-    hash_len_prefixed(&mut hasher, b"lint-ai-doc-record-content-hash/v1");
+    //
+    // v2: key_phrases joined the field set. A backfilled document must
+    // compare hash-unequal to its phrase-less record, otherwise
+    // prepare_pending_changes skips reprocessing and the phrases never
+    // reach the segment profiles.
+    hash_len_prefixed(&mut hasher, b"lint-ai-doc-record-content-hash/v2");
     // Build version pins the implementation behind the option identities;
     // any bump invalidates every stored hash (mismatch -> rebuild).
     hash_len_prefixed(&mut hasher, &build_version.to_le_bytes());
@@ -371,6 +376,13 @@ pub(crate) fn doc_record_content_hash_with_version(
     for (key, value) in &source_doc.filters {
         hash_len_prefixed(&mut hasher, key.as_bytes());
         hash_len_prefixed(&mut hasher, value.as_bytes());
+    }
+    // Grammar-accepted entity mentions: backfilling these must invalidate
+    // the stored record so the segment entity channel picks them up.
+    hasher.update((source_doc.key_phrases.len() as u64).to_le_bytes());
+    for phrase in &source_doc.key_phrases {
+        hash_len_prefixed(&mut hasher, phrase.text.as_bytes());
+        hash_len_prefixed(&mut hasher, phrase.kind.as_bytes());
     }
     hash_len_prefixed(&mut hasher, ner_provider_name.as_bytes());
     hash_len_prefixed(&mut hasher, term_ranker_name.as_bytes());
@@ -585,6 +597,10 @@ fn assemble_doc_record(
         key_entities,
         important_terms,
         section_chunks,
+        // Carry the source-level key phrases (and their extraction stamp)
+        // into the record so they survive a persist/reload round-trip.
+        key_phrases: source_doc.key_phrases.clone(),
+        key_phrase_extraction_hash: source_doc.key_phrase_extraction_hash.clone(),
         embedding: None,
         top_claims: Vec::new(),
         provenance: Provenance {
@@ -662,6 +678,9 @@ pub fn build_query_snapshot_from_source_documents(
         memory_index_layout: MemoryIndexLayout::Single,
         fuse_global_arm: false,
         conversational_rerank: true,
+        structured_fact_retrieval: true,
+        key_phrase_enrichment: false,
+        extractor_script: None,
     };
     build_query_snapshot(source_docs, &options)
 }

@@ -52,6 +52,89 @@ def _load_spacy():
         return None
 
 
+_INTERROGATIVE_LEMMAS = {"what", "which", "who", "whom", "whose"}
+
+
+def _is_interrogative_only(chunk):
+    """True if a noun chunk carries no content beyond an interrogative pronoun."""
+    for t in chunk:
+        if t.is_space or t.pos_ == "PUNCT":
+            continue
+        if t.lemma_.lower() not in _INTERROGATIVE_LEMMAS:
+            return False
+    return True
+
+
+def _sought_nominal(doc):
+    """Dependency-parse fallback for the nominal a question is about.
+
+    Copular questions like "What is the user's weekend exercise routine?"
+    yield only the interrogative from noun_chunks; the sought phrase is the
+    subject/predicate nominal ("routine") of the root clause.
+    """
+    for dep in ("nsubj", "nsubjpass", "attr", "dobj"):
+        for tok in doc:
+            if (
+                tok.dep_ == dep
+                and tok.lemma_.lower() not in _INTERROGATIVE_LEMMAS
+                and tok.pos_ not in {"PRON", "AUX", "VERB", "PUNCT", "PART", "ADP", "DET", "CCONJ", "SCONJ"}
+            ):
+                return tok
+    return None
+
+
+def _descriptor_for_token(tok, did):
+    """Build a noun-phrase descriptor from a token's full subtree span."""
+    doc = tok.doc
+    start, end = tok.left_edge.i, tok.right_edge.i
+    # Trim trailing punctuation (e.g. the question mark).
+    while end > start and doc[end].pos_ == "PUNCT":
+        end -= 1
+    return {
+        "id": did,
+        "text": doc[start:end + 1].text,
+        "head_lemma": tok.lemma_.lower(),
+        "head_pos": tok.pos_,
+        "ner_label": tok.ent_type_,
+        "modifiers": [
+            {"text": t.text, "pos": t.pos_, "dep": t.dep_}
+            for t in tok.subtree
+            if t != tok and t.pos_ != "PUNCT" and not t.is_space
+        ],
+    }
+
+
+def question_np_descriptors(doc):
+    """Noun-phrase descriptors for behood's phrase layer, with a fallback.
+
+    When noun_chunks yields only interrogative content (e.g. just "What"),
+    fall back to the dependency-parse nominal so the sought phrase still
+    reaches behood.
+    """
+    descriptors = []
+    chunks = list(doc.noun_chunks)
+    for i, chunk in enumerate(chunks):
+        descriptors.append({
+            "id": f"q:{i}",
+            "text": chunk.text,
+            "head_lemma": chunk.root.lemma_.lower(),
+            "head_pos": chunk.root.pos_,
+            "ner_label": chunk.root.ent_type_,
+            "modifiers": [
+                {"text": t.text, "pos": t.pos_, "dep": t.dep_}
+                for t in chunk
+                if t != chunk.root
+            ],
+        })
+    if not chunks or all(_is_interrogative_only(c) for c in chunks):
+        nominal = _sought_nominal(doc)
+        if nominal is not None:
+            fb = _descriptor_for_token(nominal, f"q:fb{len(descriptors)}")
+            if fb["text"] and not any(d["text"] == fb["text"] for d in descriptors):
+                descriptors.append(fb)
+    return descriptors
+
+
 def analyze_question(question, nlp=None, binary=None):
     """Return [(text, kind)] for the question's noun phrases via behood.
 
@@ -78,20 +161,7 @@ def analyze_question(question, nlp=None, binary=None):
         entities.append({"text": temporal_qw.group(0), "kind": "time"})
 
     # Build noun-phrase descriptors for behood's phrase layer.
-    np_descriptors = []
-    for i, chunk in enumerate(doc.noun_chunks):
-        np_descriptors.append({
-            "id": f"q:{i}",
-            "text": chunk.text,
-            "head_lemma": chunk.root.lemma_.lower(),
-            "head_pos": chunk.root.pos_,
-            "ner_label": chunk.root.ent_type_,
-            "modifiers": [
-                {"text": t.text, "pos": t.pos_, "dep": t.dep_}
-                for t in chunk
-                if t != chunk.root
-            ],
-        })
+    np_descriptors = question_np_descriptors(doc)
 
     # Also send PROPN tokens as personhood mentions so names get judged.
     mentions = []

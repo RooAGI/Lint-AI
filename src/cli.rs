@@ -28,6 +28,8 @@ pub enum SessionProvider {
     Agy,
     #[cfg(feature = "muse-code")]
     Muse,
+    #[value(name = "openclaw")]
+    OpenClaw,
 }
 
 #[cfg(feature = "claude-code")]
@@ -289,6 +291,30 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "agy")]
     pub agy_config: Option<String>,
+    /// Install the lint-ai MCP server and memory skill for OpenClaw.
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_install: bool,
+    /// Replace an existing user-modified OpenClaw lint-ai skill.
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_force_skill: bool,
+    /// Run the lint-ai MCP server over stdio for OpenClaw.
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_serve: bool,
+    /// Spawn `--openclaw-serve` and verify the MCP handshake.
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_verify_mcp: bool,
+    /// Override the OpenClaw config path (default `~/.openclaw/openclaw.json`).
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_config: Option<String>,
+    /// Override the OpenClaw skills directory (default `~/.openclaw/skills`).
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_skill_dir: Option<String>,
     /// Query the unified store (project documents and recorded memories) once
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
     #[arg(long)]

@@ -27,7 +27,9 @@ pub enum RecordingProvider {
     Codex,
     Gemini,
     Agy,
+    Agy,
     Muse,
+    OpenClaw,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -386,6 +388,13 @@ fn run_provider_process(
                 // binary, so the MCP-server integration ships first.
                 anyhow::bail!("session replay is not yet supported for Muse Code");
             }
+            RecordingProvider::OpenClaw => {
+                // Replay drives the provider's own CLI in an isolated home
+                // directory; OpenClaw has no equivalent portable non-interactive
+                // replay entry point, so recorded-session replay is unsupported.
+                anyhow::bail!("session replay is not supported for the OpenClaw provider")
+            }
+            }
         };
         let mut child = command
             .current_dir(project_root)
@@ -703,7 +712,9 @@ impl RecordingProvider {
             Self::Codex => "codex",
             Self::Gemini => "gemini-cli",
             Self::Agy => "agy",
+            Self::Agy => "agy",
             Self::Muse => "muse",
+            Self::OpenClaw => "openclaw",
         }
     }
 }

@@ -20,6 +20,12 @@ use crate::integrations::agy::{
     install_memory_skill as install_agy_memory_skill,
     install_user_config as install_agy_user_config, run_server as run_agy_server, AgyServerOptions,
 };
+#[cfg(feature = "openclaw")]
+use crate::integrations::openclaw::{
+    install_memory_skill as install_openclaw_memory_skill,
+    install_user_config as install_openclaw_user_config, run_server as run_openclaw_server,
+    OpenClawServerOptions,
+};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
@@ -103,6 +109,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "codex",
             feature = "gemini-cli",
             feature = "agy",
+            feature = "openclaw",
             feature = "muse-code"
         ))]
         {
@@ -138,6 +145,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "codex",
             feature = "gemini-cli",
             feature = "agy",
+            feature = "openclaw",
             feature = "muse-code"
         )))]
         {
@@ -151,6 +159,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "codex",
             feature = "gemini-cli",
             feature = "agy",
+            feature = "openclaw",
             feature = "muse-code"
         ))]
         {
@@ -172,6 +181,9 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Muse => {
                     crate::integrations::session_recording::RecordingProvider::Muse
                 }
+                crate::cli::SessionProvider::OpenClaw => {
+                    crate::integrations::session_recording::RecordingProvider::OpenClaw
+                }
             };
             let report = crate::integrations::session_recording::promote_recorded_session(
                 provider,
@@ -187,6 +199,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "codex",
             feature = "gemini-cli",
             feature = "agy",
+            feature = "openclaw",
             feature = "muse-code"
         )))]
         {
@@ -200,6 +213,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "codex",
             feature = "gemini-cli",
             feature = "agy",
+            feature = "openclaw",
             feature = "muse-code"
         ))]
         {
@@ -221,6 +235,9 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 crate::cli::SessionProvider::Muse => {
                     crate::integrations::session_recording::RecordingProvider::Muse
                 }
+                crate::cli::SessionProvider::OpenClaw => {
+                    crate::integrations::session_recording::RecordingProvider::OpenClaw
+                }
             };
             let report = crate::integrations::session_recording::replay_recorded_session(
                 provider,
@@ -237,6 +254,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             feature = "codex",
             feature = "gemini-cli",
             feature = "agy",
+            feature = "openclaw",
             feature = "muse-code"
         )))]
         {
@@ -460,6 +478,53 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         crate::integrations::mcp_health::verify(
             Path::new(&args.path),
             "--agy-serve",
+            args.mcp_timeout_ms,
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "openclaw")]
+    if args.openclaw_install {
+        let written = install_openclaw_memory_skill(
+            args.openclaw_skill_dir.as_deref().map(Path::new),
+            args.openclaw_force_skill,
+        )?;
+        println!("Wrote OpenClaw memory skill to {}", written.display());
+        let written = install_openclaw_user_config(
+            Path::new(&args.path),
+            args.openclaw_config.as_deref().map(Path::new),
+        )?;
+        println!("Wrote OpenClaw MCP config to {}", written.display());
+        return Ok(());
+    }
+
+    #[cfg(feature = "openclaw")]
+    if args.openclaw_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        run_openclaw_server(
+            Path::new(&args.path),
+            OpenClawServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "openclaw")]
+    if args.openclaw_verify_mcp {
+        crate::integrations::mcp_health::verify(
+            Path::new(&args.path),
+            "--openclaw-serve",
             args.mcp_timeout_ms,
         )?;
         return Ok(());

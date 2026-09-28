@@ -5,21 +5,32 @@
 //! and returns (text, kind) pairs. Lint-ai uses the text for matching and
 //! the kind for filtering in structured question analysis.
 //!
-//! This runs `scripts/behood_query.py --serve` as a long-lived daemon: a
-//! fresh Python interpreter plus the spaCy model load costs seconds, so
-//! spawning one per search made every query pay that cost. The daemon keeps
-//! one `--serve` child alive and speaks the line-delimited JSON protocol
-//! over its stdin/stdout, so the model load is paid once per process.
-//! Fail-open by construction: every daemon failure yields `None` and the
-//! caller falls back to a one-shot subprocess exactly as before. Behood
-//! owns judgment; the caller owns knowledge.
+//! Resolution order per query (fail-open at every tier, so a broken daemon
+//! never breaks search):
+//!
+//! 1. **Shared singleton daemon** (unix only): one `--serve-socket` daemon
+//!    per user on a well-known socket path. Short-lived processes (hooks,
+//!    CLIs) get warm answers without paying the spawn: the first process to
+//!    need it spawns it (double-forked, outliving the spawner) and every
+//!    later process connects. Idle-exits after a few minutes.
+//! 2. **Per-process daemon**: a `--serve` child owned by this process,
+//!    spawned lazily once and reused for every query. Dies with the parent.
+//! 3. **One-shot subprocess**: the original `python3 behood_query.py
+//!    <question>` invocation, now with a hard timeout.
+//!
+//! A fresh Python interpreter plus the spaCy model load costs seconds, so
+//! spawning one per search made every query pay that cost. The daemons keep
+//! the model warm; the model load is paid once per user instead of once per
+//! request. Behood owns judgment; the caller owns knowledge.
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::daemon::JsonLinesDaemon;
+use crate::daemon::{JsonLinesDaemon, QueryOutcome};
+#[cfg(unix)]
+use crate::daemon::SocketDaemon;
 
 /// A (text, kind) pair judged by behood at query time.
 #[derive(Debug, Clone)]
@@ -47,26 +58,65 @@ pub fn analyze_query_entities(question: &str) -> Vec<QueryEntity> {
 }
 
 /// One-shot `python3 scripts/behood_query.py <question>`, exactly as before
-/// the daemon existed. Used only when the daemon cannot serve.
+/// the daemons existed. Used only when no daemon tier can serve.
 fn oneshot_analyze_query_entities(question: &str) -> Vec<QueryEntity> {
-    // Locate the script relative to the crate root.
-    let script = match script_path() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
+    match script_path() {
+        Some(script) => oneshot_with_script(&script, question),
+        None => Vec::new(),
+    }
+}
 
-    let output = Command::new(crate::segments::relations::python_executable())
-        .arg(&script)
+/// Bound for the one-shot subprocess fallback. The old blocking
+/// `Command::output()` could hang search forever on a wedged interpreter.
+const ONE_SHOT_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn oneshot_with_script(script: &std::path::Path, question: &str) -> Vec<QueryEntity> {
+    use std::io::Read;
+    let mut child = match Command::new(crate::segments::relations::python_executable())
+        .arg(script)
         .arg(question)
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Vec::new(),
     };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_entities(&stdout)
+    // Drain stdout on a thread so a chatty child can never block on a full pipe.
+    let mut piped = child.stdout.take();
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(out) = piped.as_mut() {
+            let _ = out.read_to_end(&mut buf);
+        }
+        let _ = tx.send(buf);
+    });
+    // Bound the wait: a hung interpreter must not hang search.
+    let start = Instant::now();
+    let timed_out = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break false,
+            Ok(None) => {
+                if start.elapsed() >= ONE_SHOT_TIMEOUT {
+                    break true;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break true,
+        }
+    };
+    if timed_out {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    if timed_out {
+        return Vec::new();
+    }
+    // The child exited, so its write end is closed and the drain finished.
+    let buf = rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+    parse_entities(&String::from_utf8_lossy(&buf))
 }
 
 fn script_path() -> Option<std::path::PathBuf> {
@@ -80,25 +130,53 @@ fn script_path() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Long-lived `scripts/behood_query.py --serve` child.
+/// Well-known socket path for the per-user shared singleton daemon.
 ///
-/// Thin typed wrapper over [`crate::daemon::JsonLinesDaemon`]: it builds the
-/// `{"question": ...}` request line and parses the `{"entities": [...]`}
-/// response. See that module for the spawn/IO/timeout/fail-open mechanics.
+/// The protocol version is part of the filename so a newer client never
+/// mistakes an older daemon's socket for its own.
+#[cfg(unix)]
+fn singleton_socket_path() -> PathBuf {
+    let name = format!(
+        "behood-query-v{}.sock",
+        crate::daemon::SOCKET_PROTOCOL_VERSION
+    );
+    if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
+        if !rt.trim().is_empty() {
+            return PathBuf::from(rt).join("lint-ai").join(name);
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_owned());
+    PathBuf::from(home).join(".cache").join("lint-ai").join(name)
+}
+
+/// Long-lived query-time behood daemons.
+///
+/// Thin typed wrapper over the daemon machinery in [`crate::daemon`]: it
+/// builds the `{"question": ...}` request line and parses the
+/// `{"entities": [...]`} response. See that module for the spawn/IO/timeout/
+/// fail-open mechanics.
 ///
 /// Fail-open by construction: every daemon failure yields `None` and the
-/// caller falls back to a one-shot subprocess exactly as before. The daemon
-/// is a latency optimization only; it never changes judgment semantics.
+/// caller falls back to a one-shot subprocess exactly as before. The daemons
+/// are a latency optimization only; they never change judgment semantics.
 #[derive(Clone)]
 pub struct BehoodQueryDaemon {
+    /// Per-process `--serve` child. Dies with the parent.
     daemon: JsonLinesDaemon,
-    /// When the child cannot serve (e.g. no bekind binary: it exits 3 at
-    /// startup), don't pay a fresh interpreter spawn on every query.
+    /// Per-user shared `--serve-socket` daemon (unix only). Outlives any
+    /// single process; short-lived callers get warm answers through it.
+    #[cfg(unix)]
+    socket: SocketDaemon,
+    /// When the per-process child cannot serve (e.g. no bekind binary: it
+    /// exits 3 at startup), don't pay a fresh interpreter spawn on every
+    /// query.
     last_serve_failure: std::sync::Arc<Mutex<Option<Instant>>>,
 }
 
-/// How long a serve failure suppresses respawn attempts. The backend does
-/// not heal in milliseconds; the one-shot fallback covers the gap.
+/// How long a per-process serve failure suppresses respawn attempts. The
+/// backend does not heal in milliseconds; the one-shot fallback covers the
+/// gap. Lock contention never records a failure: it says nothing about the
+/// daemon's health.
 const SERVE_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 
 impl BehoodQueryDaemon {
@@ -118,31 +196,83 @@ impl BehoodQueryDaemon {
 
     /// A daemon over an explicit script (tests, benchmarks).
     pub fn new(script: PathBuf, python: String) -> Self {
+        #[cfg(unix)]
+        {
+            Self::with_socket_path(script, python, singleton_socket_path())
+        }
+        #[cfg(not(unix))]
+        {
+            BehoodQueryDaemon {
+                daemon: JsonLinesDaemon::new("behood-query", script, python),
+                last_serve_failure: std::sync::Arc::new(Mutex::new(None)),
+            }
+        }
+    }
+
+    /// A daemon over an explicit script and socket path (tests use throwaway
+    /// paths so they can never disturb — or be disturbed by — a real user
+    /// daemon).
+    #[cfg(unix)]
+    fn with_socket_path(script: PathBuf, python: String, socket_path: PathBuf) -> Self {
         BehoodQueryDaemon {
+            socket: SocketDaemon::new(
+                "behood-query",
+                script.clone(),
+                python.clone(),
+                socket_path,
+            ),
             daemon: JsonLinesDaemon::new("behood-query", script, python),
             last_serve_failure: std::sync::Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Start the child now so the first real query does not pay the spawn
+    /// Start the daemons now so the first real query does not pay the spawn
     /// cost. Best-effort: failures are silent; queries fall back to the
     /// one-shot subprocess.
     pub fn prewarm(&self) {
         self.daemon.prewarm();
+        #[cfg(unix)]
+        self.socket.prewarm();
     }
 
-    /// Analyze `question` via the daemon. Returns `None` on any failure
-    /// (including lock contention — the daemon is a fast path, never a
-    /// queue); the caller falls back to a one-shot subprocess. `Some(vec)`
+    /// Analyze `question` via the daemon tiers. Returns `None` on any
+    /// failure; the caller falls back to a one-shot subprocess. `Some(vec)`
     /// is authoritative even when empty.
     pub fn analyze(
         &self,
         question: &str,
         timeout: Duration,
     ) -> Option<Vec<QueryEntity>> {
+        let payload = serde_json::json!({ "question": question });
+        let line = serde_json::to_string(&payload).ok()?;
+        // Tier 1: shared singleton — warm for every process, even fresh ones.
+        #[cfg(unix)]
+        if let Some(entities) = self.socket_tier(&line, timeout) {
+            return Some(entities);
+        }
+        // Tier 2: per-process daemon.
+        self.proc_tier(&line, timeout)
+    }
+
+    /// Tier 1: the per-user shared socket daemon. `None` means the tier
+    /// failed (its own circuit breaker decides when to stop trying); the
+    /// caller falls through to the per-process tier.
+    #[cfg(unix)]
+    fn socket_tier(&self, request_line: &str, timeout: Duration) -> Option<Vec<QueryEntity>> {
+        #[cfg(test)]
+        if SOCKET_SKIP_COUNT.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            return None;
+        }
+        let response = self.socket.query(request_line, timeout)?;
+        parse_daemon_response(&response)
+    }
+
+    /// Tier 2: the per-process `--serve` child.
+    fn proc_tier(&self, request_line: &str, timeout: Duration) -> Option<Vec<QueryEntity>> {
         // Cooldown: after a serve failure, don't pay a fresh interpreter
         // spawn on every query; the one-shot fallback covers the gap.
-        // The mutex is never held across `query`, so lock ordering is safe.
+        // The mutex is never held across `query_detailed`, so lock ordering
+        // is safe.
         if let Ok(last) = self.last_serve_failure.lock() {
             if let Some(failed_at) = *last {
                 if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
@@ -150,11 +280,12 @@ impl BehoodQueryDaemon {
                 }
             }
         }
-        let payload = serde_json::json!({ "question": question });
-        let line = serde_json::to_string(&payload).ok()?;
-        let response = match self.daemon.query(&line, timeout) {
-            Some(response) => response,
-            None => {
+        let response = match self.daemon.query_detailed(request_line, timeout) {
+            QueryOutcome::Answered(line) => line,
+            // Contention says nothing about the daemon's health: fall back
+            // for this query without starting the failure cooldown.
+            QueryOutcome::Contended => return None,
+            QueryOutcome::Failed => {
                 if let Ok(mut last) = self.last_serve_failure.lock() {
                     *last = Some(Instant::now());
                 }
@@ -164,7 +295,7 @@ impl BehoodQueryDaemon {
         if let Ok(mut last) = self.last_serve_failure.lock() {
             *last = None;
         }
-        Some(parse_entities(&response))
+        parse_daemon_response(&response)
     }
 
     /// Test hook: simulate child death so tests can verify respawn behavior.
@@ -172,6 +303,22 @@ impl BehoodQueryDaemon {
     pub fn kill_child_for_test(&self) {
         self.daemon.kill_child_for_test();
     }
+}
+
+/// Test seam: when nonzero, the socket tier is skipped, so tests can
+/// deterministically exercise the per-process tier and below. A count (not
+/// a bool) so parallel tests can't re-enable the tier for each other.
+#[cfg(test)]
+static SOCKET_SKIP_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// `Some` only for a well-formed daemon response; anything else (EOF,
+/// garbage, wrong shape) is a transport failure, never an authoritative
+/// answer. An empty entities array IS authoritative.
+fn parse_daemon_response(line: &str) -> Option<Vec<QueryEntity>> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    value.get("entities")?.as_array()?;
+    Some(parse_entities(line))
 }
 
 fn parse_entities(json_str: &str) -> Vec<QueryEntity> {
@@ -235,6 +382,28 @@ pub fn query_has_kind(entities: &[QueryEntity], kind: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// RAII guard: skip the socket tier so a test deterministically
+    /// exercises the per-process tier and below. Without this, tests would
+    /// spawn (or disturb) the real per-user socket daemon.
+    ///
+    /// This is a refcount, not a bool: tests run in parallel, and one
+    /// test's guard dropping must not re-enable the tier for another test
+    /// still in flight (its fake script would ignore `--serve-socket`,
+    /// never bind, and burn the full 60s ready timeout polling for it).
+    struct SkipSocket;
+    impl SkipSocket {
+        fn new() -> Self {
+            SOCKET_SKIP_COUNT.fetch_add(1, Ordering::SeqCst);
+            SkipSocket
+        }
+    }
+    impl Drop for SkipSocket {
+        fn drop(&mut self) {
+            SOCKET_SKIP_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 
     #[test]
     fn parse_entities_dedups() {
@@ -306,6 +475,7 @@ for line in sys.stdin:
 
     #[test]
     fn daemon_answers_end_to_end() {
+        let _skip_socket = SkipSocket::new();
         let dir = unique_temp_dir("e2e");
         let daemon = test_daemon(write_fake_serve_script(&dir));
         let entities = daemon
@@ -318,6 +488,7 @@ for line in sys.stdin:
 
     #[test]
     fn daemon_second_call_is_warm() {
+        let _skip_socket = SkipSocket::new();
         let dir = unique_temp_dir("warm");
         let daemon = test_daemon(write_fake_serve_script(&dir));
         daemon
@@ -339,6 +510,7 @@ for line in sys.stdin:
 
     #[test]
     fn daemon_respawns_dead_child() {
+        let _skip_socket = SkipSocket::new();
         let dir = unique_temp_dir("respawn");
         let daemon = test_daemon(write_fake_serve_script(&dir));
         daemon
@@ -353,6 +525,7 @@ for line in sys.stdin:
 
     #[test]
     fn daemon_returns_none_when_script_missing() {
+        let _skip_socket = SkipSocket::new();
         let daemon = test_daemon(PathBuf::from("/nonexistent/behood_query.py"));
         assert!(
             daemon
@@ -364,6 +537,7 @@ for line in sys.stdin:
 
     #[test]
     fn daemon_timeout_kills_and_respawns() {
+        let _skip_socket = SkipSocket::new();
         let dir = unique_temp_dir("timeout");
         let daemon = test_daemon(write_fake_serve_script(&dir));
 
@@ -401,6 +575,232 @@ for line in sys.stdin:
             start.elapsed() < Duration::from_secs(20),
             "cooldown was not respected: {:?}",
             start.elapsed()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Socket singleton tier (unix): one daemon per user, warm for every
+    // process. These tests spawn the REAL script on throwaway socket paths
+    // (never the well-known user path) with short idle timeouts so the
+    // double-forked daemons exit on their own.
+    // ------------------------------------------------------------------
+
+    #[cfg(unix)]
+    fn unique_socket(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "lint-ai-behood-socktest-{}-{}-{}.sock",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        p
+    }
+
+    #[cfg(unix)]
+    fn test_socket_daemon(socket_path: PathBuf) -> SocketDaemon {
+        SocketDaemon::new(
+            "behood-query-test",
+            script_path().expect("test script must exist"),
+            crate::segments::relations::python_executable(),
+            socket_path,
+        )
+        .with_spawn_idle_secs(15)
+    }
+
+    #[cfg(unix)]
+    fn socket_request(question: &str) -> String {
+        serde_json::json!({ "question": question }).to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_roundtrip_over_unix_socket() {
+        let path = unique_socket("roundtrip");
+        let _ = std::fs::remove_file(&path);
+        let daemon = test_socket_daemon(path.clone());
+        // First query spawns the daemon (covers the model load, or the
+        // fail-open path when spaCy/bekind are missing here).
+        let first = daemon.query(
+            &socket_request("Who wrote Hamlet?"),
+            Duration::from_secs(90),
+        );
+        assert!(first.is_some(), "socket daemon should answer");
+        // Second query is warm: millisecond-scale IPC.
+        let start = std::time::Instant::now();
+        let second = daemon.query(
+            &socket_request("Who wrote Hamlet?"),
+            Duration::from_secs(30),
+        );
+        let elapsed = start.elapsed();
+        assert!(second.is_some(), "warm socket query should answer");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "warm socket query took {elapsed:?}, expected milliseconds"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_recovers_from_stale_socket_file() {
+        let path = unique_socket("stale");
+        let _ = std::fs::remove_file(&path);
+        // Plant a stale socket file: bound but nobody listening.
+        {
+            let stale = std::os::unix::net::UnixStream::connect(&path);
+            assert!(stale.is_err());
+            let srv =
+                std::os::unix::net::UnixListener::bind(&path).expect("bind stale");
+            drop(srv);
+        }
+        assert!(path.exists(), "stale socket file planted");
+        // The client must reclaim the path: unlink the stale file, spawn a
+        // daemon, and answer.
+        let daemon = test_socket_daemon(path.clone());
+        let answer = daemon.query(
+            &socket_request("Who wrote Hamlet?"),
+            Duration::from_secs(90),
+        );
+        assert!(
+            answer.is_some(),
+            "socket tier must recover from a stale socket file"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_rejects_wrong_protocol_version() {
+        let path = unique_socket("version");
+        let _ = std::fs::remove_file(&path);
+        // Fake daemon speaking a future protocol version.
+        let listener =
+            std::os::unix::net::UnixListener::bind(&path).expect("bind fake daemon");
+        let handle = std::thread::spawn(move || {
+            use std::io::Write;
+            if let Ok((mut conn, _)) = listener.accept() {
+                let _ = conn.write_all(b"{\"ready\": true, \"protocol\": 999}\n");
+                std::thread::sleep(Duration::from_secs(3));
+            }
+        });
+        let daemon = test_socket_daemon(path.clone());
+        let answer = daemon.query(
+            &socket_request("Who wrote Hamlet?"),
+            Duration::from_secs(30),
+        );
+        assert!(
+            answer.is_none(),
+            "wrong protocol version must not be treated as a usable daemon"
+        );
+        let _ = handle.join();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_concurrent_starters_elect_one_daemon() {
+        // N processes racing to spawn: the socket bind is the singleflight
+        // election — exactly one wins, losers find the live daemon and exit
+        // quietly (exit 0). All starters' queries then succeed.
+        use std::process::Command;
+        let path = unique_socket("election");
+        let _ = std::fs::remove_file(&path);
+        let script = script_path().expect("test script must exist");
+        let python = crate::segments::relations::python_executable();
+
+        let starters: Vec<_> = (0..4)
+            .map(|_| {
+                let (script, python, path) =
+                    (script.clone(), python.clone(), path.clone());
+                std::thread::spawn(move || {
+                    Command::new(&python)
+                        .arg(&script)
+                        .arg("--serve-socket")
+                        .arg(&path)
+                        .arg("--idle-timeout")
+                        .arg("15")
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                })
+            })
+            .collect();
+        for s in starters {
+            let status = s.join().expect("starter thread").expect("spawn");
+            assert!(
+                status.success(),
+                "racing starter must exit 0 (winner serves, loser defers)"
+            );
+        }
+        // The elected daemon answers.
+        let daemon = test_socket_daemon(path.clone());
+        let answer = daemon.query(
+            &socket_request("Who wrote Hamlet?"),
+            Duration::from_secs(30),
+        );
+        assert!(answer.is_some(), "elected daemon should answer");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tiered_falls_back_to_per_process_when_socket_down() {
+        // A socket path that can never bind (>108 bytes): the socket tier
+        // fast-fails (no polling, no files created) and the per-process
+        // daemon serves the query. No SkipSocket: the real tier must fail.
+        let dir = unique_temp_dir("tiered");
+        let mut long_path = dir.clone();
+        long_path.push(format!("{}.sock", "x".repeat(200)));
+        let daemon = BehoodQueryDaemon::with_socket_path(
+            write_fake_serve_script(&dir),
+            crate::segments::relations::python_executable(),
+            long_path,
+        );
+        let entities = daemon
+            .analyze("Who visited Paris?", Duration::from_secs(60))
+            .expect("per-process tier should serve when the socket tier is down");
+        assert_eq!(entities[0].text, "canned");
+    }
+
+    #[test]
+    fn daemon_response_parsing_distinguishes_transport_failure() {
+        // Well-formed response -> authoritative (even when empty).
+        let parsed = parse_daemon_response("{\"entities\": []}\n").expect("empty is Some");
+        assert!(parsed.is_empty());
+        let parsed =
+            parse_daemon_response("{\"entities\": [{\"text\": \"Jean\", \"kind\": \"person\"}]}\n")
+                .expect("entities parse");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].text, "Jean");
+        assert_eq!(parsed[0].kind, "person");
+        // Garbage / EOF / wrong shape -> transport failure (None), never an
+        // authoritative answer.
+        assert!(parse_daemon_response("").is_none());
+        assert!(parse_daemon_response("not json\n").is_none());
+        assert!(parse_daemon_response("{\"ready\": true}\n").is_none());
+        assert!(parse_daemon_response("{\"entities\": \"x\"}\n").is_none());
+    }
+
+    #[test]
+    fn oneshot_is_bounded_by_timeout() {
+        // A hanging "script" must not hang the caller past ONE_SHOT_TIMEOUT.
+        let dir = std::env::temp_dir();
+        let script = dir.join(format!("lint-ai-hang-{}.py", std::process::id()));
+        std::fs::write(&script, "#!/usr/bin/env python3\nimport time\ntime.sleep(120)\n")
+            .expect("write hang script");
+        let start = std::time::Instant::now();
+        let entities = oneshot_with_script(&script, "anything");
+        let elapsed = start.elapsed();
+        let _ = std::fs::remove_file(&script);
+        assert!(entities.is_empty());
+        assert!(
+            elapsed < ONE_SHOT_TIMEOUT + Duration::from_secs(10),
+            "one-shot took {elapsed:?}, expected timeout near {ONE_SHOT_TIMEOUT:?}"
         );
     }
 }

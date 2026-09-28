@@ -11,6 +11,8 @@ entities; lint-ai uses the text for matching and the kind for filtering.
 Usage:
     echo "Which city have both Jean and John visited?" | python3 behood_query.py
     python3 behood_query.py "Which city have both Jean and John visited?"
+    python3 behood_query.py --serve   # one {"question": ...} per stdin line,
+                                     # one {"entities": [...]} per stdout line
 
 Output (JSON to stdout):
     {"entities": [{"text": "Jean", "kind": "person"}, ...]}
@@ -50,10 +52,16 @@ def _load_spacy():
         return None
 
 
-def analyze_question(question):
-    """Return [(text, kind)] for the question's noun phrases via behood."""
-    nlp = _load_spacy()
-    binary = _behood_bin()
+def analyze_question(question, nlp=None, binary=None):
+    """Return [(text, kind)] for the question's noun phrases via behood.
+
+    When `nlp`/`binary` are not supplied (one-shot mode) they are resolved
+    here; serve mode resolves them once at startup and passes them in.
+    """
+    if nlp is None:
+        nlp = _load_spacy()
+    if binary is None:
+        binary = _behood_bin()
     if nlp is None or binary is None:
         return []
 
@@ -147,17 +155,60 @@ def analyze_question(question):
     return entities
 
 
+def serve():
+    """Line-delimited JSON protocol: one {"question": ...} per stdin line,
+    one {"entities": [...]} per stdout line. spaCy and the bekind binary are
+    resolved once at startup so per-query cost is milliseconds, not seconds.
+    Exits non-zero when the backend cannot be initialized, so the caller can
+    fail over to the heuristic path without paying per-query spawn costs.
+    """
+    # Fail fast: the binary check is cheap; the spaCy load costs seconds.
+    binary = _behood_bin()
+    if binary is None:
+        sys.stderr.write("behood_query --serve: bekind binary not found\n")
+        return 3
+    nlp = _load_spacy()
+    if nlp is None:
+        sys.stderr.write("behood_query --serve: spaCy model unavailable\n")
+        return 3
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+            question = payload.get("question", "")
+        except Exception:
+            question = ""
+        try:
+            entities = analyze_question(question, nlp=nlp, binary=binary)
+        except Exception:
+            entities = []
+        sys.stdout.write(json.dumps({"entities": entities}) + "\n")
+        sys.stdout.flush()
+    return 0
+
+
 def main():
+    if "--serve" in sys.argv[1:]:
+        return serve()
+    # Fail fast: the bekind binary check is cheap; spaCy load costs seconds.
+    # When behood is unavailable there is no point paying the model load.
+    binary = _behood_bin()
+    if binary is None:
+        print(json.dumps({"entities": []}))
+        return 0
     if len(sys.argv) > 1:
-        question = " ".join(sys.argv[1:])
+        question = " ".join(a for a in sys.argv[1:] if a != "--serve")
     else:
         question = sys.stdin.read().strip()
     try:
-        entities = analyze_question(question)
+        entities = analyze_question(question, binary=binary)
     except Exception:
         entities = []
     print(json.dumps({"entities": entities}))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

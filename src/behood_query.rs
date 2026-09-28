@@ -9,10 +9,13 @@
 //! never breaks search):
 //!
 //! 1. **Shared singleton daemon** (unix only): one `--serve-socket` daemon
-//!    per user on a well-known socket path. Short-lived processes (hooks,
-//!    CLIs) get warm answers without paying the spawn: the first process to
-//!    need it spawns it (double-forked, outliving the spawner) and every
-//!    later process connects. Idle-exits after a few minutes.
+//!    per user *per backend configuration* on a well-known socket path
+//!    (the path carries a fingerprint of the script, Python, and
+//!    `BEHOOD_BIN`, so different backends never share a daemon).
+//!    Short-lived processes (hooks, CLIs) get warm answers without paying
+//!    the spawn: the first process to need it spawns it (double-forked,
+//!    outliving the spawner) and every later process connects. Idle-exits
+//!    after a few minutes.
 //! 2. **Per-process daemon**: a `--serve` child owned by this process,
 //!    spawned lazily once and reused for every query. Dies with the parent.
 //! 3. **One-shot subprocess**: the original `python3 behood_query.py
@@ -23,7 +26,7 @@
 //! the model warm; the model load is paid once per user instead of once per
 //! request. Behood owns judgment; the caller owns knowledge.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -130,15 +133,42 @@ fn script_path() -> Option<std::path::PathBuf> {
     }
 }
 
+/// Fingerprint of the backend configuration a socket daemon bakes in at
+/// startup: the query script, the Python executable, and `BEHOOD_BIN`.
+/// The singleton socket is shared per user, but the winning starter's
+/// backend serves every later process — so processes with different
+/// backends must not share a path. Takes the env value as a parameter
+/// (rather than reading it) so tests stay race-free.
+#[cfg(unix)]
+fn backend_fingerprint(script: &Path, python: &str, behood_bin: Option<&str>) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    script.as_os_str().hash(&mut h);
+    python.hash(&mut h);
+    // Distinguish "unset" (PATH lookup at daemon start) from "set but empty".
+    behood_bin.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 /// Well-known socket path for the per-user shared singleton daemon.
 ///
 /// The protocol version is part of the filename so a newer client never
-/// mistakes an older daemon's socket for its own.
+/// mistakes an older daemon's socket for its own. The backend fingerprint
+/// is part of it too, so two processes with different backends (different
+/// checkout, Python, or `BEHOOD_BIN`) get separate singletons instead of
+/// silently sharing the first starter's backend.
 #[cfg(unix)]
-fn singleton_socket_path() -> PathBuf {
+fn singleton_socket_path(script: &Path, python: &str) -> PathBuf {
+    let fingerprint = backend_fingerprint(
+        script,
+        python,
+        std::env::var("BEHOOD_BIN").ok().as_deref(),
+    );
     let name = format!(
-        "behood-query-v{}.sock",
-        crate::daemon::SOCKET_PROTOCOL_VERSION
+        "behood-query-v{}-{}.sock",
+        crate::daemon::SOCKET_PROTOCOL_VERSION,
+        fingerprint
     );
     if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
         if !rt.trim().is_empty() {
@@ -198,7 +228,8 @@ impl BehoodQueryDaemon {
     pub fn new(script: PathBuf, python: String) -> Self {
         #[cfg(unix)]
         {
-            Self::with_socket_path(script, python, singleton_socket_path())
+            let socket_path = singleton_socket_path(&script, &python);
+            Self::with_socket_path(script, python, socket_path)
         }
         #[cfg(not(unix))]
         {
@@ -226,13 +257,19 @@ impl BehoodQueryDaemon {
         }
     }
 
-    /// Start the daemons now so the first real query does not pay the spawn
+    /// Start the daemon now so the first real query does not pay the spawn
     /// cost. Best-effort: failures are silent; queries fall back to the
     /// one-shot subprocess.
+    ///
+    /// On Unix only the shared socket tier is prewarmed: it serves normal
+    /// queries, while the per-process daemon is a fallback that stays lazy
+    /// so startup doesn't pay for two spaCy loads. Elsewhere the
+    /// per-process daemon is the only tier and is prewarmed directly.
     pub fn prewarm(&self) {
-        self.daemon.prewarm();
         #[cfg(unix)]
         self.socket.prewarm();
+        #[cfg(not(unix))]
+        self.daemon.prewarm();
     }
 
     /// Analyze `question` via the daemon tiers. Returns `None` on any
@@ -614,6 +651,46 @@ for line in sys.stdin:
     #[cfg(unix)]
     fn socket_request(question: &str) -> String {
         serde_json::json!({ "question": question }).to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_fingerprint_is_stable_for_same_backend() {
+        let script = Path::new("/repo/scripts/behood_query.py");
+        let a = backend_fingerprint(script, "python3", None);
+        let b = backend_fingerprint(script, "python3", None);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 16);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_fingerprint_partitions_backend_config() {
+        let script = Path::new("/repo/scripts/behood_query.py");
+        let base = backend_fingerprint(script, "python3", None);
+        // Each backend input changes the fingerprint: a different Python,
+        // a different script checkout, and a different BEHOOD_BIN (including
+        // unset vs set-but-empty) each get their own singleton.
+        assert_ne!(base, backend_fingerprint(script, "/other/python3", None));
+        assert_ne!(
+            base,
+            backend_fingerprint(Path::new("/other/scripts/behood_query.py"), "python3", None)
+        );
+        assert_ne!(base, backend_fingerprint(script, "python3", Some("/opt/behood")));
+        assert_ne!(
+            backend_fingerprint(script, "python3", Some("")),
+            backend_fingerprint(script, "python3", None)
+        );
+        // ... and the full socket paths differ too.
+        let p1 = singleton_socket_path(script, "python3");
+        let p2 =
+            singleton_socket_path(Path::new("/other/scripts/behood_query.py"), "python3");
+        assert!(p1
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("behood-query-v"));
+        assert_ne!(p1.file_name(), p2.file_name());
     }
 
     #[cfg(unix)]

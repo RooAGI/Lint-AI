@@ -488,6 +488,7 @@ fn run_scoped_benchmark(
             allowed_segment_doc_bitmaps: None,
             query_routing_intent: analysis.query_routing_intent,
             has_explicit_temporal: analysis.temporal.is_some(),
+            semantic_tags: &[],
         };
         let (results, timings, diagnostics) =
             index.query_with_temporal_context(&query_text, max_k, temporal);

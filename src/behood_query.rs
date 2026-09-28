@@ -167,6 +167,51 @@ impl BehoodQueryDaemon {
         Some(parse_entities(&response))
     }
 
+    /// Scope verdicts for raw text spans via the daemon.
+    ///
+    /// Sends `{"scope_texts": [{"id": "s:{i}", "text": ...}, ...]}` and
+    /// parses `{"scope_verdicts": [...]}`. Returns `None` on any failure
+    /// (including lock contention); the caller treats that as "no scope
+    /// information" and skips the boost. `Some(vec)` is authoritative even
+    /// when empty. Shares the serve-failure cooldown with [`Self::analyze`]:
+    /// a dead child suppresses respawn attempts for both request kinds.
+    pub fn analyze_scope(
+        &self,
+        texts: &[&str],
+        timeout: Duration,
+    ) -> Option<Vec<ScopeVerdict>> {
+        if texts.is_empty() {
+            return Some(Vec::new());
+        }
+        if let Ok(last) = self.last_serve_failure.lock() {
+            if let Some(failed_at) = *last {
+                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
+                    return None;
+                }
+            }
+        }
+        let scope_texts: Vec<serde_json::Value> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| serde_json::json!({ "id": format!("s:{i}"), "text": text }))
+            .collect();
+        let payload = serde_json::json!({ "scope_texts": scope_texts });
+        let line = serde_json::to_string(&payload).ok()?;
+        let response = match self.daemon.query(&line, timeout) {
+            Some(response) => response,
+            None => {
+                if let Ok(mut last) = self.last_serve_failure.lock() {
+                    *last = Some(Instant::now());
+                }
+                return None;
+            }
+        };
+        if let Ok(mut last) = self.last_serve_failure.lock() {
+            *last = None;
+        }
+        Some(parse_scope_verdicts(&response))
+    }
+
     /// Test hook: simulate child death so tests can verify respawn behavior.
     #[cfg(test)]
     pub fn kill_child_for_test(&self) {
@@ -230,6 +275,85 @@ fn clean_person_text(text: &str) -> String {
 /// Whether behood judged any entity in the question as the given kind.
 pub fn query_has_kind(entities: &[QueryEntity], kind: &str) -> bool {
     entities.iter().any(|e| e.kind == kind)
+}
+
+// ---------------------------------------------------------------------------
+// Temporal-scope verdicts (bekind's scope layer).
+//
+// A scope verdict judges one raw text span: the activity it describes, its
+// canonicalized temporal words (closed 7-day set only: "weekend"/"weekday"),
+// and whether it is habitual. Lint-ai uses these verdicts for a RANK BOOST
+// ONLY — never a filter. Activity compatibility (running ⊂ exercise) is
+// deliberately out of scope here; that stays caller-side knowledge work.
+// ---------------------------------------------------------------------------
+
+/// A temporal-scope verdict judged by bekind for one text span.
+#[derive(Debug, Clone)]
+pub struct ScopeVerdict {
+    /// Caller-assigned id, echoed back ("s:{i}").
+    pub id: String,
+    /// The activity the text is about, verbatim from the text.
+    pub activity_phrase: String,
+    /// Canonicalized temporal words (closed 7-day set: "weekend"/"weekday").
+    pub temporal_words: Vec<String>,
+    /// Whether the text describes a habitual/recurring activity.
+    pub habitual: bool,
+}
+
+/// Scope verdicts for raw text spans via the global daemon.
+///
+/// Fail-open: any daemon failure — or a daemon whose script predates scope
+/// support — yields an empty vec, and the caller skips the scope boost.
+/// Search never breaks because of scope. There is deliberately no one-shot
+/// subprocess fallback: per-fact one-shots would pay the interpreter+spaCy
+/// spawn per candidate; the daemon is the scope path.
+pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
+    BehoodQueryDaemon::global()
+        .analyze_scope(texts, Duration::from_secs(30))
+        .unwrap_or_default()
+}
+
+fn parse_scope_verdicts(json_str: &str) -> Vec<ScopeVerdict> {
+    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut verdicts = Vec::new();
+    if let Some(arr) = parsed.get("scope_verdicts").and_then(|v| v.as_array()) {
+        for item in arr {
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let activity_phrase = item
+                .get("activity_phrase")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let temporal_words = item
+                .get("temporal_words")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let habitual = item
+                .get("habitual")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            verdicts.push(ScopeVerdict {
+                id,
+                activity_phrase,
+                temporal_words,
+                habitual,
+            });
+        }
+    }
+    verdicts
 }
 
 #[cfg(test)]
@@ -402,5 +526,83 @@ for line in sys.stdin:
             "cooldown was not respected: {:?}",
             start.elapsed()
         );
+    }
+
+    #[test]
+    fn parse_scope_verdicts_reads_fields() {
+        let json = r#"{"scope_verdicts": [
+            {"id": "s:0", "activity_phrase": "weekend runs",
+             "temporal_words": ["weekend"], "habitual": true,
+             "evidence": ["literal temporal word 'weekend'"]},
+            {"id": "s:1", "activity_phrase": "one-off dinner",
+             "temporal_words": [], "habitual": false, "evidence": []}
+        ]}"#;
+        let verdicts = parse_scope_verdicts(json);
+        assert_eq!(verdicts.len(), 2);
+        assert_eq!(verdicts[0].id, "s:0");
+        assert_eq!(verdicts[0].temporal_words, vec!["weekend"]);
+        assert!(verdicts[0].habitual);
+        assert!(verdicts[1].temporal_words.is_empty());
+        assert!(!verdicts[1].habitual);
+    }
+
+    #[test]
+    fn parse_scope_verdicts_fail_open() {
+        assert!(parse_scope_verdicts("not json").is_empty());
+        assert!(parse_scope_verdicts("{}").is_empty());
+        // A pre-scope daemon answers {"entities": [...]} to anything.
+        assert!(parse_scope_verdicts(r#"{"entities": []}"#).is_empty());
+    }
+
+    /// Fake `--serve` script that answers scope requests the way the real
+    /// script does: {"scope_texts": [...]} -> {"scope_verdicts": [...]}.
+    fn write_fake_scope_serve_script(dir: &std::path::Path) -> PathBuf {
+        let path = dir.join("fake_scope_serve.py");
+        std::fs::write(
+            &path,
+            r#"import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    payload = json.loads(line)
+    if "scope_texts" in payload:
+        verdicts = [
+            {"id": t["id"], "activity_phrase": t["text"],
+             "temporal_words": ["weekend"], "habitual": True, "evidence": []}
+            for t in payload["scope_texts"]
+        ]
+        sys.stdout.write(json.dumps({"scope_verdicts": verdicts}) + "\n")
+    else:
+        sys.stdout.write(json.dumps({"entities": []}) + "\n")
+    sys.stdout.flush()
+"#,
+        )
+        .expect("write fake scope serve script");
+        path
+    }
+
+    #[test]
+    fn daemon_scope_round_trip() {
+        let dir = unique_temp_dir("scope");
+        let daemon = test_daemon(write_fake_scope_serve_script(&dir));
+        let verdicts = daemon
+            .analyze_scope(&["first text", "second text"], Duration::from_secs(60))
+            .expect("daemon should answer scope requests");
+        assert_eq!(verdicts.len(), 2);
+        assert_eq!(verdicts[0].id, "s:0");
+        assert_eq!(verdicts[1].id, "s:1");
+        assert_eq!(verdicts[0].temporal_words, vec!["weekend"]);
+        assert!(verdicts[1].habitual);
+    }
+
+    #[test]
+    fn daemon_scope_empty_input_short_circuits() {
+        let dir = unique_temp_dir("scope-empty");
+        let daemon = test_daemon(write_fake_scope_serve_script(&dir));
+        let verdicts = daemon
+            .analyze_scope(&[], Duration::from_secs(10))
+            .expect("empty input must not touch the daemon");
+        assert!(verdicts.is_empty());
     }
 }

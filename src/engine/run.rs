@@ -22,10 +22,13 @@ use crate::integrations::agy::{
 };
 #[cfg(feature = "openclaw")]
 use crate::integrations::openclaw::{
-    install_memory_skill as install_openclaw_memory_skill,
+    install_hooks as install_openclaw_hooks, install_memory_skill as install_openclaw_memory_skill,
+    install_plugin as install_openclaw_plugin,
     install_user_config as install_openclaw_user_config, run_server as run_openclaw_server,
     OpenClawServerOptions,
 };
+#[cfg(feature = "openclaw")]
+use crate::integrations::openclaw::hooks::{run_hook as run_openclaw_hook, OpenClawHookKind};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
@@ -335,6 +338,19 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return run_agy_hook(kind, Path::new(&args.path));
     }
 
+    #[cfg(feature = "openclaw")]
+    if let Some(hook) = args.openclaw_hook {
+        let kind = match hook {
+            crate::cli::OpenClawHook::Bootstrap => OpenClawHookKind::Bootstrap,
+            crate::cli::OpenClawHook::AgentEnd => OpenClawHookKind::AgentEnd,
+            crate::cli::OpenClawHook::BeforeReset => OpenClawHookKind::BeforeReset,
+            crate::cli::OpenClawHook::SessionStart => OpenClawHookKind::SessionStart,
+            crate::cli::OpenClawHook::SessionEnd => OpenClawHookKind::SessionEnd,
+            crate::cli::OpenClawHook::Shutdown => OpenClawHookKind::Shutdown,
+        };
+        return run_openclaw_hook(kind, Path::new(&args.path));
+    }
+
     #[cfg(feature = "claude-code")]
     if args.claude_code_install {
         let written = install_memory_skill(Path::new(&args.path), args.claude_code_force_skill)?;
@@ -490,6 +506,16 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             args.openclaw_force_skill,
         )?;
         println!("Wrote OpenClaw memory skill to {}", written.display());
+        let written = install_openclaw_hooks(
+            args.openclaw_hooks_dir.as_deref().map(Path::new),
+            args.openclaw_force_skill,
+        )?;
+        println!("Wrote OpenClaw hook wrapper to {}", written.display());
+        let written = install_openclaw_plugin(
+            args.openclaw_plugin_dir.as_deref().map(Path::new),
+            args.openclaw_force_skill,
+        )?;
+        println!("Wrote OpenClaw typed plugin to {}", written.display());
         let written = install_openclaw_user_config(
             Path::new(&args.path),
             args.openclaw_config.as_deref().map(Path::new),

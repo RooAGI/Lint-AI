@@ -89,6 +89,23 @@ pub enum GeminiCliHook {
     SessionEnd,
 }
 
+#[cfg(feature = "openclaw")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OpenClawHook {
+    /// Internal `agent:bootstrap` — retrieve and inject memory.
+    Bootstrap,
+    /// Typed `agent_end` — capture a per-turn Outcome.
+    AgentEnd,
+    /// Typed `before_reset` — capture the authoritative SessionSummary.
+    BeforeReset,
+    /// Typed `session_start` — session registry bookkeeping.
+    SessionStart,
+    /// Typed `session_end` — session registry bookkeeping.
+    SessionEnd,
+    /// Gateway shutdown — bounded pending-capture flush.
+    Shutdown,
+}
+
 #[cfg(feature = "agy")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum AgyHook {
@@ -315,6 +332,22 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "openclaw")]
     pub openclaw_skill_dir: Option<String>,
+    /// Handle one OpenClaw lifecycle hook event: read the event JSON from
+    /// stdin, write the response JSON to stdout. Spawned by the installed
+    /// hook wrappers; fail-open on any error.
+    #[arg(long, value_enum)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_hook: Option<OpenClawHook>,
+    /// Override the OpenClaw internal-hooks directory (default
+    /// `$OPENCLAW_STATE_DIR/hooks` or `~/.openclaw/hooks`).
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_hooks_dir: Option<String>,
+    /// Override the OpenClaw plugin (extensions) directory (default
+    /// `~/.openclaw/extensions`).
+    #[arg(long)]
+    #[cfg(feature = "openclaw")]
+    pub openclaw_plugin_dir: Option<String>,
     /// Query the unified store (project documents and recorded memories) once
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
     #[arg(long)]

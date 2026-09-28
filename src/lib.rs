@@ -50,7 +50,8 @@ pub mod index;
     feature = "codex",
     feature = "gemini-cli",
     feature = "agy",
-    feature = "muse-code"
+    feature = "muse-code",
+    feature = "openclaw"
 ))]
 mod integrations;
 #[cfg(any(

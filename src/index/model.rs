@@ -517,6 +517,10 @@ pub struct ScoreBreakdown {
     pub graph_link_score: f32,
     pub entity_graph_score: f32,
     pub sequence_rerank_score: f32,
+    /// Additive activity↔venue rank boost (lint-ai activity→venue table
+    /// over bekind's activity phrase + place-kind verdicts). Boost only —
+    /// a zero here means "no venue match", never a penalty.
+    pub activity_venue_boost: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

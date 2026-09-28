@@ -1,5 +1,6 @@
 mod catalog;
 mod diagnostics;
+pub mod extractor_daemon;
 pub mod intent;
 mod model;
 mod query;

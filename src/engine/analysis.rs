@@ -574,6 +574,9 @@ pub(crate) fn build_memory_index(
         memory_index_layout: crate::pipeline::MemoryIndexLayout::Single,
         fuse_global_arm: false,
         conversational_rerank: true,
+        structured_fact_retrieval: true,
+        key_phrase_enrichment: false,
+        extractor_script: None,
     };
     crate::pipeline::build_query_snapshot(&source_docs, &options)
 }

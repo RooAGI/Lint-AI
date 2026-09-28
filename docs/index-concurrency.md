@@ -19,10 +19,11 @@ batch construction and fast reads over compact global structures. It is not the
 right object to mutate incrementally in place.
 
 `IndexStore::refresh()` builds and publishes a complete immutable generation.
-`PublishedIndexSnapshot` is a cheaply clonable read view that excludes mutable
-writer and persistence state. The server exposes the same separation through
-`MemoryService` (writer) and `MemorySearchService` (published reader), so a
-refresh does not hold the reader lock for the duration of the rebuild.
+`MemoryService` is the single external service: its `search(&self)` reads the
+latest complete generation through the store's cached snapshot, while its
+write methods refresh the store before releasing the write lock. Readers
+holding a shared lock never block on a rebuild and never see a partially
+updated index.
 
 ## Recommended Rule
 
@@ -252,8 +253,9 @@ Current behavior:
   insufficient.
 - Empty or low-signal routes execute a bounded deterministic fallback, and
   diagnostics report the segments actually executed.
-- `PublishedIndexSnapshot` and `MemorySearchService` separate immutable readers
-  from the mutable writer during refresh.
+- `MemoryService::search` reads the latest complete generation from the
+  store's cached snapshot while writers hold the write lock only for the
+  mutation plus refresh.
 
 The implementation still rebuilds a complete semantic generation during
 `IndexStore::refresh()`; it does not update semantic postings in place or write

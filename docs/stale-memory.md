@@ -110,8 +110,8 @@ The headline aggregate, on the heuristic release backend with no embedding vecto
 
 | Metric | Result |
 | --- | --- |
-| Fractional Recall@5 | **83.5%** |
-| Any-hit Recall@10 | **95.6%** |
+| Fractional Recall@5 | **86.1%** |
+| Any-hit Recall@10 | **96.6%** |
 | Average query latency | **~1.88 ms** |
 
 Single CPU. No GPU. The dataset downloader, benchmark binary, raw reports, and comparison workflows are all in the repository, so the numbers can be reproduced rather than taken on faith. See [benchmarks](benchmark.md).
@@ -131,7 +131,7 @@ We ran the project's own `haystack_scoped_benchmark` on this question. Both rele
 2. an unrelated session about a different Rachel (an author)
 3. `answer_0b1a0942_2` — the **current** May 27 session
 
-The stale session outranks the current one. On messy multi-session data, topical relevance can still beat recency: the May 24 session is literally about Rachel's relocation, so it scores highly on similarity even though its information is outdated. The system reliably retrieves the right neighborhood of evidence — that is what the 95.6% any-hit Recall@10 measures — but ordering stale-below-current *within* the results is the genuinely hard part, and this example shows it is not solved perfectly. The clean two-file demo works because chronology is the only signal; real conversations are noisier.
+The stale session outranks the current one. On messy multi-session data, topical relevance can still beat recency: the May 24 session is literally about Rachel's relocation, so it scores highly on similarity even though its information is outdated. The system reliably retrieves the right neighborhood of evidence — that is what the 96.6% any-hit Recall@10 measures — but ordering stale-below-current *within* the results is the genuinely hard part, and this example shows it is not solved perfectly. The clean two-file demo works because chronology is the only signal; real conversations are noisier.
 
 We include this because it is the point: a memory layer should be judged on real data, misses included. The stale-memory problem is real, the progress is measurable, and the remaining gap is visible in the project's own benchmark.
 

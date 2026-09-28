@@ -429,6 +429,26 @@ fn build_query_analysis(
     } else {
         &verb_phrases
     };
+    // Luyi's direction: the augmented query must include the focus terms
+    // (what the question is ABOUT). The span extractor can miss terms like
+    // "family" in "her family", but identify_focus finds them. Without this,
+    // removing the noisy original query also removes real signal.
+    // Use UNSTEMMED forms: the search index expects "family", not "famili".
+    let focus = crate::question_focus::identify_focus(&original_query);
+    let focus_stemmed: std::collections::HashSet<&str> =
+        focus.focus_terms.iter().map(|s| s.as_str()).collect();
+    let unstemmed_tokens =
+        crate::tokenizer::tokenize(&original_query, crate::tokenizer::TokenizerMode::Unstemmed);
+    let mut focus_unstemmed = Vec::new();
+    let mut seen_focus = std::collections::HashSet::new();
+    for tok in unstemmed_tokens {
+        let stemmed = crate::tokenizer::tokenize(&tok, crate::tokenizer::TokenizerMode::Stemmed);
+        if let Some(stem) = stemmed.first() {
+            if focus_stemmed.contains(stem.as_str()) && seen_focus.insert(stem.clone()) {
+                focus_unstemmed.push(tok);
+            }
+        }
+    }
     let augmented_query = build_augmented_query(
         &original_query,
         &entities,
@@ -436,6 +456,7 @@ fn build_query_analysis(
         augmented_verb_phrases,
         subject_hint.as_deref(),
         object_hint.as_deref(),
+        &focus_unstemmed,
     );
 
     if rust_bert_model_signals {
@@ -843,7 +864,30 @@ fn extract_temporal(query: &str) -> Option<QueryTemporal> {
             source: "fuzzydate".to_string(),
         });
     }
+    // Temporal question words ("when", "what time", "how long") mark the
+    // query as temporal even without an explicit date phrase. The question
+    // is asking for a time, so downstream temporal scoring/reranking should
+    // apply. No resolved date — the answer's time comes from the evidence.
+    if let Some(phrase) = temporal_question_word(new_query) {
+        return Some(QueryTemporal {
+            phrase,
+            resolved_at: None,
+            source: "question-word".to_string(),
+        });
+    }
     seeded_temporal_anchor(query)
+}
+
+/// Matches temporal question words/phrases that ask for a time without
+/// naming one: "when", "what time", "how long", "what date", "what day".
+/// Returns the matched phrase verbatim.
+fn temporal_question_word(query: &str) -> Option<String> {
+    static QW_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = QW_RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(when|what time|how long|what date|which date|what day|which day)\b")
+            .expect("valid temporal question-word regex")
+    });
+    re.find(query).map(|m| m.as_str().to_string())
 }
 
 /// Matches the `temporal anchor: YYYY-MM-DD` marker seeded into rewritten
@@ -1378,6 +1422,7 @@ fn build_augmented_query(
     verb_phrases: &[String],
     subject_hint: Option<&str>,
     object_hint: Option<&str>,
+    focus_terms: &[String],
 ) -> String {
     let mut seen = HashSet::new();
     let mut terms = Vec::new();
@@ -1389,25 +1434,59 @@ fn build_augmented_query(
         terms.push(term.trim().to_string());
     };
 
+    // Luyi's direction: the augmented query carries the focus (what the
+    // question is ABOUT), not the question structure. Question words ("when"),
+    // temporal markers, and auxiliaries ("will") are filters/structure —
+    // they dilute the signal and must not be search terms.
     for entity in entities {
+        // Skip question words and temporal markers: they're filters, not content.
+        // Check both kind and text: "when" appears as Entity/Subject/QuestionWord.
+        let text_lower = entity.text.to_lowercase();
+        if matches!(entity.kind, QuerySpanKind::QuestionWord | QuerySpanKind::Temporal)
+            || crate::question_focus::is_question_word(&text_lower) {
+            continue;
+        }
         push_term(&entity.text);
     }
     for phrase in noun_phrases {
         push_term(phrase);
     }
     for phrase in verb_phrases {
+        // Skip auxiliaries: they're structure, not content.
+        // "will" in "will start" is not the focus; "start" is.
+        // "do"/"does"/"did" in "what does X do" are not the focus either.
+        let stemmed = crate::tokenizer::tokenize(phrase, crate::tokenizer::TokenizerMode::Stemmed);
+        if stemmed.iter().any(|t| matches!(t.as_str(), "will" | "shall" | "should" | "can" | "could" | "may" | "might" | "must" | "do" | "doe" | "did" | "done")) {
+            continue;
+        }
         push_term(phrase);
     }
     if let Some(subject) = subject_hint {
-        push_term(subject);
+        // Skip question-word subjects: "When" is not a subject, it's a filter.
+        if !crate::question_focus::is_question_word(&subject.to_lowercase()) {
+            push_term(subject);
+        }
     }
     if let Some(object) = object_hint {
         push_term(object);
+    }
+    // Luyi's direction: the focus terms (what the question is ABOUT) must be
+    // in the augmented query. The span extractor can miss terms like "family"
+    // in "her family", but identify_focus finds them via the expandable-concept
+    // filter. Without this, cleaning the query also removes real signal.
+    for term in focus_terms {
+        push_term(term);
     }
 
     if terms.is_empty() {
         original_query.to_string()
     } else {
+        // Luyi 2026-09-27: keep the original query for routing coverage.
+        // The "terms only" formulation (69828ab) hurt segmented retrieval
+        // (-1.0%) because the router needs the original terms. Focus terms
+        // and filtering are kept; the original query is prepended.
+        // "When will John start his new job?" becomes
+        // "When will John start his new job? John new job start".
         format!("{} {}", original_query.trim(), terms.join(" "))
     }
 }
@@ -1519,6 +1598,35 @@ mod tests {
     }
 
     #[test]
+    fn temporal_question_words_mark_query_temporal() {
+        // "when" with no explicit date still marks the query temporal.
+        let t = extract_temporal("When will John start his new job?");
+        assert!(t.is_some());
+        let t = t.unwrap();
+        assert_eq!(t.phrase.to_lowercase(), "when");
+        assert_eq!(t.source, "question-word");
+        assert!(t.resolved_at.is_none());
+
+        // Multi-word temporal question phrases.
+        let t = extract_temporal("What time does the meeting start?");
+        assert!(t.is_some());
+        assert_eq!(t.unwrap().source, "question-word");
+
+        let t = extract_temporal("How long did the trip take?");
+        assert!(t.is_some());
+        assert_eq!(t.unwrap().source, "question-word");
+
+        // Explicit date phrases still win and keep their source.
+        let t = extract_temporal("When did we meet last Friday?");
+        assert!(t.is_some());
+        assert_eq!(t.unwrap().source, "fuzzydate");
+
+        // Non-temporal questions stay None.
+        let t = extract_temporal("What places has Nate visited?");
+        assert!(t.is_none());
+    }
+
+    #[test]
     fn classifies_query_routing_intent() {
         let count = analyze_query("How many projects have I led?");
         assert_eq!(count.query_routing_intent, Some(QueryRoutingIntent::Count));
@@ -1565,6 +1673,7 @@ mod tests {
             &[],
             Some("Project Apollo"),
             None,
+            &[],
         );
         assert!(aug.contains("Project Apollo"));
     }

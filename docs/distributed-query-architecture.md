@@ -205,7 +205,7 @@ an explicit top-5 setting:
 | Single index | 93.23% | 93.98% | 0.814 | 6.41 ms |
 
 These results are the current routed-versus-global comparison. They do not
-change the server's fixed top-3 default.
+change the server's fixed top-5 default.
 
 A previous 500-question run of `segment_scoped_benchmark` on the checked-in
 LongMemEval-S data used an average of 47.7 segments per question and

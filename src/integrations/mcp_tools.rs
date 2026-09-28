@@ -110,16 +110,26 @@ pub(crate) fn resolve_search_session_id(
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.
-pub(crate) fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
+pub fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
     let results = results
         .into_iter()
         .filter_map(|result| {
             let document = service.source_document_by_id(&result.doc_id)?;
+            let content: String = document.content.chars().take(4_000).collect();
+            // Anchor relative date expressions ("yesterday", "last month") to
+            // an absolute date the agent can see. Fail-open: memories without
+            // a timestamp keep their original text.
+            let content = match document.timestamp.as_deref() {
+                Some(date) => format!("[session date: {date}]\n{content}"),
+                None => content,
+            };
             Some(json!({
                 "id": result.doc_id,
                 "source": result.source,
-                "content": document.content.chars().take(4_000).collect::<String>(),
+                "content": content,
                 "score": result.score,
+                "created_at": document.timestamp.clone(),
+                "session_id": document.group_id.clone(),
                 "matched_terms": result.matched_terms,
                 "matched_entities": result.matched_entities,
                 "semantic_status": result.semantic_status,
@@ -189,6 +199,437 @@ pub(crate) fn list_memories_tool_definition() -> ToolDefinition {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Agent bulletin board tools.
+// ---------------------------------------------------------------------------
+
+/// Tool definitions for the bulletin board. Every content operation takes an
+/// explicit `board_id`; boards are discovered via `board_list` or opened
+/// idempotently via `board_open` with a caller-supplied key.
+pub(crate) fn board_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "board_open".to_string(),
+            description: "Open a bulletin board by key, creating it if needed. The key is unique within your workspace; calling board_open twice with the same key returns the same board. Share the returned board_id with subagents so they post to the same board. The key \"default\" is reserved: it opens the current session's board (see board_post).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Caller-supplied board key, e.g. \"pr-81-review\". Unique within the workspace. \"default\" is reserved for the current session's board; keys starting with \"session:\" are rejected."},
+                    "title": {"type": "string", "description": "Human-readable board title."},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "required": ["key", "title"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "board_list".to_string(),
+            description: "List bulletin boards in this workspace with their IDs, keys, and titles. Includes the \"default\" entry pointing at the current session's board.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "board_info".to_string(),
+            description: "Show a board's details.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Pass \"default\" for the current session's default board."},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "required": ["board_id"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "board_post".to_string(),
+            description: "Post a short status update to a board. Returns the post ID and its sequence number. Pass a unique request_id so retries are safe (a repeated request_id returns the original post instead of a duplicate). Omit board_id to post to the current session's default board (each session gets its own). For a board shared across sessions, use board_open with a task-specific key and pass that board_id.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Omit (or pass \"default\") for the current session's default board."},
+                    "content": {"type": "string", "description": "Post content, e.g. \"The parser failure comes from the empty input path.\""},
+                    "request_id": {"type": "string", "description": "Unique ID for this post attempt; reuse it when retrying."},
+                    "author_agent_id": {"type": "string", "description": "Your agent ID (e.g. subagent ID). Defaults to the provider name."},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "required": ["content", "request_id"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "board_read".to_string(),
+            description: "Read a board's posts in posting order. Pass after_sequence (from the last post you saw) to catch up on new posts only. Omit board_id to read the current session's default board.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Omit (or pass \"default\") for the current session's default board."},
+                    "after_sequence": {"type": "integer", "minimum": 0, "description": "Only return posts after this sequence number. Omit to read from the start."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "required": [],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "board_get".to_string(),
+            description: "Get one complete board post by ID. Omit board_id for the current session's default board.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Omit (or pass \"default\") for the current session's default board."},
+                    "post_id": {"type": "string", "description": "Post ID from board_post or board_read."},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "required": ["post_id"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "board_search".to_string(),
+            description: "Search a board's older posts by keyword. Omit board_id to search the current session's default board.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Omit (or pass \"default\") for the current session's default board."},
+                    "query": {"type": "string", "description": "Search query."},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        },
+    ]
+}
+
+/// Dispatch a board tool call. Returns the JSON result payload, or an error
+/// string for invalid arguments / unknown boards.
+///
+/// `owner` is the stable memory owner (user_id), `workspace` the canonical
+/// project root, `provider` the calling provider ("claude", "codex").
+/// Every board_id comes from the agent's arguments and is validated
+/// against the store; unknown boards are errors, never implicit creations.
+pub(crate) fn dispatch_board_tool(
+    tool: &str,
+    arguments: &Value,
+    service: &mut MemoryService,
+    owner: &str,
+    workspace: &str,
+    provider: &str,
+) -> Result<Value, String> {
+    use crate::board::BoardPost;
+
+    fn get_str<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
+        args.get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("missing required argument: {name}"))
+    }
+    fn board_json(board: &crate::board::Board) -> Value {
+        json!({
+            "board_id": board.board_id,
+            "key": board.key,
+            "title": board.title,
+            "owner": board.owner,
+            "workspace": board.workspace,
+            "created_at": board.created_at,
+        })
+    }
+    fn post_json(post: &BoardPost) -> Value {
+        json!({
+            "post_id": post.post_id,
+            "board_id": post.board_id,
+            "author_agent_id": post.author_agent_id,
+            "provider": post.provider,
+            "content": post.content,
+            "sequence": post.sequence,
+            "created_at": post.created_at,
+        })
+    }
+    // Reject unknown arguments per tool.
+    let allowed: &[&str] = match tool {
+        "board_open" => &["key", "title", "session_id"],
+        "board_list" => &["session_id"],
+        "board_info" => &["board_id", "session_id"],
+        "board_post" => &["board_id", "content", "request_id", "author_agent_id", "session_id"],
+        "board_read" => &["board_id", "after_sequence", "limit", "session_id"],
+        "board_get" => &["board_id", "post_id", "session_id"],
+        "board_search" => &["board_id", "query", "top_k", "session_id"],
+        _ => return Err(format!("unknown board tool: {tool}")),
+    };
+    if let Some(obj) = arguments.as_object() {
+        if let Some(unknown) = obj.keys().find(|k| !allowed.contains(&k.as_str())) {
+            return Err(format!("unknown {tool} argument: {unknown}"));
+        }
+    }
+    // Optional board_id: omitted (or the "default" alias) means the
+    // current session's board.
+    let opt_board_id = arguments
+        .get("board_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    // Session for default-board resolution: explicit `session_id` arg,
+    // else the session most recently seen active in this workspace
+    // (hook-tracked, same as search).
+
+    match tool {
+        "board_open" => {
+            let key = get_str(arguments, "key")?;
+            let title = get_str(arguments, "title")?;
+            // The "default" key is an alias for the current session's
+            // board, not a separate board.
+            let board = if crate::board::is_default_alias(key) {
+                let session_id = resolve_search_session_id(arguments, &*service, provider)?
+                    .ok_or_else(|| {
+                        "no active session: pass session_id to board_open \"default\"".to_string()
+                    })?;
+                service
+                    .board_open_session(owner, workspace, &session_id, title)
+                    .map_err(|e| e.to_string())?
+            } else {
+                service
+                    .board_open(owner, workspace, key, title)
+                    .map_err(|e| e.to_string())?
+            };
+            Ok(board_json(&board))
+        }
+        "board_list" => {
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?;
+            let boards = service
+                .board_list(owner, workspace, session_id.as_deref())
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "boards": boards.iter().map(board_json).collect::<Vec<_>>() }))
+        }
+        "board_info" => {
+            let board_id = get_str(arguments, "board_id")?;
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?;
+            match service
+                .board_info(board_id, owner, workspace, session_id.as_deref())
+                .map_err(|e| e.to_string())?
+            {
+                Some(board) => Ok(board_json(&board)),
+                None => Err(format!("unknown board_id: {board_id}")),
+            }
+        }
+        "board_post" => {
+            let content = get_str(arguments, "content")?;
+            let request_id = get_str(arguments, "request_id")?;
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?;
+            let author_agent_id = arguments
+                .get("author_agent_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(provider);
+            let post = service
+                .board_post(
+                    opt_board_id,
+                    owner,
+                    workspace,
+                    session_id.as_deref(),
+                    author_agent_id,
+                    provider,
+                    content,
+                    request_id,
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(post_json(&post))
+        }
+        "board_read" => {
+            let after_sequence = arguments
+                .get("after_sequence")
+                .and_then(Value::as_u64);
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(20)
+                .clamp(1, 100) as usize;
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?;
+            let posts = service
+                .board_read(
+                    opt_board_id,
+                    owner,
+                    workspace,
+                    session_id.as_deref(),
+                    after_sequence,
+                    limit,
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "posts": posts.iter().map(post_json).collect::<Vec<_>>() }))
+        }
+        "board_get" => {
+            let post_id = get_str(arguments, "post_id")?;
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?;
+            match service
+                .board_get(opt_board_id, owner, workspace, session_id.as_deref(), post_id)
+                .map_err(|e| e.to_string())?
+            {
+                Some(post) => Ok(post_json(&post)),
+                None => Err(format!("post not found: {post_id}")),
+            }
+        }
+        "board_search" => {
+            let query = get_str(arguments, "query")?;
+            let top_k = arguments
+                .get("top_k")
+                .and_then(Value::as_u64)
+                .unwrap_or(10)
+                .clamp(1, 50) as usize;
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?;
+            let posts = service
+                .board_search(
+                    opt_board_id,
+                    owner,
+                    workspace,
+                    session_id.as_deref(),
+                    query,
+                    top_k,
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "posts": posts.iter().map(post_json).collect::<Vec<_>>() }))
+        }
+        _ => Err(format!("unknown board tool: {tool}")),
+    }
+}
+
+/// Stable memory owner for agent-added memories over MCP.
+const MCP_MEMORY_USER_ID: &str = "mcp";
+
+/// MCP tool definitions for direct memory writes and reads.
+pub(crate) fn memory_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "add_memory".to_string(),
+            description: "Record a memory: a fact, decision, or observation worth remembering. Returns the request_id. Pass a unique request_id so retries are safe (a repeated request_id with the same content returns success without duplicating).".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The memory content, e.g. \"The API rate limit is 100 requests per minute.\""},
+                    "request_id": {"type": "string", "description": "Unique ID for this write; reuse it when retrying."},
+                    "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace."},
+                    "role": {"type": "string", "description": "Message role: \"user\" or \"assistant\". Defaults to \"assistant\".", "enum": ["user", "assistant"]}
+                },
+                "required": ["content", "request_id"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "get_memory".to_string(),
+            description: "Get one stored memory by its memory ID (from search results or add_memory). Returns the full memory record, or an error when the ID is unknown.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory ID to fetch."},
+                    "include_inactive": {"type": "boolean", "description": "Also return memories that were superseded or expired. Defaults to false.", "default": false}
+                },
+                "required": ["memory_id"],
+                "additionalProperties": false
+            }),
+        },
+    ]
+}
+
+/// Dispatch an `add_memory` / `get_memory` tool call. Returns the JSON
+/// result payload, or an error string for invalid arguments.
+///
+/// These wrap the same `MemoryService::add` / `MemoryService::get` the
+/// HTTP server exposes, with the stable `"mcp"` memory owner. Writes run
+/// the full enrichment pipeline; reads enforce ownership and visibility.
+pub(crate) fn dispatch_memory_tool(
+    tool: &str,
+    arguments: &Value,
+    service: &mut MemoryService,
+    provider: &str,
+) -> Result<Value, String> {
+    use crate::memory_api::{AddRequest, GetRequest, Message};
+
+    fn get_str<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
+        args.get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("{name} is required"))
+    }
+
+    let allowed: &[&str] = match tool {
+        "add_memory" => &["content", "request_id", "session_id", "role"],
+        "get_memory" => &["memory_id", "include_inactive"],
+        _ => return Err(format!("unknown memory tool: {tool}")),
+    };
+    if let Some(obj) = arguments.as_object() {
+        if let Some(unknown) = obj.keys().find(|k| !allowed.contains(&k.as_str())) {
+            return Err(format!("unknown {tool} argument: {unknown}"));
+        }
+    }
+
+    match tool {
+        "add_memory" => {
+            let content = get_str(arguments, "content")?;
+            let request_id = get_str(arguments, "request_id")?;
+            let role = arguments
+                .get("role")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("assistant");
+            if role != "user" && role != "assistant" {
+                return Err("role must be \"user\" or \"assistant\"".to_string());
+            }
+            // Same session resolution as search: explicit arg, else the
+            // session most recently seen active in this workspace.
+            let session_id =
+                resolve_search_session_id(arguments, &*service, provider)?.ok_or_else(|| {
+                    "no active session: pass session_id to add_memory".to_string()
+                })?;
+            let request = AddRequest {
+                request_id: request_id.to_string(),
+                messages: vec![Message {
+                    role: role.to_string(),
+                    // No server-injected wall-clock time: the request fingerprint
+                    // covers the whole message, so a fresh timestamp per call
+                    // would make every retry of the same request_id look like
+                    // a conflicting request. The document timestamp is
+                    // display-only (export), not a retrieval input.
+                    timestamp: None,
+                    content: content.to_string(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: MCP_MEMORY_USER_ID.to_string(),
+                session_id,
+            };
+            let response = service.add(request).map_err(|e| e.to_string())?;
+            serde_json::to_value(&response).map_err(|e| e.to_string())
+        }
+        "get_memory" => {
+            let memory_id = get_str(arguments, "memory_id")?;
+            let include_inactive = arguments
+                .get("include_inactive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let request = GetRequest {
+                user_id: MCP_MEMORY_USER_ID.to_string(),
+                memory_id: memory_id.to_string(),
+                include_inactive,
+            };
+            match service.get(request).map_err(|e| e.to_string())? {
+                Some(record) => serde_json::to_value(&record).map_err(|e| e.to_string()),
+                None => Err(format!("memory not found: {memory_id}")),
+            }
+        }
+        _ => Err(format!("unknown memory tool: {tool}")),
+    }
+}
+
 // Codex validates arguments locally because its protocol already exposes the
 // unknown argument name; Claude and Gemini use this shared parser instead.
 #[cfg_attr(
@@ -216,6 +657,172 @@ mod tests {
     use crate::pipeline::{IndexStore, PipelineOptions};
     use crate::source::SourceDocument;
     use std::collections::BTreeMap;
+
+    fn memory_service() -> MemoryService {
+        MemoryService::in_memory(PipelineOptions::default())
+    }
+
+    #[test]
+    fn board_open_default_alias_redirects_to_session_board() {
+        let mut service = memory_service();
+        // board_open(key="default") goes to the session board, not a
+        // literal "default" board.
+        let opened = dispatch_board_tool(
+            "board_open",
+            &json!({"key": "default", "title": "T", "session_id": "sess-9"}),
+            &mut service,
+            "mcp",
+            "/tmp/ws-board-dispatch",
+            "claude",
+        )
+        .unwrap();
+        let expected = crate::board::default_board_id("mcp", "/tmp/ws-board-dispatch", "sess-9");
+        assert_eq!(opened["board_id"], json!(expected));
+        // Omitting board_id on post lands on the same board.
+        let posted = dispatch_board_tool(
+            "board_post",
+            &json!({"content": "hi", "request_id": "r1", "session_id": "sess-9"}),
+            &mut service,
+            "mcp",
+            "/tmp/ws-board-dispatch",
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(posted["board_id"], json!(expected));
+        // And an explicit "default" board_id agrees too.
+        let posted_alias = dispatch_board_tool(
+            "board_post",
+            &json!({"board_id": "default", "content": "yo", "request_id": "r2",
+                    "session_id": "sess-9"}),
+            &mut service,
+            "mcp",
+            "/tmp/ws-board-dispatch",
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(posted_alias["board_id"], json!(expected));
+        assert_eq!(posted_alias["sequence"], json!(2));
+    }
+
+    #[test]
+    fn memory_tool_definitions_expose_add_and_get() {
+        let defs = memory_tool_definitions();
+        let names: Vec<_> = defs.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["add_memory", "get_memory"]);
+        // Schemas require only the essentials.
+        assert_eq!(defs[0].input_schema["required"], json!(["content", "request_id"]));
+        assert_eq!(defs[1].input_schema["required"], json!(["memory_id"]));
+    }
+
+    #[test]
+    fn dispatch_memory_tool_rejects_unknown_tool_and_args() {
+        let mut service = memory_service();
+        let err = dispatch_memory_tool("nope", &json!({}), &mut service, "claude")
+            .unwrap_err();
+        assert!(err.contains("unknown memory tool"), "{err}");
+        let err = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "x", "request_id": "r1", "bogus": 1}),
+            &mut service,
+            "claude",
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown add_memory argument"), "{err}");
+    }
+
+    #[test]
+    fn add_memory_then_get_memory_round_trip() {
+        let mut service = memory_service();
+        let payload = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "The API rate limit is 100 requests per minute.",
+                    "request_id": "mem-1", "session_id": "s1"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(payload["success"], json!(true));
+        assert_eq!(payload["request_id"], json!("mem-1"));
+
+        // The memory ID is deterministic: stable_doc_id("mcp:mem-1:0").
+        let memory_id = crate::stable_doc_id_from_source("mcp:mem-1:0");
+        let record = dispatch_memory_tool(
+            "get_memory",
+            &json!({"memory_id": memory_id}),
+            &mut service,
+            "claude",
+        )
+        .unwrap();
+        assert!(record["content"]
+            .as_str()
+            .unwrap()
+            .contains("rate limit"));
+
+        // Unknown ID is an error, not an empty result.
+        let err = dispatch_memory_tool(
+            "get_memory",
+            &json!({"memory_id": "does-not-exist"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap_err();
+        assert!(err.contains("memory not found"), "{err}");
+    }
+
+    #[test]
+    fn add_memory_request_id_retry_is_idempotent() {
+        let mut service = memory_service();
+        let args = json!({"content": "same content", "request_id": "dup-1",
+                          "session_id": "s1"});
+        let first = dispatch_memory_tool("add_memory", &args, &mut service, "claude").unwrap();
+        let second = dispatch_memory_tool("add_memory", &args, &mut service, "claude").unwrap();
+        assert_eq!(first, second);
+        // Same request_id with different content is still a conflict.
+        let err = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "different content", "request_id": "dup-1",
+                    "session_id": "s1"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap_err();
+        assert!(err.contains("already used with different content"), "{err}");
+    }
+
+    #[test]
+    fn add_memory_requires_session() {
+        let mut service = memory_service();
+        // No session_id arg and no hook-tracked session: clear error.
+        let err = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "x", "request_id": "r1"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap_err();
+        assert!(err.contains("session_id"), "{err}");
+    }
+
+    #[test]
+    fn add_memory_validates_role_and_content() {
+        let mut service = memory_service();
+        let err = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "x", "request_id": "r1", "session_id": "s1", "role": "system"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap_err();
+        assert!(err.contains("role"), "{err}");
+        let err = dispatch_memory_tool(
+            "add_memory",
+            &json!({"request_id": "r1", "session_id": "s1"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap_err();
+        assert!(err.contains("content is required"), "{err}");
+    }
 
     #[test]
     fn search_provider_filters_accepts_known_providers() {
@@ -269,6 +876,7 @@ mod tests {
                 doc_length: 38,
                 author_agent: Some(provider.to_string()),
                 key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
             }
         }
 
@@ -316,6 +924,7 @@ mod tests {
             doc_length: 14,
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         });
         store.upsert(SourceDocument {
             doc_id: "workspace-file".to_string(),
@@ -330,6 +939,7 @@ mod tests {
             doc_length: 17,
             author_agent: None,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         });
         let service = MemoryService::new(store);
         let payload = list_memories(&service, 20);
@@ -340,6 +950,67 @@ mod tests {
         );
         assert_eq!(parse_list_memories_limit(&json!({"limit": 0})).unwrap(), 1);
         assert!(parse_list_memories_limit(&json!({"unexpected": true})).is_err());
+    }
+
+    #[test]
+    fn search_results_anchor_memories_to_their_session_date() {
+        fn memory(doc_id: &str, timestamp: Option<&str>) -> SourceDocument {
+            SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: "codex://project/session-1/outcome".to_string(),
+                content: "we deployed yesterday".to_string(),
+                concept: "outcome".to_string(),
+                group_id: Some("session-1".to_string()),
+                filters: BTreeMap::new(),
+                headings: vec![],
+                links: vec![],
+                timestamp: timestamp.map(str::to_string),
+                doc_length: 21,
+                author_agent: None,
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            }
+        }
+        fn hit(doc_id: &str) -> SearchResult {
+            SearchResult {
+                doc_id: doc_id.to_string(),
+                source: "codex://project/session-1/outcome".to_string(),
+                group_id: Some("session-1".to_string()),
+                score: 1.0,
+                score_breakdown: crate::index::ScoreBreakdown::default(),
+                matched_entities: Vec::new(),
+                matched_terms: Vec::new(),
+                probable_topic: None,
+                doc_type_guess: None,
+                semantic_status: None,
+                superseded_by: None,
+                relation_confidence: None,
+                relation_evidence: Vec::new(),
+            }
+        }
+
+        let mut store = IndexStore::in_memory(PipelineOptions::default());
+        store.upsert(memory("dated", Some("2026-09-20T10:00:00Z")));
+        store.upsert(memory("undated", None));
+        let service = MemoryService::new(store);
+        let payload = search_results(&service, vec![hit("dated"), hit("undated")]);
+        let results = payload["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+
+        let dated = &results[0];
+        assert_eq!(dated["created_at"], "2026-09-20T10:00:00Z");
+        assert_eq!(dated["session_id"], "session-1");
+        let content = dated["content"].as_str().unwrap();
+        assert!(
+            content.starts_with("[session date: 2026-09-20T10:00:00Z]\n"),
+            "date prefix missing: {content}"
+        );
+        assert!(content.ends_with("we deployed yesterday"));
+
+        // Fail-open: a memory without a timestamp keeps its original text.
+        let undated = &results[1];
+        assert!(undated["created_at"].is_null());
+        assert_eq!(undated["content"], "we deployed yesterday");
     }
 
     #[cfg(any(

@@ -1330,6 +1330,8 @@ mod tests {
             temporal_terms: vec![],
             key_entities: entities,
             important_terms: vec![],
+            key_phrases: vec![],
+            key_phrase_extraction_hash: String::new(),
             section_chunks: vec![],
             embedding: None,
             top_claims: vec![],

@@ -27,6 +27,14 @@ pub struct SourceDocument {
     /// local-memory term cap, so discriminative phrases survive routing.
     #[serde(default)]
     pub key_phrases: Vec<KeyPhrase>,
+    /// Content hash the key phrases were extracted from. Empty means
+    /// extraction has not completed for the current content yet; matching
+    /// `key_phrase_content_hash(content)` means it has (even when
+    /// `key_phrases` is empty, which is then a legitimate empty result).
+    /// A mismatch means the content changed after extraction and the
+    /// phrases must be recomputed.
+    #[serde(default)]
+    pub key_phrase_extraction_hash: String,
 }
 
 /// One grammar-accepted entity mention: a noun phrase the dependency
@@ -67,6 +75,7 @@ impl SourceDocument {
             author_agent,
             filters: BTreeMap::new(),
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         }
     }
 }

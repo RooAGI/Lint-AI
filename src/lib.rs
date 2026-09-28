@@ -38,6 +38,7 @@
 //! and the HTTP server binary.
 
 pub mod cli;
+pub mod board;
 mod config;
 pub mod conversation_state;
 mod conversational_rerank;
@@ -51,6 +52,16 @@ pub mod index;
     feature = "muse-code"
 ))]
 mod integrations;
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code"
+))]
+/// Agent-facing search-result shaping, shared by the MCP `search` tools and
+/// the retrieval benchmark so both present hits identically.
+pub use crate::integrations::mcp_tools::search_results;
 pub mod memory_api;
 pub mod pipeline;
 pub mod query_plan;
@@ -74,6 +85,8 @@ mod filters;
 mod graph;
 mod ownership;
 mod query_expansion;
+pub mod question_focus;
+pub mod behood_query;
 mod query_semantics;
 mod report;
 mod review;
@@ -81,7 +94,7 @@ mod rules;
 mod symbols;
 mod temporal;
 mod tier1;
-mod tokenizer;
+pub mod tokenizer;
 mod usage;
 
 pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
@@ -91,10 +104,11 @@ pub use crate::index::{
 };
 pub use crate::pipeline::{
     build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
-    build_query_snapshot_from_source_documents, resolve_store_paths, ChunkStrategy, IndexDump,
-    IndexLocation, IndexStore, IndexStoreInspection, MemoryIndexLayout,
-    MemoryIndexSegmentInspection, MemoryIndexSnapshot, MemoryIndexSnapshotInspection,
-    PipelineOptions, PublishedIndexSnapshot, StorePaths, Tier1NerProvider, Tier1TermRankerKind,
+    build_query_snapshot_from_source_documents, default_production_pipeline_options,
+    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, IndexStoreInspection,
+    MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
+    MemoryIndexSnapshotInspection, PipelineOptions, StorePaths, Tier1NerProvider,
+    Tier1TermRankerKind, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
 pub use crate::segments::{
     SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,
@@ -352,6 +366,8 @@ impl PyMemoryCore {
             user_id,
             top_k,
             session_id: None,
+            scope: None,
+            filters: None,
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,

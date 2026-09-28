@@ -70,6 +70,7 @@ impl CodexDocument {
             author_agent: Some("codex".to_string()),
             filters,
             key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
         })
     }
 }

@@ -68,16 +68,16 @@ fractional recall measures how much of the relevant evidence it found.
 
 | Metric | Result |
 |---|---:|
-| Any-hit Recall@5 | 92.4% |
-| Any-hit Recall@10 | 95.6% |
-| Any-hit Recall@20 | 97.0% |
-| Fractional Recall@5 | 83.5% |
-| Fractional Recall@10 | 89.5% |
-| Fractional Recall@20 | 91.1% |
-| MRR | 84.0% |
-| NDCG@10 | 81.8% |
+| Any-hit Recall@5 | 93.8% |
+| Any-hit Recall@10 | 96.6% |
+| Any-hit Recall@20 | 97.2% |
+| Fractional Recall@5 | 86.1% |
+| Fractional Recall@10 | 92.3% |
+| Fractional Recall@20 | 93.9% |
+| MRR | 85.7% |
+| NDCG@10 | 84.5% |
 
-Lint-AI's fractional recall is 83.5% at 5, 89.5% at 10, and 91.1% at 20.
+Lint-AI's fractional recall is 86.1% at 5, 92.3% at 10, and 93.9% at 20.
 
 | Question type | n | Any-hit @5 | Any-hit @10 | Any-hit @20 | MRR | NDCG@10 |
 |---|---:|---:|---:|---:|---:|---:|

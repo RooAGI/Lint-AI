@@ -52,10 +52,10 @@ Legacy `*-mcp-index` directories are recognized for compatibility but are no
 longer created.
 
 The server publishes a segmented memory index grouped by `session_id` and routes
-each search to the three most locally distinctive candidate segments.
-Fixed top-3 routing remains the default. To opt into adaptive routing, pass
+each search to the five most locally distinctive candidate segments.
+Fixed top-5 routing remains the default. To opt into adaptive routing, pass
 `--adaptive-segment-max-n N` or set `ADAPTIVE_SEGMENT_MAX_N=N`, where `N` is
-greater than 3. Adaptive routing starts with the same three segments and may
+greater than 5. Adaptive routing starts with the same five segments and may
 expand up to `N` when the initial routes do not cover enough query evidence.
 Use `--single-index` for the non-segmented layout or `--global-index` to query
 every segmented shard. These modes are intended primarily for controlled
@@ -65,6 +65,24 @@ By default, each multi-segment query runs the routed arm only, using the gated
 coverage-local router. Pass `--fuse-global` to also run the corpus-wide
 all-segments arm and fuse it with the routed arm via reciprocal rank fusion.
 See `docs/benchmark-results.md` for the measured trade-off.
+
+The routing strategy is selectable with `--segment-routing <name>`; names match
+the router comparison in `docs/benchmark-results.md`:
+
+| `--segment-routing` value | Router |
+|---|---|
+| `sparse` | sparse overlap |
+| `local-distinctiveness` | plain local distinctiveness |
+| `coverage-local` | coverage-weighted local distinctiveness |
+| `coverage-team` | coverage team selection |
+| `team-coverage-local` | team coverage local distinctiveness |
+| `typed-evidence-additive` | typed evidence, additive |
+| `gated-coverage-local` | gated coverage-local (**default**) |
+| `gated-coverage-team` | gated coverage-team |
+
+The default is the measured best recall-per-latency trade-off from the
+full 500-question comparison; the other values exist for controlled
+comparisons.
 The server is intentionally localhost-only. `--bind` may select a loopback
 address and port, such as `127.0.0.1:8080` or `[::1]:8080`, but non-loopback
 addresses are rejected at startup. Authentication remains available for
@@ -170,13 +188,14 @@ content. Claude Code and Codex token usage is captured from lifecycle payloads
 or provider transcripts when available; cost and productivity accounting still
 require provider-specific contracts.
 
-Search requests use the latest immutable `MemorySearchService` snapshot, so
-multiple searches can run concurrently. A dedicated writer owns mutable
-`MemoryService` state and refreshes it before publishing the replacement
-snapshot with a short swap. A search that overlaps refresh sees either the
-previous complete snapshot or the newly refreshed one, never a partially
-updated index. Blocking index work runs on Tokio's blocking pool rather than
-the Axum async executor. Reproduce the measured concurrency behavior in
+Search requests take a shared read lock on the single `MemoryService` and run
+`MemoryService::search` against the latest complete generation, so multiple
+searches run concurrently. A dedicated writer gate serializes mutations: each
+write mutates under the write lock and refreshes the store before releasing
+it, so a search that overlaps a write sees either the previous complete
+generation or the newly refreshed one, never a partially updated index.
+Blocking index work runs on Tokio's blocking pool rather than the Axum async
+executor. Reproduce the measured concurrency behavior in
 [`Comparison`](comparison.md).
 
 ## Performance

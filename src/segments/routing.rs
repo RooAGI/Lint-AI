@@ -38,6 +38,26 @@ pub(crate) fn route_segments_with_corpus_stats(
     strategy: SegmentRoutingStrategy,
     corpus_stats: &SegmentCorpusStats,
 ) -> Vec<SegmentRoute> {
+    // Luyi's direction: when the question has identifiable focus terms (what
+    // the question is ABOUT, e.g. "start new job"), route on the focus terms,
+    // not the full noisy query ("when will his" dilutes the signal). The
+    // focus terms are the discriminative content; question words, auxiliaries,
+    // and pronouns are structure, not signal.
+    let focus = crate::question_focus::identify_focus(query);
+    let mut raw_terms: std::collections::HashSet<String> = if focus.focus_terms.is_empty() {
+        query_tokens(query)
+    } else {
+        // Focus terms are unstemmed; add both forms for the stemmed index.
+        let mut terms = std::collections::HashSet::new();
+        for term in &focus.focus_terms {
+            terms.insert(term.clone());
+            // Add stemmed form for the stemmed index
+            if let Some(stemmed) = crate::tokenizer::tokenize(term, crate::tokenizer::TokenizerMode::Stemmed).into_iter().next() {
+                terms.insert(stemmed);
+            }
+        }
+        terms
+    };
     // Route on the literal query terms first. The enriched expansion
     // vocabulary carries noisy wrong-sense expansions (e.g. "game" ->
     // "bathroom"/"gospel", "potter" -> "ceramicist") that dominate the routing
@@ -51,13 +71,36 @@ pub(crate) fn route_segments_with_corpus_stats(
     // conflates phrase heads ("conference" -> "confer", colliding with the
     // verb). The unstemmed query tokens meet them there; literal phrase
     // evidence is rare (high IDF) and outranks acronym-only evidence.
-    let mut raw_terms = query_tokens(query);
     raw_terms.extend(literal_query_tokens(query));
     let raw_routes = route_segments_scored(query, &raw_terms, segments, strategy, corpus_stats);
-    if raw_routes
-        .iter()
-        .any(|route| route_has_signal(route, strategy, &raw_terms))
-    {
+    // Focus-aware gate: when the question has identifiable focus terms (what
+    // the question is ABOUT, e.g. "certificate"), the raw route stands only
+    // if a focus term appears in the top-3 raw routes. A route can have
+    // signal from constraint terms alone (e.g. the person name "john") while
+    // missing the focus entirely; in that case the expansion fallback runs
+    // so concept bridges like certificate->degree get a chance. Questions
+    // without focus terms keep the original any-signal check.
+    let raw_stands = if focus.focus_terms.is_empty() {
+        raw_routes
+            .iter()
+            .any(|route| route_has_signal(route, strategy, &raw_terms))
+    } else {
+        raw_routes.iter().take(3).any(|route| {
+            if route.score <= 0.0 {
+                return false;
+            }
+            let summary = corpus_stats.summary(&route.segment_id);
+            focus.focus_terms.iter().any(|term| {
+                // Focus terms are unstemmed (Luyi: no stemming for focus words),
+                // but the summary index is stemmed. Check both forms.
+                summary.terms.contains_key(term)
+                    || summary
+                        .terms
+                        .contains_key(&crate::tokenizer::tokenize(term, crate::tokenizer::TokenizerMode::Stemmed).into_iter().next().unwrap_or_else(|| term.clone()))
+            })
+        })
+    };
+    if raw_stands {
         return raw_routes;
     }
     let expanded_terms = query_tokens_expanded(query);

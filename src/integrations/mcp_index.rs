@@ -17,34 +17,99 @@ use walkdir::WalkDir;
 const STORE_INIT_LOCK_WAIT: Duration = Duration::from_secs(30);
 const STORE_INIT_LOCK_RETRY: Duration = Duration::from_millis(100);
 
+/// Kernel-released file-lock primitive shared by both guards below.
+///
+/// On Unix this is `flock(LOCK_EX|LOCK_NB)`: the kernel releases the lock
+/// when the holding process dies for any reason — including SIGKILL — so a
+/// crashed writer can never wedge the store with an orphaned lock file.
+/// The lock file itself is never deleted; only the flock state matters.
+/// Holding the returned `File` open holds the lock; dropping it releases.
+#[cfg(unix)]
+fn acquire_file_lock(path: &Path, wait: Duration, retry: Duration, what: &str) -> Result<File> {
+    use std::os::unix::io::AsRawFd;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)?;
+    let started = std::time::Instant::now();
+    loop {
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Ok(file);
+        }
+        let error = std::io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code) if code == libc::EINTR => continue,
+            Some(code) if code == libc::EWOULDBLOCK => {
+                if started.elapsed() >= wait {
+                    return Err(anyhow::anyhow!(
+                        "timed out waiting for {what} at {}",
+                        path.display()
+                    ));
+                }
+                thread::sleep(retry);
+            }
+            _ => return Err(error.into()),
+        }
+    }
+}
+
+/// Non-Unix fallback: the create_new + remove-on-Drop scheme. Keeps the
+/// crate building on targets without `flock`; carries the old crash caveat
+/// (an orphaned file wedges later writers until manually removed).
+#[cfg(not(unix))]
+fn acquire_file_lock(path: &Path, wait: Duration, retry: Duration, what: &str) -> Result<File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let started = std::time::Instant::now();
+    loop {
+        match OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(file) => return Ok(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if started.elapsed() >= wait {
+                    return Err(anyhow::anyhow!(
+                        "timed out waiting for {what} at {}",
+                        path.display()
+                    ));
+                }
+                thread::sleep(retry);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 struct StoreInitLock {
-    path: std::path::PathBuf,
     _file: File,
+    // Only the non-Unix fallback deletes the lock file on release.
+    #[cfg(not(unix))]
+    path: std::path::PathBuf,
 }
 
 impl StoreInitLock {
     fn acquire(index_root: &Path) -> Result<Self> {
         fs::create_dir_all(index_root)?;
         let path = index_root.join(".initialization.lock");
-        let started = std::time::Instant::now();
-        loop {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(file) => return Ok(Self { path, _file: file }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if started.elapsed() >= STORE_INIT_LOCK_WAIT {
-                        return Err(anyhow::anyhow!(
-                            "timed out waiting for persistent store initialization lock at {}",
-                            path.display()
-                        ));
-                    }
-                    thread::sleep(STORE_INIT_LOCK_RETRY);
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        let file = acquire_file_lock(
+            &path,
+            STORE_INIT_LOCK_WAIT,
+            STORE_INIT_LOCK_RETRY,
+            "persistent store initialization lock",
+        )?;
+        Ok(Self {
+            _file: file,
+            #[cfg(not(unix))]
+            path,
+        })
     }
 }
 
+#[cfg(not(unix))]
 impl Drop for StoreInitLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -58,38 +123,37 @@ impl Drop for StoreInitLock {
 /// interleave their write-then-refresh sequences on the same persistent
 /// store. The lock file lives inside the store directory it protects.
 /// Acquisition waits ~10s with retries, then errors — hooks must never hang
-/// indefinitely on a stale lock.
+/// indefinitely on contention. A dead holder's lock is released by the
+/// kernel (Unix), never orphaned.
 const STORE_WRITE_LOCK_WAIT: Duration = Duration::from_secs(10);
 const STORE_WRITE_LOCK_RETRY: Duration = Duration::from_millis(50);
 
 struct StoreWriteLock {
-    path: std::path::PathBuf,
     _file: File,
+    // Only the non-Unix fallback deletes the lock file on release.
+    #[cfg(not(unix))]
+    path: std::path::PathBuf,
 }
 
 impl StoreWriteLock {
     fn acquire(store_root: &Path) -> Result<Self> {
         fs::create_dir_all(store_root)?;
         let path = store_root.join(".write.lock");
-        let started = std::time::Instant::now();
-        loop {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(file) => return Ok(Self { path, _file: file }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if started.elapsed() >= STORE_WRITE_LOCK_WAIT {
-                        return Err(anyhow::anyhow!(
-                            "timed out waiting for shared store write lock at {}",
-                            path.display()
-                        ));
-                    }
-                    thread::sleep(STORE_WRITE_LOCK_RETRY);
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        let file = acquire_file_lock(
+            &path,
+            STORE_WRITE_LOCK_WAIT,
+            STORE_WRITE_LOCK_RETRY,
+            "shared store write lock",
+        )?;
+        Ok(Self {
+            _file: file,
+            #[cfg(not(unix))]
+            path,
+        })
     }
 }
 
+#[cfg(not(unix))]
 impl Drop for StoreWriteLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -179,7 +243,6 @@ pub fn with_shared_memory_service<T>(
 /// successfully. Failures leave the legacy directory untouched.
 pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
     let lint_ai = root.join(".lint-ai");
-    let shared_root = lint_ai.join(SHARED_MEMORY_DIR);
     let mut migrated_any = false;
     for provider in LEGACY_PROVIDERS {
         let provider = *provider;
@@ -215,12 +278,13 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
             let _ = fs::remove_dir_all(&legacy_root);
             continue;
         }
-        let mut shared = MemoryService::at_path(&shared_root, segmented_store_options())?;
-        for mut document in documents {
-            normalize_migrated_document(&mut document, provider);
-            shared.upsert(document);
-        }
-        shared.refresh_index()?;
+        with_shared_store_write(root, |shared| {
+            for mut document in documents {
+                normalize_migrated_document(&mut document, provider);
+                shared.upsert(document);
+            }
+            shared.refresh_index()
+        })?;
         match fs::remove_dir_all(&legacy_root) {
             Ok(()) => {}
             // A concurrent server removed it first; the documents are already
@@ -831,8 +895,17 @@ mod tests {
         })
         .expect("second write");
         assert!(
-            !shared_memory_root(&root).join(".write.lock").exists(),
-            "lock file must be released after the write"
+            !shared_memory_root(&root).join(".write.lock").exists()
+                || cfg!(unix),
+            "non-unix fallback must delete the lock file on release"
+        );
+        // The lock must be promptly re-acquirable after release (on Unix
+        // the lock file itself persists — only the flock state matters).
+        let start = std::time::Instant::now();
+        with_shared_store_write(&root, |_| Ok(())).expect("re-acquire after release");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "lock was not released promptly"
         );
         let store = MemoryService::at_path(
             shared_memory_root(&root),
@@ -841,6 +914,68 @@ mod tests {
         .expect("reopen");
         assert!(store.source_document_by_id("doc-1").is_some());
         assert!(store.source_document_by_id("doc-2").is_some());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A SIGKILLed lock holder must not wedge the store: the kernel
+    /// releases the lock on process death, so a fresh writer re-acquires
+    /// promptly. (With a create_new + Drop-remove scheme this test fails:
+    /// the orphaned lock file makes every later acquisition time out.)
+    #[cfg(unix)]
+    #[test]
+    fn shared_store_write_lock_survives_crashed_holder() {
+        use std::process::Command;
+        // Child mode: the re-executed test binary holds the lock, signals
+        // readiness, then sleeps until killed.
+        if std::env::var_os("LINT_AI_LOCK_CRASH_CHILD").is_some() {
+            let root = std::path::PathBuf::from(
+                std::env::var("LINT_AI_LOCK_CRASH_ROOT").expect("crash child root"),
+            );
+            let ready = root.join("holder-ready");
+            let _ = with_shared_store_write(&root, |_| {
+                fs::write(&ready, b"ready").expect("signal readiness");
+                std::thread::sleep(Duration::from_secs(120));
+                Ok(())
+            });
+            return;
+        }
+        let root = write_lock_test_root("write-lock-crash");
+        fs::create_dir_all(&root).expect("crash test root");
+        let exe = std::env::current_exe().expect("test binary path");
+        let mut child = Command::new(exe)
+            .arg("--exact")
+            .arg(
+                "integrations::mcp_index::tests::\
+                 shared_store_write_lock_survives_crashed_holder",
+            )
+            .arg("--nocapture")
+            .env("LINT_AI_LOCK_CRASH_CHILD", "1")
+            .env("LINT_AI_LOCK_CRASH_ROOT", &root)
+            .spawn()
+            .expect("spawn crash child");
+        // Wait until the child actually holds the lock.
+        let ready = root.join("holder-ready");
+        let start = std::time::Instant::now();
+        while !ready.exists() {
+            if start.elapsed() > Duration::from_secs(30) {
+                let _ = child.kill();
+                panic!("crash child never acquired the lock");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // SIGKILL: no Drop runs, no userspace cleanup is possible.
+        unsafe {
+            assert_eq!(libc::kill(child.id() as libc::pid_t, libc::SIGKILL), 0);
+        }
+        let _ = child.wait();
+        // Re-acquisition must succeed promptly — well under the ~10s
+        // contention timeout.
+        let start = std::time::Instant::now();
+        with_shared_store_write(&root, |_| Ok(())).expect("re-acquire after crash");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "lock was not released by the kernel after holder death"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

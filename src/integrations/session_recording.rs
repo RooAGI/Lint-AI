@@ -1,6 +1,3 @@
-use crate::memory_api::MemoryService;
-use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
-use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
@@ -502,75 +499,71 @@ pub fn promote_recorded_session(
     // Promoted sessions land in the shared cross-provider memory store. The
     // provider stays on the documents themselves (group id, `filters.provider`,
     // `author_agent`, doc id) so attribution is preserved without a silo.
-    let memory_root = crate::integrations::mcp_index::shared_memory_root(project_root);
-    let options = PipelineOptions {
-        memory_index_layout: MemoryIndexLayout::Segmented {
-            query_top_n: 3,
-            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
-        },
-        ..PipelineOptions::default()
-    };
-    let mut store = MemoryService::at_path(&memory_root, options)?;
-    let mut imported_document_ids = Vec::new();
-    let mut skipped_events = 0;
+    // The events file is read before taking the write lock; the whole
+    // upsert + refresh sequence runs under the cross-process lock so it
+    // cannot interleave with hook captures or MCP board/memory writes.
+    crate::integrations::mcp_index::with_shared_store_write(project_root, |store| {
+        let mut imported_document_ids = Vec::new();
+        let mut skipped_events = 0;
 
-    for line in content.lines() {
-        let event: Value = match serde_json::from_str(line) {
-            Ok(value) => value,
-            Err(_) => {
+        for line in content.lines() {
+            let event: Value = match serde_json::from_str(line) {
+                Ok(value) => value,
+                Err(_) => {
+                    skipped_events += 1;
+                    continue;
+                }
+            };
+            let kind = event.get("kind").and_then(Value::as_str).unwrap_or("event");
+            if matches!(kind, "session_start" | "session_end") {
                 skipped_events += 1;
                 continue;
             }
-        };
-        let kind = event.get("kind").and_then(Value::as_str).unwrap_or("event");
-        if matches!(kind, "session_start" | "session_end") {
-            skipped_events += 1;
-            continue;
-        }
-        let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
-        let doc_id = format!(
-            "session-recording:{}:{}:{}",
-            provider.as_str(),
-            safe_component(session_id),
-            sequence
-        );
-        let mut filters = BTreeMap::new();
-        filters.insert("provider".to_string(), provider.as_str().to_string());
-        filters.insert("session_id".to_string(), session_id.to_string());
-        filters.insert("event_kind".to_string(), kind.to_string());
-        filters.insert("source_type".to_string(), "recorded-session".to_string());
-        let document = SourceDocument {
-            source: format!(
-                "lint-ai://{}/session/{}/{}",
+            let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+            let doc_id = format!(
+                "session-recording:{}:{}:{}",
                 provider.as_str(),
-                session_id,
+                safe_component(session_id),
                 sequence
-            ),
-            concept: "recorded-session".to_string(),
-            headings: vec![kind.to_string()],
-            links: vec![],
-            timestamp: event
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            doc_length: event_content(&event).len(),
-            author_agent: Some(provider.as_str().to_string()),
-            filters,
-            group_id: Some(group_id.clone()),
-            doc_id: doc_id.clone(),
-            content: event_content(&event),
-            key_phrases: Vec::new(),
-            key_phrase_extraction_hash: String::new(),
-        };
-        store.upsert(document);
-        imported_document_ids.push(doc_id);
-    }
-    store.refresh_index()?;
-    Ok(SessionImportReport {
-        session_id: session_id.to_string(),
-        group_id,
-        imported_document_ids,
-        skipped_events,
+            );
+            let mut filters = BTreeMap::new();
+            filters.insert("provider".to_string(), provider.as_str().to_string());
+            filters.insert("session_id".to_string(), session_id.to_string());
+            filters.insert("event_kind".to_string(), kind.to_string());
+            filters.insert("source_type".to_string(), "recorded-session".to_string());
+            let document = SourceDocument {
+                source: format!(
+                    "lint-ai://{}/session/{}/{}",
+                    provider.as_str(),
+                    session_id,
+                    sequence
+                ),
+                concept: "recorded-session".to_string(),
+                headings: vec![kind.to_string()],
+                links: vec![],
+                timestamp: event
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                doc_length: event_content(&event).len(),
+                author_agent: Some(provider.as_str().to_string()),
+                filters,
+                group_id: Some(group_id.clone()),
+                doc_id: doc_id.clone(),
+                content: event_content(&event),
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            };
+            store.upsert(document);
+            imported_document_ids.push(doc_id);
+        }
+        store.refresh_index()?;
+        Ok(SessionImportReport {
+            session_id: session_id.to_string(),
+            group_id,
+            imported_document_ids,
+            skipped_events,
+        })
     })
 }
 

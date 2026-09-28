@@ -335,20 +335,11 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         key_phrases: Vec::new(),
         key_phrase_extraction_hash: String::new(),
     };
-    let options = PipelineOptions {
-        memory_index_layout: MemoryIndexLayout::Segmented {
-            query_top_n: 3,
-            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
-        },
-        ..PipelineOptions::default()
-    };
-    let mut store = MemoryService::at_path(
-        &crate::integrations::mcp_index::shared_memory_root(root),
-        options,
-    )?;
-    store.upsert(document);
-    store.refresh_index()?;
-    Ok(())
+    crate::integrations::mcp_index::with_shared_store_write(root, |store| {
+        store.upsert(document);
+        store.refresh_index()?;
+        Ok(())
+    })
 }
 
 fn current_timestamp() -> String {

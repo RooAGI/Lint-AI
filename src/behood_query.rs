@@ -340,7 +340,9 @@ pub fn query_has_kind(entities: &[QueryEntity], kind: &str) -> bool {
 pub struct ScopeVerdict {
     /// Caller-assigned id, echoed back ("s:{i}").
     pub id: String,
-    /// The activity the text is about, verbatim from the text.
+    /// The activity verb phrase extracted from the text ("eat out"),
+    /// empty when the text names no activity verb. Deterministic and
+    /// rule-based; never a guess.
     pub activity_phrase: String,
     /// Canonicalized temporal words (closed 7-day set: "weekend"/"weekday").
     pub temporal_words: Vec<String>,

@@ -530,6 +530,164 @@ fn blend_structured_first(
     blended
 }
 
+/// Apply a fixed boost to the given result indices and re-sort by score
+/// (stable sort, so unboosted relative order is preserved). Records the
+/// amount in each hit's score breakdown via `record`. Returns the number
+/// boosted. Pure: no daemon, no I/O. Boost only — results are never
+/// removed, demoted, or filtered here.
+fn boost_result_indices(
+    results: &mut [crate::SearchResult],
+    indices: &[usize],
+    amount: f32,
+    record: impl Fn(&mut crate::index::ScoreBreakdown, f32),
+) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let mut n = 0usize;
+    for &ri in indices {
+        if ri < results.len() && seen.insert(ri) {
+            results[ri].score += amount;
+            record(&mut results[ri].score_breakdown, amount);
+            n += 1;
+        }
+    }
+    if n > 0 {
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    n
+}
+
+/// Fixed additive boost for activity↔venue matches (Luyi 2026-09-28).
+///
+/// The activity→venue relation is WORLD KNOWLEDGE — it lives here in
+/// lint-ai, not in bekind (Luyi's ruling, mem-14: "Where does the user
+/// like to eat out?" / "The user's favorite restaurant is Din Tai
+/// Fung"). bekind's share is purely linguistic: the scope verdict's
+/// `activity_phrase` (the extracted verb phrase, e.g. "eat out") and
+/// the kind verdicts ("restaurant" is kind=place). This table maps the
+/// former to the latter. Boost only — never a filter. Recorded per hit in
+/// `score_breakdown.activity_venue_boost` so the boost is measurable in
+/// serialized responses.
+const ACTIVITY_VENUE_BOOST: f32 = 25.0;
+
+/// Admitted 2026-09-28 (Luyi): activity → typical venue words. Fixed
+/// enumeration, fail-open (an activity not listed here yields no boost).
+/// Each new activity needs its own explicit admission — the table does
+/// not grow by fuzzy matching, and bekind never sees it.
+const ACTIVITY_VENUES: &[(&str, &[&str])] = &[
+    ("eat out", &["restaurant", "cafe", "diner", "eatery"]),
+    ("dine", &["restaurant", "cafe", "diner", "eatery"]),
+    ("eat", &["restaurant", "cafe", "diner", "eatery"]),
+    ("swim", &["pool"]),
+    ("run", &["park", "track"]),
+    ("jog", &["park", "track"]),
+    ("watch movie", &["cinema", "theater", "theatre"]),
+    ("drink coffee", &["cafe", "coffee shop"]),
+    ("shop", &["mall", "store"]),
+    ("work out", &["gym"]),
+    ("hike", &["trail", "park", "mountain"]),
+    ("play golf", &["golf course", "country club"]),
+];
+
+/// Whether a descriptor's text names one of the venue words: whole-word
+/// (for multi-word venues, whole-phrase) match on normalized tokens, so
+/// "The user's favorite restaurant" matches "restaurant" and "the local
+/// coffee shop" matches "coffee shop", but "parked" never matches "park".
+fn venue_text_matches(descriptor_text: &str, venues: &[&str]) -> bool {
+    let norm = format!(
+        " {} ",
+        descriptor_text
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    venues
+        .iter()
+        .any(|v| norm.contains(&format!(" {v} ")))
+}
+
+/// Pure activity↔venue match predicate, unit-testable without the daemon.
+///
+/// The question's activity is bekind's extracted `activity_phrase`
+/// (lowercased); it looks up the venue set in the admitted table. A fact
+/// matches when any of its PLACE-kind descriptors names a venue word.
+/// Only place-kind descriptors count — a venue is a place, and the kind
+/// restriction is the precision control. A `false` here only withholds
+/// the boost — it never removes or demotes.
+fn activity_venue_match(activity: &str, fact: &crate::behood_query::KindVerdict) -> bool {
+    let activity = activity.trim().to_lowercase();
+    let venues = match ACTIVITY_VENUES.iter().find(|(a, _)| *a == activity) {
+        Some((_, v)) => *v,
+        None => return false,
+    };
+    fact.kinds
+        .iter()
+        .filter(|hit| hit.kind == "place")
+        .any(|hit| venue_text_matches(&hit.text, venues))
+}
+
+/// Activity↔venue rank boost over blended search results.
+///
+/// Query-time only, no reindexing: the question's activity phrase comes
+/// from the behood daemon's scope verdict (existing
+/// `analyze_scope_verdicts` path — no new protocol), then all candidate
+/// fact texts go through the daemon in ONE batched kind request
+/// (milliseconds), reusing the same verdict shape the kind boost needs.
+/// Fail-open throughout: no daemon, no binary, no scope/kind support,
+/// empty activity phrase, or an activity not in the admitted table →
+/// results returned unchanged.
+fn apply_activity_venue_boost(
+    store: &IndexStore,
+    query: &str,
+    mut results: Vec<crate::SearchResult>,
+) -> Vec<crate::SearchResult> {
+    if results.is_empty() {
+        return results;
+    }
+    let activity = match crate::behood_query::analyze_scope_verdicts(&[query])
+        .into_iter()
+        .next()
+    {
+        Some(v) => v.activity_phrase.trim().to_lowercase(),
+        None => return results,
+    };
+    if !ACTIVITY_VENUES.iter().any(|(a, _)| *a == activity) {
+        return results;
+    }
+    // Map each blended result to its document text; results whose documents
+    // are missing are skipped (their verdict slot is simply absent).
+    let mut text_to_result: Vec<usize> = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
+    for (ri, r) in results.iter().enumerate() {
+        if let Some(doc) = store.source_document_by_id(&r.doc_id) {
+            text_to_result.push(ri);
+            texts.push(doc.content.clone());
+        }
+    }
+    if texts.is_empty() {
+        return results;
+    }
+    let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let verdicts = crate::behood_query::analyze_kind_verdicts(&text_refs);
+    let matched: Vec<usize> = verdicts
+        .iter()
+        .filter_map(|v| {
+            let ti: usize = v.id.strip_prefix("k:")?.parse().ok()?;
+            let ri = *text_to_result.get(ti)?;
+            activity_venue_match(&activity, v).then_some(ri)
+        })
+        .collect();
+    boost_result_indices(&mut results, &matched, ACTIVITY_VENUE_BOOST, |b, a| {
+        b.activity_venue_boost += a
+    });
+    results
+}
+
 impl MemoryService {
     /// Create an in-memory service without exposing the storage implementation
     /// to application callers.
@@ -1280,6 +1438,11 @@ impl MemoryService {
             }
         };
         let results = blend_structured_first(structured, lexical, top_k);
+        // Activity↔venue rank boost (Luyi 2026-09-28): additive only,
+        // never a filter. No-op when the behood daemon is unavailable,
+        // the question names no admitted activity, or no fact names one
+        // of its venues.
+        let results = apply_activity_venue_boost(&self.store, query, results);
         observe_session_search(
             &self.conversation_states,
             scope,
@@ -2578,6 +2741,106 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         base.join(format!("lint-ai-{name}-{}", std::process::id()))
+    }
+
+    fn kind_verdict(kinds: &[(&str, &str)]) -> crate::behood_query::KindVerdict {
+        crate::behood_query::KindVerdict {
+            id: "k:0".to_string(),
+            kinds: kinds
+                .iter()
+                .map(|(text, kind)| crate::behood_query::KindHit {
+                    text: text.to_string(),
+                    kind: kind.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    fn bare_search_result(doc_id: &str, score: f32) -> crate::SearchResult {
+        crate::SearchResult {
+            doc_id: doc_id.to_string(),
+            source: "test".to_string(),
+            group_id: None,
+            score,
+            score_breakdown: Default::default(),
+            matched_entities: vec![],
+            matched_terms: vec![],
+            probable_topic: None,
+            doc_type_guess: None,
+            semantic_status: None,
+            superseded_by: None,
+            relation_confidence: None,
+            relation_evidence: vec![],
+        }
+    }
+
+    #[test]
+    fn activity_venue_match_predicate() {
+        // mem-14: "eat out" + place-kind "restaurant" -> match.
+        assert!(activity_venue_match(
+            "eat out",
+            &kind_verdict(&[("The user's favorite restaurant", "place")]),
+        ));
+        // Case/whitespace-insensitive on the activity side.
+        assert!(activity_venue_match(
+            "  Eat Out ",
+            &kind_verdict(&[("a cafe", "place")]),
+        ));
+        // "park" is a run venue, not an eat-out venue -> no match.
+        assert!(!activity_venue_match(
+            "eat out",
+            &kind_verdict(&[("Golden Gate Park", "place")]),
+        ));
+        // Multi-word venue: "coffee shop" matches as a phrase.
+        assert!(activity_venue_match(
+            "drink coffee",
+            &kind_verdict(&[("the local coffee shop", "place")]),
+        ));
+        // Whole-word control: "parked" must not match "park".
+        assert!(!activity_venue_match(
+            "run",
+            &kind_verdict(&[("parked cars", "place")]),
+        ));
+        // Only place-kind descriptors count: a venue word under any
+        // other kind is not a venue.
+        assert!(!activity_venue_match(
+            "eat out",
+            &kind_verdict(&[("restaurant", "thing")]),
+        ));
+        // Activity not in the admitted table -> no match, never a guess.
+        assert!(!activity_venue_match(
+            "skydive",
+            &kind_verdict(&[("the airport", "place")]),
+        ));
+        // Empty activity phrase -> no match.
+        assert!(!activity_venue_match(
+            "",
+            &kind_verdict(&[("a restaurant", "place")]),
+        ));
+    }
+
+    #[test]
+    fn activity_venue_boost_adds_resorts_and_never_removes() {
+        // Lexical order: park-run (10) > restaurant (9). Boost restaurant.
+        let mut results = vec![
+            bare_search_result("parkrun", 10.0),
+            bare_search_result("restaurant", 9.0),
+        ];
+        let n = boost_result_indices(&mut results, &[1], ACTIVITY_VENUE_BOOST, |b, a| {
+            b.activity_venue_boost += a
+        });
+        assert_eq!(n, 1);
+        assert_eq!(results.len(), 2, "boost must never remove results");
+        assert_eq!(results[0].doc_id, "restaurant");
+        assert_eq!(results[0].score, 9.0 + ACTIVITY_VENUE_BOOST);
+        assert_eq!(
+            results[0].score_breakdown.activity_venue_boost,
+            ACTIVITY_VENUE_BOOST
+        );
+        // Untouched hits keep their score and carry no venue boost.
+        assert_eq!(results[1].doc_id, "parkrun");
+        assert_eq!(results[1].score, 10.0);
+        assert_eq!(results[1].score_breakdown.activity_venue_boost, 0.0);
     }
 
     #[test]

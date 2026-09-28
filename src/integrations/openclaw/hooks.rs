@@ -4,12 +4,13 @@
 //!   - internal hooks, which run in-process and can mutate the live event
 //!     (used for `agent:bootstrap` → recall and inject `LINTAI.md`), and
 //!   - typed plugin hooks, which observe lifecycle events (used for
-//!     `agent_end` → Outcome capture, `before_reset` → SessionSummary capture,
-//!     `session_start`/`session_end` → session registry, shutdown → flush).
+//!     `agent_end` → Outcome capture, `before_reset` → SessionSummary capture;
+//!     `session_start`/`session_end`/`shutdown` are acknowledged no-ops).
 //!
-//! The thin JS shims installed by `--openclaw-install` spawn
-//! `lint-ai --openclaw-hook <kind>` with the event JSON on stdin and apply
-//! the JSON written to stdout. All lifecycle logic lives here in Rust.
+//! Stateless by design, like the Claude/Codex hooks: every invocation carries
+//! what it needs in the event payload, captures go straight to the memory
+//! store, and idempotency comes from stable document IDs in the store — there
+//! is no cross-invocation hook state, so concurrent hook processes cannot race.
 //! Fail-open throughout: any error leaves OpenClaw's behavior unchanged.
 
 use super::document::{OpenClawDocument, OpenClawDocumentType};
@@ -24,7 +25,7 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -33,8 +34,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_TOP_K: usize = 5;
 const MAX_EXCERPT_BYTES: usize = 800;
 const MAX_CAPTURE_BYTES: usize = 32 * 1024;
-const MAX_STATE_RUN_IDS: usize = 2000;
-const MAX_STATE_SESSIONS: usize = 500;
 const INJECTED_FILE_NAME: &str = "LINTAI.md";
 /// Fallback recall query when the shim has no user text to correlate
 /// (e.g. a fresh session whose first turn has no `message:received` yet).
@@ -141,17 +140,14 @@ fn emit(output: &Value) -> Result<()> {
 }
 
 fn handle_hook(kind: OpenClawHookKind, input: &OpenClawHookInput, root: &Path) -> Result<Value> {
-    let mut state = load_state(root)?;
-    let output = match kind {
-        OpenClawHookKind::Bootstrap => handle_bootstrap(input, root)?,
-        OpenClawHookKind::AgentEnd => handle_agent_end(input, root, &mut state)?,
-        OpenClawHookKind::BeforeReset => handle_before_reset(input, root, &mut state)?,
-        OpenClawHookKind::SessionStart => handle_session_start(input, &mut state)?,
-        OpenClawHookKind::SessionEnd => handle_session_end(input, &mut state)?,
-        OpenClawHookKind::Shutdown => handle_shutdown(&state)?,
-    };
-    save_state(root, &state)?;
-    Ok(output)
+    match kind {
+        OpenClawHookKind::Bootstrap => handle_bootstrap(input, root),
+        OpenClawHookKind::AgentEnd => handle_agent_end(input, root),
+        OpenClawHookKind::BeforeReset => handle_before_reset(input, root),
+        OpenClawHookKind::SessionStart => handle_session_start(input),
+        OpenClawHookKind::SessionEnd => handle_session_end(input),
+        OpenClawHookKind::Shutdown => handle_shutdown(),
+    }
 }
 
 /// The default response emitted when a handler fails: keep OpenClaw's
@@ -202,7 +198,9 @@ fn resolve_root(
     .and_then(Value::as_str)
     .map(str::trim)
     .filter(|s| !s.is_empty());
-    let path = candidate.map(PathBuf::from).unwrap_or_else(|| fallback_root.to_path_buf());
+    let path = candidate
+        .map(PathBuf::from)
+        .unwrap_or_else(|| fallback_root.to_path_buf());
     path.canonicalize()
         .with_context(|| format!("failed to canonicalize OpenClaw root {}", path.display()))
 }
@@ -252,91 +250,6 @@ fn current_timestamp() -> String {
     DateTime::from_timestamp(seconds, 0)
         .map(|timestamp| timestamp.to_rfc3339())
         .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Hook state: runId idempotency + session registry.
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct SessionRecord {
-    #[serde(default)]
-    open: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    session_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    resumed_from: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ended_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    next_session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    agent_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct HookState {
-    #[serde(default)]
-    seen_run_ids: VecDeque<String>,
-    #[serde(default)]
-    sessions: HashMap<String, SessionRecord>,
-}
-
-fn state_path(root: &Path) -> PathBuf {
-    root.join(".lint-ai").join("openclaw-hooks").join("state.json")
-}
-
-fn load_state(root: &Path) -> Result<HookState> {
-    let path = state_path(root);
-    if !path.is_file() {
-        return Ok(HookState::default());
-    }
-    let bytes = fs::read(&path)
-        .with_context(|| format!("failed to read OpenClaw hook state {}", path.display()))?;
-    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
-}
-
-fn save_state(root: &Path, state: &HookState) -> Result<()> {
-    let path = state_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("failed to create OpenClaw hook state dir {}", parent.display())
-        })?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(state)?)
-        .with_context(|| format!("failed to write OpenClaw hook state {}", tmp.display()))?;
-    fs::rename(&tmp, &path)
-        .with_context(|| format!("failed to publish OpenClaw hook state {}", path.display()))?;
-    Ok(())
-}
-
-/// Returns true when `run_id` was already captured (retries re-fire the same
-/// `runId`, so this is the capture idempotency key).
-fn already_seen(state: &mut HookState, run_id: &str) -> bool {
-    if state.seen_run_ids.iter().any(|seen| seen == run_id) {
-        return true;
-    }
-    state.seen_run_ids.push_back(run_id.to_string());
-    while state.seen_run_ids.len() > MAX_STATE_RUN_IDS {
-        state.seen_run_ids.pop_front();
-    }
-    false
-}
-
-fn record_session<'a>(state: &'a mut HookState, session_id: &str) -> &'a mut SessionRecord {
-    if state.sessions.len() >= MAX_STATE_SESSIONS && !state.sessions.contains_key(session_id) {
-        // Bounded registry: drop a closed session before adding a new one.
-        if let Some(closed) = state
-            .sessions
-            .iter()
-            .find(|(_, record)| !record.open)
-            .map(|(id, _)| id.clone())
-        {
-            state.sessions.remove(&closed);
-        }
-    }
-    state.sessions.entry(session_id.to_string()).or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +312,12 @@ fn retrieve_memories(root: &Path, query: &str) -> Result<String> {
         let Some(record) = store.record_by_id(&result.doc_id) else {
             continue;
         };
-        let excerpt = relevant_excerpt(&record.content, query, &result.matched_terms, MAX_EXCERPT_BYTES);
+        let excerpt = relevant_excerpt(
+            &record.content,
+            query,
+            &result.matched_terms,
+            MAX_EXCERPT_BYTES,
+        );
         let excerpt = excerpt.trim();
         if excerpt.is_empty() || !seen.insert(excerpt.to_string()) {
             continue;
@@ -451,7 +369,10 @@ fn is_internal_context(message: &Value) -> bool {
         return true;
     }
     if let Some(content) = message.get("content").and_then(Value::as_str) {
-        if content.trim_start().starts_with("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") {
+        if content
+            .trim_start()
+            .starts_with("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>")
+        {
             return true;
         }
     }
@@ -486,17 +407,18 @@ fn ack(skipped: Option<&str>) -> Value {
     Value::Object(map)
 }
 
+/// Capture a per-turn Outcome. Idempotency is a store property, not hook
+/// state: the document ID is `openclaw://{project}/{session}/outcome/{run_id}`
+/// (see `document.rs`), so `store.upsert` on a retried `agent_end` with the
+/// same `runId` replaces the identical record in place — a no-op, exactly as
+/// the Claude/Codex hooks rely on.
 fn capture_outcome(
     root: &Path,
-    state: &mut HookState,
     session_id: &str,
     run_id: &str,
     channel: Option<&str>,
     turns: &[(String, String)],
 ) -> Result<Value> {
-    if already_seen(state, run_id) {
-        return Ok(ack(Some("duplicate runId")));
-    }
     if turns.is_empty() {
         return Ok(ack(Some("no conversation text")));
     }
@@ -521,14 +443,10 @@ fn capture_outcome(
 }
 
 // ---------------------------------------------------------------------------
-// agent_end — per-turn Outcome capture (idempotent on runId).
+// agent_end — per-turn Outcome capture (idempotent on runId via the store).
 // ---------------------------------------------------------------------------
 
-fn handle_agent_end(
-    input: &OpenClawHookInput,
-    root: &Path,
-    state: &mut HookState,
-) -> Result<Value> {
+fn handle_agent_end(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
     let run_id = input
         .event
         .get("runId")
@@ -550,19 +468,7 @@ fn handle_agent_end(
         .unwrap_or_default();
     let turns = message_texts(&messages);
     let channel = input.ctx.get("channel").and_then(Value::as_str);
-    let output = capture_outcome(root, state, &session_id, run_id, channel, &turns)?;
-    // agent_end is also the heartbeat that keeps the session registry's
-    // open/closed bookkeeping honest when session_start arrived without a
-    // workspace root.
-    let record = record_session(state, &session_id);
-    record.open = true;
-    if record.session_key.is_none() {
-        record.session_key = string_field(&input.ctx, "sessionKey");
-    }
-    if record.agent_id.is_none() {
-        record.agent_id = input.ctx.get("agentId").and_then(Value::as_str).map(str::to_string);
-    }
-    Ok(output)
+    capture_outcome(root, &session_id, run_id, channel, &turns)
 }
 
 // ---------------------------------------------------------------------------
@@ -570,11 +476,7 @@ fn handle_agent_end(
 // departing transcript (delivered before OpenClaw wipes the session).
 // ---------------------------------------------------------------------------
 
-fn handle_before_reset(
-    input: &OpenClawHookInput,
-    root: &Path,
-    state: &mut HookState,
-) -> Result<Value> {
+fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
     let session_id = session_id(input, OpenClawHookKind::BeforeReset);
     if !lint_ai_enabled(RecordingProvider::OpenClaw, root)? {
         return Ok(ack(Some("recording disabled")));
@@ -611,59 +513,44 @@ fn handle_before_reset(
         content,
         cwd: root.to_path_buf(),
         timestamp: Some(current_timestamp()),
-        channel: input.ctx.get("channel").and_then(Value::as_str).map(str::to_string),
+        channel: input
+            .ctx
+            .get("channel")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     };
     let mut store = open_store(root)?;
     store.upsert(document.into_source_document()?);
     store.refresh()?;
-    let record = record_session(state, &session_id);
-    record.open = false;
-    record.ended_reason = Some(reason.to_string());
     Ok(ack(None))
 }
 
 // ---------------------------------------------------------------------------
-// session_start / session_end — session registry bookkeeping.
+// session_start / session_end — lifecycle acknowledgements.
+//
+// These carry no capture today (matching the Claude/Codex lifecycle, where
+// session bookkeeping is the host's job). Parent↔child linkage needs no
+// registry either: `resumedFrom`/`nextSessionId` already arrive in the event
+// payloads (verified against the live 2026.9.6 host), so any future capture
+// that wants them can read them straight from the event.
 // ---------------------------------------------------------------------------
 
-fn string_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn handle_session_start(input: &OpenClawHookInput, state: &mut HookState) -> Result<Value> {
-    let session_id = session_id(input, OpenClawHookKind::SessionStart);
-    let record = record_session(state, &session_id);
-    record.open = true;
-    record.session_key = string_field(&input.event, "sessionKey");
-    record.resumed_from = string_field(&input.event, "resumedFrom");
-    record.agent_id = input.ctx.get("agentId").and_then(Value::as_str).map(str::to_string);
+fn handle_session_start(_input: &OpenClawHookInput) -> Result<Value> {
     Ok(ack(None))
 }
 
-fn handle_session_end(input: &OpenClawHookInput, state: &mut HookState) -> Result<Value> {
-    let session_id = session_id(input, OpenClawHookKind::SessionEnd);
-    let reason = string_field(&input.event, "reason");
-    let next_session_id = string_field(&input.event, "nextSessionId");
-    let record = record_session(state, &session_id);
-    record.open = false;
-    record.ended_reason = reason;
-    record.next_session_id = next_session_id;
+fn handle_session_end(_input: &OpenClawHookInput) -> Result<Value> {
     Ok(ack(None))
 }
 
 // ---------------------------------------------------------------------------
 // Shutdown — bounded pending-capture flush.
 //
-// All captures above write through synchronously, so this is a final
-// best-effort state flush inside OpenClaw's shared two-second drain budget.
+// All captures above write through synchronously, so this is a no-op
+// acknowledgement inside OpenClaw's shared two-second drain budget.
 // ---------------------------------------------------------------------------
 
-fn handle_shutdown(_state: &HookState) -> Result<Value> {
+fn handle_shutdown() -> Result<Value> {
     Ok(ack(None))
 }
 
@@ -706,7 +593,11 @@ mod tests {
         store.refresh().unwrap();
     }
 
-    fn bootstrap_input(workspace_dir: &str, query: &str, existing: Vec<Value>) -> OpenClawHookInput {
+    fn bootstrap_input(
+        workspace_dir: &str,
+        query: &str,
+        existing: Vec<Value>,
+    ) -> OpenClawHookInput {
         OpenClawHookInput {
             event: json!({
                 "type": "agent",
@@ -732,14 +623,19 @@ mod tests {
             "seed-1",
             "The team decided to adopt SQLite for the local session store.",
         );
-        let existing = vec![json!({"name": "SKILL.md", "path": "/ws/SKILL.md", "content": "x", "missing": false})];
+        let existing = vec![
+            json!({"name": "SKILL.md", "path": "/ws/SKILL.md", "content": "x", "missing": false}),
+        ];
         let input = bootstrap_input(root.to_str().unwrap(), "local session store", existing);
         let output = handle_bootstrap(&input, &root).unwrap();
         let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
         assert_eq!(files.len(), 2);
         let injected = files.iter().find(|f| f["name"] == "LINTAI.md").unwrap();
         assert!(injected["content"].as_str().unwrap().contains("SQLite"));
-        assert_eq!(injected["path"], format!("{}/LINTAI.md", root.to_str().unwrap()));
+        assert_eq!(
+            injected["path"],
+            format!("{}/LINTAI.md", root.to_str().unwrap())
+        );
         assert_eq!(injected["missing"], false);
         // Pre-existing files survive.
         assert!(files.iter().any(|f| f["name"] == "SKILL.md"));
@@ -755,7 +651,12 @@ mod tests {
         let rerun_input = bootstrap_input(
             root.to_str().unwrap(),
             "analytics",
-            first.get("bootstrapFiles").unwrap().as_array().unwrap().clone(),
+            first
+                .get("bootstrapFiles")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .clone(),
         );
         let second = handle_bootstrap(&rerun_input, &root).unwrap();
         let files = second.get("bootstrapFiles").unwrap().as_array().unwrap();
@@ -769,10 +670,20 @@ mod tests {
     #[test]
     fn bootstrap_with_empty_memory_store_leaves_files_untouched() {
         let root = test_root();
-        let existing = vec![json!({"name": "SKILL.md", "path": "/ws/SKILL.md", "content": "x", "missing": false})];
+        let existing = vec![
+            json!({"name": "SKILL.md", "path": "/ws/SKILL.md", "content": "x", "missing": false}),
+        ];
         let input = bootstrap_input(root.to_str().unwrap(), "anything", existing);
         let output = handle_bootstrap(&input, &root).unwrap();
-        assert_eq!(output.get("bootstrapFiles").unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(
+            output
+                .get("bootstrapFiles")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(output
             .get("bootstrapFiles")
             .unwrap()
@@ -813,17 +724,21 @@ mod tests {
     }
 
     #[test]
-    fn agent_end_captures_outcome_and_dedupes_run_id() {
+    fn agent_end_replay_is_idempotent_at_the_store_level() {
+        // Mirrors the Claude/Codex hooks' "replayed hook must be idempotent":
+        // two independent invocations (no shared state, as if two hook
+        // processes) with the same runId must leave exactly one Outcome
+        // record. Idempotency is a store property: the document ID is a pure
+        // function of (project, session, "outcome", run_id), so the second
+        // upsert replaces the identical record in place.
         let root = test_root();
-        let mut state = HookState::default();
-        let first = handle_agent_end(&agent_end_input("run-1", "sess-1"), &root, &mut state).unwrap();
+        let first = handle_agent_end(&agent_end_input("run-1", "sess-1"), &root).unwrap();
         assert_eq!(first["ok"], true);
-        // Retry with the same runId captures nothing new.
-        let second = handle_agent_end(&agent_end_input("run-1", "sess-1"), &root, &mut state).unwrap();
-        assert_eq!(second["ok"], false);
-        assert_eq!(second["skipped"], "duplicate runId");
-        // A new runId captures.
-        let third = handle_agent_end(&agent_end_input("run-2", "sess-1"), &root, &mut state).unwrap();
+        // Retry with the same runId: re-runs capture, store dedupes.
+        let second = handle_agent_end(&agent_end_input("run-1", "sess-1"), &root).unwrap();
+        assert_eq!(second["ok"], true);
+        // A new runId captures a second record.
+        let third = handle_agent_end(&agent_end_input("run-2", "sess-1"), &root).unwrap();
         assert_eq!(third["ok"], true);
 
         let mut store = open_store(&root).unwrap();
@@ -831,7 +746,9 @@ mod tests {
         let outcomes: Vec<_> = results
             .iter()
             .filter_map(|r| store.record_by_id(&r.doc_id))
-            .filter(|record| record.filters.get("document_type").map(String::as_str) == Some("outcome"))
+            .filter(|record| {
+                record.filters.get("document_type").map(String::as_str) == Some("outcome")
+            })
             .collect();
         assert_eq!(outcomes.len(), 2);
         let content = &outcomes[0].content;
@@ -845,20 +762,18 @@ mod tests {
     #[test]
     fn agent_end_without_run_id_skips() {
         let root = test_root();
-        let mut state = HookState::default();
         let input = OpenClawHookInput {
             event: json!({"messages": []}),
             ctx: json!({"sessionId": "s"}),
             query: String::new(),
         };
-        let output = handle_agent_end(&input, &root, &mut state).unwrap();
+        let output = handle_agent_end(&input, &root).unwrap();
         assert_eq!(output["skipped"], "missing runId");
     }
 
     #[test]
     fn before_reset_captures_session_summary_from_full_transcript() {
         let root = test_root();
-        let mut state = HookState::default();
         let input = OpenClawHookInput {
             event: json!({
                 "messages": [
@@ -870,7 +785,7 @@ mod tests {
             ctx: json!({"sessionId": "sess-9", "channel": "webchat"}),
             query: String::new(),
         };
-        let output = handle_before_reset(&input, &root, &mut state).unwrap();
+        let output = handle_before_reset(&input, &root).unwrap();
         assert_eq!(output["ok"], true);
 
         let mut store = open_store(&root).unwrap();
@@ -885,65 +800,43 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert!(summaries[0].content.contains("reason: user-initiated"));
         assert!(summaries[0].content.contains("How do I reset the gateway?"));
-
-        let record = state.sessions.get("sess-9").unwrap();
-        assert!(!record.open);
-        assert_eq!(record.ended_reason.as_deref(), Some("user-initiated"));
     }
 
     #[test]
-    fn session_lifecycle_updates_registry() {
-        let mut state = HookState::default();
+    fn session_lifecycle_hooks_ack_without_state() {
         let start = OpenClawHookInput {
             event: json!({"sessionId": "sess-a", "sessionKey": "agent:main:webchat:sess-a", "resumedFrom": "sess-old"}),
             ctx: json!({"agentId": "agent-main"}),
             query: String::new(),
         };
-        assert_eq!(handle_session_start(&start, &mut state).unwrap()["ok"], true);
-        let record = state.sessions.get("sess-a").unwrap();
-        assert!(record.open);
-        assert_eq!(record.resumed_from.as_deref(), Some("sess-old"));
-        assert_eq!(record.agent_id.as_deref(), Some("agent-main"));
+        assert_eq!(handle_session_start(&start).unwrap()["ok"], true);
 
         let end = OpenClawHookInput {
             event: json!({"sessionId": "sess-a", "reason": "idle-timeout", "nextSessionId": "sess-b"}),
             ctx: Value::Null,
             query: String::new(),
         };
-        assert_eq!(handle_session_end(&end, &mut state).unwrap()["ok"], true);
-        let record = state.sessions.get("sess-a").unwrap();
-        assert!(!record.open);
-        assert_eq!(record.ended_reason.as_deref(), Some("idle-timeout"));
-        assert_eq!(record.next_session_id.as_deref(), Some("sess-b"));
+        assert_eq!(handle_session_end(&end).unwrap()["ok"], true);
     }
 
     #[test]
-    fn shutdown_flushes_state_and_acks() {
-        let root = test_root();
-        let mut state = HookState::default();
-        already_seen(&mut state, "run-7");
-        save_state(&root, &state).unwrap();
-        assert_eq!(handle_shutdown(&state).unwrap()["ok"], true);
-        let reloaded = load_state(&root).unwrap();
-        assert!(reloaded.seen_run_ids.iter().any(|id| id == "run-7"));
-    }
-
-    #[test]
-    fn state_round_trip_survives_reload() {
-        let root = test_root();
-        let mut state = HookState::default();
-        assert!(!already_seen(&mut state, "run-1"));
-        assert!(already_seen(&mut state, "run-1"));
-        save_state(&root, &state).unwrap();
-        let reloaded = load_state(&root).unwrap();
-        assert!(reloaded.seen_run_ids.iter().any(|id| id == "run-1"));
+    fn shutdown_acks_without_state() {
+        assert_eq!(handle_shutdown().unwrap()["ok"], true);
     }
 
     #[test]
     fn default_output_keeps_bootstrap_files_untouched_on_failure() {
         let input = bootstrap_input("/ws", "q", vec![json!({"name": "SKILL.md"})]);
         let output = default_output(OpenClawHookKind::Bootstrap, &input);
-        assert_eq!(output.get("bootstrapFiles").unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(
+            output
+                .get("bootstrapFiles")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         let output = default_output(OpenClawHookKind::AgentEnd, &input);
         assert_eq!(output["ok"], false);
     }

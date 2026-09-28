@@ -20,15 +20,6 @@ use crate::integrations::agy::{
     install_memory_skill as install_agy_memory_skill,
     install_user_config as install_agy_user_config, run_server as run_agy_server, AgyServerOptions,
 };
-#[cfg(feature = "openclaw")]
-use crate::integrations::openclaw::{
-    install_hooks as install_openclaw_hooks, install_memory_skill as install_openclaw_memory_skill,
-    install_plugin as install_openclaw_plugin,
-    install_user_config as install_openclaw_user_config, run_server as run_openclaw_server,
-    OpenClawServerOptions,
-};
-#[cfg(feature = "openclaw")]
-use crate::integrations::openclaw::hooks::{run_hook as run_openclaw_hook, OpenClawHookKind};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
@@ -53,6 +44,14 @@ use crate::integrations::gemini_cli::install_hook_settings as install_gemini_hoo
 use crate::integrations::gemini_cli::{
     install_user_config as install_gemini_user_config, run_server as run_gemini_server,
     GeminiCliServerOptions,
+};
+#[cfg(feature = "openclaw")]
+use crate::integrations::openclaw::hooks::{run_hook as run_openclaw_hook, OpenClawHookKind};
+#[cfg(feature = "openclaw")]
+use crate::integrations::openclaw::{
+    install_hooks as install_openclaw_hooks, install_memory_skill as install_openclaw_memory_skill,
+    install_plugin as install_openclaw_plugin, install_user_config as install_openclaw_user_config,
+    run_server as run_openclaw_server, OpenClawServerOptions,
 };
 #[cfg(feature = "muse-code")]
 use crate::integrations::muse_code::{
@@ -508,11 +507,13 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         println!("Wrote OpenClaw memory skill to {}", written.display());
         let written = install_openclaw_hooks(
             args.openclaw_hooks_dir.as_deref().map(Path::new),
+            Path::new(&args.path),
             args.openclaw_force_skill,
         )?;
         println!("Wrote OpenClaw hook wrapper to {}", written.display());
         let written = install_openclaw_plugin(
             args.openclaw_plugin_dir.as_deref().map(Path::new),
+            Path::new(&args.path),
             args.openclaw_force_skill,
         )?;
         println!("Wrote OpenClaw typed plugin to {}", written.display());

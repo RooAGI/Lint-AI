@@ -27,7 +27,6 @@ pub enum RecordingProvider {
     Codex,
     Gemini,
     Agy,
-    Agy,
     Muse,
     OpenClaw,
 }
@@ -393,7 +392,6 @@ fn run_provider_process(
                 // directory; OpenClaw has no equivalent portable non-interactive
                 // replay entry point, so recorded-session replay is unsupported.
                 anyhow::bail!("session replay is not supported for the OpenClaw provider")
-            }
             }
         };
         let mut child = command

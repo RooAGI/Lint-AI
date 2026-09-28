@@ -9,6 +9,10 @@ import { execFileSync } from "node:child_process";
 
 // Replaced with the absolute lint-ai binary path at install time.
 const BIN = "__LINT_AI_BIN__";
+// Replaced with the canonicalized project root at install time: the fallback
+// workspace when the bootstrap event carries none (typed lifecycle events
+// observed on a live host sometimes omit workspaceDir entirely).
+const INSTALL_ROOT = "__LINT_AI_ROOT__";
 // How long the recall query may block a turn before we give up (fail-open).
 const TIMEOUT_MS = Number(process.env.LINT_AI_OPENCLAW_HOOK_TIMEOUT_MS ?? 8000);
 // Last user text per session, correlated from `message:received` (the
@@ -63,10 +67,17 @@ export default function lintAiHook(event) {
     }
 
     if (event?.type === "agent" && event?.action === "bootstrap") {
-      const workspaceDir = event.context?.workspaceDir;
-      if (!workspaceDir) return;
+      const trimmed = trimEvent(event);
+      // Prefer the event's own workspace; fall back to the install-time root.
+      // The fallback is written back into the trimmed context so the binary
+      // sees one consistent root (it also builds the injected file path from it).
+      const workspaceDir =
+        typeof trimmed.context?.workspaceDir === "string" && trimmed.context.workspaceDir.trim()
+          ? trimmed.context.workspaceDir
+          : INSTALL_ROOT;
+      trimmed.context = { ...trimmed.context, workspaceDir };
       const payload = {
-        event: trimEvent(event),
+        event: trimmed,
         query: lastUserText.get(event.sessionKey) ?? "",
       };
       const stdout = execFileSync(

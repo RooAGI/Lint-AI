@@ -77,6 +77,8 @@ impl OpenClawDocument {
             timestamp: self.timestamp,
             doc_length,
             author_agent: Some("openclaw".to_string()),
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
             filters,
         })
     }
@@ -126,7 +128,10 @@ mod tests {
     fn document_types_follow_lifecycle_convention() {
         assert_eq!(OpenClawDocumentType::Checkpoint.as_str(), "checkpoint");
         assert_eq!(OpenClawDocumentType::Outcome.as_str(), "outcome");
-        assert_eq!(OpenClawDocumentType::SessionSummary.as_str(), "session-summary");
+        assert_eq!(
+            OpenClawDocumentType::SessionSummary.as_str(),
+            "session-summary"
+        );
     }
 
     #[test]

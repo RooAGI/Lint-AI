@@ -98,38 +98,51 @@ pub fn run_server(root: &Path, options: OpenClawServerOptions<'_>) -> Result<()>
 /// `OPENCLAW_STATE_DIR` when set, else `~/.openclaw` (verified against the
 /// 2026.9.6 runtime). The installed `handler.js` is a thin wrapper around
 /// `lint-ai --openclaw-hook bootstrap`; `__LINT_AI_BIN__` is replaced with the
-/// current binary path at install time.
-pub fn install_hooks(hooks_dir: Option<&Path>, force: bool) -> Result<PathBuf> {
+/// current binary path and `__LINT_AI_ROOT__` with the canonicalized project
+/// root at install time.
+pub fn install_hooks(hooks_dir: Option<&Path>, root: &Path, force: bool) -> Result<PathBuf> {
     let dir = hooks_dir
         .map(Path::to_path_buf)
         .unwrap_or(default_hooks_dir()?)
         .join("lint-ai");
     let bin = env::current_exe()?.to_string_lossy().into_owned();
-    write_install_asset(
-        &dir.join("HOOK.md"),
-        include_str!("hooks/HOOK.md"),
-        force,
-    )?;
+    let root = root.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize OpenClaw install root {}",
+            root.display()
+        )
+    })?;
+    let root = root.to_string_lossy().into_owned();
+    write_install_asset(&dir.join("HOOK.md"), include_str!("hooks/HOOK.md"), force)?;
     write_install_asset(
         &dir.join("handler.js"),
-        &include_str!("hooks/handler.js").replace("__LINT_AI_BIN__", &bin),
+        &include_str!("hooks/handler.js")
+            .replace("__LINT_AI_BIN__", &bin)
+            .replace("__LINT_AI_ROOT__", &root),
         force,
     )?;
     Ok(dir)
 }
 
 /// Install the typed plugin for lifecycle capture (`agent_end` → Outcome,
-/// `before_reset` → SessionSummary, session registry, shutdown flush).
+/// `before_reset` → SessionSummary).
 ///
 /// Plugins are discovered under `<configDir>/extensions/` (`~/.openclaw`
 /// by default; `OPENCLAW_STATE_DIR` overrides it the same way it overrides
 /// the state dir).
-pub fn install_plugin(plugin_dir: Option<&Path>, force: bool) -> Result<PathBuf> {
+pub fn install_plugin(plugin_dir: Option<&Path>, root: &Path, force: bool) -> Result<PathBuf> {
     let dir = plugin_dir
         .map(Path::to_path_buf)
         .unwrap_or(default_plugin_dir()?)
         .join("lint-ai");
     let bin = env::current_exe()?.to_string_lossy().into_owned();
+    let root = root.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize OpenClaw install root {}",
+            root.display()
+        )
+    })?;
+    let root = root.to_string_lossy().into_owned();
     write_install_asset(
         &dir.join("openclaw.plugin.json"),
         include_str!("plugin/openclaw.plugin.json"),
@@ -142,7 +155,9 @@ pub fn install_plugin(plugin_dir: Option<&Path>, force: bool) -> Result<PathBuf>
     )?;
     write_install_asset(
         &dir.join("index.js"),
-        &include_str!("plugin/index.js").replace("__LINT_AI_BIN__", &bin),
+        &include_str!("plugin/index.js")
+            .replace("__LINT_AI_BIN__", &bin)
+            .replace("__LINT_AI_ROOT__", &root),
         force,
     )?;
     Ok(dir)
@@ -302,7 +317,10 @@ mod tests {
 
         let config: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(config["mcp"]["servers"]["other"]["command"], "other");
-        assert_eq!(config["mcp"]["servers"]["lint-ai"]["args"][0], "--openclaw-serve");
+        assert_eq!(
+            config["mcp"]["servers"]["lint-ai"]["args"][0],
+            "--openclaw-serve"
+        );
         assert_eq!(
             config["mcp"]["servers"]["lint-ai"]["args"][1],
             root.to_string_lossy().as_ref()

@@ -272,15 +272,17 @@ async fn main() -> anyhow::Result<()> {
         telemetry: OperationalTelemetry::new(),
         project_root,
     };
-    // Warm the spaCy extractor daemon in the background: the first query
-    // that needs key-phrase backfill or structured relations then pays
-    // inference only (~100ms) instead of interpreter+model load (~2-3s).
-    // Best-effort — extraction falls back to one-shot subprocesses if the
-    // daemon cannot start.
+    // Warm the Python daemon children in the background: the first query
+    // that needs key-phrase backfill, structured relations, or behood
+    // entities then pays inference only (~100ms) instead of
+    // interpreter+model load (~2-3s).
+    // Best-effort — extraction/analysis falls back to one-shot subprocesses
+    // if a daemon cannot start.
     std::thread::Builder::new()
-        .name("extractor-daemon-prewarm".to_string())
+        .name("python-daemon-prewarm".to_string())
         .spawn(|| {
             lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
+            lint_ai::behood_query::BehoodQueryDaemon::global().prewarm();
         })
         .ok();
     let app = Router::new()

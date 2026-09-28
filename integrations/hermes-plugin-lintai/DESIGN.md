@@ -113,11 +113,20 @@ Following the OpenClaw purist fix (no `state.json`; store-level idempotency inst
   Used as the `request_id` on `POST /add/batch` (the server treats `request_id` as the
   idempotency key).
 - **Tool events:** `tool_call_id` — unique per tool call; same request_id scheme.
-- **Session registry / boundary markers:** `session_id` (+ reason) as the key;
-  re-fires overwrite the same record.
+- **Session registry / boundary markers:** `hermes:session:{session_id}:start` and
+  `hermes:session:{session_id}:close` — start and close MUST use distinct
+  request_ids, because the server rejects the same id with different content.
 
 No local state file, no seen-sets. A replayed hook with the same IDs is a no-op at the
 store.
+
+**Replay byte-identical rule (verified against the live server):** the server's
+`request_fingerprint` covers the full message content *including* `timestamp`, so a
+replayed hook rebuilt with a fresh timestamp is rejected as "request_id was already
+used with different content" (HTTP 500). All records therefore pass
+`timestamp: None` — the doc timestamp is display-only — making a replayed
+`(session_id, turn_id)` / `tool_call_id` write byte-identical and idempotent. This
+is the same fix PR #81 applied to MCP `add_memory`.
 
 ## 6. Lifecycle comparison vs the OpenClaw hooks integration
 
@@ -172,16 +181,20 @@ with other providers' sessions).
      (as a small `[meta]` preamble — the store is content-addressed text; structured
      fields live inline).
 2. **Tool-event record** — `request_id = "hermes:tool:{tool_call_id}"`
-   - `messages`: `[{role: "system", content: "tool_call function_name=<name> status=<status> duration_ms=<n>"}]`
+   - `messages`: `[{role: "user", content: "[tool_call] function_name=<name> status=<status> duration_ms=<n>"}]`
      followed by truncated `function_args` and `result` (each ≤2000 chars) and, on
      failure, `error_type`/`error_message`.
    - `session_id` on the request ties it to the session; the content header carries
      `turn_id` for turn-level correlation.
-3. **Session record** — `request_id = "hermes:session:{session_id}"`
-   - Written on `on_session_start`: `[{role: "system", content: "session_start model=<m> platform=<p> parent_session_id=<pid or none>"}}`.
-   - Rewritten (same `request_id`, idempotent) on `on_session_finalize`/`reset` with
-     `session_close reason=<reason>` appended. The latest write wins; history of the
-     session's turns is in the turn records.
+   - NOTE: role must be `"user"` (or `"assistant"`) — the server rejects
+     `role: "system"` on `/add/batch` (`memory_api.rs`: "messages[i].role must be
+     user or assistant"). The `[tool_call]` content prefix marks the kind.
+3. **Session record** — `request_id = "hermes:session:{session_id}:start"` /
+   `"hermes:session:{session_id}:close"` (distinct ids — see §5)
+   - Written on `on_session_start`: `[{role: "user", content: "[meta] model=<m> platform=<p> parent_session_id=<pid or none>\nsession_start"}}]`.
+     (Role is `"user"` for the same `/add/batch` validation reason as above.)
+   - Written on `on_session_finalize`/`reset`: `session_close reason=<reason>`.
+     History of the session's turns is in the turn records.
 
 Truncation policy: no single captured field exceeds 2000 chars; a turn's total
 payload is capped at ~24KB. Rationale: capture is for recall, not forensics; the

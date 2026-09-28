@@ -267,7 +267,7 @@ impl GeminiMcp {
                 let session_id = match mcp_tools::resolve_search_session_id(
                     &args,
                     &*service,
-                    RecordingProvider::Gemini.as_str(),
+                    self.provider.as_str(),
                 ) {
                     Ok(session_id) => session_id,
                     Err(message) => return Ok(error_response(id, -32602, &message)),
@@ -275,7 +275,7 @@ impl GeminiMcp {
                 let started = std::time::Instant::now();
                 let results = service.search_with_filters(
                     query,
-                    crate::integrations::session_recording::RecordingProvider::Gemini.as_str(),
+                    self.provider.as_str(),
                     session_id.as_deref(),
                     top_k,
                     &filters,
@@ -530,6 +530,107 @@ mod tests {
             .unwrap()
             .to_string();
         serde_json::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn adapter_search_returns_hits_for_all_providers() {
+        // Hit-parity gate: the shared adapter search path (gemini/agy/openclaw)
+        // must return hits for user-ID-less local docs. A 0-hits outcome here
+        // would reproduce the Hermes finding (unconditional ownership filter).
+        for (provider, label) in [
+            (RecordingProvider::Gemini, "gemini-cli"),
+            (RecordingProvider::Agy, "agy"),
+            (RecordingProvider::OpenClaw, "openclaw"),
+        ] {
+            let root = temp_root(label);
+            // Seed through the shared memory root, like hook captures do:
+            // no memory_user_id filter on the documents.
+            let memory_root = mcp_index::shared_memory_root(&root);
+            let mut memory = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
+            let doc_id = format!("{label}-search-doc");
+            let mut filters = BTreeMap::new();
+            filters.insert("provider".to_string(), label.to_string());
+            memory.upsert(SourceDocument {
+                doc_id: doc_id.clone(),
+                source: format!("{}://session-1/outcome", provider.as_str()),
+                content: format!(
+                    "{label} deployment runbook: rotate the staging API key every Friday"
+                ),
+                concept: "outcome".to_string(),
+                group_id: Some(format!("{}-session:session-1", provider.as_str())),
+                filters,
+                headings: vec![],
+                links: vec![],
+                timestamp: None,
+                doc_length: 64,
+                author_agent: Some(provider.as_str().to_string()),
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            });
+            memory.refresh().unwrap();
+            drop(memory);
+
+            let mcp = GeminiMcp {
+                root: root.clone(),
+                store: Mutex::new(None),
+                provider,
+                provider_label: label,
+                max_bytes: 5_000_000,
+                max_files: 50_000,
+                max_depth: 20,
+                max_total_bytes: 100_000_000,
+                ignore_paths: vec![],
+                workspace_watcher: None,
+            };
+            // Unfiltered search over the shared pool.
+            let res = call_tool(
+                &mcp,
+                "search",
+                json!({"query": "staging API key rotation runbook"}),
+            );
+            let results = res["results"].as_array().cloned().unwrap_or_default();
+            assert!(
+                !results.is_empty(),
+                "{label}: adapter search returned 0 hits (0-hits regression)"
+            );
+            assert!(
+                results
+                    .iter()
+                    .any(|hit| hit["doc_id"].as_str() == Some(doc_id.as_str())),
+                "{label}: seeded doc missing from search results: {res}"
+            );
+            // Provider-scoped search keeps this provider's doc...
+            let res = call_tool(
+                &mcp,
+                "search",
+                json!({"query": "staging API key rotation runbook", "provider": label}),
+            );
+            let results = res["results"].as_array().cloned().unwrap_or_default();
+            assert!(
+                results
+                    .iter()
+                    .any(|hit| hit["doc_id"].as_str() == Some(doc_id.as_str())),
+                "{label}: provider filter dropped its own doc: {res}"
+            );
+            // ...and rejects an unknown provider instead of returning empty.
+            let err = mcp
+                .handle_request(JsonRpcRequest {
+                    id: Some(json!(1)),
+                    method: "tools/call".to_string(),
+                    params: Some(
+                        json!({"name": "search", "arguments": {"query": "key", "provider": "nope"}}),
+                    ),
+                })
+                .unwrap();
+            assert!(
+                err.error
+                    .as_ref()
+                    .is_some_and(|e| e.message.contains("unknown provider")),
+                "{label}: unknown provider should be an error: {err:?}"
+            );
+            drop(mcp);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

@@ -9,13 +9,13 @@ use std::path::Path;
 /// Canonical provider values for `filters.provider`, the per-document
 /// attribution stamped on every captured memory.
 pub(crate) const PROVIDER_FILTER_VALUES: &[&str] =
-    &["claude", "codex", "gemini-cli", "agy", "muse"];
+    &["claude", "codex", "gemini-cli", "agy", "muse", "openclaw"];
 
 /// JSON Schema fragment for the optional `provider` search argument.
 pub(crate) fn provider_argument_schema() -> Value {
     json!({
         "type": "string",
-        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse). Omit to search the shared pool.",
+        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse, openclaw). Omit to search the shared pool.",
         "enum": PROVIDER_FILTER_VALUES,
     })
 }

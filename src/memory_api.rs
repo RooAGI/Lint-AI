@@ -2774,6 +2774,134 @@ mod tests {
     }
 
     #[test]
+    fn search_with_empty_user_id_skips_ownership_filter() {
+        // Provider-scoped callers (MCP adapters) pass no user id: documents
+        // without a memory_user_id filter must still be returned. This is the
+        // regression test for the Hermes 0-hits finding — an unconditional
+        // ownership filter would zero out the adapter's local corpus.
+        let mut service = service();
+        let mut owned_filters = BTreeMap::new();
+        owned_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        for (doc_id, content, filters) in [
+            (
+                "owned-doc",
+                "The owned ledger records amber transactions.",
+                owned_filters,
+            ),
+            (
+                "unowned-doc",
+                "The shared ledger records amber transactions.",
+                BTreeMap::new(),
+            ),
+        ] {
+            service.store.upsert(SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: format!("hook://{doc_id}"),
+                content: content.to_string(),
+                concept: doc_id.to_string(),
+                group_id: Some(doc_id.to_string()),
+                headings: vec![],
+                links: vec![],
+                timestamp: None,
+                doc_length: content.len(),
+                author_agent: None,
+                filters,
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            });
+        }
+        service.store.refresh().unwrap();
+
+        let response = service
+            .search(SearchRequest {
+                query: "amber ledger transactions".into(),
+                options: None,
+                user_id: "".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+            })
+            .unwrap();
+        let ids: Vec<&str> = response
+            .data
+            .iter()
+            .map(|memory| memory.id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"owned-doc"),
+            "empty user_id must not hide owned docs, got {ids:?}"
+        );
+        assert!(
+            ids.contains(&"unowned-doc"),
+            "empty user_id must not hide unowned docs, got {ids:?}"
+        );
+    }
+
+    #[test]
+    fn search_with_user_id_still_enforces_ownership_filter() {
+        // The server path is unaffected: a supplied user id filters exactly
+        // as before.
+        let mut service = service();
+        let mut owned_filters = BTreeMap::new();
+        owned_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
+        for (doc_id, content, filters) in [
+            (
+                "owned-doc",
+                "The owned ledger records amber transactions.",
+                owned_filters,
+            ),
+            (
+                "unowned-doc",
+                "The shared ledger records amber transactions.",
+                BTreeMap::new(),
+            ),
+        ] {
+            service.store.upsert(SourceDocument {
+                doc_id: doc_id.to_string(),
+                source: format!("hook://{doc_id}"),
+                content: content.to_string(),
+                concept: doc_id.to_string(),
+                group_id: Some(doc_id.to_string()),
+                headings: vec![],
+                links: vec![],
+                timestamp: None,
+                doc_length: content.len(),
+                author_agent: None,
+                filters,
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            });
+        }
+        service.store.refresh().unwrap();
+
+        let response = service
+            .search(SearchRequest {
+                query: "amber ledger transactions".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+            })
+            .unwrap();
+        let ids: Vec<&str> = response
+            .data
+            .iter()
+            .map(|memory| memory.id.as_str())
+            .collect();
+        assert!(
+            ids.contains(&"owned-doc"),
+            "supplied user_id must return owned docs, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"unowned-doc"),
+            "supplied user_id must hide unowned docs, got {ids:?}"
+        );
+    }
+
+    #[test]
     fn identical_request_ids_are_isolated_between_users() {
         let mut service = service();
         for (user_id, content) in [("user-a", "alpha secret"), ("user-b", "beta secret")] {

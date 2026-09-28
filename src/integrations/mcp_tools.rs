@@ -1,9 +1,10 @@
 use crate::index::SearchResult;
-use crate::integrations::mcp_transport::ToolDefinition;
+use crate::integrations::mcp_transport::{JsonRpcError, JsonRpcResponse, ToolDefinition};
 use crate::memory_api::MemoryService;
 use crate::source::SourceDocument;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Canonical provider values for `filters.provider`, the per-document
 /// attribution stamped on every captured memory.
@@ -631,6 +632,64 @@ pub(crate) fn dispatch_memory_tool(
             }
         }
         _ => Err(format!("unknown memory tool: {tool}")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared tools/call dispatch for the bulletin-board tools and add_memory /
+// get_memory, used by every MCP adapter that opts in (claude_code, codex,
+// and the gemini_cli-based adapters: gemini, agy, openclaw).
+// ---------------------------------------------------------------------------
+
+/// Route one `tools/call` invocation for the bulletin-board tools or
+/// `add_memory` / `get_memory`, and wrap the payload in the standard MCP
+/// text-content envelope (or a `-32602` JSON-RPC error). `service` must be an
+/// initialized memory service; this syncs the shared memory store first.
+/// Boards are scoped to the workspace root with the stable `"mcp"` owner,
+/// exactly as the claude_code/codex adapters did before consolidation.
+pub(crate) fn call_board_or_memory_tool(
+    tool_name: &str,
+    id: Option<Value>,
+    arguments: &Value,
+    service: &mut MemoryService,
+    root: &Path,
+    provider: &str,
+) -> anyhow::Result<JsonRpcResponse> {
+    service.sync_shared_memory(&crate::integrations::mcp_index::shared_memory_root(root))?;
+    // Board owner/workspace: the workspace root scopes boards;
+    // "mcp" is the stable owner for agent-posted boards.
+    let workspace = root.to_string_lossy().to_string();
+    let result = match tool_name {
+        "board_open" | "board_list" | "board_info" | "board_post" | "board_read" | "board_get"
+        | "board_search" => {
+            dispatch_board_tool(tool_name, arguments, service, "mcp", &workspace, provider)
+        }
+        "add_memory" | "get_memory" => {
+            dispatch_memory_tool(tool_name, arguments, service, provider)
+        }
+        _ => Err(format!("unknown tool: {tool_name}")),
+    };
+    match result {
+        Ok(payload) => Ok(JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&payload)?,
+                }]
+            })),
+            error: None,
+        }),
+        Err(message) => Ok(JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32602,
+                message,
+            }),
+        }),
     }
 }
 

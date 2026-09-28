@@ -351,6 +351,19 @@ impl GeminiMcp {
                 };
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
+            "board_open" | "board_list" | "board_info" | "board_post" | "board_read"
+            | "board_get" | "board_search" | "add_memory" | "get_memory" => {
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("initialized");
+                mcp_tools::call_board_or_memory_tool(
+                    name,
+                    id,
+                    &args,
+                    service,
+                    &self.root,
+                    self.provider.as_str(),
+                )
+            }
             _ => Ok(error_response(id, -32602, "unknown tool")),
         }
     }
@@ -358,7 +371,7 @@ impl GeminiMcp {
 
 fn tool_definitions() -> Vec<ToolDefinition> {
     let schema = |properties: Value, required: Vec<&str>| json!({"type":"object", "properties":properties, "required":required});
-    vec![
+    let tools = vec![
         ToolDefinition {
             name: "search".into(),
             description: "Search Gemini project memory.".into(),
@@ -396,7 +409,11 @@ fn tool_definitions() -> Vec<ToolDefinition> {
             description: "Show Gemini Lint-AI and recording state.".into(),
             input_schema: schema(json!({}), vec![]),
         },
-    ]
+    ];
+    let mut tools = tools;
+    tools.extend(mcp_tools::board_tool_definitions());
+    tools.extend(mcp_tools::memory_tool_definitions());
+    tools
 }
 
 fn text_response(id: Option<Value>, text: &str) -> JsonRpcResponse {
@@ -598,6 +615,17 @@ mod tests {
                 "enable_lint_ai",
                 "disable_lint_ai",
                 "lint_ai_status",
+                // Bulletin-board tools and add_memory / get_memory are now
+                // opted in for all Gemini-compatible providers.
+                "board_open",
+                "board_list",
+                "board_info",
+                "board_post",
+                "board_read",
+                "board_get",
+                "board_search",
+                "add_memory",
+                "get_memory",
             ] {
                 assert!(names.contains(&required), "{label} must expose {required}");
             }
@@ -619,6 +647,86 @@ mod tests {
             let status = call_tool(&mcp, "lint_ai_status", json!({}));
             assert_eq!(status["enabled"], true);
             assert_eq!(status["recording_enabled"], false);
+            drop(mcp);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn board_and_memory_tools_round_trip_for_gemini_compatible_providers() {
+        let providers = [
+            (RecordingProvider::Gemini, "gemini-cli"),
+            (RecordingProvider::Agy, "agy"),
+            (RecordingProvider::OpenClaw, "openclaw"),
+        ];
+        for (provider, label) in providers {
+            let root = temp_root(label);
+            let mcp = GeminiMcp {
+                root: root.clone(),
+                store: Mutex::new(None),
+                provider,
+                provider_label: label,
+                max_bytes: 5_000_000,
+                max_files: 50_000,
+                max_depth: 20,
+                max_total_bytes: 100_000_000,
+                ignore_paths: vec![],
+                workspace_watcher: None,
+            };
+            let session = format!("gemini-board-{label}");
+
+            // board_post -> board_read: same session's default board.
+            let request_id = format!("post-{label}");
+            let posted = call_tool(
+                &mcp,
+                "board_post",
+                json!({
+                    "content": "OpenClaw integration checkpoint reached.",
+                    "request_id": request_id,
+                    "session_id": session,
+                }),
+            );
+            assert!(
+                posted["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("OpenClaw integration checkpoint"),
+                "{provider:?}: board_post did not echo content: {posted}"
+            );
+            let read = call_tool(&mcp, "board_read", json!({"session_id": session}));
+            let posts = read["posts"].as_array().cloned().unwrap_or_default();
+            assert!(
+                posts.iter().any(|post| post["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("OpenClaw integration checkpoint"))),
+                "{provider:?}: board_read missed the post: {read}"
+            );
+
+            // add_memory -> get_memory: the memory ID is deterministic.
+            let mem_request = format!("mem-{label}");
+            let added = call_tool(
+                &mcp,
+                "add_memory",
+                json!({
+                    "content": "The staging API key rotates every Friday.",
+                    "request_id": mem_request,
+                    "session_id": session,
+                }),
+            );
+            assert_eq!(
+                added["request_id"].as_str().unwrap(),
+                mem_request,
+                "{provider:?}: add_memory response missing request id: {added}"
+            );
+            let memory_id = crate::stable_doc_id_from_source(&format!("mcp:{mem_request}:0"));
+            let fetched = call_tool(&mcp, "get_memory", json!({"memory_id": memory_id}));
+            assert!(
+                fetched["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("rotates every Friday"),
+                "{provider:?}: get_memory missed the content: {fetched}"
+            );
             drop(mcp);
             fs::remove_dir_all(root).unwrap();
         }

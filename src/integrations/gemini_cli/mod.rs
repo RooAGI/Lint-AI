@@ -865,4 +865,81 @@ mod tests {
             fs::remove_dir_all(root).unwrap();
         }
     }
+
+    #[test]
+    fn shared_search_scopes_conversation_state_to_adapter_provider() {
+        // The shared Gemini-compatible search must scope conversation state
+        // (session pointers, follow-up resolution) to the adapter's own
+        // provider, never hardcoded "gemini".
+        let root = temp_root("hermes-scope");
+        let memory_root = mcp_index::shared_memory_root(&root);
+        fs::create_dir_all(&memory_root).unwrap();
+        fs::write(
+            memory_root.join("tea.md"),
+            "# Tea\nLuyi prefers oolong tea from Alishan, Taiwan.",
+        )
+        .unwrap();
+        let make_mcp = |provider, label: &'static str, display_name: &'static str| GeminiMcp {
+            root: root.clone(),
+            store: Mutex::new(None),
+            provider,
+            provider_label: label,
+            provider_display_name: display_name,
+            max_bytes: 5_000_000,
+            max_files: 50_000,
+            max_depth: 20,
+            max_total_bytes: 100_000_000,
+            ignore_paths: vec![],
+            workspace_watcher: None,
+        };
+
+        // Gemini turn in session s1: seeds ("gemini", "s1") conversation
+        // state about oolong tea.
+        let gemini_mcp = make_mcp(RecordingProvider::Gemini, "gemini-cli", "Gemini");
+        let seed = call_tool(
+            &gemini_mcp,
+            "search",
+            json!({"query": "oolong tea", "top_k": 3, "session_id": "s1"}),
+        );
+        assert!(
+            !seed["results"].as_array().unwrap().is_empty(),
+            "seed turn should find the tea doc"
+        );
+        drop(gemini_mcp);
+
+        let hermes_mcp = make_mcp(RecordingProvider::Hermes, "hermes", "Hermes");
+        // Hermes follow-up in the same session id: with the adapter's own
+        // scope there is no hermes turn to resolve against, so the bare
+        // follow-up finds nothing. A hardcoded "gemini" scope leaks
+        // Gemini's turn in and returns the tea doc.
+        let follow_up = call_tool(
+            &hermes_mcp,
+            "search",
+            json!({"query": "tell me about it", "top_k": 3, "session_id": "s1"}),
+        );
+        assert!(
+            follow_up["results"].as_array().unwrap().is_empty(),
+            "hermes follow-up must not resolve against gemini's conversation state: {}",
+            serde_json::to_string_pretty(&follow_up["results"]).unwrap()
+        );
+
+        // Session-pointer wiring: an explicit session id is noted under the
+        // adapter's own provider, not gemini's.
+        call_tool(
+            &hermes_mcp,
+            "search",
+            json!({"query": "oolong tea", "top_k": 1, "session_id": "s2"}),
+        );
+        {
+            let mut guard = hermes_mcp.store().unwrap();
+            let service = guard.as_mut().expect("initialized");
+            assert_eq!(
+                service.current_session_id("hermes").as_deref(),
+                Some("s2"),
+                "hermes adapter must note the session under its own provider"
+            );
+        }
+        drop(hermes_mcp);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

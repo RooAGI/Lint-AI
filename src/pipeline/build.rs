@@ -579,6 +579,73 @@ pub(crate) fn build_doc_record(
     ))
 }
 
+/// Reduce a grammar-accepted key phrase to its referring core: the head noun
+/// plus proper-noun modifiers. Possessors ("user's", "my"), determiners
+/// ("the") and descriptive modifiers ("favorite") are not the thing the
+/// phrase denotes, so they must not enter the entity channel: a generic
+/// token like "user" is rare in the entities field, and its high per-field
+/// IDF at 2.4x weight inflated near-miss documents (mem-04: the restaurant
+/// fact outscored the peanut-allergy fact on "user" alone).
+///
+/// Rule (systematic, applies to every key phrase):
+/// - drop possessive-marked tokens ("user's", "dogs'") and possessive
+///   determiners (my/your/his/her/its/our/their);
+/// - drop leading articles (the/a/an);
+/// - keep capitalized tokens (proper-noun modifiers are part of naming:
+///   "Harry Potter" in "Harry Potter conference") and the final token
+///   (the head; English NPs are head-final);
+/// - drop remaining lowercase non-final tokens (descriptive modifiers).
+/// Fail-open: if nothing survives, the original text is kept.
+///
+/// Limitations (documented, not fixed here): capitalization is a heuristic
+/// proxy for proper-nounhood (misses lowercase proper nouns); multi-word
+/// common-noun compounds reduce to the final token ("ice cream" -> "cream");
+/// interior glue ("of" in "University of Washington") is dropped. The full
+/// phrase text stays in the content/terms fields, so nothing becomes
+/// unretrievable -- only the 2.4x entity-channel precision changes.
+fn head_noun_phrase(text: &str) -> String {
+    const POSSESSIVE_DETS: [&str; 7] = ["my", "your", "his", "her", "its", "our", "their"];
+    const ARTICLES: [&str; 3] = ["the", "a", "an"];
+
+    fn is_possessive(tok: &str) -> bool {
+        let lower = tok.to_lowercase();
+        lower.ends_with("'s")
+            || lower.ends_with("\u{2019}s")
+            || lower.ends_with("s'")
+            || lower.ends_with("s\u{2019}")
+            || POSSESSIVE_DETS.contains(&lower.as_str())
+    }
+
+    // Word tokens with original case; apostrophes stay inside the token so
+    // possessives ("user's") are detectable.
+    let mut tokens: Vec<&str> = text
+        .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '\u{2019}'))
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    tokens.retain(|t| !is_possessive(t));
+    while tokens
+        .first()
+        .is_some_and(|t| ARTICLES.contains(&t.to_lowercase().as_str()))
+    {
+        tokens.remove(0);
+    }
+
+    let n = tokens.len();
+    let kept: Vec<&str> = tokens
+        .into_iter()
+        .enumerate()
+        .filter(|(i, t)| *i == n - 1 || t.chars().next().is_some_and(|c| c.is_uppercase()))
+        .map(|(_, t)| t)
+        .collect();
+
+    if kept.is_empty() {
+        text.to_string()
+    } else {
+        kept.join(" ")
+    }
+}
+
 fn assemble_doc_record(
     source_doc: &SourceDocument,
     doc: &Tier1DocInput,
@@ -598,7 +665,10 @@ fn assemble_doc_record(
     // retrieval signals in both routing and per-document entity scoring.
     let mut key_entities = key_entities;
     key_entities.extend(source_doc.key_phrases.iter().map(|kp| Tier1Entity {
-        text: kp.text.clone(),
+        // Luyi 2026-09-28: admit the head noun, not the whole possessive
+        // phrase -- possessors and descriptive modifiers are not the thing
+        // the phrase denotes ("user's favorite restaurant" -> "restaurant").
+        text: head_noun_phrase(&kp.text),
         label: kp.kind.clone(),
         start: 0,
         end: 0,
@@ -748,4 +818,42 @@ pub fn build_index_store(
     let mut index = IndexStore::with_documents(options.clone(), source_docs.to_vec());
     index.refresh()?;
     Ok(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::head_noun_phrase;
+
+    #[test]
+    fn possessive_phrase_reduces_to_head_noun() {
+        assert_eq!(head_noun_phrase("user's favorite restaurant"), "restaurant");
+    }
+
+    #[test]
+    fn proper_noun_modifiers_are_kept() {
+        assert_eq!(
+            head_noun_phrase("Harry Potter conference"),
+            "Harry Potter conference"
+        );
+    }
+
+    #[test]
+    fn leading_article_is_dropped() {
+        assert_eq!(head_noun_phrase("the Eiffel Tower"), "Eiffel Tower");
+    }
+
+    #[test]
+    fn possessive_determiner_is_dropped() {
+        assert_eq!(head_noun_phrase("my mom"), "mom");
+    }
+
+    #[test]
+    fn single_token_phrase_survives() {
+        assert_eq!(head_noun_phrase("EpiPen"), "EpiPen");
+    }
+
+    #[test]
+    fn empty_after_strip_falls_back_to_original() {
+        assert_eq!(head_noun_phrase("John's"), "John's");
+    }
 }

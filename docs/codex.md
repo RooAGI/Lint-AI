@@ -33,6 +33,11 @@ By default this should:
   uses for standing project instructions
 - preserve unrelated MCP servers, hooks, and settings
 
+The MCP entry is user-global, so it deliberately does not pin one repository
+path. Codex starts the server for the active workspace, and Lint-AI uses that
+working directory as the project root. This lets one global MCP entry serve
+multiple repositories without the most recent install redirecting all of them.
+
 Codex's built-in TUI status line currently accepts only Codex-defined item
 identifiers, so installation does not inject an unsupported custom item. The
 Lint-AI state is available inside Codex through

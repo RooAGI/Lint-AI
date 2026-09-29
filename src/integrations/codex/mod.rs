@@ -125,14 +125,13 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         "startup_timeout_sec".to_string(),
         TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
     );
-    // Pin the project root explicitly so the MCP server does not depend on the
-    // client's working directory (which may be the user's home directory).
+    // This is a user-global config entry. Pinning `root` here redirects every
+    // project to whichever repository was installed most recently. The serve
+    // command defaults to the Codex process working directory, so leave the
+    // project path out of the global entry.
     entry.insert(
         "args".to_string(),
-        TomlValue::Array(vec![
-            TomlValue::String("--codex-serve".to_string()),
-            TomlValue::String(root.to_string_lossy().into_owned()),
-        ]),
+        TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
     );
     mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
 
@@ -1069,7 +1068,7 @@ args = ["old"]
                 .map(TomlValue::as_str)
                 .collect::<Option<Vec<_>>>()
                 .unwrap(),
-            vec!["--codex-serve", root.to_string_lossy().as_ref()]
+            vec!["--codex-serve"]
         );
     }
 

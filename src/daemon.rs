@@ -37,6 +37,9 @@ struct DaemonState {
     name: &'static str,
     script: PathBuf,
     python: String,
+    /// Extra interpreter args placed before the script, e.g. `["-I"]` so
+    /// the daemon matches a `python -I script` one-shot invocation.
+    extra_args: Vec<String>,
     mutable: Mutex<DaemonMutable>,
 }
 
@@ -52,11 +55,23 @@ impl JsonLinesDaemon {
     /// A daemon over an explicit script. Each daemon owns exactly one
     /// child; wrappers keep one process-wide instance per script.
     pub fn new(name: &'static str, script: PathBuf, python: String) -> Self {
+        Self::new_with_args(name, script, python, Vec::new())
+    }
+
+    /// A daemon over an explicit script plus extra interpreter args placed
+    /// before the script (e.g. `["-I"]` for `python -I script --serve`).
+    pub fn new_with_args(
+        name: &'static str,
+        script: PathBuf,
+        python: String,
+        extra_args: Vec<String>,
+    ) -> Self {
         JsonLinesDaemon {
             inner: std::sync::Arc::new(DaemonState {
                 name,
                 script,
                 python,
+                extra_args,
                 mutable: Mutex::new(DaemonMutable {
                     child: None,
                     stdin: None,
@@ -75,6 +90,7 @@ impl JsonLinesDaemon {
                 self.inner.name,
                 &self.inner.script,
                 &self.inner.python,
+                &self.inner.extra_args,
             );
         }
     }
@@ -90,6 +106,7 @@ impl JsonLinesDaemon {
             self.inner.name,
             &self.inner.script,
             &self.inner.python,
+            &self.inner.extra_args,
         )?;
         if mutable.write_line(request_line).is_err() {
             mutable.kill();
@@ -128,6 +145,7 @@ impl DaemonMutable {
         name: &str,
         script: &Path,
         python: &str,
+        extra_args: &[String],
     ) -> Option<()> {
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
@@ -140,6 +158,7 @@ impl DaemonMutable {
             return None;
         }
         let mut child = Command::new(python)
+            .args(extra_args)
             .arg(script)
             .arg("--serve")
             .stdin(Stdio::piped())

@@ -289,6 +289,7 @@ async fn main() -> anyhow::Result<()> {
         .spawn(|| {
             lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
             lint_ai::behood_query::BehoodQueryDaemon::global().prewarm();
+            lint_ai::NerDaemon::global().prewarm();
         })
         .ok();
     let app = Router::new()

@@ -158,40 +158,57 @@ fn rake_token_regex() -> &'static Regex {
 }
 
 #[derive(Serialize)]
-struct SpacyDocInput<'a> {
-    id: &'a str,
-    text: &'a str,
+pub(crate) struct SpacyDocInput<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) text: &'a str,
 }
 
 #[derive(Serialize)]
-struct SpacyBatchInput<'a> {
-    model: &'a str,
-    documents: Vec<SpacyDocInput<'a>>,
+pub(crate) struct SpacyBatchInput<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) documents: Vec<SpacyDocInput<'a>>,
 }
 
 #[derive(Deserialize)]
-struct SpacyBatchOutput {
-    documents: Vec<SpacyDocOutput>,
+pub(crate) struct SpacyBatchOutput {
+    pub(crate) documents: Vec<SpacyDocOutput>,
 }
 
 #[derive(Deserialize)]
-struct SpacyDocOutput {
-    id: String,
-    entities: Vec<SpacyEntityOutput>,
+pub(crate) struct SpacyDocOutput {
+    pub(crate) id: String,
+    pub(crate) entities: Vec<SpacyEntityOutput>,
 }
 
 #[derive(Deserialize)]
-struct SpacyEntityOutput {
-    text: String,
-    label: String,
-    start: usize,
-    end: usize,
+pub(crate) struct SpacyEntityOutput {
+    pub(crate) text: String,
+    pub(crate) label: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
     #[serde(default)]
-    score: Option<f32>,
+    pub(crate) score: Option<f32>,
 }
 
 impl KeyEntityRanker for SpacyKeyEntityRanker {
     fn rank_docs(&self, docs: &[Tier1DocInput]) -> Result<HashMap<String, Vec<Tier1Entity>>> {
+        // Fast path: the long-lived NER daemon keeps the spaCy model loaded
+        // across calls, so repeated rankings (per-document adds, benchmark
+        // batches) pay the interpreter + model load once per process instead
+        // of once per call. Fail-open: any daemon failure (missing script,
+        // dead child, timeout, lock contention) falls through to the
+        // one-shot subprocess below, exactly as before.
+        //
+        // Only the default script goes through the process-wide daemon; a
+        // custom script_path always uses the one-shot path.
+        if self.script_path == default_spacy_script_path().display().to_string() {
+            let timeout = Duration::from_secs(SPACY_SUBPROCESS_TIMEOUT_SECS);
+            if let Some(out) =
+                crate::tier1_ner_daemon::NerDaemon::global().rank(&self.model, docs, timeout)
+            {
+                return Ok(out);
+            }
+        }
         let payload = SpacyBatchInput {
             model: &self.model,
             documents: docs

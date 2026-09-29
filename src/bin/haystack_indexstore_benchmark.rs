@@ -113,6 +113,11 @@ fn main() -> Result<()> {
         anyhow::bail!("at least one positive --k value is required");
     }
 
+    // Warm the long-lived spaCy NER daemon so the index build pays the
+    // interpreter + model load once, up front, instead of inside the
+    // first ranking call. Mirrors src/bin/server.rs.
+    lint_ai::NerDaemon::global().prewarm();
+
     let data = fs::read_to_string(&args.longmemeval)
         .with_context(|| format!("failed to read {}", args.longmemeval.display()))?;
     let raw: Vec<LongMemEvalEntry> =

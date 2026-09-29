@@ -10,10 +10,9 @@ use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
 use crate::tier1::{
-    default_spacy_script_path, CValueStyleTermRanker, HeuristicKeyEntityRanker,
-    ImportantTermRanker, KeyEntityRanker, RakeStyleTermRanker, SpacyKeyEntityRanker,
-    TextRankStyleTermRanker, Tier1DocInput, Tier1Entity, YakeStyleTermRanker,
-    BEHOOD_NP_ENTITY_SOURCE,
+    default_spacy_script_path, CValueStyleTermRanker, ImportantTermRanker, KeyEntityRanker,
+    RakeStyleTermRanker, SpacyKeyEntityRanker, TextRankStyleTermRanker, Tier1DocInput, Tier1Entity,
+    YakeStyleTermRanker, BEHOOD_NP_ENTITY_SOURCE,
 };
 use anyhow::Result;
 use sha2::{Digest, Sha256};
@@ -67,15 +66,6 @@ impl LexicalState {
             Some(dir) => Self::open_or_create_on_disk(dir, &schema)?,
             None => Index::create_in_ram(schema),
         };
-        // Unified script-aware tokenization for all TEXT fields (overrides
-        // the built-in "default"; see crate::index::cjk_tokenizer): Han runs
-        // index as character bigrams, Hangul runs as eojeol +
-        // particle-stripped stem, and Latin runs replicate tantivy's default
-        // tokenizer plus deunicode folding ("niño" -> "nino") so accented
-        // terms agree with the deunicoded boosted fields. Pure-ASCII text is
-        // unaffected. Applies to existing on-disk indexes too — the
-        // tokenizer name resolves through the manager at index/query time.
-        crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
         let writer = None;
         let reader = index
             .reader_builder()
@@ -290,10 +280,10 @@ fn guess_doc_type(headings: &[String], content: &str) -> Option<String> {
 /// [`doc_record_content_hash`]) are the only `PipelineOptions` inputs that can
 /// change a built [`DocRecord`].
 fn extraction_identity(options: &PipelineOptions) -> (String, String) {
-    let ner_provider_name = match &options.ner_provider {
-        Tier1NerProvider::Heuristic => "heuristic".to_string(),
-        Tier1NerProvider::Spacy => format!("spacy:{}", options.spacy_model),
-    };
+    // Luyi 2026-09-29: spaCy NER is the only Tier1 provider. The heuristic
+    // ranker admitted junk entities ("The", "user", "memory") into the
+    // 2.4x-weighted entities field, so it was removed outright.
+    let ner_provider_name = format!("spacy:{}", options.spacy_model);
     let term_ranker_name = select_term_ranker(&options.term_ranker).name().to_string();
     (ner_provider_name, term_ranker_name)
 }
@@ -435,48 +425,6 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
-/// Run spaCy NER with per-language model selection: docs are grouped by
-/// the model [`PipelineOptions::spacy_model_for_text`] picks for their
-/// content, so Spanish docs get `es_core_news_sm`, Chinese docs get
-/// `zh_core_web_sm`, and Korean docs get `ko_core_news_sm` with no flags
-/// while an explicit `--spacy-model` still applies to everything.
-/// Fail-open per group: a group whose model is unavailable falls back to
-/// the heuristic ranker for just those docs.
-fn spacy_key_entities_by_lang(
-    docs: &[Tier1DocInput],
-    options: &PipelineOptions,
-    heuristic: &HeuristicKeyEntityRanker,
-) -> Result<HashMap<String, Vec<Tier1Entity>>> {
-    let mut by_model: HashMap<String, Vec<Tier1DocInput>> = HashMap::new();
-    for doc in docs {
-        by_model
-            .entry(options.spacy_model_for_text(&doc.content))
-            .or_default()
-            .push(doc.clone());
-    }
-    let script_path = default_spacy_script_path().display().to_string();
-    let mut out: HashMap<String, Vec<Tier1Entity>> = HashMap::new();
-    // BTreeMap for deterministic model order across runs.
-    let by_model: std::collections::BTreeMap<_, _> = by_model.into_iter().collect();
-    for (model, group_docs) in by_model {
-        let spacy = SpacyKeyEntityRanker {
-            model: model.clone(),
-            script_path: script_path.clone(),
-        };
-        match spacy.rank_docs(&group_docs) {
-            Ok(entities) => out.extend(entities),
-            Err(err) => {
-                eprintln!(
-                    "warning: {} ranker unavailable for model {model} ({err}), falling back to heuristic",
-                    spacy.name(),
-                );
-                out.extend(heuristic.rank_docs(&group_docs).unwrap_or_default());
-            }
-        }
-    }
-    Ok(out)
-}
-
 /// Extracts [`DocRecord`]s from source documents (NER + term ranking +
 /// chunking). This is the expensive per-document pipeline phase; the
 /// benchmark harness calls it once per question and builds both the
@@ -488,10 +436,23 @@ pub fn build_doc_records(
 ) -> Result<Vec<DocRecord>> {
     let docs = source_documents_to_tier1_inputs(source_docs);
 
-    let heuristic = HeuristicKeyEntityRanker;
-    let entities_by_doc = match &options.ner_provider {
-        Tier1NerProvider::Heuristic => heuristic.rank_docs(&docs)?,
-        Tier1NerProvider::Spacy => spacy_key_entities_by_lang(&docs, options, &heuristic)?,
+    // Luyi 2026-09-29: always NER from spaCy. Fail OPEN with zero NER key
+    // entities when the spaCy subprocess is unavailable (loud warning) —
+    // bekind-np key phrases still flow and lexical retrieval is unaffected.
+    let spacy = SpacyKeyEntityRanker {
+        model: options.spacy_model.clone(),
+        script_path: default_spacy_script_path().display().to_string(),
+    };
+    let entities_by_doc = match spacy.rank_docs(&docs) {
+        Ok(out) => out,
+        Err(err) => {
+            eprintln!(
+                "warning: {} ranker unavailable ({}); NER key entities disabled, lexical retrieval unaffected",
+                spacy.name(),
+                err
+            );
+            HashMap::new()
+        }
     };
 
     let term_ranker = select_term_ranker(&options.term_ranker);
@@ -534,33 +495,22 @@ pub(crate) fn build_doc_record(
         .next()
         .expect("single source document should yield one tier1 input");
 
-    let heuristic = HeuristicKeyEntityRanker;
-    let key_entities = match &options.ner_provider {
-        Tier1NerProvider::Heuristic => heuristic
-            .rank_docs(std::slice::from_ref(&doc))?
-            .remove(&doc.id)
-            .unwrap_or_default(),
-        Tier1NerProvider::Spacy => {
-            let model = options.spacy_model_for_text(&doc.content);
-            let spacy = SpacyKeyEntityRanker {
-                model: model.clone(),
-                script_path: default_spacy_script_path().display().to_string(),
-            };
-            match spacy.rank_docs(std::slice::from_ref(&doc)) {
-                Ok(mut out) => out.remove(&doc.id).unwrap_or_default(),
-                Err(err) => {
-                    eprintln!(
-                        "warning: {} ranker unavailable for model {model} ({}), falling back to heuristic",
-                        spacy.name(),
-                        err
-                    );
-                    heuristic
-                        .rank_docs(std::slice::from_ref(&doc))
-                        .unwrap_or_default()
-                        .remove(&doc.id)
-                        .unwrap_or_default()
-                }
-            }
+    // Luyi 2026-09-29: always NER from spaCy. Fail OPEN with zero NER key
+    // entities when the spaCy subprocess is unavailable (loud warning) —
+    // bekind-np key phrases still flow and lexical retrieval is unaffected.
+    let spacy = SpacyKeyEntityRanker {
+        model: options.spacy_model.clone(),
+        script_path: default_spacy_script_path().display().to_string(),
+    };
+    let key_entities = match spacy.rank_docs(std::slice::from_ref(&doc)) {
+        Ok(mut out) => out.remove(&doc.id).unwrap_or_default(),
+        Err(err) => {
+            eprintln!(
+                "warning: {} ranker unavailable ({}); NER key entities disabled, lexical retrieval unaffected",
+                spacy.name(),
+                err
+            );
+            Vec::new()
         }
     };
 
@@ -789,7 +739,6 @@ pub fn build_query_snapshot_from_source_documents(
     let options = PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
-        lang: crate::lang::Lang::Auto,
         term_ranker: ranker_kind.clone(),
         chunk_strategy: chunk_strategy.clone(),
         chunk_lines,

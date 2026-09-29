@@ -298,7 +298,7 @@ fn run_scoped_benchmark(
         let candidate_session_ids = entry.haystack_session_ids.clone();
         let source_docs = build_scoped_source_docs(&entry);
         let options = PipelineOptions {
-            ner_provider: Tier1NerProvider::Heuristic,
+            ner_provider: Tier1NerProvider::Spacy,
             spacy_model: "en_core_web_sm".to_string(),
             term_ranker: Tier1TermRankerKind::Yake,
             chunk_strategy: ChunkStrategy::Heading,

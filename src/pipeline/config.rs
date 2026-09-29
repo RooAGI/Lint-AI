@@ -1,15 +1,12 @@
 use crate::index::MemoryIndex;
-use crate::lang::{default_spacy_model_for_lang, detect_lang, Lang};
 use crate::segments::{SegmentRoutingStrategy, SegmentedMemoryIndex};
 use crate::semantic_relations::SupersessionOptions;
-use crate::tier1::DEFAULT_SPACY_MODEL;
 use clap::ValueEnum;
 use serde::Serialize;
 use std::path::PathBuf;
 use tantivy::doc;
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Tier1NerProvider {
-    Heuristic,
     Spacy,
 }
 
@@ -56,12 +53,6 @@ pub enum MemoryIndexLayout {
 pub struct PipelineOptions {
     pub ner_provider: Tier1NerProvider,
     pub spacy_model: String,
-    /// Content language. `Auto` (default) detects per text from script
-    /// statistics (plus Spanish signals for Latin text); an explicit value
-    /// forces it. Selects per-language defaults — e.g. the spaCy model —
-    /// when the corresponding explicit option (like `--spacy-model`) was
-    /// not given.
-    pub lang: Lang,
     pub term_ranker: Tier1TermRankerKind,
     pub chunk_strategy: ChunkStrategy,
     pub chunk_lines: usize,
@@ -109,9 +100,8 @@ pub struct PipelineOptions {
 impl Default for PipelineOptions {
     fn default() -> Self {
         Self {
-            ner_provider: Tier1NerProvider::Heuristic,
-            spacy_model: DEFAULT_SPACY_MODEL.to_string(),
-            lang: Lang::Auto,
+            ner_provider: Tier1NerProvider::Spacy,
+            spacy_model: "en_core_web_sm".to_string(),
             term_ranker: Tier1TermRankerKind::Yake,
             chunk_strategy: ChunkStrategy::Heading,
             chunk_lines: 40,
@@ -130,25 +120,6 @@ impl Default for PipelineOptions {
             key_phrase_enrichment: true,
             extractor_script: None,
         }
-    }
-}
-
-impl PipelineOptions {
-    /// The spaCy model to use for `text`. An explicit `--spacy-model` (any
-    /// value other than the default) always wins; otherwise the model
-    /// follows the language — `zh` content gets `zh_core_web_sm`, `ko`
-    /// content gets `ko_core_news_sm`, `es` content gets `es_core_news_sm`
-    /// — with `lang` forcing the language
-    /// instead of per-text detection.
-    pub fn spacy_model_for_text(&self, text: &str) -> String {
-        if self.spacy_model != DEFAULT_SPACY_MODEL {
-            return self.spacy_model.clone();
-        }
-        let lang = match self.lang {
-            Lang::Auto => detect_lang(text),
-            lang => lang,
-        };
-        default_spacy_model_for_lang(lang).to_string()
     }
 }
 

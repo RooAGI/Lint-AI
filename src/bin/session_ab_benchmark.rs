@@ -823,7 +823,7 @@ fn main() -> Result<()> {
     eprintln!("processing {} conversations...", conversations.len());
 
     let options = PipelineOptions {
-        ner_provider: Tier1NerProvider::Heuristic,
+        ner_provider: Tier1NerProvider::Spacy,
         spacy_model: "en_core_web_sm".to_string(),
         term_ranker: Tier1TermRankerKind::Yake,
         chunk_strategy: ChunkStrategy::Heading,

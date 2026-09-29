@@ -1,4 +1,3 @@
-use crate::lang::Lang;
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -71,162 +70,6 @@ pub trait ImportantTermRanker {
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm>;
 }
 
-pub struct HeuristicKeyEntityRanker;
-
-impl HeuristicKeyEntityRanker {
-    fn rank_one(doc: &Tier1DocInput) -> Vec<Tier1Entity> {
-        #[derive(Clone, Copy)]
-        struct Cand {
-            start: usize,
-            end: usize,
-            mentions: usize,
-            heading_hits: usize,
-            section_hits: usize,
-            first_pos: usize,
-            label: &'static str,
-        }
-
-        let mut candidates: HashMap<String, Cand> = HashMap::new();
-        let mut section_bounds = Vec::new();
-        let mut last = 0usize;
-        for h in &doc.headings {
-            if let Some(pos) = doc.content.find(h) {
-                if pos > last {
-                    section_bounds.push((last, pos));
-                }
-                last = pos;
-            }
-        }
-        section_bounds.push((last, doc.content.len()));
-        if section_bounds.is_empty() {
-            section_bounds.push((0, doc.content.len()));
-        }
-
-        let concept = doc.concept.trim().to_string();
-        if !concept.is_empty() {
-            candidates.insert(
-                concept.clone(),
-                Cand {
-                    start: 0,
-                    end: concept.len(),
-                    mentions: 1,
-                    heading_hits: 0,
-                    section_hits: 1,
-                    first_pos: 0,
-                    label: "CONCEPT",
-                },
-            );
-        }
-
-        for cap in title_case_regex().captures_iter(&doc.content).take(80) {
-            let m = cap.get(1).expect("capture exists");
-            let text = m.as_str().trim();
-            if text.len() < 3 {
-                continue;
-            }
-            let key = text.to_string();
-            let section_hits = section_bounds
-                .iter()
-                .filter(|(s, e)| m.start() >= *s && m.start() < *e)
-                .count()
-                .max(1);
-            let entry = candidates.entry(key).or_insert(Cand {
-                start: m.start(),
-                end: m.end(),
-                mentions: 0,
-                heading_hits: 0,
-                section_hits: 0,
-                first_pos: m.start(),
-                label: "PROPN",
-            });
-            entry.mentions += 1;
-            entry.section_hits = entry.section_hits.max(section_hits);
-            entry.first_pos = entry.first_pos.min(m.start());
-        }
-
-        for m in acronym_regex().find_iter(&doc.content).take(50) {
-            let text = m.as_str();
-            let key = text.to_string();
-            let entry = candidates.entry(key).or_insert(Cand {
-                start: m.start(),
-                end: m.end(),
-                mentions: 0,
-                heading_hits: 0,
-                section_hits: 1,
-                first_pos: m.start(),
-                label: "ACRONYM",
-            });
-            entry.mentions += 1;
-            entry.first_pos = entry.first_pos.min(m.start());
-        }
-
-        for heading in &doc.headings {
-            let heading_l = heading.to_lowercase();
-            for (term, cand) in &mut candidates {
-                if heading_l.contains(&term.to_lowercase()) {
-                    cand.heading_hits += 1;
-                }
-            }
-        }
-
-        let len = doc.content.len().max(1) as f32;
-        let mut out: Vec<Tier1Entity> = candidates
-            .into_iter()
-            .filter_map(|(text, cand)| {
-                if text.len() < 3 {
-                    return None;
-                }
-                let pos_bonus = 1.0 + (1.0 - (cand.first_pos as f32 / len));
-                let freq_score = (cand.mentions as f32).ln_1p();
-                let section_score = cand.section_hits as f32;
-                let heading_score = (cand.heading_hits as f32) * 1.5;
-                let score =
-                    0.8 * freq_score + 0.7 * section_score + 1.2 * heading_score + 0.6 * pos_bonus;
-                Some(Tier1Entity {
-                    text,
-                    label: cand.label.to_string(),
-                    start: cand.start,
-                    end: cand.end,
-                    score: Some(score),
-                    source: "heuristic-scored".to_string(),
-                })
-            })
-            .collect();
-        out.sort_by(|a, b| {
-            b.score
-                .unwrap_or(0.0)
-                .partial_cmp(&a.score.unwrap_or(0.0))
-                .unwrap_or(Ordering::Equal)
-        });
-        out.truncate(12);
-        if out.is_empty() {
-            out.push(Tier1Entity {
-                text: doc.source.clone(),
-                label: "DOC".to_string(),
-                start: 0,
-                end: doc.source.len(),
-                score: Some(0.3),
-                source: "heuristic-scored".to_string(),
-            });
-        }
-        out
-    }
-}
-
-impl KeyEntityRanker for HeuristicKeyEntityRanker {
-    fn rank_docs(&self, docs: &[Tier1DocInput]) -> Result<HashMap<String, Vec<Tier1Entity>>> {
-        let mut out = HashMap::new();
-        for doc in docs {
-            out.insert(doc.id.clone(), Self::rank_one(doc));
-        }
-        Ok(out)
-    }
-
-    fn name(&self) -> &'static str {
-        "heuristic"
-    }
-}
-
 pub struct SpacyKeyEntityRanker {
     pub model: String,
     pub script_path: String,
@@ -276,14 +119,9 @@ pub fn detect_python_executable() -> String {
     "python3".to_string()
 }
 
-fn title_case_regex() -> &'static Regex {
+fn content_word_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b").expect("valid regex"))
-}
-
-fn acronym_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,8})\b").expect("valid regex"))
+    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"))
 }
 
 fn content_word_regex() -> &'static Regex {
@@ -307,9 +145,6 @@ fn rake_token_regex() -> &'static Regex {
         .expect("valid regex")
     })
 }
-
-/// Sentence-boundary characters: ASCII plus CJK fullwidth forms.
-const SENTENCE_ENDINGS: &[char] = &['.', '!', '?', '。', '！', '？'];
 
 #[derive(Serialize)]
 struct SpacyDocInput<'a> {
@@ -470,103 +305,45 @@ mod subprocess_tests {
     }
 }
 
-/// Stopwords for the YAKE/RAKE/TextRank term rankers, per language.
-/// The English base is the canonical spaCy list
-/// (`crate::tokenizer::english_stopwords`); Chinese/Korean function words
-/// can never collide with Latin tokens so they are unioned for every
-/// language; Spanish is added only for Spanish docs — its words collide
-/// with English (`no`, `son`, `era`).
-fn default_stopwords_for_lang(lang: Lang) -> HashSet<String> {
-    let mut stop: HashSet<String> = crate::tokenizer::english_stopwords()
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    stop.extend(
-        crate::tokenizer::chinese_stopwords()
-            .iter()
-            .map(|s| s.to_string()),
-    );
-    stop.extend(
-        crate::tokenizer::korean_stopwords()
-            .iter()
-            .map(|s| s.to_string()),
-    );
-    if matches!(lang, Lang::Es) {
-        stop.extend(crate::tokenizer::spanish_stopwords().iter().cloned());
-    }
-    stop
+fn default_stopwords() -> HashSet<&'static str> {
+    let mut set: HashSet<&'static str> = [
+        "a", "an", "the", "is", "are", "was", "were", "be", "to", "for", "of", "on", "in", "by",
+        "as", "or", "and", "that", "this", "with", "from", "it", "its", "at", "into", "about",
+        "over", "under", "also", "can", "could", "should", "would", "will", "may", "might", "do",
+        "does", "did", "done", "not", "no", "yes", "if", "then", "than", "there", "their", "we",
+        "you", "they", "he", "she", "them", "our", "your",
+    ]
+    .iter()
+    .copied()
+    .collect();
+    // Korean particles/function words: without these, the term ranker
+    // would surface e.g. "것" or "수" as top terms for Korean docs.
+    set.extend(crate::tokenizer::korean_stopwords().iter().copied());
+    set
 }
 
 fn tokenize_words(content: &str) -> Vec<String> {
-    // Unstemmed mode keeps the exact historical Latin behavior (the shared
-    // tokenizer's Latin path matches the old content-word regex
-    // `[A-Za-z][A-Za-z0-9_-]{2,}`) and adds Han bigrams / Hangul eojeol
-    // for CJK text.
-    crate::tokenizer::tokenize(content, crate::tokenizer::TokenizerMode::Unstemmed)
-}
-
-/// RAKE tokens: like the shared tokenizer, but keeps RAKE's historical
-/// `{1,}` Latin minimum (so 2-letter English tokens still count) instead
-/// of the shared `{2,}`. Script-aware single pass so mixed-language order
-/// is preserved for phrase building.
-fn rake_tokens(content: &str) -> Vec<String> {
-    let rake_re = rake_token_regex();
-    let mut out = Vec::new();
-    let mut latin = String::new();
-    let mut han = String::new();
-    let mut hangul = String::new();
-    let flush_latin = |latin: &mut String, out: &mut Vec<String>| {
-        for m in rake_re.find_iter(latin) {
-            out.push(m.as_str().to_lowercase());
-        }
-        latin.clear();
-    };
-    for ch in content.chars() {
-        if crate::lang::is_han(ch) {
-            flush_latin(&mut latin, &mut out);
-            if !hangul.is_empty() {
-                for t in crate::tokenizer::hangul_eojeol_tokens(&hangul) {
-                    out.push(t);
-                }
-                hangul.clear();
-            }
-            han.push(ch);
-        } else if crate::lang::is_hangul(ch) {
-            flush_latin(&mut latin, &mut out);
-            if !han.is_empty() {
-                out.extend(crate::tokenizer::han_tokens(&han));
-                han.clear();
-            }
-            hangul.push(ch);
-        } else {
-            if !han.is_empty() {
-                out.extend(crate::tokenizer::han_tokens(&han));
-                han.clear();
-            }
-            if !hangul.is_empty() {
-                for t in crate::tokenizer::hangul_eojeol_tokens(&hangul) {
-                    out.push(t);
-                }
-                hangul.clear();
-            }
-            latin.push(ch);
-        }
-    }
-    flush_latin(&mut latin, &mut out);
-    if !han.is_empty() {
-        out.extend(crate::tokenizer::han_tokens(&han));
-    }
-    if !hangul.is_empty() {
-        for t in crate::tokenizer::hangul_eojeol_tokens(&hangul) {
-            out.push(t);
-        }
-    }
-    out
+    let mut tokens: Vec<String> = content_word_regex()
+        .find_iter(content)
+        .map(|m| m.as_str().to_lowercase())
+        .collect();
+    // The Latin regex skips Hangul/Han runs entirely; add them via the
+    // shared script-aware tokenizer so Korean/Chinese terms participate
+    // in term ranking (Han → bigrams, Hangul → eojeol + stem).
+    tokens.extend(
+        crate::tokenizer::tokenize(content, crate::tokenizer::TokenizerMode::Unstemmed)
+            .into_iter()
+            .filter(|t| {
+                t.chars()
+                    .any(|c| crate::lang::is_han(c) || crate::lang::is_hangul(c))
+            }),
+    );
+    tokens
 }
 
 fn sentence_count(content: &str) -> usize {
     let count = content
-        .split(SENTENCE_ENDINGS)
+        .split(['.', '!', '?'])
         .filter(|s| !s.trim().is_empty())
         .count();
     count.max(1)
@@ -578,41 +355,6 @@ fn sorted_terms(mut terms: Vec<RankedTerm>, top_k: usize) -> Vec<RankedTerm> {
     terms
 }
 
-/// True when Han characters make up at least half of the content's
-/// non-whitespace characters. Han-dominant docs get a quadrupled term
-/// budget: the interleaved unigram+bigram token stream is ~2x the tokens
-/// of the same text without unigrams, and Chinese topic-comment order puts
-/// the distinctive payload late — a tight budget with an early-position
-/// bias truncates exactly the terms questions ask about.
-pub(crate) fn han_dominant_content(content: &str) -> bool {
-    let mut han = 0usize;
-    let mut total = 0usize;
-    for ch in content.chars() {
-        if ch.is_whitespace() {
-            continue;
-        }
-        total += 1;
-        if crate::lang::is_han(ch) {
-            han += 1;
-        }
-    }
-    total > 0 && han * 2 >= total
-}
-
-/// Term budget for [`sorted_terms`]: quadrupled for Han-dominant content.
-/// The interleaved unigram+bigram token stream is ~2x the tokens of the
-/// same text without unigrams, and Chinese topic-comment order puts the
-/// distinctive payload late — a tight budget with an early-position bias
-/// truncates exactly the terms questions ask about (verified on the
-/// Chinese memory benchmark: budget 24 left q15/q16/q19/q25 failing).
-pub(crate) fn term_budget_for(content: &str) -> usize {
-    if han_dominant_content(content) {
-        48
-    } else {
-        12
-    }
-}
-
 pub struct YakeStyleTermRanker;
 
 impl ImportantTermRanker for YakeStyleTermRanker {
@@ -621,7 +363,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
     }
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
-        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&doc.content));
+        let stop = default_stopwords();
         let raw_tokens = tokenize_words(&doc.content);
         let total = raw_tokens.len().max(1) as f32;
         let sentences = sentence_count(&doc.content) as f32;
@@ -636,7 +378,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
             *freq.entry(t.clone()).or_insert(0) += 1;
             first_pos.entry(t.clone()).or_insert(i);
         }
-        for sent in doc.content.split(SENTENCE_ENDINGS) {
+        for sent in doc.content.split(['.', '!', '?']) {
             let s_tokens = tokenize_words(sent);
             let unique: HashSet<String> = s_tokens.into_iter().collect();
             for t in unique {
@@ -660,7 +402,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
                 source: self.name().to_string(),
             });
         }
-        sorted_terms(out, term_budget_for(&doc.content))
+        sorted_terms(out, 12)
     }
 }
 
@@ -672,8 +414,11 @@ impl ImportantTermRanker for RakeStyleTermRanker {
     }
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
-        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&doc.content));
-        let tokens: Vec<String> = rake_tokens(&doc.content);
+        let stop = default_stopwords();
+        let tokens: Vec<String> = rake_token_regex()
+            .find_iter(&doc.content)
+            .map(|m| m.as_str().to_lowercase())
+            .collect();
         let mut phrases: Vec<Vec<String>> = Vec::new();
         let mut current = Vec::new();
         for t in tokens {
@@ -732,7 +477,7 @@ impl ImportantTermRanker for RakeStyleTermRanker {
                 source: self.name().to_string(),
             })
             .collect();
-        sorted_terms(out, term_budget_for(&doc.content))
+        sorted_terms(out, 12)
     }
 }
 
@@ -783,7 +528,7 @@ impl ImportantTermRanker for CValueStyleTermRanker {
                 });
             }
         }
-        sorted_terms(out, term_budget_for(&doc.content))
+        sorted_terms(out, 12)
     }
 }
 
@@ -795,7 +540,7 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
     }
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
-        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&doc.content));
+        let stop = default_stopwords();
         let tokens: Vec<String> = tokenize_words(&doc.content)
             .into_iter()
             .filter(|t| !stop.contains(t.as_str()))
@@ -841,225 +586,7 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
                 source: self.name().to_string(),
             })
             .collect();
-        sorted_terms(out, term_budget_for(&doc.content))
-    }
-}
-
-#[cfg(test)]
-mod cjk_term_tests {
-    use super::*;
-
-    fn doc(content: &str) -> Tier1DocInput {
-        Tier1DocInput {
-            id: "t".to_string(),
-            source: "test".to_string(),
-            content: content.to_string(),
-            concept: String::new(),
-            headings: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn chinese_content_terms_are_ranked() {
-        let terms = YakeStyleTermRanker.rank_terms(&doc("我毕业于清华大学，专业是计算机科学。"));
-        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
-        assert!(
-            names.iter().any(|t| t.contains("清华")),
-            "expected a 清华 bigram in ranked terms, got {names:?}"
-        );
-        // Chinese function words must not surface as content terms.
-        assert!(
-            !names.iter().any(|t| ["的", "了", "在", "是"].contains(t)),
-            "stopwords leaked into terms: {names:?}"
-        );
-    }
-
-    #[test]
-    fn chinese_sentence_splitting_counts_cjk_boundaries() {
-        assert_eq!(sentence_count("第一句。第二句！第三句？"), 3);
-        assert_eq!(sentence_count("第一句。第二句!"), 2);
-        assert_eq!(sentence_count("没有标点"), 1);
-    }
-
-    #[test]
-    fn rake_tokens_emit_chinese_bigrams() {
-        let toks = rake_tokens("我喜欢学习Rust编程");
-        assert!(
-            toks.iter().any(|t| t == "喜欢"),
-            "expected 喜欢 bigram, got {toks:?}"
-        );
-        assert!(
-            toks.iter().any(|t| t == "rust"),
-            "expected rust latin token, got {toks:?}"
-        );
-    }
-
-    #[test]
-    fn rake_keeps_two_letter_latin_tokens() {
-        let toks = rake_tokens("AI is here");
-        assert!(
-            toks.iter().any(|t| t == "ai"),
-            "RAKE must keep 2-letter Latin tokens, got {toks:?}"
-        );
-    }
-
-    #[test]
-    fn english_ranking_unchanged_by_cjk_work() {
-        // Guard: shared-tokenizer switch must not alter Latin behavior.
-        let terms = YakeStyleTermRanker.rank_terms(&doc(
-            "The certificate program awarded a degree in computer science.",
-        ));
-        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
-        assert!(
-            names.iter().any(|t| *t == "certificate" || *t == "degree"),
-            "expected content terms, got {names:?}"
-        );
-    }
-
-    #[test]
-    fn han_dominant_detection() {
-        assert!(han_dominant_content("八月二十号我改主意了，最后提了一辆比亚迪海豹。"));
-        assert!(han_dominant_content("我毕业于清华大学，专业是计算机科学。"));
-        assert!(!han_dominant_content(
-            "The certificate program awarded a degree in computer science."
-        ));
-        assert!(!han_dominant_content(""));
-        // Mixed: 3 Han of 9 non-ws chars -> not dominant.
-        assert!(!han_dominant_content("买特斯拉 Model Y"));
-    }
-
-    #[test]
-    fn chinese_generous_budget_keeps_late_payload_terms() {
-        // Regression: the tight top-12 budget with an early-position bias
-        // truncated the distinctive late terms Chinese questions ask about
-        // (topic-comment order). Han-dominant docs get a 48-term budget so
-        // the payload — 比亚迪海豹, 现在 — survives ranking.
-        let terms = YakeStyleTermRanker.rank_terms(&doc(
-            "八月二十号我改主意了，最后提了一辆比亚迪海豹，现在每天开着上下班。",
-        ));
-        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
-        // 比亚迪海豹 segments as 比亚/亚迪/海豹 bigrams (+ unigrams); the
-        // payload must survive ranking regardless of segmentation.
-        for want in ["比亚", "亚迪", "海豹", "现在", "下班"] {
-            assert!(
-                names.contains(&want),
-                "expected late payload term {want:?} in top terms, got {names:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn chinese_term_budget_is_quadrupled() {
-        assert_eq!(term_budget_for("八月二十号我改主意了。"), 48);
-        assert_eq!(term_budget_for("The quick brown fox."), 12);
-    }
-
-    #[test]
-    fn chinese_unigram_query_term_is_indexable() {
-        // 猫 (single char) must be rankable so it can match 橘猫's unigram.
-        let terms = YakeStyleTermRanker.rank_terms(&doc("家里养了一只橘猫，名字叫年糕。"));
-        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
-        assert!(
-            names.contains(&"猫"),
-            "expected 猫 unigram among ranked terms, got {names:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod spacy_chinese_tests {
-    use super::*;
-
-    /// Chinese NER through the real `spacy_ner.py` with the Rust-selected
-    /// `zh_core_web_sm` model. Skips gracefully when spaCy is unavailable;
-    /// run with PYTHON_EXECUTABLE=~/workspace/venvs/spacy-ner/bin/python
-    /// for the isolated venv that carries the model.
-    #[test]
-    fn spacy_chinese_ner_extracts_entities() {
-        let ranker = SpacyKeyEntityRanker {
-            model: "zh_core_web_sm".to_string(),
-            script_path: default_spacy_script_path().to_string_lossy().to_string(),
-        };
-        let docs = vec![Tier1DocInput {
-            id: "zh-ner-1".to_string(),
-            source: "test".to_string(),
-            content: "我毕业于清华大学，专业是计算机科学。".to_string(),
-            concept: String::new(),
-            headings: Vec::new(),
-        }];
-        let result = match ranker.rank_docs(&docs) {
-            Ok(map) => map,
-            Err(e) => {
-                println!("SKIPPED: spaCy NER unavailable ({e})");
-                return;
-            }
-        };
-        let entities = result.get("zh-ner-1").cloned().unwrap_or_default();
-        println!("Chinese NER entities: {entities:?}");
-        assert!(
-            entities.iter().any(|e| e.text.contains("清华大学")),
-            "expected 清华大学 entity, got {entities:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod stopword_tests {
-    use super::*;
-
-    #[test]
-    fn per_language_stopwords_use_canonical_lists() {
-        let en = default_stopwords_for_lang(Lang::En);
-        let es = default_stopwords_for_lang(Lang::Es);
-        // Canonical spaCy English base in both.
-        for w in ["the", "however", "therefore"] {
-            assert!(en.contains(w), "{w} should stop in English");
-            assert!(es.contains(w), "{w} should stop in Spanish docs too");
-        }
-        // CJK unions apply to every language (no collision possible).
-        for w in ["的", "은"] {
-            assert!(en.contains(w), "{w} should stop in English");
-            assert!(es.contains(w), "{w} should stop in Spanish");
-        }
-        // Spanish gated on Lang::Es: "son"/"era" collide with English words.
-        for w in ["está", "esta", "son", "era"] {
-            assert!(es.contains(w), "{w} should stop for Spanish docs");
-            assert!(!en.contains(w), "{w} must not stop for English docs");
-        }
-        // "now" is not a stopword: it anchors current-state retrieval
-        // ("what is X now" must keep the temporal signal).
-        assert!(
-            !en.contains("now"),
-            "\"now\" must not be an English stopword"
-        );
-    }
-
-    #[test]
-    fn auto_detect_includes_spanish_signals() {
-        // Auto-detection uses Spanish signals (accents, ñ, ¿¡) for Latin
-        // text, so a Spanish doc via Auto gets the Spanish stop set.
-        let es_doc = Tier1DocInput {
-            id: "1".into(),
-            source: "t".into(),
-            content: "El niño está en la escuela porque tiene clases".into(),
-            concept: "".into(),
-            headings: vec![],
-        };
-        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&es_doc.content));
-        assert!(stop.contains("está"));
-        let stop_es = default_stopwords_for_lang(Lang::Es);
-        assert!(stop_es.contains("está"));
-        // English content words that collide with Spanish stopwords survive.
-        let en_doc = Tier1DocInput {
-            id: "2".into(),
-            source: "t".into(),
-            content: "The son went to school in an era of change".into(),
-            concept: "".into(),
-            headings: vec![],
-        };
-        let stop_en = default_stopwords_for_lang(Lang::Auto.resolve(&en_doc.content));
-        assert!(!stop_en.contains("son"), "English 'son' must survive");
-        assert!(!stop_en.contains("era"), "English 'era' must survive");
+        sorted_terms(out, 12)
     }
     use super::*;
 

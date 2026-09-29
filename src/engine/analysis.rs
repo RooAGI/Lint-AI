@@ -7,8 +7,8 @@ use crate::pipeline::{
 };
 use crate::source::SourceDocument;
 use crate::tier1::{
-    default_spacy_script_path, HeuristicKeyEntityRanker, ImportantTermRanker, KeyEntityRanker,
-    SpacyKeyEntityRanker, Tier1DocEntities, Tier1DocInput, Tier1DocTerms,
+    default_spacy_script_path, ImportantTermRanker, KeyEntityRanker, SpacyKeyEntityRanker,
+    Tier1DocEntities, Tier1DocInput, Tier1DocTerms,
 };
 use aho_corasick::AhoCorasick;
 use anyhow::Result;
@@ -473,40 +473,31 @@ pub(crate) fn analyze_corpus(graph: &Graph, cfg: &Config) {
 
 pub(crate) fn show_tier1_entities(
     graph: &Graph,
-    provider: &Tier1NerProvider,
     spacy_model: &str,
 ) -> Result<()> {
     let source_docs = graph_to_source_documents(graph);
     let docs: Vec<Tier1DocInput> = source_documents_to_tier1_inputs(&source_docs);
-    let heuristic = HeuristicKeyEntityRanker;
-    let mut heuristic_by_doc = heuristic.rank_docs(&docs)?;
-    let mut by_doc = match provider {
-        Tier1NerProvider::Heuristic => heuristic_by_doc.clone(),
-        Tier1NerProvider::Spacy => {
-            let spacy = SpacyKeyEntityRanker {
-                model: spacy_model.to_string(),
-                script_path: default_spacy_script_path().display().to_string(),
-            };
-            match spacy.rank_docs(&docs) {
-                Ok(out) => out,
-                Err(err) => {
-                    eprintln!(
-                        "warning: {} ranker unavailable ({}), falling back to heuristic",
-                        spacy.name(),
-                        err
-                    );
-                    heuristic_by_doc.clone()
-                }
-            }
+    // Luyi 2026-09-29: always NER from spaCy. Fail OPEN with zero NER key
+    // entities when the spaCy subprocess is unavailable (loud warning).
+    let spacy = SpacyKeyEntityRanker {
+        model: spacy_model.to_string(),
+        script_path: default_spacy_script_path().display().to_string(),
+    };
+    let mut by_doc = match spacy.rank_docs(&docs) {
+        Ok(out) => out,
+        Err(err) => {
+            eprintln!(
+                "warning: {} ranker unavailable ({}); NER key entities disabled",
+                spacy.name(),
+                err
+            );
+            std::collections::HashMap::new()
         }
     };
 
     let mut docs_out = Vec::new();
     for doc in docs {
-        let key_entities = by_doc
-            .remove(&doc.id)
-            .or_else(|| heuristic_by_doc.remove(&doc.id))
-            .unwrap_or_default();
+        let key_entities = by_doc.remove(&doc.id).unwrap_or_default();
         docs_out.push(Tier1DocEntities {
             id: doc.id,
             source: doc.source,

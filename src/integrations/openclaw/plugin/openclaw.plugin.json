@@ -1,1 +1,1 @@
-{"activation":{"onStartup":true},"configSchema":{"additionalProperties":false,"type":"object"},"id":"lint-ai","name":"Lint-AI memory"}
+{"activation":{"onStartup":true},"configSchema":{"additionalProperties":false,"properties":{"binaryPath":{"description":"Absolute path to the lint-ai binary; falls back to LINT_AI_BIN, then lint-ai on PATH","type":"string"},"projectRoot":{"description":"Project root lint-ai captures for; falls back to the event workspaceDir when unset","type":"string"}},"type":"object"},"id":"lint-ai","name":"Lint-AI memory","version":"0.2.1"}

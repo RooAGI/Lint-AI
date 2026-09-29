@@ -50,7 +50,8 @@ use crate::integrations::openclaw::hooks::{run_hook as run_openclaw_hook, OpenCl
 #[cfg(feature = "openclaw")]
 use crate::integrations::openclaw::{
     install_hooks as install_openclaw_hooks, install_memory_skill as install_openclaw_memory_skill,
-    install_plugin as install_openclaw_plugin, install_user_config as install_openclaw_user_config,
+    install_plugin as install_openclaw_plugin, install_plugin_config as install_openclaw_plugin_config,
+    install_user_config as install_openclaw_user_config,
     run_server as run_openclaw_server, OpenClawServerOptions,
 };
 #[cfg(feature = "muse-code")]
@@ -513,10 +514,14 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         println!("Wrote OpenClaw hook wrapper to {}", written.display());
         let written = install_openclaw_plugin(
             args.openclaw_plugin_dir.as_deref().map(Path::new),
-            Path::new(&args.path),
             args.openclaw_force_skill,
         )?;
         println!("Wrote OpenClaw typed plugin to {}", written.display());
+        let written = install_openclaw_plugin_config(
+            Path::new(&args.path),
+            args.openclaw_config.as_deref().map(Path::new),
+        )?;
+        println!("Wrote OpenClaw plugin config to {}", written.display());
         let written = install_openclaw_user_config(
             Path::new(&args.path),
             args.openclaw_config.as_deref().map(Path::new),

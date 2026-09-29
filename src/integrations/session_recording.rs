@@ -26,6 +26,7 @@ pub enum RecordingProvider {
     Agy,
     Muse,
     OpenClaw,
+    Hermes,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -390,6 +391,12 @@ fn run_provider_process(
                 // replay entry point, so recorded-session replay is unsupported.
                 anyhow::bail!("session replay is not supported for the OpenClaw provider")
             }
+            RecordingProvider::Hermes => {
+                // Replay drives the provider's own CLI in an isolated home
+                // directory; Hermes has no equivalent portable non-interactive
+                // replay entry point, so recorded-session replay is unsupported.
+                anyhow::bail!("session replay is not supported for the Hermes provider")
+            }
         };
         let mut child = command
             .current_dir(project_root)
@@ -706,6 +713,7 @@ impl RecordingProvider {
             Self::Agy => "agy",
             Self::Muse => "muse",
             Self::OpenClaw => "openclaw",
+            Self::Hermes => "hermes",
         }
     }
 }

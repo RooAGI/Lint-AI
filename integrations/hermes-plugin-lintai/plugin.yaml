@@ -1,0 +1,4 @@
+name: lintai
+version: 0.1.0
+description: Automatic lint-ai memory for Hermes Agent — recall injected before every model call, per-turn and per-tool-call capture via hooks. Talks to a running lint-ai server over HTTP; fail-open.
+requires_hermes: ">=2026.9"

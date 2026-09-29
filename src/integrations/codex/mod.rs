@@ -1127,6 +1127,61 @@ args = ["old"]
                 .unwrap(),
             vec!["--codex-serve"]
         );
+        assert_eq!(
+            parsed["mcp_servers"]["lint-ai"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(parsed["mcp_servers"]["lint-ai"]
+            .as_table()
+            .unwrap()
+            .get("cwd")
+            .is_none());
+    }
+
+    #[test]
+    fn install_project_config_scopes_each_server_to_its_project() {
+        let first_root = temp_dir("codex-project-config-first");
+        let second_root = temp_dir("codex-project-config-second");
+        fs::create_dir_all(first_root.join(".codex")).unwrap();
+        fs::write(
+            first_root.join(".codex/config.toml"),
+            "profile = \"keep\"\n\n[mcp_servers.other]\ncommand = \"other-tool\"\nargs = []\n",
+        )
+        .unwrap();
+
+        let first_config = install_project_config(&first_root).unwrap();
+        let second_config = install_project_config(&second_root).unwrap();
+        let first: TomlValue = fs::read_to_string(first_config).unwrap().parse().unwrap();
+        let second: TomlValue = fs::read_to_string(second_config).unwrap().parse().unwrap();
+        let first_entry = &first["mcp_servers"]["lint-ai"];
+        let second_entry = &second["mcp_servers"]["lint-ai"];
+
+        assert_eq!(first["profile"].as_str(), Some("keep"));
+        assert_eq!(
+            first["mcp_servers"]["other"]["command"].as_str(),
+            Some("other-tool")
+        );
+        assert_eq!(first_entry["enabled"].as_bool(), Some(true));
+        assert_eq!(second_entry["enabled"].as_bool(), Some(true));
+        assert_eq!(
+            first_entry["cwd"].as_str(),
+            Some(first_root.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert_eq!(
+            second_entry["cwd"].as_str(),
+            Some(second_root.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert_ne!(first_entry["cwd"], second_entry["cwd"]);
+        for entry in [first_entry, second_entry] {
+            assert_eq!(
+                entry["args"].as_array().unwrap()[0].as_str(),
+                Some("--codex-serve")
+            );
+            assert!(entry["command"].as_str().is_some());
+        }
+
+        fs::remove_dir_all(first_root).ok();
+        fs::remove_dir_all(second_root).ok();
     }
 
     #[test]

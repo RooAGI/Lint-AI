@@ -228,6 +228,43 @@ class QueueTest(unittest.TestCase):
         finally:
             q.stop()
 
+    def test_overflow_drop_decrements_unfinished_tasks(self):
+        # P2: dropping the oldest item on overflow must pair get_nowait()
+        # with task_done(); otherwise the queue's unfinished count leaks and
+        # flush() waits the full timeout on an already-drained queue.
+        client = FakeClient()
+        q = WriteQueue.__new__(WriteQueue)  # no background thread
+        import queue as _queue
+        q.client = client
+        q.queue = _queue.Queue(maxsize=2)
+        q.dropped = 0
+        q.enqueue({"request_id": "a"})
+        q.enqueue({"request_id": "b"})
+        q.enqueue({"request_id": "c"})  # drops "a"
+        self.assertEqual(q.dropped, 1)
+        self.assertEqual(q.queue.unfinished_tasks, 2)
+
+    def test_flush_returns_promptly_after_overflow_and_drain(self):
+        # End-to-end symptom: after the dropped item is accounted for and the
+        # rest drained, flush() must return True immediately, not after the
+        # full timeout.
+        import time as _time
+        client = FakeClient()
+        q = WriteQueue.__new__(WriteQueue)  # no background thread
+        import queue as _queue
+        q.client = client
+        q.queue = _queue.Queue(maxsize=2)
+        q.dropped = 0
+        q.enqueue({"request_id": "a"})
+        q.enqueue({"request_id": "b"})
+        q.enqueue({"request_id": "c"})  # drops "a"
+        while not q.queue.empty():  # drain like the background thread does
+            q.queue.get_nowait()
+            q.queue.task_done()
+        start = _time.time()
+        self.assertTrue(q.flush(timeout_s=5.0))
+        self.assertLess(_time.time() - start, 4.0)
+
 
 class PluginHookTest(unittest.TestCase):
     def _plugin(self, **cfg_overrides):

@@ -344,6 +344,10 @@ class WriteQueue:
         except queue.Full:
             try:
                 self.queue.get_nowait()
+                # The dropped item will never be processed: pair the removal
+                # with task_done() or the unfinished-task count leaks and
+                # flush() waits the full timeout on a drained queue.
+                self.queue.task_done()
             except queue.Empty:
                 pass
             self.dropped += 1

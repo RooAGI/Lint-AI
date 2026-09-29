@@ -50,7 +50,7 @@ pub struct GeminiCliServerOptions<'a> {
     pub ignore_paths: &'a [String],
 }
 
-struct GeminiMcp {
+pub(crate) struct GeminiMcp {
     root: PathBuf,
     store: Mutex<Option<crate::memory_api::MemoryService>>,
     provider: RecordingProvider,
@@ -162,8 +162,33 @@ pub fn run_server_for(
     server.serve()
 }
 
+/// Build a [`GeminiMcp`] handle for adapter unit tests without starting the
+/// stdio server loop. Test-only: production servers go through
+/// [`run_server_for`].
+#[cfg(test)]
+pub(crate) fn test_handle(
+    root: PathBuf,
+    provider: RecordingProvider,
+    provider_label: &'static str,
+    provider_display_name: &'static str,
+) -> GeminiMcp {
+    GeminiMcp {
+        root,
+        store: Mutex::new(None),
+        provider,
+        provider_label,
+        provider_display_name,
+        max_bytes: 5_000_000,
+        max_files: 50_000,
+        max_depth: 20,
+        max_total_bytes: 100_000_000,
+        ignore_paths: vec![],
+        workspace_watcher: None,
+    }
+}
+
 impl GeminiMcp {
-    fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<crate::memory_api::MemoryService>>> {
+    pub(crate) fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<crate::memory_api::MemoryService>>> {
         let mut store = self
             .store
             .lock()
@@ -213,7 +238,7 @@ impl GeminiMcp {
         Ok(())
     }
 
-    fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
+    pub(crate) fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
         let id = request.id;
         match request.method.as_str() {
             "initialize" => Ok(JsonRpcResponse {

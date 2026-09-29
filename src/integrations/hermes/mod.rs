@@ -398,4 +398,264 @@ mod tests {
     fn provider_strings_match_storage_layout() {
         assert_eq!(RecordingProvider::Hermes.as_str(), "hermes");
     }
+
+    // ------------------------------------------------------------------
+    // Hermes MCP server identity: the adapter Hermes talks to must present
+    // itself as Hermes everywhere — seven tools, Hermes wording, hermes
+    // provider scoping. These mirror the live `hermes mcp test` checks.
+    // ------------------------------------------------------------------
+
+    use serde_json::{json, Value};
+    use crate::integrations::mcp_transport::JsonRpcRequest;
+
+    fn hermes_handle(root: &std::path::Path) -> gemini_cli::GeminiMcp {
+        gemini_cli::test_handle(
+            root.to_path_buf(),
+            RecordingProvider::Hermes,
+            "hermes",
+            "Hermes",
+        )
+    }
+
+    fn call_tool(mcp: &gemini_cli::GeminiMcp, name: &str, arguments: Value) -> Value {
+        let response = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(1)),
+                method: "tools/call".to_string(),
+                params: Some(json!({"name": name, "arguments": arguments})),
+            })
+            .unwrap();
+        assert!(response.error.is_none(), "{name} should succeed");
+        let text = response.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn list_tools(mcp: &gemini_cli::GeminiMcp) -> Vec<Value> {
+        mcp.handle_request(JsonRpcRequest {
+            id: Some(json!(1)),
+            method: "tools/list".to_string(),
+            params: None,
+        })
+        .unwrap()
+        .result
+        .unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn mcp_server_presents_hermes_identity() {
+        let root = temp_root("mcp-identity");
+        let mcp = hermes_handle(&root);
+        let tools = list_tools(&mcp);
+
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        for required in [
+            "search",
+            "info",
+            "list_memories",
+            "record_session",
+            "enable_lint_ai",
+            "disable_lint_ai",
+            "lint_ai_status",
+        ] {
+            assert!(names.contains(&required), "hermes must expose {required}");
+        }
+        // No user-visible description leaks another adapter's name; the
+        // adapter-specific descriptions carry the Hermes name.
+        for tool in &tools {
+            let name = tool["name"].as_str().unwrap_or("?");
+            let description = tool["description"].as_str().unwrap_or("");
+            assert!(
+                !description.contains("Gemini"),
+                "hermes tool {name} leaks a Gemini description: {description}"
+            );
+        }
+        for tool in &tools {
+            let name = tool["name"].as_str().unwrap_or("?");
+            let description = tool["description"].as_str().unwrap_or("");
+            if matches!(
+                name,
+                "search" | "info" | "enable_lint_ai" | "disable_lint_ai" | "lint_ai_status"
+            ) {
+                assert!(
+                    description.contains("Hermes"),
+                    "hermes tool {name} should name Hermes: {description}"
+                );
+            }
+        }
+        let search = tools.iter().find(|t| t["name"] == "search").unwrap();
+        assert_eq!(
+            search["description"].as_str().unwrap(),
+            "Search Hermes project memory."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hermes_search_round_trip_tags_hermes_provider() {
+        let root = temp_root("mcp-search");
+        let memory_root = crate::integrations::mcp_index::shared_memory_root(&root);
+        fs::create_dir_all(&memory_root).unwrap();
+        fs::write(
+            memory_root.join("tea-note.md"),
+            "# Tea\nLuyi prefers oolong tea from Alishan, Taiwan.",
+        )
+        .unwrap();
+
+        let mcp = hermes_handle(&root);
+        let result = call_tool(&mcp, "search", json!({"query": "oolong tea Alishan", "top_k": 3}));
+        assert_eq!(result["provider"], "hermes");
+        let results = result["results"].as_array().unwrap();
+        assert!(
+            !results.is_empty(),
+            "hermes search should find the shared-memory tea note"
+        );
+        assert!(
+            results[0]["doc_id"].as_str().unwrap().contains("tea-note"),
+            "top hit should be the tea note: {}",
+            serde_json::to_string_pretty(&results[0]).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hermes_conversation_state_isolated_from_gemini() {
+        // Hermes follow-ups must resolve against Hermes' own conversation
+        // state, never Gemini's, even for the same session id.
+        let root = temp_root("mcp-scope");
+        let memory_root = crate::integrations::mcp_index::shared_memory_root(&root);
+        fs::create_dir_all(&memory_root).unwrap();
+        fs::write(
+            memory_root.join("tea.md"),
+            "# Tea\nLuyi prefers oolong tea from Alishan, Taiwan.",
+        )
+        .unwrap();
+
+        let gemini_mcp = gemini_cli::test_handle(
+            root.clone(),
+            RecordingProvider::Gemini,
+            "gemini-cli",
+            "Gemini",
+        );
+        let seed = call_tool(
+            &gemini_mcp,
+            "search",
+            json!({"query": "oolong tea", "top_k": 3, "session_id": "s1"}),
+        );
+        assert!(
+            !seed["results"].as_array().unwrap().is_empty(),
+            "seed turn should find the tea doc"
+        );
+        drop(gemini_mcp);
+
+        let hermes_mcp = hermes_handle(&root);
+        let follow_up = call_tool(
+            &hermes_mcp,
+            "search",
+            json!({"query": "tell me about it", "top_k": 3, "session_id": "s1"}),
+        );
+        assert!(
+            follow_up["results"].as_array().unwrap().is_empty(),
+            "hermes follow-up must not resolve against gemini's conversation state"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // Config-merge edge cases.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn stale_lint_ai_entry_is_replaced_not_duplicated() {
+        let root = temp_root("config-replace");
+        let config = root.join("config.yaml");
+        fs::write(
+            &config,
+            "mcp_servers:\n  lint-ai:\n    command: /old/lint-ai\n    args: [\"--gemini-serve\", \"/old\"]\n",
+        )
+        .unwrap();
+
+        install_user_config(&root, Some(&config)).unwrap();
+
+        let merged = fs::read_to_string(&config).unwrap();
+        assert_eq!(merged.matches("  lint-ai:").count(), 1);
+        assert!(!merged.contains("/old/lint-ai"));
+        assert!(merged.contains("\"--hermes-serve\""));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn entry_indent_follows_existing_servers() {
+        let root = temp_root("config-indent");
+        let config = root.join("config.yaml");
+        fs::write(
+            &config,
+            "mcp_servers:\n    other:\n      command: other\n",
+        )
+        .unwrap();
+
+        install_user_config(&root, Some(&config)).unwrap();
+
+        let merged = fs::read_to_string(&config).unwrap();
+        assert!(merged.contains("    lint-ai:\n      command: "));
+        assert!(merged.contains("    other:\n      command: other"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn tab_indented_config_fails_with_manual_recipe() {
+        let root = temp_root("config-tabs");
+        let config = root.join("config.yaml");
+        let original = "mcp_servers:\n\tlint-ai:\n\t\tcommand: x\n";
+        fs::write(&config, original).unwrap();
+
+        let error = install_user_config(&root, Some(&config))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("hermes mcp add lint-ai"));
+        assert_eq!(fs::read_to_string(&config).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mcp_servers_null_is_normalized_and_merged() {
+        let root = temp_root("config-null");
+        let config = root.join("config.yaml");
+        fs::write(&config, "mcp_servers: null\n").unwrap();
+
+        install_user_config(&root, Some(&config)).unwrap();
+
+        let merged = fs::read_to_string(&config).unwrap();
+        assert!(merged.contains("mcp_servers:\n  lint-ai:\n"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn yaml_string_escapes_quotes_and_backslashes() {
+        assert_eq!(yaml_string("a\"b"), "\"a\\\"b\"");
+        assert_eq!(yaml_string("a\\b"), "\"a\\\\b\"");
+        assert_eq!(yaml_string("plain"), "\"plain\"");
+    }
+
+    #[test]
+    fn skill_content_mentions_hermes() {
+        let root = temp_root("skill-content");
+        let skill_dir = root.join("skills");
+
+        install_memory_skill(Some(&skill_dir), true).unwrap();
+
+        let content =
+            fs::read_to_string(skill_dir.join("lint-ai-memory/SKILL.md")).unwrap();
+        assert!(content.contains("Hermes"));
+        assert!(content.contains("--hermes-serve"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

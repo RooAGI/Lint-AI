@@ -283,15 +283,14 @@ fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
         };
         let memories = retrieve_memories(root, query)?;
         if !memories.trim().is_empty() {
-            let workspace_dir = input
-                .event
-                .pointer("/context/workspaceDir")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim_end_matches('/');
+            // The injected file lives at the resolved root (which already
+            // fell back to the install root when the event omitted
+            // `workspaceDir`); building the path from the raw event field
+            // would yield `/LINTAI.md` and the recall would not be injected.
+            let injected_path = root.join(INJECTED_FILE_NAME);
             files.push(json!({
                 "name": INJECTED_FILE_NAME,
-                "path": format!("{workspace_dir}/{INJECTED_FILE_NAME}"),
+                "path": injected_path.to_string_lossy(),
                 "content": format!("# {INJECTED_FILE_NAME}\n\nLint-AI recalled memories (automatic):\n{memories}"),
                 "missing": false,
             }));
@@ -442,7 +441,7 @@ fn capture_outcome(
     // Writes go through the persistent shared store under the cross-process
     // write lock (never the in-memory view): hook captures must survive the
     // hook process and be visible to MCP servers and other hooks.
-    crate::integrations::mcp_index::with_shared_store_write(root, |store| {
+    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
         store.upsert(document.into_source_document()?);
         store.refresh_index()
     })?;
@@ -529,7 +528,7 @@ fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> 
     // Writes go through the persistent shared store under the cross-process
     // write lock (never the in-memory view): hook captures must survive the
     // hook process and be visible to MCP servers and other hooks.
-    crate::integrations::mcp_index::with_shared_store_write(root, |store| {
+    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
         store.upsert(document.into_source_document()?);
         store.refresh_index()
     })?;
@@ -712,6 +711,35 @@ mod tests {
         let output = handle_bootstrap(&input, &root).unwrap();
         let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
         assert!(files.iter().any(|f| f["name"] == "LINTAI.md"));
+    }
+
+    #[test]
+    fn bootstrap_without_workspace_dir_uses_resolved_root_for_injected_path() {
+        let root = test_root();
+        write_memory_doc(&root, "seed-1", "The team standardized on SQLite for local state.");
+        // Live 2026.9.6 payloads sometimes omit `context.workspaceDir`;
+        // `resolve_root` then falls back to the install root, which is the
+        // `root` the handler receives.
+        let input = OpenClawHookInput {
+            event: json!({
+                "type": "agent",
+                "action": "bootstrap",
+                "sessionKey": "agent:main:dashboard:main",
+                "context": {
+                    "sessionId": "f917502e-0000-4000-8000-000000000000",
+                    "agentId": "agent-main",
+                    "bootstrapFiles": [],
+                },
+            }),
+            ctx: Value::Null,
+            query: "local state".to_string(),
+        };
+        let output = handle_bootstrap(&input, &root).unwrap();
+        let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
+        let injected = files.iter().find(|f| f["name"] == "LINTAI.md").unwrap();
+        let path = injected["path"].as_str().unwrap();
+        assert_eq!(path, root.join("LINTAI.md").to_string_lossy());
+        assert_ne!(path, "/LINTAI.md");
     }
 
     fn agent_end_input(run_id: &str, session_id: &str) -> OpenClawHookInput {

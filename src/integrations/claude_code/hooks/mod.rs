@@ -416,7 +416,7 @@ fn capture(
     // Writes go through the persistent shared store under the cross-process
     // write lock (never the in-memory view): hook captures must survive the
     // hook process and be visible to MCP servers and other hooks.
-    crate::integrations::mcp_index::with_shared_store_write(root, |store| {
+    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
         store.upsert(document.into_source_document()?);
         store.refresh_index()
     })?;

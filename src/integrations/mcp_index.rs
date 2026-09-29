@@ -19,14 +19,14 @@ const STORE_INIT_LOCK_RETRY: Duration = Duration::from_millis(100);
 
 /// Kernel-released file-lock primitive shared by both guards below.
 ///
-/// On Unix this is `flock(LOCK_EX|LOCK_NB)`: the kernel releases the lock
-/// when the holding process dies for any reason — including SIGKILL — so a
-/// crashed writer can never wedge the store with an orphaned lock file.
-/// The lock file itself is never deleted; only the flock state matters.
-/// Holding the returned `File` open holds the lock; dropping it releases.
+/// On Unix this is an advisory exclusive lock via `File::try_lock` (std):
+/// the kernel releases the lock when the holding process dies for any
+/// reason — including SIGKILL — so a crashed writer can never wedge the
+/// store with an orphaned lock file. The lock file itself is never deleted;
+/// only the lock state matters. Holding the returned `File` open holds the
+/// lock; dropping it releases.
 #[cfg(unix)]
 fn acquire_file_lock(path: &Path, wait: Duration, retry: Duration, what: &str) -> Result<File> {
-    use std::os::unix::io::AsRawFd;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -37,14 +37,9 @@ fn acquire_file_lock(path: &Path, wait: Duration, retry: Duration, what: &str) -
         .open(path)?;
     let started = std::time::Instant::now();
     loop {
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if rc == 0 {
-            return Ok(file);
-        }
-        let error = std::io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(code) if code == libc::EINTR => continue,
-            Some(code) if code == libc::EWOULDBLOCK => {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
                 if started.elapsed() >= wait {
                     return Err(anyhow::anyhow!(
                         "timed out waiting for {what} at {}",
@@ -53,7 +48,7 @@ fn acquire_file_lock(path: &Path, wait: Duration, retry: Duration, what: &str) -
                 }
                 thread::sleep(retry);
             }
-            _ => return Err(error.into()),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
     }
 }
@@ -116,69 +111,48 @@ impl Drop for StoreInitLock {
     }
 }
 
-/// Bounded cross-process write lock for the shared memory store.
+/// Bounded wait for the shared-store write lock: acquisition retries, then
+/// errors after ~10s — hooks must never hang indefinitely on contention.
+const SHARED_STORE_WRITE_LOCK_WAIT: Duration = Duration::from_secs(10);
+const SHARED_STORE_WRITE_LOCK_RETRY: Duration = Duration::from_millis(50);
+
+/// Open the persistent shared-memory service under the cross-process write
+/// lock and run `operation` against it. This is the write gate for ALL
+/// shared-store mutations — board operations, memory upserts, hook captures,
+/// migration: everything written here survives the process and is visible to
+/// hooks and other providers. Persistence happens inside `operation` via the
+/// usual `upsert` / `add` / `board_open` / `board_post` calls (they refresh
+/// internally).
 ///
-/// `StoreInitLock` guards one-time initialization; this guards every *write*
-/// (MCP board/memory writes and hook captures) so two processes never
-/// interleave their write-then-refresh sequences on the same persistent
-/// store. The lock file lives inside the store directory it protects.
-/// Acquisition waits ~10s with retries, then errors — hooks must never hang
-/// indefinitely on contention. A dead holder's lock is released by the
-/// kernel (Unix), never orphaned.
-const STORE_WRITE_LOCK_WAIT: Duration = Duration::from_secs(10);
-const STORE_WRITE_LOCK_RETRY: Duration = Duration::from_millis(50);
-
-struct StoreWriteLock {
-    _file: File,
-    // Only the non-Unix fallback deletes the lock file on release.
-    #[cfg(not(unix))]
-    path: std::path::PathBuf,
-}
-
-impl StoreWriteLock {
-    fn acquire(store_root: &Path) -> Result<Self> {
-        fs::create_dir_all(store_root)?;
-        let path = store_root.join(".write.lock");
-        let file = acquire_file_lock(
-            &path,
-            STORE_WRITE_LOCK_WAIT,
-            STORE_WRITE_LOCK_RETRY,
-            "shared store write lock",
-        )?;
-        Ok(Self {
-            _file: file,
-            #[cfg(not(unix))]
-            path,
-        })
-    }
-}
-
-#[cfg(not(unix))]
-impl Drop for StoreWriteLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-/// Open the persistent shared memory store under the cross-process write
-/// lock, run `f` against it, and release the lock. This is the write path
-/// for MCP board/memory tools and for hook captures: unlike the in-memory
-/// composed view the adapters query, everything written here survives the
-/// process and is visible to hooks and other providers. Persistence happens
-/// inside `f` via the usual `upsert` / `add` / `board_open` / `board_post`
-/// calls (they refresh internally).
+/// MCP adapters keep a separate, composed in-memory service for workspace
+/// search. Board/memory writes must use this persistent service so another
+/// provider MCP process and later invocations see the same documents. The
+/// advisory file lock serializes mutations across those processes, so
+/// sequence assignment and request-id recovery run against the latest
+/// persisted state; the kernel releases the lock on holder death (even
+/// SIGKILL), so a crashed writer can never wedge the store. Acquisition
+/// waits ~10s with retries, then errors — hooks must never hang
+/// indefinitely on contention.
 ///
 /// Luyi's architectural rule: external paths go through `MemoryService`;
 /// this helper opens one on the shared store — it never touches
 /// `IndexStore` directly.
-pub fn with_shared_store_write<T>(
+pub fn with_shared_memory_service<T>(
     root: &Path,
-    f: impl FnOnce(&mut MemoryService) -> Result<T>,
+    operation: impl FnOnce(&mut MemoryService) -> Result<T>,
 ) -> Result<T> {
-    let shared = shared_memory_root(root);
-    let _lock = StoreWriteLock::acquire(&shared)?;
-    let mut service = MemoryService::at_path(&shared, segmented_store_options())?;
-    f(&mut service)
+    let memory_root = shared_memory_root(root);
+    fs::create_dir_all(&memory_root)?;
+    let lock_path = memory_root.join(".board-operation.lock");
+    let _lock = acquire_file_lock(
+        &lock_path,
+        SHARED_STORE_WRITE_LOCK_WAIT,
+        SHARED_STORE_WRITE_LOCK_RETRY,
+        "shared store write lock",
+    )?;
+
+    let mut service = MemoryService::at_path(&memory_root, segmented_store_options())?;
+    operation(&mut service)
 }
 
 /// Directory name (under `.lint-ai/`) for the shared cross-provider memory
@@ -207,33 +181,6 @@ fn legacy_provider_memory_dir(provider: RecordingProvider) -> String {
 /// Path to the shared memory store for a workspace root.
 pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
     root.join(".lint-ai").join(SHARED_MEMORY_DIR)
-}
-
-/// Open the persistent shared-memory service for one board operation.
-///
-/// MCP adapters keep a separate, composed in-memory service for workspace
-/// search. Board writes must use this persistent service so another provider
-/// MCP process and later invocations see the same documents. The advisory
-/// file lock serializes board operations across those processes; sequence
-/// assignment and request-id recovery then run against the latest persisted
-/// state.
-pub fn with_shared_memory_service<T>(
-    root: &Path,
-    operation: impl FnOnce(&mut MemoryService) -> Result<T>,
-) -> Result<T> {
-    let memory_root = shared_memory_root(root);
-    fs::create_dir_all(&memory_root)?;
-    let lock_path = memory_root.join(".board-operation.lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)?;
-    lock.lock()?;
-
-    let mut service = MemoryService::at_path(&memory_root, segmented_store_options())?;
-    operation(&mut service)
 }
 
 /// One-time, idempotent migration of legacy per-provider memory stores into
@@ -278,7 +225,7 @@ pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
             let _ = fs::remove_dir_all(&legacy_root);
             continue;
         }
-        with_shared_store_write(root, |shared| {
+        with_shared_memory_service(root, |shared| {
             for mut document in documents {
                 normalize_migrated_document(&mut document, provider);
                 shared.upsert(document);
@@ -863,14 +810,24 @@ mod tests {
     }
 
     /// A second writer must time out instead of hanging forever when the
-    /// write lock is held (e.g. by a crashed process's stale lock or a
-    /// genuinely concurrent writer).
+    /// write lock is held by a genuinely concurrent writer. (A crashed
+    /// holder is covered by
+    /// `shared_store_write_lock_survives_crashed_holder`: the kernel
+    /// releases its lock on death.)
     #[test]
     fn shared_store_write_lock_times_out_when_held() {
         let root = write_lock_test_root("write-lock-held");
-        let shared = shared_memory_root(&root);
-        let _held = StoreWriteLock::acquire(&shared).expect("first acquire");
-        let error = with_shared_store_write(&root, |_| Ok(())).unwrap_err();
+        let memory_root = shared_memory_root(&root);
+        fs::create_dir_all(&memory_root).expect("lock dir");
+        let lock_path = memory_root.join(".board-operation.lock");
+        let _held = acquire_file_lock(
+            &lock_path,
+            Duration::from_secs(30),
+            Duration::from_millis(50),
+            "test-held lock",
+        )
+        .expect("first acquire");
+        let error = with_shared_memory_service(&root, |_| Ok(())).unwrap_err();
         assert!(
             error.to_string().contains("timed out"),
             "expected a timeout error, got: {error:#}"
@@ -884,25 +841,20 @@ mod tests {
     #[test]
     fn shared_store_write_persists_and_releases_lock() {
         let root = write_lock_test_root("write-lock-persist");
-        with_shared_store_write(&root, |store| {
+        with_shared_memory_service(&root, |store| {
             store.upsert(document("doc-1", "test", "persistent content"));
             store.refresh_index()
         })
         .expect("first write");
-        with_shared_store_write(&root, |store| {
+        with_shared_memory_service(&root, |store| {
             store.upsert(document("doc-2", "test", "more content"));
             store.refresh_index()
         })
         .expect("second write");
-        assert!(
-            !shared_memory_root(&root).join(".write.lock").exists()
-                || cfg!(unix),
-            "non-unix fallback must delete the lock file on release"
-        );
-        // The lock must be promptly re-acquirable after release (on Unix
-        // the lock file itself persists — only the flock state matters).
+        // The lock file itself is never deleted — only the lock state
+        // matters — so assert prompt re-acquisition instead of absence.
         let start = std::time::Instant::now();
-        with_shared_store_write(&root, |_| Ok(())).expect("re-acquire after release");
+        with_shared_memory_service(&root, |_| Ok(())).expect("re-acquire after release");
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "lock was not released promptly"
@@ -932,7 +884,7 @@ mod tests {
                 std::env::var("LINT_AI_LOCK_CRASH_ROOT").expect("crash child root"),
             );
             let ready = root.join("holder-ready");
-            let _ = with_shared_store_write(&root, |_| {
+            let _ = with_shared_memory_service(&root, |_| {
                 fs::write(&ready, b"ready").expect("signal readiness");
                 std::thread::sleep(Duration::from_secs(120));
                 Ok(())
@@ -971,7 +923,7 @@ mod tests {
         // Re-acquisition must succeed promptly — well under the ~10s
         // contention timeout.
         let start = std::time::Instant::now();
-        with_shared_store_write(&root, |_| Ok(())).expect("re-acquire after crash");
+        with_shared_memory_service(&root, |_| Ok(())).expect("re-acquire after crash");
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "lock was not released by the kernel after holder death"

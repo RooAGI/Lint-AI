@@ -667,8 +667,20 @@ pub(crate) fn call_board_or_memory_tool(
     let workspace = root.to_string_lossy().to_string();
     let is_write = matches!(tool_name, "board_open" | "board_post" | "add_memory");
     let result: Result<Value, String> = if is_write {
-        match crate::integrations::mcp_index::with_shared_store_write(root, |store| {
-            dispatch_write_tool(tool_name, arguments, store, "mcp", &workspace, provider)
+        // Resolve the session from the composed service, which tracks hook
+        // activity, then run the write against the persistent shared-memory
+        // service (a fresh service never sees hook-tracked sessions).
+        let mut write_arguments = arguments.clone();
+        if write_arguments.get("session_id").is_none() {
+            if let Some(session_id) =
+                resolve_search_session_id(&write_arguments, service, provider)
+                    .map_err(anyhow::Error::msg)?
+            {
+                write_arguments["session_id"] = json!(session_id);
+            }
+        }
+        match crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
+            dispatch_write_tool(tool_name, &write_arguments, store, "mcp", &workspace, provider)
                 .map_err(anyhow::Error::msg)
         }) {
             Ok(value) => Ok(value),

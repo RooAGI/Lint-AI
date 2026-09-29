@@ -611,12 +611,49 @@ impl ClaudeMcp {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
-                let result = mcp_tools::dispatch_memory_tool(
-                    tool_name,
-                    &arguments,
-                    service,
-                    RecordingProvider::Claude.as_str(),
-                );
+                // `add_memory` is a write: run it against the persistent
+                // shared-memory service. The composed view is in-memory
+                // only, so a view write would vanish on process exit and stay
+                // invisible to hooks and other providers. Resolve the session
+                // from the composed service first (it tracks hook activity),
+                // mirroring the board arm above.
+                let result = if tool_name == "add_memory" {
+                    let mut memory_arguments = arguments.clone();
+                    if memory_arguments.get("session_id").is_none() {
+                        if let Some(session_id) = mcp_tools::resolve_search_session_id(
+                            &memory_arguments,
+                            service,
+                            "claude",
+                        )
+                        .map_err(anyhow::Error::msg)?
+                        {
+                            memory_arguments["session_id"] = json!(session_id);
+                        }
+                    }
+                    let write = mcp_index::with_shared_memory_service(&self.root, |shared| {
+                        mcp_tools::dispatch_memory_tool(
+                            tool_name,
+                            &memory_arguments,
+                            shared,
+                            RecordingProvider::Claude.as_str(),
+                        )
+                        .map_err(anyhow::Error::msg)
+                    })
+                    .map_err(|error| error.to_string());
+                    // Re-sync the view so this process observes its own
+                    // write without waiting for the next pre-dispatch sync.
+                    if write.is_ok() {
+                        service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                    }
+                    write
+                } else {
+                    mcp_tools::dispatch_memory_tool(
+                        tool_name,
+                        &arguments,
+                        service,
+                        RecordingProvider::Claude.as_str(),
+                    )
+                };
                 match result {
                     Ok(payload) => Ok(JsonRpcResponse {
                         jsonrpc: "2.0",

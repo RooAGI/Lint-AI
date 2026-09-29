@@ -267,7 +267,7 @@ impl GeminiMcp {
                 let session_id = match mcp_tools::resolve_search_session_id(
                     &args,
                     &*service,
-                    RecordingProvider::Gemini.as_str(),
+                    self.provider.as_str(),
                 ) {
                     Ok(session_id) => session_id,
                     Err(message) => return Ok(error_response(id, -32602, &message)),
@@ -275,7 +275,7 @@ impl GeminiMcp {
                 let started = std::time::Instant::now();
                 let results = service.search_with_filters(
                     query,
-                    crate::integrations::session_recording::RecordingProvider::Gemini.as_str(),
+                    self.provider.as_str(),
                     session_id.as_deref(),
                     top_k,
                     &filters,
@@ -351,6 +351,19 @@ impl GeminiMcp {
                 };
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
+            "board_open" | "board_list" | "board_info" | "board_post" | "board_read"
+            | "board_get" | "board_search" | "add_memory" | "get_memory" => {
+                let mut service = self.store()?;
+                let service = service.as_mut().expect("initialized");
+                mcp_tools::call_board_or_memory_tool(
+                    name,
+                    id,
+                    &args,
+                    service,
+                    &self.root,
+                    self.provider.as_str(),
+                )
+            }
             _ => Ok(error_response(id, -32602, "unknown tool")),
         }
     }
@@ -358,7 +371,7 @@ impl GeminiMcp {
 
 fn tool_definitions() -> Vec<ToolDefinition> {
     let schema = |properties: Value, required: Vec<&str>| json!({"type":"object", "properties":properties, "required":required});
-    vec![
+    let tools = vec![
         ToolDefinition {
             name: "search".into(),
             description: "Search Gemini project memory.".into(),
@@ -396,7 +409,11 @@ fn tool_definitions() -> Vec<ToolDefinition> {
             description: "Show Gemini Lint-AI and recording state.".into(),
             input_schema: schema(json!({}), vec![]),
         },
-    ]
+    ];
+    let mut tools = tools;
+    tools.extend(mcp_tools::board_tool_definitions());
+    tools.extend(mcp_tools::memory_tool_definitions());
+    tools
 }
 
 fn text_response(id: Option<Value>, text: &str) -> JsonRpcResponse {
@@ -516,6 +533,107 @@ mod tests {
     }
 
     #[test]
+    fn adapter_search_returns_hits_for_all_providers() {
+        // Hit-parity gate: the shared adapter search path (gemini/agy/openclaw)
+        // must return hits for user-ID-less local docs. A 0-hits outcome here
+        // would reproduce the Hermes finding (unconditional ownership filter).
+        for (provider, label) in [
+            (RecordingProvider::Gemini, "gemini-cli"),
+            (RecordingProvider::Agy, "agy"),
+            (RecordingProvider::OpenClaw, "openclaw"),
+        ] {
+            let root = temp_root(label);
+            // Seed through the shared memory root, like hook captures do:
+            // no memory_user_id filter on the documents.
+            let memory_root = mcp_index::shared_memory_root(&root);
+            let mut memory = IndexStore::at_path(&memory_root, PipelineOptions::default()).unwrap();
+            let doc_id = format!("{label}-search-doc");
+            let mut filters = BTreeMap::new();
+            filters.insert("provider".to_string(), label.to_string());
+            memory.upsert(SourceDocument {
+                doc_id: doc_id.clone(),
+                source: format!("{}://session-1/outcome", provider.as_str()),
+                content: format!(
+                    "{label} deployment runbook: rotate the staging API key every Friday"
+                ),
+                concept: "outcome".to_string(),
+                group_id: Some(format!("{}-session:session-1", provider.as_str())),
+                filters,
+                headings: vec![],
+                links: vec![],
+                timestamp: None,
+                doc_length: 64,
+                author_agent: Some(provider.as_str().to_string()),
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            });
+            memory.refresh().unwrap();
+            drop(memory);
+
+            let mcp = GeminiMcp {
+                root: root.clone(),
+                store: Mutex::new(None),
+                provider,
+                provider_label: label,
+                max_bytes: 5_000_000,
+                max_files: 50_000,
+                max_depth: 20,
+                max_total_bytes: 100_000_000,
+                ignore_paths: vec![],
+                workspace_watcher: None,
+            };
+            // Unfiltered search over the shared pool.
+            let res = call_tool(
+                &mcp,
+                "search",
+                json!({"query": "staging API key rotation runbook"}),
+            );
+            let results = res["results"].as_array().cloned().unwrap_or_default();
+            assert!(
+                !results.is_empty(),
+                "{label}: adapter search returned 0 hits (0-hits regression)"
+            );
+            assert!(
+                results
+                    .iter()
+                    .any(|hit| hit["doc_id"].as_str() == Some(doc_id.as_str())),
+                "{label}: seeded doc missing from search results: {res}"
+            );
+            // Provider-scoped search keeps this provider's doc...
+            let res = call_tool(
+                &mcp,
+                "search",
+                json!({"query": "staging API key rotation runbook", "provider": label}),
+            );
+            let results = res["results"].as_array().cloned().unwrap_or_default();
+            assert!(
+                results
+                    .iter()
+                    .any(|hit| hit["doc_id"].as_str() == Some(doc_id.as_str())),
+                "{label}: provider filter dropped its own doc: {res}"
+            );
+            // ...and rejects an unknown provider instead of returning empty.
+            let err = mcp
+                .handle_request(JsonRpcRequest {
+                    id: Some(json!(1)),
+                    method: "tools/call".to_string(),
+                    params: Some(
+                        json!({"name": "search", "arguments": {"query": "key", "provider": "nope"}}),
+                    ),
+                })
+                .unwrap();
+            assert!(
+                err.error
+                    .as_ref()
+                    .is_some_and(|e| e.message.contains("unknown provider")),
+                "{label}: unknown provider should be an error: {err:?}"
+            );
+            drop(mcp);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn installs_hooks_idempotently_and_preserves_settings() {
         let root = env::temp_dir().join(format!(
             "lint-ai-gemini-{}",
@@ -537,10 +655,11 @@ mod tests {
     }
 
     #[test]
-    fn gemini_compatible_mcp_contract_applies_to_gemini_and_agy() {
+    fn gemini_compatible_mcp_contract_applies_to_gemini_agy_and_openclaw() {
         for (provider, label) in [
             (RecordingProvider::Gemini, "gemini-cli"),
             (RecordingProvider::Agy, "agy"),
+            (RecordingProvider::OpenClaw, "openclaw"),
         ] {
             let root = temp_root(label);
             let memory_root = mcp_index::shared_memory_root(&root);
@@ -597,6 +716,17 @@ mod tests {
                 "enable_lint_ai",
                 "disable_lint_ai",
                 "lint_ai_status",
+                // Bulletin-board tools and add_memory / get_memory are now
+                // opted in for all Gemini-compatible providers.
+                "board_open",
+                "board_list",
+                "board_info",
+                "board_post",
+                "board_read",
+                "board_get",
+                "board_search",
+                "add_memory",
+                "get_memory",
             ] {
                 assert!(names.contains(&required), "{label} must expose {required}");
             }
@@ -618,6 +748,86 @@ mod tests {
             let status = call_tool(&mcp, "lint_ai_status", json!({}));
             assert_eq!(status["enabled"], true);
             assert_eq!(status["recording_enabled"], false);
+            drop(mcp);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn board_and_memory_tools_round_trip_for_gemini_compatible_providers() {
+        let providers = [
+            (RecordingProvider::Gemini, "gemini-cli"),
+            (RecordingProvider::Agy, "agy"),
+            (RecordingProvider::OpenClaw, "openclaw"),
+        ];
+        for (provider, label) in providers {
+            let root = temp_root(label);
+            let mcp = GeminiMcp {
+                root: root.clone(),
+                store: Mutex::new(None),
+                provider,
+                provider_label: label,
+                max_bytes: 5_000_000,
+                max_files: 50_000,
+                max_depth: 20,
+                max_total_bytes: 100_000_000,
+                ignore_paths: vec![],
+                workspace_watcher: None,
+            };
+            let session = format!("gemini-board-{label}");
+
+            // board_post -> board_read: same session's default board.
+            let request_id = format!("post-{label}");
+            let posted = call_tool(
+                &mcp,
+                "board_post",
+                json!({
+                    "content": "OpenClaw integration checkpoint reached.",
+                    "request_id": request_id,
+                    "session_id": session,
+                }),
+            );
+            assert!(
+                posted["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("OpenClaw integration checkpoint"),
+                "{provider:?}: board_post did not echo content: {posted}"
+            );
+            let read = call_tool(&mcp, "board_read", json!({"session_id": session}));
+            let posts = read["posts"].as_array().cloned().unwrap_or_default();
+            assert!(
+                posts.iter().any(|post| post["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("OpenClaw integration checkpoint"))),
+                "{provider:?}: board_read missed the post: {read}"
+            );
+
+            // add_memory -> get_memory: the memory ID is deterministic.
+            let mem_request = format!("mem-{label}");
+            let added = call_tool(
+                &mcp,
+                "add_memory",
+                json!({
+                    "content": "The staging API key rotates every Friday.",
+                    "request_id": mem_request,
+                    "session_id": session,
+                }),
+            );
+            assert_eq!(
+                added["request_id"].as_str().unwrap(),
+                mem_request,
+                "{provider:?}: add_memory response missing request id: {added}"
+            );
+            let memory_id = crate::stable_doc_id_from_source(&format!("mcp:{mem_request}:0"));
+            let fetched = call_tool(&mcp, "get_memory", json!({"memory_id": memory_id}));
+            assert!(
+                fetched["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("rotates every Friday"),
+                "{provider:?}: get_memory missed the content: {fetched}"
+            );
             drop(mcp);
             fs::remove_dir_all(root).unwrap();
         }

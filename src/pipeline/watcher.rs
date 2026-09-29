@@ -56,6 +56,17 @@ impl WorkspaceWatcher {
             match events.try_recv() {
                 Ok(Ok(events)) => {
                     for event in events {
+                        // Access events (opens/reads) are not content changes.
+                        // The watcher exists to invalidate cached state when
+                        // workspace files actually change; reacting to access
+                        // is both incorrect and self-perpetuating: rebuilding
+                        // the cached service itself does read_dir(root), which
+                        // emits Access(Open) on the root, and that event would
+                        // otherwise discard the fresh service (along with its
+                        // in-memory key-phrase stamps) on the very next call.
+                        if matches!(event.event.kind, notify::EventKind::Access(_)) {
+                            continue;
+                        }
                         for path in event.event.paths {
                             let relative = path.strip_prefix(&self.root).unwrap_or(&path);
                             if pipeline_workspace_path_is_ignored(relative, &self.ignore_paths) {

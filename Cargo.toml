@@ -54,12 +54,13 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 [features]
 default = ["heuristic-query-semantics", "agent-integrations"]
 heuristic-query-semantics = []
-agent-integrations = ["claude-code", "codex", "gemini-cli", "agy", "muse-code"]
+agent-integrations = ["claude-code", "codex", "gemini-cli", "agy", "muse-code", "openclaw"]
 claude-code = []
 codex = []
 gemini-cli = []
 agy = []
 muse-code = []
+openclaw = []
 python = ["dep:pyo3", "dep:reqwest"]
 experimental = []
 
@@ -79,3 +80,7 @@ path = "src/bin/project_memory_recency_benchmark.rs"
 [[bin]]
 name = "corpus_scale_benchmark"
 path = "src/bin/corpus_scale_benchmark.rs"
+
+[dev-dependencies]
+# Only the SIGKILL crash test needs raw syscalls now; the lock itself is std.
+libc = "0.2"

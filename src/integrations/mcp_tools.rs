@@ -1,20 +1,21 @@
 use crate::index::SearchResult;
-use crate::integrations::mcp_transport::ToolDefinition;
+use crate::integrations::mcp_transport::{JsonRpcError, JsonRpcResponse, ToolDefinition};
 use crate::memory_api::MemoryService;
 use crate::source::SourceDocument;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Canonical provider values for `filters.provider`, the per-document
 /// attribution stamped on every captured memory.
 pub(crate) const PROVIDER_FILTER_VALUES: &[&str] =
-    &["claude", "codex", "gemini-cli", "agy", "muse"];
+    &["claude", "codex", "gemini-cli", "agy", "muse", "openclaw"];
 
 /// JSON Schema fragment for the optional `provider` search argument.
 pub(crate) fn provider_argument_schema() -> Value {
     json!({
         "type": "string",
-        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse). Omit to search the shared pool.",
+        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse, openclaw). Omit to search the shared pool.",
         "enum": PROVIDER_FILTER_VALUES,
     })
 }
@@ -166,7 +167,9 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
         || document.source.starts_with("codex://")
         || document.source.starts_with("gemini-cli://")
         || document.source.starts_with("agy://")
+        || document.source.starts_with("agy://")
         || document.source.starts_with("muse://")
+        || document.source.starts_with("openclaw://")
         || document.source.starts_with("lint-ai://")
         || document
             .filters
@@ -178,7 +181,9 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
                 "codex-session:",
                 "gemini-cli-session:",
                 "agy-session:",
+                "agy-session:",
                 "muse-session:",
+                "openclaw-session:",
             ]
             .iter()
             .any(|prefix| group_id.starts_with(prefix))
@@ -630,14 +635,126 @@ pub(crate) fn dispatch_memory_tool(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shared tools/call dispatch for the bulletin-board tools and add_memory /
+// get_memory, used by every MCP adapter that opts in (claude_code, codex,
+// and the gemini_cli-based adapters: gemini, agy, openclaw).
+// ---------------------------------------------------------------------------
+
+/// Route one `tools/call` invocation for the bulletin-board tools or
+/// `add_memory` / `get_memory`, and wrap the payload in the standard MCP
+/// text-content envelope (or a `-32602` JSON-RPC error). `service` must be an
+/// initialized memory service; this syncs the shared memory store first.
+/// Boards are scoped to the workspace root with the stable `"mcp"` owner,
+/// exactly as the claude_code/codex adapters did before consolidation.
+///
+/// Write tools (`board_open`, `board_post`, `add_memory`) run against the
+/// persistent shared store under the cross-process write lock — the composed
+/// view is in-memory only, so view writes would vanish on process exit and
+/// stay invisible to hooks and other providers. Reads stay on the view.
+pub(crate) fn call_board_or_memory_tool(
+    tool_name: &str,
+    id: Option<Value>,
+    arguments: &Value,
+    service: &mut MemoryService,
+    root: &Path,
+    provider: &str,
+) -> anyhow::Result<JsonRpcResponse> {
+    let shared_root = crate::integrations::mcp_index::shared_memory_root(root);
+    service.sync_shared_memory(&shared_root)?;
+    // Board owner/workspace: the workspace root scopes boards;
+    // "mcp" is the stable owner for agent-posted boards.
+    let workspace = root.to_string_lossy().to_string();
+    let is_write = matches!(tool_name, "board_open" | "board_post" | "add_memory");
+    let result: Result<Value, String> = if is_write {
+        // Resolve the session from the composed service, which tracks hook
+        // activity, then run the write against the persistent shared-memory
+        // service (a fresh service never sees hook-tracked sessions).
+        let mut write_arguments = arguments.clone();
+        if write_arguments.get("session_id").is_none() {
+            if let Some(session_id) =
+                resolve_search_session_id(&write_arguments, service, provider)
+                    .map_err(anyhow::Error::msg)?
+            {
+                write_arguments["session_id"] = json!(session_id);
+            }
+        }
+        match crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
+            dispatch_write_tool(tool_name, &write_arguments, store, "mcp", &workspace, provider)
+                .map_err(anyhow::Error::msg)
+        }) {
+            Ok(value) => Ok(value),
+            Err(error) => Err(format!("{error:#}")),
+        }
+    } else {
+        match tool_name {
+            "board_open" | "board_list" | "board_info" | "board_post" | "board_read" | "board_get"
+            | "board_search" => {
+                dispatch_board_tool(tool_name, arguments, service, "mcp", &workspace, provider)
+            }
+            "add_memory" | "get_memory" => {
+                dispatch_memory_tool(tool_name, arguments, service, provider)
+            }
+            _ => Err(format!("unknown tool: {tool_name}")),
+        }
+    };
+    // After a successful write, re-sync the view so this process observes
+    // its own write without waiting for the next pre-dispatch sync.
+    if is_write && result.is_ok() {
+        service.sync_shared_memory(&shared_root)?;
+    }
+    match result {
+        Ok(payload) => Ok(JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: Some(json!({
+                "content": [{
+                    "type": "text",
+                    "text": serde_json::to_string_pretty(&payload)?,
+                }]
+            })),
+            error: None,
+        }),
+        Err(message) => Ok(JsonRpcResponse {
+            jsonrpc: "2.0",
+            id,
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32602,
+                message,
+            }),
+        }),
+    }
+}
+
+/// Dispatch one of the write tools (`board_open`, `board_post`, `add_memory`)
+/// against an explicitly passed service. Separated from
+/// [`call_board_or_memory_tool`] so the write path can target the persistent
+/// shared store while reads stay on the composed in-memory view.
+fn dispatch_write_tool(
+    tool_name: &str,
+    arguments: &Value,
+    service: &mut MemoryService,
+    owner: &str,
+    workspace: &str,
+    provider: &str,
+) -> Result<Value, String> {
+    match tool_name {
+        "board_open" | "board_post" => {
+            dispatch_board_tool(tool_name, arguments, service, owner, workspace, provider)
+        }
+        "add_memory" => dispatch_memory_tool(tool_name, arguments, service, provider),
+        _ => Err(format!("unknown write tool: {tool_name}")),
+    }
+}
+
 // Codex validates arguments locally because its protocol already exposes the
 // unknown argument name; Claude and Gemini use this shared parser instead.
 #[cfg_attr(
     not(any(feature = "claude-code", feature = "gemini-cli")),
     allow(dead_code)
 )]
-pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'static str> {
-    if arguments
+pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'static str> {    if arguments
         .as_object()
         .map(|object| object.keys().any(|key| key != "limit"))
         .unwrap_or(false)
@@ -1064,5 +1181,158 @@ mod tests {
         let resolved = resolve_search_session_id(&json!({"query": "q"}), &fresh, "claude").unwrap();
         assert_eq!(resolved, None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn test_root(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lint-ai-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Unwrap a successful `tools/call` envelope back to its JSON payload.
+    fn tool_payload(response: &JsonRpcResponse) -> Value {
+        assert!(
+            response.error.is_none(),
+            "tool error: {:?}",
+            response.error
+        );
+        let text = response.result.as_ref().expect("result")["content"][0]["text"]
+            .as_str()
+            .expect("text content");
+        serde_json::from_str(text).expect("payload parses")
+    }
+
+    /// P1: board and memory writes must land on the persistent shared store,
+    /// not the in-memory composed view. Drives `board_open` -> `board_post`
+    /// and `add_memory` through the shared dispatch, drops the view entirely
+    /// (simulating process exit), then reopens the shared store fresh and
+    /// requires the board, post, and memory to be present and readable.
+    #[test]
+    fn board_and_memory_writes_survive_reopen() {
+        use crate::integrations::mcp_index;
+        let root = test_root("board-persist");
+        // Build the composed in-memory view exactly like the adapters do.
+        let mut view = mcp_index::open_workspace_memory_store(
+            &root,
+            mcp_index::SHARED_MEMORY_DIR,
+            &[],
+            || Ok(vec![]),
+        )
+        .expect("view opens");
+        let workspace = root.to_string_lossy().to_string();
+
+        let opened = tool_payload(
+            &call_board_or_memory_tool(
+                "board_open",
+                None,
+                &json!({"key": "k1", "title": "Board", "session_id": "sess-p1"}),
+                &mut view,
+                &root,
+                "openclaw",
+            )
+            .expect("board_open dispatches"),
+        );
+        let board_id = opened["board_id"]
+            .as_str()
+            .expect("board_id in payload")
+            .to_string();
+
+        let posted = tool_payload(
+            &call_board_or_memory_tool(
+                "board_post",
+                None,
+                &json!({"board_id": board_id, "content": "hello board",
+                        "request_id": "post-1", "session_id": "sess-p1"}),
+                &mut view,
+                &root,
+                "openclaw",
+            )
+            .expect("board_post dispatches"),
+        );
+        assert_eq!(posted["content"], json!("hello board"));
+
+        let added = tool_payload(
+            &call_board_or_memory_tool(
+                "add_memory",
+                None,
+                &json!({"content": "The API rate limit is 100 requests per minute.",
+                        "request_id": "mem-p1", "session_id": "sess-p1"}),
+                &mut view,
+                &root,
+                "openclaw",
+            )
+            .expect("add_memory dispatches"),
+        );
+        assert_eq!(added["success"], json!(true));
+
+        // Simulate process exit: the in-memory view is gone.
+        drop(view);
+
+        // Reopen the persistent shared store fresh, as another process would.
+        let mut store = MemoryService::at_path(
+            mcp_index::shared_memory_root(&root),
+            mcp_index::segmented_store_options(),
+        )
+        .expect("shared store reopens");
+
+        let boards = dispatch_board_tool(
+            "board_list",
+            &json!({"session_id": "sess-p1"}),
+            &mut store,
+            "mcp",
+            &workspace,
+            "openclaw",
+        )
+        .expect("board_list");
+        assert!(
+            boards["boards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|board| board["board_id"] == board_id),
+            "board missing after reopen: {boards}"
+        );
+        let posts = dispatch_board_tool(
+            "board_read",
+            &json!({"board_id": board_id, "session_id": "sess-p1"}),
+            &mut store,
+            "mcp",
+            &workspace,
+            "openclaw",
+        )
+        .expect("board_read");
+        assert!(
+            posts["posts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|post| post["content"] == "hello board"),
+            "post missing after reopen: {posts}"
+        );
+        let memory_id = crate::stable_doc_id_from_source("mcp:mem-p1:0");
+        let record = dispatch_memory_tool(
+            "get_memory",
+            &json!({"memory_id": memory_id}),
+            &mut store,
+            "openclaw",
+        )
+        .expect("get_memory");
+        assert!(
+            record["content"]
+                .as_str()
+                .unwrap()
+                .contains("rate limit"),
+            "memory missing after reopen: {record}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

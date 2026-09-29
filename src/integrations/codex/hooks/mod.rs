@@ -527,9 +527,13 @@ fn capture(
         branch: git_value(root, &["branch", "--show-current"]),
         revision: git_value(root, &["rev-parse", "HEAD"]),
     };
-    let mut store = open_store(root)?;
-    store.upsert(document.into_source_document()?);
-    store.refresh_index()?;
+    // Writes go through the persistent shared store under the cross-process
+    // write lock (never the in-memory view): hook captures must survive the
+    // hook process and be visible to MCP servers and other hooks.
+    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
+        store.upsert(document.into_source_document()?);
+        store.refresh_index()
+    })?;
     Ok(CodexHookOutput::default())
 }
 

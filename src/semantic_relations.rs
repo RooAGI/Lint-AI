@@ -1283,6 +1283,7 @@ fn source_kind(doc: &SourceDocument) -> &'static str {
         || doc.source.starts_with("claude-code://")
         || doc.source.starts_with("gemini-cli://")
         || doc.source.starts_with("agy://")
+        || doc.source.starts_with("openclaw://")
         || doc.source.starts_with("lint-ai://")
         || doc.filters.contains_key("document_type")
     {

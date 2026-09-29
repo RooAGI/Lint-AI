@@ -4756,11 +4756,13 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         );
         // The rebuilt record carries the phrase as a key entity, so the
         // query that triggered the backfill already sees it indexed.
+        // Head-noun admission: the key entity is "phrase", not the whole
+        // "canary phrase" (modifiers are not the thing denoted).
         let record = service.store.record_by_id("search-doc").unwrap();
         assert!(record
             .key_entities
             .iter()
-            .any(|e| e.text == "canary phrase"));
+            .any(|e| e.text == "phrase"));
     }
 
     #[test]

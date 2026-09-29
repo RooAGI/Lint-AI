@@ -66,19 +66,20 @@ function findOnPath(name) {
 }
 
 // Resolve the project root for a capture, in order:
-//   1. plugin config `projectRoot` (plugins.entries.lint-ai.config.projectRoot)
-//   2. the event's own workspaceDir (multi-workspace gateways)
+//   1. the event's own workspaceDir (multi-workspace gateways: an event that
+//      names its workspace must stay in that workspace, never leak into the
+//      installer's project)
+//   2. plugin config `projectRoot` (plugins.entries.lint-ai.config.projectRoot)
 // Returns null when nothing resolves; callers skip the event (fail open).
 function rootOf(config, ctx, event) {
+  const root =
+    ctx?.workspaceDir ?? event?.context?.workspaceDir ?? event?.workspaceDir;
+  if (typeof root === "string" && root.trim()) return root.trim();
   const fromConfig =
     typeof config?.projectRoot === "string" && config.projectRoot.trim()
       ? config.projectRoot.trim()
       : null;
-  if (fromConfig) return fromConfig;
-  const root =
-    ctx?.workspaceDir ?? event?.context?.workspaceDir ?? event?.workspaceDir;
-  if (typeof root === "string" && root.trim()) return root.trim();
-  return null;
+  return fromConfig;
 }
 
 function trimEvent(event) {

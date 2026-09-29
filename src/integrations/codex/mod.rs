@@ -125,14 +125,14 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         "startup_timeout_sec".to_string(),
         TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
     );
-    // This is a user-global config entry. Pinning `root` here redirects every
-    // project to whichever repository was installed most recently. The serve
-    // command defaults to the Codex process working directory, so leave the
-    // project path out of the global entry.
+    // This is a user-global config entry. Keep it disabled and unpinned so
+    // projects without their own trusted override cannot accidentally query
+    // another repository's memory.
     entry.insert(
         "args".to_string(),
         TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
     );
+    entry.insert("enabled".to_string(), TomlValue::Boolean(false));
     mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
 
     // Codex Desktop and newer Codex CLI builds gate lifecycle hooks behind
@@ -148,6 +148,63 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 
     write_text_object(&config_path, &toml::to_string_pretty(&config)?)
         .context("failed to write Codex config")?;
+    Ok(config_path)
+}
+
+/// Pins the MCP server working directory to this repository in its trusted
+/// project config. The user-global entry stays disabled; project config takes
+/// precedence and lets Codex launch multiple repositories independently.
+pub fn install_project_config(root: &Path) -> Result<PathBuf> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+    let config_path = root.join(".codex").join("config.toml");
+    let mut config = match fs::read_to_string(&config_path) {
+        Ok(current) if current.trim().is_empty() => TomlValue::Table(TomlMap::new()),
+        Ok(current) => current.parse::<TomlValue>().with_context(|| {
+            format!(
+                "failed to parse Codex project config {}",
+                config_path.display()
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            TomlValue::Table(TomlMap::new())
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", config_path.display()))
+        }
+    };
+    let table = config
+        .as_table_mut()
+        .context("Codex project config must be a TOML table")?;
+    let mcp_servers = table
+        .entry("mcp_servers".to_string())
+        .or_insert_with(|| TomlValue::Table(TomlMap::new()));
+    let mcp_servers = mcp_servers
+        .as_table_mut()
+        .context("Codex project config 'mcp_servers' must be a table")?;
+    let executable = env::current_exe()
+        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .to_string_lossy()
+        .into_owned();
+    let mut entry = TomlMap::new();
+    entry.insert("command".to_string(), TomlValue::String(executable));
+    entry.insert(
+        "startup_timeout_sec".to_string(),
+        TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
+    );
+    entry.insert("enabled".to_string(), TomlValue::Boolean(true));
+    entry.insert(
+        "args".to_string(),
+        TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
+    );
+    entry.insert(
+        "cwd".to_string(),
+        TomlValue::String(root.to_string_lossy().into_owned()),
+    );
+    mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
+    write_text_object(&config_path, &toml::to_string_pretty(&config)?)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
     Ok(config_path)
 }
 

@@ -24,7 +24,9 @@ From the repository root:
 
 By default this should:
 
-- merge a `mcp_servers.lint-ai` entry into `~/.codex/config.toml`
+- merge a disabled `mcp_servers.lint-ai` entry into `~/.codex/config.toml`
+- write a project-scoped `mcp_servers.lint-ai` entry to
+  `<project>/.codex/config.toml`, with its working directory set to that repo
 - enable Codex's stable `[features].hooks = true` gate while preserving other
   feature flags
 - merge Lint-AI commands into `~/.codex/hooks.json` for the supported Codex
@@ -33,10 +35,13 @@ By default this should:
   uses for standing project instructions
 - preserve unrelated MCP servers, hooks, and settings
 
-The MCP entry is user-global, so it deliberately does not pin one repository
-path. Codex starts the server for the active workspace, and Lint-AI uses that
-working directory as the project root. This lets one global MCP entry serve
-multiple repositories without the most recent install redirecting all of them.
+The user-global MCP entry is disabled, so projects without an installed and
+trusted project config cannot accidentally query another repository's memory.
+The project-scoped entry sets the MCP process working directory to the
+installed repository. Separate projects therefore get separate roots, while
+multiple Codex sessions in one project share that project's memory store.
+Codex loads project config only for trusted projects; the project's `.codex/`
+settings must be trusted in Codex.
 
 Codex's built-in TUI status line currently accepts only Codex-defined item
 identifiers, so installation does not inject an unsupported custom item. The

@@ -512,6 +512,9 @@ pub struct ScoreBreakdown {
     pub graph_link_score: f32,
     pub entity_graph_score: f32,
     pub sequence_rerank_score: f32,
+    /// Additive temporal-scope rank boost (bekind scope verdicts). Boost
+    /// only — a zero here means "no scope information", never a penalty.
+    pub scope_boost: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

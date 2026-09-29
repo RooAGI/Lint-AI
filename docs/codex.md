@@ -55,7 +55,7 @@ After installation, restart Codex Desktop so its app-server reloads
 also require approving the installed commands before they become runnable.
 
 `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`,
-`PermissionRequest`, `PostToolUse`, and `SubagentStart` retrieve context.
+`PostToolUse`, and `SubagentStart` retrieve context.
 `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, and `SubagentStop` capture
 bounded session memory. A new session segment is created lazily by the first
 capture hook, not by `SessionStart`.
@@ -69,7 +69,6 @@ Timeouts are reported on stderr while the provider receives valid fallback JSON.
 - `SessionStart`
 - `UserPromptSubmit`
 - `PreToolUse`
-- `PermissionRequest`
 - `PostToolUse`
 - `UserPromptExpansion`
 - `PreCompact`

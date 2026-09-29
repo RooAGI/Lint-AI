@@ -248,11 +248,11 @@ pub(crate) fn board_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "board_post".to_string(),
-            description: "Post a short status update to a board. Returns the post ID and its sequence number. Pass a unique request_id so retries are safe (a repeated request_id returns the original post instead of a duplicate). Omit board_id to post to the current session's default board (each session gets its own). For a board shared across sessions, use board_open with a task-specific key and pass that board_id.".to_string(),
+            description: "Post a short status update to a board. The result includes the board_id; pass that exact ID to board_read and share it with subagents so everyone uses the same board. Pass a unique request_id so retries are safe (a repeated request_id returns the original post instead of a duplicate). Omitting board_id selects only the current session's default board; each session has its own.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Omit (or pass \"default\") for the current session's default board."},
+                    "board_id": {"type": "string", "description": "For a shared board, pass the exact board_id returned by board_open or board_post. Omit (or pass \"default\") only for this session's private default board."},
                     "content": {"type": "string", "description": "Post content, e.g. \"The parser failure comes from the empty input path.\""},
                     "request_id": {"type": "string", "description": "Unique ID for this post attempt; reuse it when retrying."},
                     "author_agent_id": {"type": "string", "description": "Your agent ID (e.g. subagent ID). Defaults to the provider name."},
@@ -264,11 +264,11 @@ pub(crate) fn board_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "board_read".to_string(),
-            description: "Read a board's posts in posting order. Pass after_sequence (from the last post you saw) to catch up on new posts only. Omit board_id to read the current session's default board.".to_string(),
+            description: "Read a board's posts in posting order. For reliable readback, pass the same explicit board_id returned by board_open or board_post; omitting it reads only the current session's default board. Pass after_sequence (from the last post you saw) to catch up on new posts only.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "board_id": {"type": "string", "description": "Board ID from board_open or board_list. Omit (or pass \"default\") for the current session's default board."},
+                    "board_id": {"type": "string", "description": "Pass the exact board_id returned by board_open or board_post to read that shared board. Omit (or pass \"default\") only for this session's private default board."},
                     "after_sequence": {"type": "integer", "minimum": 0, "description": "Only return posts after this sequence number. Omit to read from the start."},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
                     "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace. Only needed to resolve the default board."},

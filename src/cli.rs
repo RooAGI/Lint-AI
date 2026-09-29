@@ -63,7 +63,6 @@ pub enum CodexHook {
     SessionStart,
     UserPromptSubmit,
     PreToolUse,
-    PermissionRequest,
     PostToolUse,
     UserPromptExpansion,
     PreCompact,

@@ -33,7 +33,6 @@ pub enum CodexHookKind {
     SessionStart,
     UserPromptSubmit,
     PreToolUse,
-    PermissionRequest,
     PostToolUse,
     UserPromptExpansion,
     PreCompact,
@@ -50,7 +49,6 @@ impl CodexHookKind {
             Self::SessionStart => "SessionStart",
             Self::UserPromptSubmit => "UserPromptSubmit",
             Self::PreToolUse => "PreToolUse",
-            Self::PermissionRequest => "PermissionRequest",
             Self::PostToolUse => "PostToolUse",
             Self::UserPromptExpansion => "UserPromptExpansion",
             Self::PreCompact => "PreCompact",
@@ -176,7 +174,6 @@ fn write_timing_record(kind: CodexHookKind, elapsed_ms: f64, output: &CodexHookO
         CodexHookKind::SessionStart
         | CodexHookKind::UserPromptSubmit
         | CodexHookKind::PreToolUse
-        | CodexHookKind::PermissionRequest
         | CodexHookKind::PostToolUse
         | CodexHookKind::UserPromptExpansion
         | CodexHookKind::SubagentStart => "retrieve",
@@ -235,7 +232,7 @@ fn handle_hook(
             &input.session_id,
             input.prompt.as_deref().unwrap_or_default(),
         ),
-        CodexHookKind::PreToolUse | CodexHookKind::PermissionRequest => retrieve(
+        CodexHookKind::PreToolUse => retrieve(
             &root,
             kind.event_name(),
             &input.session_id,

@@ -186,7 +186,7 @@ The initial suite should contain at least three scenarios in each category:
 
 Add Codex-specific tool-use coverage that the Claude suite does not need:
 
-- Tool-use recall: use `PreToolUse`, `PermissionRequest`, or `PostToolUse`
+- Tool-use recall: use `PreToolUse` or `PostToolUse`
   context to recover the immediately relevant implementation detail.
 - Subagent handoff: verify that `SubagentStart` retrieval and `SubagentStop`
   capture do not leak unrelated session memory.

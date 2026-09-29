@@ -277,7 +277,6 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             crate::cli::CodexHook::SessionStart => CodexHookKind::SessionStart,
             crate::cli::CodexHook::UserPromptSubmit => CodexHookKind::UserPromptSubmit,
             crate::cli::CodexHook::PreToolUse => CodexHookKind::PreToolUse,
-            crate::cli::CodexHook::PermissionRequest => CodexHookKind::PermissionRequest,
             crate::cli::CodexHook::PostToolUse => CodexHookKind::PostToolUse,
             crate::cli::CodexHook::UserPromptExpansion => CodexHookKind::UserPromptExpansion,
             crate::cli::CodexHook::PreCompact => CodexHookKind::PreCompact,

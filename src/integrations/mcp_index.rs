@@ -78,6 +78,33 @@ pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
     root.join(".lint-ai").join(SHARED_MEMORY_DIR)
 }
 
+/// Open the persistent shared-memory service for one board operation.
+///
+/// MCP adapters keep a separate, composed in-memory service for workspace
+/// search. Board writes must use this persistent service so another provider
+/// MCP process and later invocations see the same documents. The advisory
+/// file lock serializes board operations across those processes; sequence
+/// assignment and request-id recovery then run against the latest persisted
+/// state.
+pub fn with_shared_memory_service<T>(
+    root: &Path,
+    operation: impl FnOnce(&mut MemoryService) -> Result<T>,
+) -> Result<T> {
+    let memory_root = shared_memory_root(root);
+    fs::create_dir_all(&memory_root)?;
+    let lock_path = memory_root.join(".board-operation.lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    lock.lock()?;
+
+    let mut service = MemoryService::at_path(&memory_root, segmented_store_options())?;
+    operation(&mut service)
+}
+
 /// One-time, idempotent migration of legacy per-provider memory stores into
 /// the shared store. Each legacy store's documents are upserted (provider
 /// attribution travels with the documents, so nothing is lost or duplicated),
@@ -370,6 +397,114 @@ mod tests {
     use crate::pipeline::IndexStore;
     use std::collections::BTreeMap;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn board_test_root(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let root = base.join(format!(
+            "lint-ai-shared-board-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        root
+    }
+
+    #[test]
+    fn board_post_is_readable_after_reopening_shared_service() {
+        let root = board_test_root("reopen");
+        let workspace = root.to_string_lossy().into_owned();
+        let board = with_shared_memory_service(&root, |service| {
+            service.board_open("mcp", &workspace, "research", "Research")
+        })
+        .unwrap();
+
+        let posted = with_shared_memory_service(&root, |service| {
+            service.board_post(
+                Some(&board.board_id),
+                "mcp",
+                &workspace,
+                None,
+                "agent-a",
+                "codex",
+                "The parser failure is in the empty-input path.",
+                "research-post-1",
+            )
+        })
+        .unwrap();
+        assert_eq!(posted.sequence, 1);
+
+        // A fresh MemoryService instance must read the durable post from the
+        // same explicit board ID, as a later MCP invocation would.
+        let posts = with_shared_memory_service(&root, |service| {
+            service.board_read(Some(&board.board_id), "mcp", &workspace, None, None, 20)
+        })
+        .unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].post_id, posted.post_id);
+        assert_eq!(posts[0].board_id, board.board_id);
+        assert_eq!(posts[0].content, posted.content);
+        assert_eq!(posts[0].sequence, 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_board_lock_serializes_writers_across_service_instances() {
+        const WRITERS: usize = 6;
+        let root = board_test_root("concurrent");
+        let workspace = root.to_string_lossy().into_owned();
+        let board = with_shared_memory_service(&root, |service| {
+            service.board_open("mcp", &workspace, "parallel", "Parallel")
+        })
+        .unwrap();
+
+        let mut writers = Vec::new();
+        for writer in 0..WRITERS {
+            let root = root.clone();
+            let workspace = workspace.clone();
+            let board_id = board.board_id.clone();
+            writers.push(std::thread::spawn(move || {
+                with_shared_memory_service(&root, |service| {
+                    service.board_post(
+                        Some(&board_id),
+                        "mcp",
+                        &workspace,
+                        None,
+                        &format!("agent-{writer}"),
+                        "codex",
+                        &format!("post from writer {writer}"),
+                        &format!("parallel-{writer}"),
+                    )
+                })
+                .unwrap()
+                .sequence
+            }));
+        }
+
+        let mut sequences: Vec<u64> = writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .collect();
+        sequences.sort_unstable();
+        assert_eq!(sequences, (1..=WRITERS as u64).collect::<Vec<_>>());
+
+        let posts = with_shared_memory_service(&root, |service| {
+            service.board_read(Some(&board.board_id), "mcp", &workspace, None, None, 100)
+        })
+        .unwrap();
+        assert_eq!(posts.len(), WRITERS);
+        assert_eq!(
+            posts.iter().map(|post| post.sequence).collect::<Vec<_>>(),
+            (1..=WRITERS as u64).collect::<Vec<_>>()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     fn document(doc_id: &str, source: &str, content: &str) -> SourceDocument {
         SourceDocument {

@@ -39,7 +39,6 @@ const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session-start"),
     ("UserPromptSubmit", "user-prompt-submit"),
     ("PreToolUse", "pre-tool-use"),
-    ("PermissionRequest", "permission-request"),
     ("PostToolUse", "post-tool-use"),
     ("UserPromptExpansion", "user-prompt-expansion"),
     ("PreCompact", "pre-compact"),
@@ -583,18 +582,34 @@ impl CodexMcp {
             | "board_get" | "board_search" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
-                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
+                // Resolve the session from the composed service, which tracks
+                // hook activity, then perform board operations against the
+                // persistent shared-memory service. Do not mutate the
+                // composed in-memory search view for board writes.
+                let mut board_arguments = arguments.clone();
+                if board_arguments.get("session_id").is_none() {
+                    if let Some(session_id) =
+                        mcp_tools::resolve_search_session_id(&board_arguments, service, "codex")
+                            .map_err(anyhow::Error::msg)?
+                    {
+                        board_arguments["session_id"] = json!(session_id);
+                    }
+                }
                 // Board owner/workspace: the workspace root scopes boards;
                 // "mcp" is the stable owner for agent-posted boards.
                 let workspace = self.root.to_string_lossy().to_string();
-                let result = mcp_tools::dispatch_board_tool(
-                    tool_name,
-                    &arguments,
-                    service,
-                    "mcp",
-                    &workspace,
-                    RecordingProvider::Codex.as_str(),
-                );
+                let result = mcp_index::with_shared_memory_service(&self.root, |board_service| {
+                    mcp_tools::dispatch_board_tool(
+                        tool_name,
+                        &board_arguments,
+                        board_service,
+                        "mcp",
+                        &workspace,
+                        RecordingProvider::Codex.as_str(),
+                    )
+                    .map_err(anyhow::Error::msg)
+                })
+                .map_err(|error| error.to_string());
                 match result {
                     Ok(payload) => Ok(JsonRpcResponse {
                         jsonrpc: "2.0",

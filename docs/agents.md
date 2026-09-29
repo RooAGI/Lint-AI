@@ -158,7 +158,7 @@ not update the searchable `IndexStore`:
 | Provider | Recorded hook events |
 |---|---|
 | Claude Code | `SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`, `SessionEnd`, `SubagentStart`, `SubagentStop` |
-| Codex | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `UserPromptExpansion`, `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `SubagentStart`, `SubagentStop` |
+| Codex | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `UserPromptExpansion`, `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `SubagentStart`, `SubagentStop` |
 | Gemini CLI | `SessionStart`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `BeforeToolSelection`, `BeforeTool`, `AfterTool`, `PreCompress`, `SessionEnd` |
 | Antigravity CLI | `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop` |
 

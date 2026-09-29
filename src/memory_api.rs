@@ -1384,6 +1384,9 @@ impl MemoryService {
                         }
                     }
                 }
+                if self.board_info(id, owner, workspace, session_id)?.is_none() {
+                    anyhow::bail!("unknown board_id: {id}");
+                }
                 Ok(id.to_string())
             }
             None => {
@@ -1594,7 +1597,20 @@ impl MemoryService {
                 if d.filters.get(BOARD_ID_FILTER).map(String::as_str) != Some(board_id) {
                     return Ok(None);
                 }
-                Ok(board_from_doc_content(&d.content))
+                if d.filters.get(BOARD_OWNER_FILTER).map(String::as_str) != Some(owner)
+                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str)
+                        != Some(workspace)
+                {
+                    return Ok(None);
+                }
+                let Some(board) = board_from_doc_content(&d.content) else {
+                    return Ok(None);
+                };
+                if board.owner != owner || board.workspace != workspace || board.board_id != board_id
+                {
+                    return Ok(None);
+                }
+                Ok(Some(board))
             }
             None => {
                 let sid = session_id.map(str::trim).filter(|s| !s.is_empty());

@@ -85,6 +85,17 @@ pub fn default_spacy_script_path() -> PathBuf {
 }
 
 pub fn detect_python_executable() -> String {
+    // SPACY_PYTHON: explicit override for the spaCy NER subprocess python,
+    // following the BEHOOD_BIN precedent. Points at a Python with spaCy
+    // installed (e.g. a uv venv whose own site-packages survive the -I
+    // isolated flag below; user site-packages do not). Checked before the
+    // legacy PYTHON_EXECUTABLE / PYTHON overrides.
+    if let Ok(value) = std::env::var("SPACY_PYTHON") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return value.to_string();
+        }
+    }
     if let Ok(value) = std::env::var("PYTHON_EXECUTABLE") {
         let value = value.trim();
         if !value.is_empty() {

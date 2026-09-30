@@ -70,6 +70,7 @@ pub mod pipeline;
 pub mod query_plan;
 mod remote_query;
 pub mod segments;
+pub mod semantic_audit;
 pub mod semantic_relations;
 pub mod session_prepare;
 pub mod source;

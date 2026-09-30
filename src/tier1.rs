@@ -554,6 +554,41 @@ fn sorted_terms(mut terms: Vec<RankedTerm>, top_k: usize) -> Vec<RankedTerm> {
     terms
 }
 
+/// True when Han characters make up at least half of the content's
+/// non-whitespace characters. Han-dominant docs get a quadrupled term
+/// budget: the interleaved unigram+bigram token stream is ~2x the tokens
+/// of the same text without unigrams, and Chinese topic-comment order puts
+/// the distinctive payload late — a tight budget with an early-position
+/// bias truncates exactly the terms questions ask about.
+pub(crate) fn han_dominant_content(content: &str) -> bool {
+    let mut han = 0usize;
+    let mut total = 0usize;
+    for ch in content.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if crate::lang::is_han(ch) {
+            han += 1;
+        }
+    }
+    total > 0 && han * 2 >= total
+}
+
+/// Term budget for [`sorted_terms`]: quadrupled for Han-dominant content.
+/// The interleaved unigram+bigram token stream is ~2x the tokens of the
+/// same text without unigrams, and Chinese topic-comment order puts the
+/// distinctive payload late — a tight budget with an early-position bias
+/// truncates exactly the terms questions ask about (verified on the
+/// Chinese memory benchmark: budget 24 left q15/q16/q19/q25 failing).
+pub(crate) fn term_budget_for(content: &str) -> usize {
+    if han_dominant_content(content) {
+        48
+    } else {
+        12
+    }
+}
+
 pub struct YakeStyleTermRanker;
 
 impl ImportantTermRanker for YakeStyleTermRanker {
@@ -601,7 +636,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
                 source: self.name().to_string(),
             });
         }
-        sorted_terms(out, 12)
+        sorted_terms(out, term_budget_for(&doc.content))
     }
 }
 
@@ -673,7 +708,7 @@ impl ImportantTermRanker for RakeStyleTermRanker {
                 source: self.name().to_string(),
             })
             .collect();
-        sorted_terms(out, 12)
+        sorted_terms(out, term_budget_for(&doc.content))
     }
 }
 
@@ -724,7 +759,7 @@ impl ImportantTermRanker for CValueStyleTermRanker {
                 });
             }
         }
-        sorted_terms(out, 12)
+        sorted_terms(out, term_budget_for(&doc.content))
     }
 }
 
@@ -782,7 +817,7 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
                 source: self.name().to_string(),
             })
             .collect();
-        sorted_terms(out, 12)
+        sorted_terms(out, term_budget_for(&doc.content))
     }
 }
 
@@ -854,6 +889,55 @@ mod cjk_term_tests {
         assert!(
             names.iter().any(|t| *t == "certificate" || *t == "degree"),
             "expected content terms, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn han_dominant_detection() {
+        assert!(han_dominant_content("八月二十号我改主意了，最后提了一辆比亚迪海豹。"));
+        assert!(han_dominant_content("我毕业于清华大学，专业是计算机科学。"));
+        assert!(!han_dominant_content(
+            "The certificate program awarded a degree in computer science."
+        ));
+        assert!(!han_dominant_content(""));
+        // Mixed: 3 Han of 9 non-ws chars -> not dominant.
+        assert!(!han_dominant_content("买特斯拉 Model Y"));
+    }
+
+    #[test]
+    fn chinese_generous_budget_keeps_late_payload_terms() {
+        // Regression: the tight top-12 budget with an early-position bias
+        // truncated the distinctive late terms Chinese questions ask about
+        // (topic-comment order). Han-dominant docs get a 48-term budget so
+        // the payload — 比亚迪海豹, 现在 — survives ranking.
+        let terms = YakeStyleTermRanker.rank_terms(&doc(
+            "八月二十号我改主意了，最后提了一辆比亚迪海豹，现在每天开着上下班。",
+        ));
+        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
+        // 比亚迪海豹 segments as 比亚/亚迪/海豹 bigrams (+ unigrams); the
+        // payload must survive ranking regardless of segmentation.
+        for want in ["比亚", "亚迪", "海豹", "现在", "下班"] {
+            assert!(
+                names.contains(&want),
+                "expected late payload term {want:?} in top terms, got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn chinese_term_budget_is_quadrupled() {
+        assert_eq!(term_budget_for("八月二十号我改主意了。"), 48);
+        assert_eq!(term_budget_for("The quick brown fox."), 12);
+    }
+
+    #[test]
+    fn chinese_unigram_query_term_is_indexable() {
+        // 猫 (single char) must be rankable so it can match 橘猫's unigram.
+        let terms = YakeStyleTermRanker.rank_terms(&doc("家里养了一只橘猫，名字叫年糕。"));
+        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
+        assert!(
+            names.contains(&"猫"),
+            "expected 猫 unigram among ranked terms, got {names:?}"
         );
     }
 }

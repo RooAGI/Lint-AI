@@ -892,40 +892,64 @@ fn chinese_relative_hits(query: &str, base: NaiveDate) -> Vec<ChineseTemporalHit
         }
     };
 
-    // Day scale.
-    if query.contains("前天") {
+    // Day scale. Longest-match-first: "大前天" contains "前天" (and
+    // "大后天" contains "后天") as a substring, so the doubled form must
+    // be checked — and stripped — before the base form to avoid
+    // mistagging it (e.g. memory "上上周去杭州" tagged as "上周").
+    let q_day = query.replace("大前天", "").replace("大后天", "");
+    if query.contains("大前天") {
+        push("大前天", base - Duration::days(3), 2);
+    }
+    if query.contains("大后天") {
+        push("大后天", base + Duration::days(3), 2);
+    }
+    if q_day.contains("前天") {
         push("前天", base - Duration::days(2), 2);
     }
-    if query.contains("昨天") {
+    if q_day.contains("昨天") {
         push("昨天", base - Duration::days(1), 2);
     }
-    if query.contains("今天") {
+    if q_day.contains("今天") {
         push("今天", base, 2);
     }
-    if query.contains("明天") {
+    if q_day.contains("明天") {
         push("明天", base + Duration::days(1), 2);
     }
-    if query.contains("后天") {
+    if q_day.contains("后天") {
         push("后天", base + Duration::days(2), 2);
     }
-    // Week scale.
-    if query.contains("上周") {
+    // Week scale. Longest-match-first: "上上周" contains "上周".
+    let q_week = query.replace("上上周", "").replace("下下周", "");
+    if query.contains("上上周") {
+        push("上上周", base - Duration::weeks(2), 7);
+    }
+    if query.contains("下下周") {
+        push("下下周", base + Duration::weeks(2), 7);
+    }
+    if q_week.contains("上周") {
         push("上周", base - Duration::weeks(1), 7);
     }
-    if query.contains("本周") || query.contains("这周") {
+    if q_week.contains("本周") || q_week.contains("这周") {
         push("本周", base, 7);
     }
-    if query.contains("下周") {
+    if q_week.contains("下周") {
         push("下周", base + Duration::weeks(1), 7);
     }
-    // Month scale.
-    if query.contains("上个月") || query.contains("上月") {
+    // Month scale. Longest-match-first: "上上个月" contains "上个月".
+    let q_month = query.replace("上上个月", "").replace("下下个月", "");
+    if query.contains("上上个月") {
+        push("上上月", shift_months(base, -2), 14);
+    }
+    if query.contains("下下个月") {
+        push("下下月", shift_months(base, 2), 14);
+    }
+    if q_month.contains("上个月") || q_month.contains("上月") {
         push("上月", shift_months(base, -1), 14);
     }
-    if query.contains("这个月") || query.contains("本月") {
+    if q_month.contains("这个月") || q_month.contains("本月") {
         push("本月", base, 14);
     }
-    if query.contains("下个月") || query.contains("下月") {
+    if q_month.contains("下个月") || q_month.contains("下月") {
         push("下月", shift_months(base, 1), 14);
     }
     // Year scale.
@@ -1154,6 +1178,57 @@ mod tests {
         assert_eq!(
             hit.target_date,
             NaiveDate::from_ymd_opt(2026, 9, 29).unwrap()
+        );
+    }
+
+    #[test]
+    fn chinese_doubled_temporal_forms_longest_match_first() {
+        // Regression: "上上周" contains "上周" as a substring and was
+        // mistagged as last week. Doubled forms must resolve to their own
+        // offset, never the base form's.
+        let t = |q: &str| resolve_temporal_target(q, Some(anchor())).unwrap();
+        let hit = t("上上周去杭州出差");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 15).unwrap()
+        );
+        assert_eq!(hit.window_days, 7);
+        let hit = t("下下周要去北京");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 10, 13).unwrap()
+        );
+        let hit = t("大前天买的菜");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 26).unwrap()
+        );
+        let hit = t("大后天出发");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 10, 2).unwrap()
+        );
+        let hit = t("上上个月去了南京");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 7, 29).unwrap()
+        );
+        assert_eq!(hit.window_days, 14);
+        let hit = t("下下个月交房");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 11, 29).unwrap()
+        );
+        // Base forms still resolve when the doubled form is absent.
+        let hit = t("上周我们开会了");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 22).unwrap()
+        );
+        let hit = t("前天买的菜");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 27).unwrap()
         );
     }
 

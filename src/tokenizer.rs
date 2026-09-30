@@ -176,15 +176,28 @@ fn push_han_bigrams(out: &mut Vec<String>, run: &[char]) {
         out.push(run[0].to_string());
         return;
     }
-    for w in run.windows(2) {
-        out.push(w.iter().collect());
+    // Emit each character and each sliding bigram, interleaved by position:
+    // c1, c1c2, c2, c2c3, ..., cn. The unigrams let a single-character query
+    // term (e.g. 猫) match that character inside an indexed word (e.g. 橘猫);
+    // with bigrams alone a unigram query can never hit the index. Interleaving
+    // keeps each unigram adjacent to its bigrams so term-rank position scores
+    // treat them fairly. Single-character runs stay unigrams (above).
+    for (i, ch) in run.iter().enumerate() {
+        out.push(ch.to_string());
+        if i + 1 < run.len() {
+            let mut bigram = String::with_capacity(ch.len_utf8() * 2 + 1);
+            bigram.push(*ch);
+            bigram.push(run[i + 1]);
+            out.push(bigram);
+        }
     }
 }
 
-/// Sliding character bigrams over every Han run in `text`, in order.
-/// Shared by the tantivy CJK tokenizer and the BM25 query fallback so
-/// index-time and query-time segmentation agree.
-pub(crate) fn han_bigrams(text: &str) -> Vec<String> {
+/// Interleaved character unigrams and sliding bigrams over every Han run
+/// in `text`, in order (c1, c1c2, c2, c2c3, ..., cn). Shared by the tantivy
+/// CJK tokenizer and the BM25 query fallback so index-time and query-time
+/// segmentation agree.
+pub(crate) fn han_tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut run: Vec<char> = Vec::new();
     for ch in text.chars() {
@@ -412,10 +425,13 @@ mod tests {
     fn unstemmed_chinese_emits_bigrams() {
         assert_eq!(
             tokenize("我毕业于清华大学", TokenizerMode::Unstemmed),
-            vec!["我毕", "毕业", "业于", "于清", "清华", "华大", "大学"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()
+            vec![
+                "我", "我毕", "毕", "毕业", "业", "业于", "于", "于清", "清", "清华", "华",
+                "华大", "大", "大学", "学"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
         );
     }
 
@@ -424,7 +440,7 @@ mod tests {
         // Latin regex behavior is unchanged around Han runs.
         assert_eq!(
             tokenize("我在学习Rust编程", TokenizerMode::Unstemmed),
-            vec!["我在", "在学", "学习", "rust", "编程"]
+            vec!["我", "我在", "在", "在学", "学", "学习", "习", "rust", "编", "编程", "程"]
                 .into_iter()
                 .map(String::from)
                 .collect::<Vec<_>>()
@@ -553,9 +569,18 @@ mod tests {
     }
 
     #[test]
-    fn han_bigrams_match_zh_convention() {
-        assert_eq!(han_bigrams("清华大学"), vec!["清华", "华大", "大学"]);
-        assert_eq!(han_bigrams("中"), vec!["中"]);
+    fn han_tokens_emit_interleaved_unigrams_and_bigrams() {
+        // Unigrams let a single-character query term (猫) match that
+        // character inside an indexed word (橘猫); bigrams alone made that
+        // impossible. Interleaving keeps each unigram adjacent to its
+        // bigrams so position-based ranking treats them fairly.
+        assert_eq!(
+            han_tokens("清华大学"),
+            vec!["清", "清华", "华", "华大", "大", "大学", "学"]
+        );
+        assert_eq!(han_tokens("中"), vec!["中"]);
+        // Non-Han text passes through untouched.
+        assert_eq!(han_tokens("Rust"), Vec::<String>::new());
     }
 
     #[test]

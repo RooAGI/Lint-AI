@@ -2638,6 +2638,20 @@ mod tests {
         );
         assert_eq!(spacy_model_for_request(None, &zh_turns), "zh_core_web_sm");
 
+        let es_turns = vec![RelationTurn {
+            speaker: "María".to_string(),
+            text: "¿Dónde está la biblioteca de Madrid? Fui ayer por la mañana.".to_string(),
+            session_id: "s1".to_string(),
+            turn_idx: 0,
+            doc_id: "d1".to_string(),
+            session_date: None,
+        }];
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Auto), &es_turns),
+            "es_core_news_sm"
+        );
+        assert_eq!(spacy_model_for_request(None, &es_turns), "es_core_news_sm");
+
         // Explicit languages still pin their model.
         assert_eq!(
             spacy_model_for_request(Some(Lang::Ko), &ko_turns),

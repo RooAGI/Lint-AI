@@ -904,11 +904,15 @@ impl MemoryIndex {
             // Definitional tags join as SHOULD clauses: purely additive,
             // scored by BM25 inside the tantivy scorer — a match, not a
             // bonus bolted on after scoring.
+            // Luyi 2026-09-30: the lexical query stays MUST — its required
+            // terms/AND constraints are mandatory. Tags are SHOULD (optional
+            // scoring). Previously the lexical query was SHOULD, so a doc
+            // matching only a tag could pass despite failing lexical constraints.
             let combined: Arc<dyn Query> = if sorted_tags.is_empty() {
                 Arc::from(parsed_lexical)
             } else {
                 let mut subqueries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-                subqueries.push((Occur::Should, parsed_lexical));
+                subqueries.push((Occur::Must, parsed_lexical));
                 for tag in &sorted_tags {
                     let term_query = TermQuery::new(
                         Term::from_field_text(lex.tags_f, tag),

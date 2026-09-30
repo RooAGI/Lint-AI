@@ -58,6 +58,17 @@ pub fn expand_query_terms(input_terms: &[String], lang: Lang) -> ExpandedQuery {
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>();
 
+    // The expansion store is English WordNet/ConceptNet. For non-English
+    // queries, accidental cross-language matches (Spanish "pan" = bread vs
+    // English "pan" = cooking vessel) are harmful, and Spanish lexical
+    // resources are out of scope. No-op: return the terms unexpanded.
+    if !matches!(lang, Lang::En | Lang::Auto) {
+        return ExpandedQuery {
+            original_terms,
+            expanded_terms: Vec::new(),
+        };
+    }
+
     let Some(store) = STORE.get_or_init(load_store).as_ref() else {
         return ExpandedQuery {
             original_terms,
@@ -73,7 +84,13 @@ pub fn expand_query_terms(input_terms: &[String], lang: Lang) -> ExpandedQuery {
     for term in &original_terms {
         // Never expand stopwords: their lexical neighborhoods ("and" -> "end",
         // "not") are noise that would pollute both routing and scoring.
-        if crate::tokenizer::is_stopword(term, crate::tokenizer::TokenizerMode::Stemmed) {
+        // Language-aware: Spanish stopwords ("no", "son") must be filtered
+        // for Spanish queries, not just English ones.
+        if crate::tokenizer::is_stopword_for_lang(
+            term,
+            crate::tokenizer::TokenizerMode::Stemmed,
+            lang,
+        ) {
             continue;
         }
         // Only expand focus-worthy concepts. Expanding names ("john" ->
@@ -303,6 +320,20 @@ mod tests {
         let out = expand_query_terms(&["install".to_string()], Lang::En);
         assert!(!out.expanded_terms.is_empty());
         assert!(out.expanded_terms.iter().all(|t| !t.is_empty()));
+    }
+
+    #[test]
+    fn spanish_expansion_is_noop() {
+        // The expansion store is English-only. Spanish queries must not
+        // receive English WordNet expansions ("pan" = bread must not expand
+        // via English "pan" = cooking vessel).
+        let out = expand_query_terms(&["biblioteca".to_string(), "pan".to_string()], Lang::Es);
+        assert!(
+            out.expanded_terms.is_empty(),
+            "Spanish expansion must be a no-op, got {:?}",
+            out.expanded_terms
+        );
+        assert_eq!(out.original_terms, vec!["biblioteca".to_string(), "pan".to_string()]);
     }
 
     #[test]

@@ -814,6 +814,13 @@ fn resolve_weekend(base: NaiveDate, offset_weeks: i64) -> (NaiveDate, NaiveDate)
 }
 
 fn shift_months(base: NaiveDate, months: i32) -> NaiveDate {
+    // Bound the magnitude first: input numerals are unbounded (\d+), and
+    // without this `base.month() as i32 + months` can overflow i32 while
+    // the normalization loops below spin ~2^31/12 iterations on
+    // adversarial input. 3.1M months (~258k years) still resolves inside
+    // chrono's range; truly out-of-range results fall back to `base`.
+    const MAX_MONTHS: i32 = 3_100_000; // ~258k years
+    let months = months.clamp(-MAX_MONTHS, MAX_MONTHS);
     let mut year = base.year();
     let mut month = base.month() as i32 + months;
     while month <= 0 {
@@ -825,23 +832,45 @@ fn shift_months(base: NaiveDate, months: i32) -> NaiveDate {
         month -= 12;
     }
     let month_u32 = month as u32;
-    let last_day = last_day_of_month(year, month_u32);
+    let last_day = match last_day_of_month(year, month_u32) {
+        Some(d) => d,
+        None => return base,
+    };
     let day = base.day().min(last_day);
     NaiveDate::from_ymd_opt(year, month_u32, day).unwrap_or(base)
 }
 
 fn shift_years(base: NaiveDate, years: i32) -> NaiveDate {
-    let year = base.year() + years;
-    let last_day = last_day_of_month(year, base.month());
+    // saturating_add: input numerals are unbounded, so `base.year() + years`
+    // could overflow i32 (panic in debug). Out-of-range years resolve to
+    // `base` below instead of panicking.
+    let year = base.year().saturating_add(years);
+    let last_day = match last_day_of_month(year, base.month()) {
+        Some(d) => d,
+        None => return base,
+    };
     let day = base.day().min(last_day);
     NaiveDate::from_ymd_opt(year, base.month(), day).unwrap_or(base)
 }
 
-fn last_day_of_month(year: i32, month: u32) -> u32 {
+/// Add `days` (possibly huge — input numerals are unbounded) to `base`
+/// without panicking. The magnitude is clamped to just inside chrono's
+/// representable range (~260k years); the result stays directionally
+/// correct (far past / far future) instead of killing the process.
+fn shift_days(base: NaiveDate, days: i64) -> NaiveDate {
+    const MAX_DAYS: i64 = 95_000_000; // ~260k years, just inside chrono's ±262143-year range
+    let days = days.clamp(-MAX_DAYS, MAX_DAYS);
+    base.checked_add_signed(Duration::days(days)).unwrap_or(base)
+}
+
+fn last_day_of_month(year: i32, month: u32) -> Option<u32> {
     let next_month = if month == 12 { 1 } else { month + 1 };
     let next_year = if month == 12 { year + 1 } else { year };
-    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1).unwrap();
-    (first_next - Duration::days(1)).day()
+    // Fallible: `from_ymd_opt` returns None outside chrono's year range
+    // (e.g. "百万年前" -> year -997974). Callers fall back to `base`;
+    // this must never panic on input text.
+    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
+    Some((first_next - Duration::days(1)).day())
 }
 
 fn word_to_num(input: &str) -> u32 {
@@ -1060,12 +1089,17 @@ fn chinese_offset_hits(normalized: &str, base: NaiveDate) -> Vec<ChineseTemporal
         if n == 0 {
             continue;
         }
+        // Input numerals are unbounded (\d+): clamp once, up front, to a
+        // magnitude date arithmetic can represent. This bounds every
+        // downstream multiplication and cast (days, weeks, months, years).
+        // Unrepresentable offsets resolve to `base` in the shift helpers.
+        let n = n.min(95_000_000);
         let unit = cap.get(2).map(|x| x.as_str()).unwrap_or("");
         let future = cap.get(3).map(|x| x.as_str() == "后").unwrap_or(false);
         let sign = if future { 1 } else { -1 };
         let (date, window_days) = match unit {
-            "天" | "日" => (base + Duration::days(sign * n), 2),
-            "星期" | "个星期" | "周" => (base + Duration::weeks(sign * n), 7),
+            "天" | "日" => (shift_days(base, sign * n), 2),
+            "星期" | "个星期" | "周" => (shift_days(base, sign * n * 7), 7),
             "个月" | "月" => (shift_months(base, (sign * n) as i32), 14),
             "年" => (shift_years(base, (sign * n) as i32), 30),
             _ => continue,
@@ -1447,6 +1481,49 @@ mod tests {
         )
         .expect("timestamp should receive a recency boost");
         assert!((boost - 0.125).abs() < 0.001, "boost={boost}");
+    }
+
+    #[test]
+    fn extreme_temporal_offsets_never_panic() {
+        // Regression: "百万年前" (a million years ago, from MIRACL corpus
+        // docs 6769570#0 / 2736869#0) panicked `last_day_of_month` via
+        // `NaiveDate::from_ymd_opt(...).unwrap()` on year -997974, killing
+        // the whole indexing run. Out-of-range offsets now resolve to
+        // `base` instead of panicking.
+        let base = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        // Out-of-chrono-range magnitudes resolve to base, never panic.
+        assert_eq!(shift_years(base, -1_000_000), base);
+        assert_eq!(shift_years(base, 1_000_000), base);
+        assert_eq!(shift_years(base, i32::MAX), base);
+        assert_eq!(shift_years(base, i32::MIN), base);
+        assert!(shift_days(base, i64::MAX) > base);
+        assert!(shift_days(base, i64::MIN) < base);
+        assert_eq!(last_day_of_month(-997_974, 9), None);
+        assert_eq!(last_day_of_month(2026, 9), Some(30));
+        assert_eq!(last_day_of_month(2026, 2), Some(28));
+        // Clamped magnitudes stay representable: no panic, and the
+        // direction is preserved (far past / far future).
+        assert!(shift_months(base, -1_000_000_000) < base);
+        assert!(shift_months(base, 1_000_000_000) > base);
+        assert!(shift_months(base, i32::MIN) < base);
+    }
+
+    #[test]
+    fn chinese_geological_time_does_not_panic() {
+        // The exact trigger from the MIRACL zh corpus:
+        // "290.1–283.5百万年前" (Artinskian stage, doc 6769570#0).
+        // Must be recognized as a temporal hit without panicking.
+        let base = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        let hits = chinese_temporal_hits("亚丁斯克期290.1–283.5百万年前", base);
+        assert!(
+            !hits.is_empty(),
+            "expected the offset to be recognized as a temporal hit"
+        );
+        // Absurd magnitudes from raw digit strings must not panic either.
+        let hits = chinese_temporal_hits("99999999999999999999天前发生了大事", base);
+        let _ = hits;
+        let hits = chinese_temporal_hits("99999999999999999999年前发生了大事", base);
+        let _ = hits;
     }
 }
 

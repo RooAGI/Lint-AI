@@ -60,6 +60,13 @@ impl LexicalState {
             Some(dir) => Self::open_or_create_on_disk(dir, &schema)?,
             None => Index::create_in_ram(schema),
         };
+        // CJK-aware tokenization for all TEXT fields (see
+        // crate::index::cjk_tokenizer): Han runs index as character
+        // bigrams, Hangul runs as eojeol + particle-stripped stem;
+        // pure-English text is unaffected. Applies to existing
+        // on-disk indexes too — the tokenizer name resolves through the
+        // manager at index/query time.
+        crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
         let writer = None;
         let reader = index
             .reader_builder()

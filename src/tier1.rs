@@ -231,6 +231,11 @@ pub struct SpacyKeyEntityRanker {
     pub script_path: String,
 }
 
+/// The spaCy model used when the user did not pass `--spacy-model`.
+/// Compared by value (not by "was the flag passed") to decide whether the
+/// per-language default applies — see `PipelineOptions::spacy_model_for_text`.
+pub const DEFAULT_SPACY_MODEL: &str = "en_core_web_sm";
+
 pub fn default_spacy_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_ner.py")
 }

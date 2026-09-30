@@ -1,7 +1,7 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
-use crate::pipeline::PipelineOptions;
+use crate::pipeline::{PipelineOptions, Tier1NerProvider};
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::analyze_query;
 use crate::segments::relations::{
@@ -4010,6 +4010,9 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
     fn enrichment_service(script: &std::path::Path) -> MemoryService {
         MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // These tests exercise the spaCy extractor; opt out of the
+            // Python-free default explicitly.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script.to_path_buf()),
             ..PipelineOptions::default()
         })
@@ -4122,6 +4125,8 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
     fn key_phrase_enrichment_fails_open_without_extractor() {
         let mut service = MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // Test the spaCy fail-open path; opt out of Python-free default.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(std::path::PathBuf::from("/nonexistent/extractor.py")),
             ..PipelineOptions::default()
         });
@@ -4467,6 +4472,8 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         std::fs::create_dir_all(&dir).unwrap();
         let options = PipelineOptions {
             key_phrase_enrichment: true,
+            // Test exercises the spaCy extractor; opt out of Python-free.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script),
             ..PipelineOptions::default()
         };
@@ -4599,6 +4606,8 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
     fn key_phrase_backfill_fail_open_without_extractor() {
         let mut service = MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // Test the spaCy fail-open path; opt out of Python-free default.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(std::path::PathBuf::from("/nonexistent/extractor.py")),
             ..PipelineOptions::default()
         });
@@ -4635,12 +4644,15 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         std::fs::create_dir_all(&dir).unwrap();
         // Same option shape as the Claude Code / Codex / Gemini hooks:
         // segmented layout with top-3 routing, enrichment on.
+        // These tests exercise the spaCy extractor; opt out of the
+        // Python-free default explicitly.
         let options = PipelineOptions {
             memory_index_layout: crate::MemoryIndexLayout::Segmented {
                 query_top_n: 3,
                 routing_strategy: crate::segments::SegmentRoutingStrategy::LocalDistinctiveness,
             },
             key_phrase_enrichment: true,
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script),
             ..PipelineOptions::default()
         };

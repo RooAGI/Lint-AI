@@ -313,6 +313,10 @@ fn run_scoped_benchmark(
         // PipelineOptions mirror the old direct-index benchmark so the
         // --ner-provider / --text-rerank-* flags keep their meaning. The
         // MemoryService applies them on both the add() and search() paths.
+        // structured_fact_retrieval is disabled: the spaCy dependency-parse
+        // extractor is too slow/brittle for a 500-question benchmark run
+        // (120s timeout killed the first attempt). The lexical + behood
+        // semantic-tag path is what we measure here.
         let options = PipelineOptions {
             ner_provider: ner_provider.clone(),
             spacy_model: "en_core_web_sm".to_string(),
@@ -324,6 +328,7 @@ fn run_scoped_benchmark(
             chunk_max_tokens: 800,
             text_rerank_ngram,
             text_rerank_lcs,
+            structured_fact_retrieval: false,
             ..PipelineOptions::default()
         };
 

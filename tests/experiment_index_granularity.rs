@@ -63,6 +63,7 @@ fn experiment_turn_vs_session_indexing() {
             session_id: None,
             scope: Some("test".to_string()),
             filters: None,
+            lang: None,
         })
         .unwrap();
 
@@ -93,6 +94,7 @@ fn experiment_turn_vs_session_indexing() {
             session_id: None,
             scope: Some("test".to_string()),
             filters: None,
+            lang: None,
         })
         .unwrap();
 

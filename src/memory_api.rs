@@ -45,6 +45,51 @@ pub struct AddResponse {
     pub request_id: String,
     pub user_id: String,
     pub session_id: String,
+    /// Write-adjudication receipt: what the semantic layer extracted from
+    /// this write and what it decided. `None` only on deserialization of
+    /// responses produced before receipts existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjudication: Option<WriteAdjudicationReceipt>,
+}
+
+/// A single claim extracted from a written document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdjudicatedClaim {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub scope: String,
+    pub evidence: String,
+}
+
+/// One clash decision involving a written document: what the semantic layer
+/// decided about this write relative to one other document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdjudicationDecision {
+    /// "supersedes" | "conflicts_with" | "confirms"
+    pub kind: String,
+    pub other_doc_id: String,
+    /// True when this write's document is the newer/correcting side of the
+    /// relation (relation source); false when it is the older side.
+    pub is_source: bool,
+    pub confidence: f32,
+    pub method: String,
+    pub evidence: Vec<String>,
+}
+
+/// Write-adjudication receipt: the semantic layer's account of what a single
+/// `add` write did. Lets callers audit supersession from the outside instead
+/// of inferring it from later query results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteAdjudicationReceipt {
+    pub request_id: String,
+    pub doc_ids: Vec<String>,
+    /// Claims extracted from this write's documents.
+    pub claims: Vec<AdjudicatedClaim>,
+    /// Clash decisions involving this write's documents.
+    pub decisions: Vec<AdjudicationDecision>,
+    /// Pre-existing documents this write retired (superseded).
+    pub retired_doc_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -167,6 +212,9 @@ pub struct MemoryService {
     store: IndexStore,
     superseded_ids: HashSet<(String, String)>,
     request_fingerprints: HashMap<(String, String), String>,
+    /// Cached write-adjudication receipts by (user_id, request_id), so an
+    /// idempotent retry returns the identical response including the receipt.
+    request_receipts: HashMap<(String, String), WriteAdjudicationReceipt>,
     conversation_states:
         std::sync::Arc<std::sync::Mutex<crate::conversation_state::ConversationStateStore>>,
     /// Lazily-built dependency-parse relation index for the structured-fact
@@ -737,6 +785,7 @@ impl MemoryService {
             store,
             superseded_ids,
             request_fingerprints,
+            request_receipts: HashMap::new(),
             conversation_states: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::conversation_state::ConversationStateStore::new(None),
             )),
@@ -1058,27 +1107,133 @@ impl MemoryService {
 
     pub fn add(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
         self.drain_enrichment_inbox();
-        let response = self.add_unpublished(request)?;
+        let request_key = (request.user_id.clone(), request.request_id.clone());
+        let (mut response, doc_ids) = self.add_unpublished(request)?;
         self.store.refresh()?;
+        // Fresh write: build the receipt and cache it for idempotent retries.
+        // Retry path (empty doc_ids): add_unpublished already attached the
+        // cached receipt; leave it untouched.
+        if !doc_ids.is_empty() {
+            let receipt =
+                self.build_adjudication_receipt(response.request_id.clone(), &doc_ids);
+            self.request_receipts.insert(request_key, receipt.clone());
+            response.adjudication = Some(receipt);
+        }
         Ok(response)
     }
 
     /// Adds several requests and publishes one snapshot after all mutations.
     /// Each request retains the normal per-request message limit and validation.
+    /// Each response carries its own write-adjudication receipt, built after
+    /// the single refresh so cross-request relations within the batch are
+    /// attributed correctly.
     pub fn add_batch(&mut self, requests: Vec<AddRequest>) -> anyhow::Result<Vec<AddResponse>> {
         if requests.is_empty() {
             anyhow::bail!("requests must not be empty");
         }
         self.drain_enrichment_inbox();
         let mut responses = Vec::with_capacity(requests.len());
+        let mut receipt_inputs = Vec::with_capacity(requests.len());
         for request in requests {
-            responses.push(self.add_unpublished(request)?);
+            let request_key = (request.user_id.clone(), request.request_id.clone());
+            let (response, doc_ids) = self.add_unpublished(request)?;
+            receipt_inputs.push((request_key, response.request_id.clone(), doc_ids));
+            responses.push(response);
         }
         self.store.refresh()?;
+        for (response, (request_key, request_id, doc_ids)) in
+            responses.iter_mut().zip(receipt_inputs.into_iter())
+        {
+            // Fresh write: build and cache the receipt. Retry path (empty
+            // doc_ids): the cached receipt is already attached.
+            if !doc_ids.is_empty() {
+                let receipt = self.build_adjudication_receipt(request_id, &doc_ids);
+                self.request_receipts.insert(request_key, receipt.clone());
+                response.adjudication = Some(receipt);
+            }
+        }
         Ok(responses)
     }
 
-    fn add_unpublished(&mut self, request: AddRequest) -> anyhow::Result<AddResponse> {
+    /// Returns the semantic state (Current / Superseded / Conflicted) of one
+    /// document. Used by the false-positive audit and other external
+    /// verification of supersession decisions.
+    pub fn semantic_document_state(
+        &self,
+        doc_id: &str,
+    ) -> crate::semantic_relations::DocumentSemanticState {
+        self.store.semantic_document_state(doc_id)
+    }
+
+    /// Builds the write-adjudication receipt for one request from the
+    /// post-refresh semantic state. Only relations and claims touching the
+    /// request's documents are included.
+    fn build_adjudication_receipt(
+        &self,
+        request_id: String,
+        doc_ids: &[String],
+    ) -> WriteAdjudicationReceipt {
+        use std::collections::HashSet;
+        let doc_set: HashSet<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
+        let claims = self
+            .store
+            .semantic_claims()
+            .iter()
+            .filter(|c| doc_set.contains(c.source_doc_id.as_str()))
+            .map(|c| AdjudicatedClaim {
+                subject: c.subject.clone(),
+                predicate: c.predicate.clone(),
+                object: c.object.clone(),
+                scope: c.scope.clone(),
+                evidence: c.evidence.clone(),
+            })
+            .collect();
+        let mut decisions = Vec::new();
+        let mut retired_doc_ids = Vec::new();
+        for r in self.store.semantic_relations() {
+            let is_source = doc_set.contains(r.source_doc_id.as_str());
+            let is_target = doc_set.contains(r.target_doc_id.as_str());
+            if !is_source && !is_target {
+                continue;
+            }
+            let kind = match r.kind {
+                crate::semantic_relations::SemanticRelationKind::Supersedes => "supersedes",
+                crate::semantic_relations::SemanticRelationKind::ConflictsWith => "conflicts_with",
+                crate::semantic_relations::SemanticRelationKind::Confirms => "confirms",
+            }
+            .to_string();
+            decisions.push(AdjudicationDecision {
+                kind: kind.clone(),
+                other_doc_id: if is_source {
+                    r.target_doc_id.clone()
+                } else {
+                    r.source_doc_id.clone()
+                },
+                is_source,
+                confidence: r.confidence,
+                method: r.method.clone(),
+                evidence: r.evidence.clone(),
+            });
+            if is_source
+                && kind == "supersedes"
+                && !retired_doc_ids.contains(&r.target_doc_id)
+            {
+                retired_doc_ids.push(r.target_doc_id.clone());
+            }
+        }
+        WriteAdjudicationReceipt {
+            request_id,
+            doc_ids: doc_ids.to_vec(),
+            claims,
+            decisions,
+            retired_doc_ids,
+        }
+    }
+
+    fn add_unpublished(
+        &mut self,
+        request: AddRequest,
+    ) -> anyhow::Result<(AddResponse, Vec<String>)> {
         validate_identifier(&request.request_id, "request_id")?;
         validate_identifier(&request.user_id, "user_id")?;
         validate_identifier(&request.session_id, "session_id")?;
@@ -1097,12 +1252,18 @@ impl MemoryService {
             if previous != &fingerprint {
                 anyhow::bail!("request_id was already used with different content");
             }
-            return Ok(AddResponse {
-                success: true,
-                request_id: request.request_id,
-                user_id: request.user_id,
-                session_id: request.session_id,
-            });
+            return Ok((
+                AddResponse {
+                    success: true,
+                    request_id: request.request_id,
+                    user_id: request.user_id,
+                    session_id: request.session_id,
+                    // Idempotent retry: return the original write's receipt so
+                    // the response is identical to the first call.
+                    adjudication: self.request_receipts.get(&request_key).cloned(),
+                },
+                Vec::new(),
+            ));
         }
 
         let mut new_docs = Vec::with_capacity(request.messages.len());
@@ -1149,17 +1310,22 @@ impl MemoryService {
         }
         // The documents are written; key phrases arrive asynchronously.
         // `upsert` queues each document for background enrichment.
+        let doc_ids: Vec<String> = new_docs.iter().map(|d| d.doc_id.clone()).collect();
         for doc in new_docs {
             self.upsert(doc);
         }
 
         self.request_fingerprints.insert(request_key, fingerprint);
-        Ok(AddResponse {
-            success: true,
-            request_id: request.request_id,
-            user_id: request.user_id,
-            session_id: request.session_id,
-        })
+        Ok((
+            AddResponse {
+                success: true,
+                request_id: request.request_id,
+                user_id: request.user_id,
+                session_id: request.session_id,
+                adjudication: None,
+            },
+            doc_ids,
+        ))
     }
 
     /// The API-facing search entry point (HTTP server, Python bindings).
@@ -3095,6 +3261,347 @@ mod tests {
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("new deployment"));
+    }
+
+    #[test]
+    fn semantic_supersession_hides_stale_doc_in_single_segment_corpus() {
+        // Regression: the segmented query path dropped the semantic
+        // supersession allow-list when the corpus fit in a single segment
+        // (one session). The relations were computed correctly; the query
+        // just never applied them.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        // Day-apart timestamps: chronological supersession needs strictly
+        // greater dates (same calendar day does not count).
+        for (request_id, content, timestamp) in [
+            ("old", "timeout: 100", 1_699_939_200_000i64),
+            ("new", "timeout: 150", 1_700_025_600_000i64),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(timestamp),
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    // Same session => single segment.
+                    session_id: "session-a".into(),
+                })
+                .unwrap();
+        }
+        let response = service
+            .search(SearchRequest {
+                query: "what is the timeout".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].content.contains("timeout: 150"));
+    }
+
+    #[test]
+    fn decimal_config_backfill_hides_stale_value() {
+        // End-to-end for the decimal sentence-splitting regression: the older
+        // effective value (written later, as a backfill) must be superseded.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        for (request_id, content, timestamp) in [
+            ("new", "version: 2.0", 1_700_003_200_000i64), // 2023-11-15
+            ("old", "version: 1.5", 1_699_916_800_000i64), // 2023-11-14
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(timestamp),
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: "session-a".into(),
+                })
+                .unwrap();
+        }
+        let response = service
+            .search(SearchRequest {
+                query: "what version are we on".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].content.contains("version: 2.0"));
+    }
+
+    #[test]
+    fn correction_cue_supersedes_prior_usage_claim() {
+        // End-to-end for the chain-key regression: "instead of" must not be
+        // absorbed into the usage claim's subject.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        for (request_id, content, timestamp) in [
+            (
+                "old",
+                "We use Postgres for analytics.",
+                1_699_939_200_000i64, // 2023-11-14
+            ),
+            (
+                "new",
+                "We use MongoDB for analytics instead of Postgres.",
+                1_700_025_600_000i64, // 2023-11-15
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(timestamp),
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: "session-a".into(),
+                })
+                .unwrap();
+        }
+        let response = service
+            .search(SearchRequest {
+                query: "what database do we use for analytics".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].content.contains("MongoDB"));
+    }
+
+    #[test]
+    fn correction_cue_supersedes_across_sessions() {
+        // Probe P4 exact replication: the two docs live in DIFFERENT sessions
+        // (hence different segments). The usage chain is user-scoped, so the
+        // correction must still apply.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        for (request_id, content, timestamp, session_id) in [
+            (
+                "old",
+                "We use Postgres for analytics.",
+                1_699_939_200_000i64,
+                "s1",
+            ),
+            (
+                "new",
+                "We use MongoDB for analytics instead of Postgres.",
+                1_700_025_600_000i64,
+                "s2",
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(timestamp),
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: session_id.into(),
+                })
+                .unwrap();
+        }
+        let response = service
+            .search(SearchRequest {
+                query: "what database do we use for analytics".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].content.contains("MongoDB"));
+    }
+
+#[test]
+    fn add_batch_receipts_attribute_cross_request_relations() {
+        // In a batch, the second request's receipt must show the supersedes
+        // decision against the first request's doc, and vice versa.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let responses = service
+            .add_batch(vec![
+                AddRequest {
+                    request_id: "b1".into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(1_699_939_200_000i64),
+                        content: "The bicycle is owned by Rossi.".into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: "s1".into(),
+                },
+                AddRequest {
+                    request_id: "b2".into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(1_700_025_600_000i64),
+                        content: "The bicycle is owned by Bianchi.".into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: "s2".into(),
+                },
+            ])
+            .unwrap();
+        assert_eq!(responses.len(), 2);
+        let first = responses[0].adjudication.as_ref().expect("receipt missing");
+        let second = responses[1].adjudication.as_ref().expect("receipt missing");
+        // Second write is the source of the supersedes relation.
+        assert_eq!(second.decisions.len(), 1);
+        assert_eq!(second.decisions[0].kind, "supersedes");
+        assert!(second.decisions[0].is_source);
+        assert_eq!(second.retired_doc_ids, first.doc_ids);
+        // First write is the target side of the same relation.
+        assert_eq!(first.decisions.len(), 1);
+        assert_eq!(first.decisions[0].kind, "supersedes");
+        assert!(!first.decisions[0].is_source);
+        assert_eq!(first.decisions[0].other_doc_id, second.doc_ids[0]);
+        assert!(first.retired_doc_ids.is_empty());
+    }
+
+#[test]
+    fn add_response_carries_adjudication_receipt() {
+        // The receipt must report what the write extracted and decided:
+        // one claim, one supersedes decision, one retired doc.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let first = service
+            .add(AddRequest {
+                request_id: "r1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: Some(1_699_939_200_000i64),
+                    content: "The bicycle is owned by Rossi.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "s1".into(),
+            })
+            .unwrap();
+        // First write: claim extracted, no clash decisions yet.
+        let receipt = first.adjudication.as_ref().expect("receipt missing");
+        assert_eq!(receipt.request_id, "r1");
+        assert_eq!(receipt.doc_ids.len(), 1);
+        assert_eq!(receipt.claims.len(), 1);
+        assert_eq!(receipt.claims[0].object, "rossi");
+        assert!(receipt.decisions.is_empty());
+        assert!(receipt.retired_doc_ids.is_empty());
+        let first_doc_ids = receipt.doc_ids.clone();
+
+        let second = service
+            .add(AddRequest {
+                request_id: "r2".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: Some(1_700_025_600_000i64),
+                    content: "The bicycle is owned by Bianchi.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "s2".into(),
+            })
+            .unwrap();
+        let receipt = second.adjudication.expect("receipt missing");
+        assert_eq!(receipt.claims.len(), 1);
+        assert_eq!(receipt.claims[0].object, "bianchi");
+        // One decision: this write supersedes the Rossi doc.
+        assert_eq!(receipt.decisions.len(), 1);
+        let decision = &receipt.decisions[0];
+        assert_eq!(decision.kind, "supersedes");
+        assert!(decision.is_source);
+        assert_eq!(decision.method, "canonical_claim_and_time");
+        // The retired doc is the first write's doc.
+        assert_eq!(receipt.retired_doc_ids, first_doc_ids);
+        assert_eq!(receipt.retired_doc_ids.len(), 1);
+    }
+
+#[test]
+    fn correction_cue_supersedes_with_identical_timestamps() {
+        // Probe P4 exact: SAME timestamp on both docs. The correction cue
+        // alone must force supersession (chronological is false).
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        for (request_id, content, session_id) in [
+            ("old", "We use Postgres for analytics.", "s1"),
+            (
+                "new",
+                "We use MongoDB for analytics instead of Postgres.",
+                "s2",
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: Some(1_699_939_200_000i64),
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: session_id.into(),
+                })
+                .unwrap();
+        }
+        let response = service
+            .search(SearchRequest {
+                query: "which database is used for analytics".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert!(response.data[0].content.contains("MongoDB"));
     }
 
     #[test]

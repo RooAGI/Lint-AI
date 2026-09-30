@@ -70,6 +70,11 @@ struct Args {
     /// Project root containing provider hook telemetry under `.lint-ai`.
     #[arg(long)]
     project_root: Option<PathBuf>,
+    /// Content language. `auto` (default) detects per text from script
+    /// statistics; pass `zh`/`ko`/`en` to force it. Drives per-language
+    /// spaCy model selection for NER and relations.
+    #[arg(long, value_enum, default_value_t = Lang::Auto)]
+    lang: Lang,
 }
 
 /// CLI-selectable segment routing strategies. Variant names map to the router

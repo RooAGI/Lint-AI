@@ -3932,16 +3932,6 @@ mod tests {
             filters: None,
             lang: None,
         }
-    }{
-            query: query.to_string(),
-            options: None,
-            user_id: user.to_string(),
-            top_k: 10,
-            session_id: None,
-            scope: None,
-            filters: None,
-            lang: None,
-        }
     }
 
     #[test]

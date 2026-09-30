@@ -12,7 +12,8 @@
 //! document's score, never lower it, and a missing tag changes nothing.
 
 use crate::behood_query::{
-    analyze_kind_verdicts, analyze_query_entities, analyze_scope_verdicts, KindVerdict, ScopeVerdict,
+    analyze_kind_verdicts, analyze_query_semantics, analyze_scope_verdicts, KindVerdict,
+    QueryEntity, ScopeVerdict,
 };
 use std::collections::HashMap;
 
@@ -66,23 +67,48 @@ pub fn batch_doc_scope_tags(contents: &[&str]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Tags for the ORIGINAL user query: its canonical temporal words, plus
-/// [`HABITUAL_TAG`] when the question itself is habitual. A non-habitual
-/// question emits no habitual tag — no effect, never a penalty. This
-/// preserves the old `!question.habitual || fact.habitual` semantics
-/// additively: habitual questions match habitual facts through the shared
-/// tag, everything else is untouched.
+/// Scope verdicts + definitional tags for the ORIGINAL user query, from a
+/// SINGLE behood daemon round-trip.
 ///
-/// Fail-open: no daemon/binary or no temporal scope in the question yields
-/// an empty vec, and the lexical query runs exactly as before.
-pub fn query_scope_tags(query: &str) -> Vec<String> {
+/// The query path needs both halves of the query's semantics: the scope
+/// verdict (canonical temporal words, [`HABITUAL_TAG`] when the question
+/// itself is habitual, and the activity phrase for the venue boost) and
+/// the admitted kind tags ("herb"). Fetching them together costs one parse
+/// plus one judge call through the daemon pair, versus the old multi
+/// round-trip sequence — and no subprocess spawn anywhere.
+///
+/// Tag semantics (unchanged): temporal words are emitted verbatim — bekind
+/// already emits canonical lowercase from the closed 7-day set, so the
+/// query and index sides share the exact token. A non-habitual question
+/// emits no habitual tag — no effect, never a penalty. Kind tags are
+/// admitted kinds only; bekind reporting a kind does NOT automatically
+/// tag it.
+///
+/// Fail-open: no daemon/binary or no definitional content in the question
+/// yields empty verdicts/tags, and the lexical query runs exactly as
+/// before.
+pub fn query_semantics(query: &str) -> (Vec<ScopeVerdict>, Vec<String>) {
+    let (scope_verdicts, entities) = analyze_query_semantics(query);
+    let tags = query_tags(&scope_verdicts, &entities);
+    (scope_verdicts, tags)
+}
+
+/// Pure tag emission from one query's scope verdicts + entities:
+/// temporal words, [`HABITUAL_TAG`], admitted kinds. Unit-testable, no I/O.
+fn query_tags(scope_verdicts: &[ScopeVerdict], entities: &[QueryEntity]) -> Vec<String> {
     let mut tags = Vec::new();
-    if let Some(verdict) = analyze_scope_verdicts(&[query]).into_iter().next() {
+    if let Some(verdict) = scope_verdicts.first() {
         tags.extend(verdict.temporal_words.iter().cloned());
         if verdict.habitual {
             tags.push(HABITUAL_TAG.to_string());
         }
     }
+    tags.extend(
+        entities
+            .iter()
+            .map(|entity| entity.kind.to_lowercase())
+            .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str())),
+    );
     tags.sort();
     tags.dedup();
     tags
@@ -127,21 +153,6 @@ pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Tags for the ORIGINAL user query from its entity kinds: admitted kinds
-/// only. "Is there an herb the user avoids?" emits ["herb"] when bekind
-/// judges the "herb" mention herb-kind. Fail-open: no daemon/binary or no
-/// admitted kind in the question yields an empty vec.
-pub fn query_kind_tags(query: &str) -> Vec<String> {
-    let mut tags: Vec<String> = analyze_query_entities(query)
-        .into_iter()
-        .map(|entity| entity.kind.to_lowercase())
-        .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str()))
-        .collect();
-    tags.sort();
-    tags.dedup();
-    tags
-}
-
 /// All definitional tags for document contents: scope tags + admitted kind
 /// tags, merged and deduplicated. One batched daemon call per layer.
 pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
@@ -160,13 +171,10 @@ pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
 }
 
 /// All definitional tags for the ORIGINAL user query: scope tags + admitted
-/// kind tags, merged and deduplicated.
+/// kind tags, merged and deduplicated. One daemon round-trip via
+/// [`query_semantics`].
 pub fn query_semantic_tags(query: &str) -> Vec<String> {
-    let mut tags = query_scope_tags(query);
-    tags.extend(query_kind_tags(query));
-    tags.sort();
-    tags.dedup();
-    tags
+    query_semantics(query).1
 }
 
 #[cfg(test)]
@@ -209,6 +217,36 @@ mod tests {
             doc_scope_tags(&verdict(&["weekend", "weekend"], true)),
             vec!["habitual".to_string(), "weekend".to_string()]
         );
+    }
+
+    fn query_entity(text: &str, kind: &str) -> QueryEntity {
+        QueryEntity {
+            text: text.to_string(),
+            kind: kind.to_string(),
+        }
+    }
+
+    #[test]
+    fn query_tags_merge_scope_and_admitted_kinds() {
+        let verdicts = vec![verdict(&["weekend"], true)];
+        let entities = vec![
+            query_entity("cilantro", "herb"),
+            query_entity("Jean", "person"),
+        ];
+        // "person" is not an admitted kind tag; scope words + habitual kept.
+        assert_eq!(
+            query_tags(&verdicts, &entities),
+            vec![
+                "habitual".to_string(),
+                "herb".to_string(),
+                "weekend".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn query_tags_empty_semantics_yields_no_tags() {
+        assert!(query_tags(&[], &[]).is_empty());
     }
 
     fn kind_verdict(kinds: &[(&str, &str)]) -> KindVerdict {

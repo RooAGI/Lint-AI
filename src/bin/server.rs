@@ -294,6 +294,9 @@ async fn main() -> anyhow::Result<()> {
         .spawn(|| {
             lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
             lint_ai::behood_query::BehoodQueryDaemon::global().prewarm();
+            // The judge daemon is tiny (a Rust binary, ~ms startup); warm it
+            // alongside the parse daemon so the first query pays no spawn.
+            lint_ai::behood_query::BekindDaemon::global().prewarm();
         })
         .ok();
     let app = Router::new()

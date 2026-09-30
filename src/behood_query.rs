@@ -1,25 +1,44 @@
-//! Query-time behood entity analysis.
+//! Query-time behood: parse (Python/spaCy) + judge (bekind daemon).
 //!
 //! Luyi's design: "the behood provide people as the source, then we have
 //! place and thing." At query time, behood judges the question's entities
 //! and returns (text, kind) pairs. Lint-ai uses the text for matching and
 //! the kind for filtering in structured question analysis.
 //!
-//! This runs `scripts/behood_query.py --serve` as a long-lived daemon: a
-//! fresh Python interpreter plus the spaCy model load costs seconds, so
-//! spawning one per search made every query pay that cost. The daemon keeps
-//! one `--serve` child alive and speaks the line-delimited JSON protocol
-//! over its stdin/stdout, so the model load is paid once per process.
-//! Fail-open by construction: every daemon failure yields `None` and the
-//! caller falls back to a one-shot subprocess exactly as before. Behood
-//! owns judgment; the caller owns knowledge.
+//! Two long-lived children, each doing one job:
+//!
+//! - `scripts/behood_query.py --serve` (parse daemon): pure spaCy parsing,
+//!   one pass per text over the already-loaded model. It emits bekind-ready
+//!   descriptors (`mentions`, `np_mentions`) and never spawns a subprocess.
+//! - `bekind --serve` (judge daemon): pure judgment over descriptors, no
+//!   parsing, no spaCy. Owned directly by this module — Rust passes the
+//!   payload straight to the binary instead of routing through Python.
+//!
+//! Spawning a fresh Python interpreter plus the spaCy model load costs
+//! seconds, and spawning the bekind binary per request cost ~13ms; the
+//! daemons pay each cost once per process. Fail-open by construction:
+//! every daemon failure yields `None` and the caller falls back to a
+//! one-shot chain (or empty) exactly as before. Behood owns judgment; the
+//! caller owns knowledge.
 
-use std::path::PathBuf;
-use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use serde_json::{json, Value};
+
 use crate::daemon::JsonLinesDaemon;
+use crate::segments::relations::python_executable;
+
+/// How long one daemon round-trip may take before the caller fails open.
+const DAEMON_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a serve failure suppresses respawn attempts. The backend does
+/// not heal in milliseconds; fallbacks cover the gap.
+const SERVE_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// A (text, kind) pair judged by behood at query time.
 #[derive(Debug, Clone)]
@@ -31,49 +50,82 @@ pub struct QueryEntity {
     pub kind: String,
 }
 
-/// Analyze a question with behood, returning (text, kind) pairs.
-///
-/// Daemon first: the process-wide `--serve` child answers in milliseconds.
-/// `None` from the daemon means the daemon itself failed (not "no entities"),
-/// and only then do we fall back to a one-shot subprocess. An empty `Some`
-/// is authoritative — callers fall back to heuristics, never to another
-/// subprocess. Fail-open throughout: callers fall back to heuristics.
-pub fn analyze_query_entities(question: &str) -> Vec<QueryEntity> {
-    if let Some(entities) =
-        BehoodQueryDaemon::global().analyze(question, Duration::from_secs(30))
-    {
-        return entities;
+/// One text's parse result: bekind-ready descriptors from the parse daemon.
+#[derive(Debug, Clone)]
+pub struct ParsedText {
+    /// Caller-assigned id, echoed back ("p:{index}").
+    pub id: String,
+    /// PROPN personhood mention descriptors (bekind Mention pieces).
+    pub mentions: Value,
+    /// Noun-phrase descriptors (bekind NpMention pieces).
+    pub np_mentions: Value,
+}
+
+/// Suppresses respawn attempts for a while after a serve failure.
+#[derive(Clone)]
+struct ServeCooldown {
+    last_failure: Arc<Mutex<Option<Instant>>>,
+}
+
+impl ServeCooldown {
+    fn new() -> Self {
+        ServeCooldown {
+            last_failure: Arc::new(Mutex::new(None)),
+        }
     }
-    oneshot_analyze_query_entities(question)
+
+    /// `false` while cooling down (the caller fails open); `true` when the
+    /// daemon may be asked to serve.
+    fn gate(&self) -> bool {
+        // The mutex is never held across `query`, so lock ordering is safe.
+        if let Ok(last) = self.last_failure.lock() {
+            if let Some(failed_at) = *last {
+                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn note_failure(&self) {
+        if let Ok(mut last) = self.last_failure.lock() {
+            *last = Some(Instant::now());
+        }
+    }
+
+    fn note_success(&self) {
+        if let Ok(mut last) = self.last_failure.lock() {
+            *last = None;
+        }
+    }
 }
 
-/// One-shot `python3 scripts/behood_query.py <question>`, exactly as before
-/// the daemon existed. Used only when the daemon cannot serve.
-fn oneshot_analyze_query_entities(question: &str) -> Vec<QueryEntity> {
-    // Locate the script relative to the crate root.
-    let script = match script_path() {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-
-    let output = Command::new(crate::segments::relations::python_executable())
-        .arg(&script)
-        .arg(question)
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_entities(&stdout)
+/// Locate the bekind binary: `BEHOOD_BIN` first, then `PATH`
+/// (`bekind`, falling back to the old `behood` name).
+fn bekind_bin() -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("BEHOOD_BIN") {
+        let p = PathBuf::from(&env);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        for name in ["bekind", "behood"] {
+            let p = dir.join(name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
-fn script_path() -> Option<std::path::PathBuf> {
-    // CARGO_MANIFEST_DIR is set at compile time to the crate root.
+/// Locate `scripts/behood_query.py` relative to the crate root.
+fn script_path() -> Option<PathBuf> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let path = std::path::Path::new(manifest_dir).join("scripts/behood_query.py");
+    let path = Path::new(manifest_dir).join("scripts/behood_query.py");
     if path.is_file() {
         Some(path)
     } else {
@@ -81,200 +133,79 @@ fn script_path() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Long-lived `scripts/behood_query.py --serve` child.
-///
-/// Thin typed wrapper over [`crate::daemon::JsonLinesDaemon`]: it builds the
-/// `{"question": ...}` request line and parses the `{"entities": [...]`}
-/// response. See that module for the spawn/IO/timeout/fail-open mechanics.
-///
-/// Fail-open by construction: every daemon failure yields `None` and the
-/// caller falls back to a one-shot subprocess exactly as before. The daemon
-/// is a latency optimization only; it never changes judgment semantics.
-#[derive(Clone)]
-pub struct BehoodQueryDaemon {
-    daemon: JsonLinesDaemon,
-    /// When the child cannot serve (e.g. no bekind binary: it exits 3 at
-    /// startup), don't pay a fresh interpreter spawn on every query.
-    last_serve_failure: std::sync::Arc<Mutex<Option<Instant>>>,
+/// Build the bekind discourse Request for one question's descriptors,
+/// optionally carrying the question itself as a scope text so scope
+/// verdicts come back in the same judge call.
+fn discourse_request(mentions: &Value, np_mentions: &Value, scope_text: Option<&str>) -> Value {
+    let mut request = json!({
+        "strategy": "discourse",
+        "mentions": mentions,
+        "chunks": [],
+        "np_mentions": np_mentions,
+        "context": {"speaker_names": []},
+    });
+    if let Some(text) = scope_text {
+        request["scope_texts"] = json!([{"id": "s:0", "text": text}]);
+    }
+    request
 }
 
-/// How long a serve failure suppresses respawn attempts. The backend does
-/// not heal in milliseconds; the one-shot fallback covers the gap.
-const SERVE_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
-
-impl BehoodQueryDaemon {
-    /// The process-wide daemon over the default query script. Used by the
-    /// production query path; tests construct their own via
-    /// [`BehoodQueryDaemon::new`] for isolation.
-    pub fn global() -> &'static BehoodQueryDaemon {
-        static DAEMON: OnceLock<BehoodQueryDaemon> = OnceLock::new();
-        DAEMON.get_or_init(|| {
-            let script = script_path().unwrap_or_default();
-            BehoodQueryDaemon::new(
-                script,
-                crate::segments::relations::python_executable(),
-            )
-        })
-    }
-
-    /// A daemon over an explicit script (tests, benchmarks).
-    pub fn new(script: PathBuf, python: String) -> Self {
-        BehoodQueryDaemon {
-            daemon: JsonLinesDaemon::new("behood-query", script, python),
-            last_serve_failure: std::sync::Arc::new(Mutex::new(None)),
-        }
-    }
-
-    /// Start the child now so the first real query does not pay the spawn
-    /// cost. Best-effort: failures are silent; queries fall back to the
-    /// one-shot subprocess.
-    pub fn prewarm(&self) {
-        self.daemon.prewarm();
-    }
-
-    /// Analyze `question` via the daemon. Returns `None` on any failure
-    /// (including lock contention — the daemon is a fast path, never a
-    /// queue); the caller falls back to a one-shot subprocess. `Some(vec)`
-    /// is authoritative even when empty.
-    pub fn analyze(
-        &self,
-        question: &str,
-        timeout: Duration,
-    ) -> Option<Vec<QueryEntity>> {
-        // Cooldown: after a serve failure, don't pay a fresh interpreter
-        // spawn on every query; the one-shot fallback covers the gap.
-        // The mutex is never held across `query`, so lock ordering is safe.
-        if let Ok(last) = self.last_serve_failure.lock() {
-            if let Some(failed_at) = *last {
-                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
-                    return None;
-                }
-            }
-        }
-        let payload = serde_json::json!({ "question": question });
-        let line = serde_json::to_string(&payload).ok()?;
-        let response = match self.daemon.query(&line, timeout) {
-            Some(response) => response,
-            None => {
-                if let Ok(mut last) = self.last_serve_failure.lock() {
-                    *last = Some(Instant::now());
-                }
-                return None;
-            }
-        };
-        if let Ok(mut last) = self.last_serve_failure.lock() {
-            *last = None;
-        }
-        Some(parse_entities(&response))
-    }
-
-    /// Scope verdicts for raw text spans via the daemon.
-    ///
-    /// Sends `{"scope_texts": [{"id": "s:{i}", "text": ...}, ...]}` and
-    /// parses `{"scope_verdicts": [...]}`. Returns `None` on any failure
-    /// (including lock contention); the caller treats that as "no scope
-    /// information" and emits no scope tags. `Some(vec)` is authoritative even
-    /// when empty. Shares the serve-failure cooldown with [`Self::analyze`]:
-    /// a dead child suppresses respawn attempts for both request kinds.
-    pub fn analyze_scope(
-        &self,
-        texts: &[&str],
-        timeout: Duration,
-    ) -> Option<Vec<ScopeVerdict>> {
-        if texts.is_empty() {
-            return Some(Vec::new());
-        }
-        if let Ok(last) = self.last_serve_failure.lock() {
-            if let Some(failed_at) = *last {
-                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
-                    return None;
-                }
-            }
-        }
-        let scope_texts: Vec<serde_json::Value> = texts
-            .iter()
-            .enumerate()
-            .map(|(i, text)| serde_json::json!({ "id": format!("s:{i}"), "text": text }))
-            .collect();
-        let payload = serde_json::json!({ "scope_texts": scope_texts });
-        let line = serde_json::to_string(&payload).ok()?;
-        let response = match self.daemon.query(&line, timeout) {
-            Some(response) => response,
-            None => {
-                if let Ok(mut last) = self.last_serve_failure.lock() {
-                    *last = Some(Instant::now());
-                }
-                return None;
-            }
-        };
-        if let Ok(mut last) = self.last_serve_failure.lock() {
-            *last = None;
-        }
-        Some(parse_scope_verdicts(&response))
-    }
-
-    /// Kind verdicts for raw text spans via the daemon.
-    ///
-    /// Sends `{"kind_texts": [{"id": "k:{i}", "text": ...}, ...]}` and
-    /// parses `{"kind_verdicts": [...]}`. Returns `None` on any failure
-    /// (including lock contention); the caller treats that as "no kind
-    /// information" and emits no kind tags. `Some(vec)` is authoritative even
-    /// when empty. Shares the serve-failure cooldown with [`Self::analyze`]
-    /// and [`Self::analyze_scope`].
-    pub fn analyze_kind(
-        &self,
-        texts: &[&str],
-        timeout: Duration,
-    ) -> Option<Vec<KindVerdict>> {
-        if texts.is_empty() {
-            return Some(Vec::new());
-        }
-        if let Ok(last) = self.last_serve_failure.lock() {
-            if let Some(failed_at) = *last {
-                if failed_at.elapsed() < SERVE_FAILURE_COOLDOWN {
-                    return None;
-                }
-            }
-        }
-        let kind_texts: Vec<serde_json::Value> = texts
-            .iter()
-            .enumerate()
-            .map(|(i, text)| serde_json::json!({ "id": format!("k:{i}"), "text": text }))
-            .collect();
-        let payload = serde_json::json!({ "kind_texts": kind_texts });
-        let line = serde_json::to_string(&payload).ok()?;
-        let response = match self.daemon.query(&line, timeout) {
-            Some(response) => response,
-            None => {
-                if let Ok(mut last) = self.last_serve_failure.lock() {
-                    *last = Some(Instant::now());
-                }
-                return None;
-            }
-        };
-        if let Ok(mut last) = self.last_serve_failure.lock() {
-            *last = None;
-        }
-        Some(parse_kind_verdicts(&response))
-    }
-
-    /// Test hook: simulate child death so tests can verify respawn behavior.
-    #[cfg(test)]
-    pub fn kill_child_for_test(&self) {
-        self.daemon.kill_child_for_test();
-    }
+/// Whether both descriptor arrays are empty (or absent).
+fn descriptors_empty(mentions: &Value, np_mentions: &Value) -> bool {
+    mentions
+        .as_array()
+        .map(|a| a.is_empty())
+        .unwrap_or(true)
+        && np_mentions
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true)
 }
 
-fn parse_entities(json_str: &str) -> Vec<QueryEntity> {
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+/// Map bekind phrase/person verdicts back to (text, kind) entities using
+/// the descriptors the parse daemon produced (ids echoed by bekind).
+/// Deduplicated by text, keeping first occurrence.
+fn map_bekind_entities(
+    response: &Value,
+    mentions: &Value,
+    np_mentions: &Value,
+) -> Vec<QueryEntity> {
+    let mut id_to_text: HashMap<&str, &str> = HashMap::new();
+    for arr in [np_mentions, mentions] {
+        if let Some(items) = arr.as_array() {
+            for d in items {
+                if let (Some(id), Some(text)) = (
+                    d.get("id").and_then(|v| v.as_str()),
+                    d.get("text").and_then(|v| v.as_str()),
+                ) {
+                    id_to_text.insert(id, text);
+                }
+            }
+        }
+    }
     let mut entities = Vec::new();
-    if let Some(arr) = parsed.get("entities").and_then(|e| e.as_array()) {
-        for item in arr {
-            let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("");
-            let kind = item.get("kind").and_then(|k| k.as_str()).unwrap_or("thing");
+    if let Some(arr) = response
+        .get("phrase_verdicts")
+        .and_then(|v| v.as_array())
+    {
+        for v in arr {
+            if !v
+                .get("is_entity_mention")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let text = v
+                .get("id")
+                .and_then(|id| id.as_str())
+                .and_then(|id| id_to_text.get(id))
+                .copied()
+                .unwrap_or("");
+            let kind = v
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or("thing");
             if !text.is_empty() {
                 entities.push(QueryEntity {
                     text: text.to_string(),
@@ -283,10 +214,391 @@ fn parse_entities(json_str: &str) -> Vec<QueryEntity> {
             }
         }
     }
-    // Deduplicate by text, keeping first occurrence.
+    if let Some(arr) = response.get("verdicts").and_then(|v| v.as_array()) {
+        for v in arr {
+            if !v
+                .get("is_person")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let text = v
+                .get("id")
+                .and_then(|id| id.as_str())
+                .and_then(|id| id_to_text.get(id))
+                .copied()
+                .unwrap_or("");
+            if !text.is_empty() && !entities.iter().any(|e| e.text == text) {
+                entities.push(QueryEntity {
+                    text: text.to_string(),
+                    kind: "person".to_string(),
+                });
+            }
+        }
+    }
     let mut seen = std::collections::HashSet::new();
     entities.retain(|e| seen.insert(e.text.clone()));
     entities
+}
+
+/// Temporal question words ("when", "what time", ...) ask for a time.
+/// Purely local match on the lowered question; behood judges these as
+/// time-seeking and lint-ai uses the kind for answer-kind filtering.
+/// (Moved from `scripts/behood_query.py` when the Python layer became
+/// parse-only; the text stays lowercase exactly as before.)
+fn temporal_question_entity(question: &str) -> Option<QueryEntity> {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"\b(when|what time|how long|what date|which date|what day|which day)\b")
+            .expect("temporal question-word regex")
+    });
+    let lowered = question.to_lowercase();
+    re.find(&lowered).map(|m| QueryEntity {
+        text: m.as_str().to_string(),
+        kind: "time".to_string(),
+    })
+}
+
+/// Scope verdicts + entities from one judge Response: scope verdicts when
+/// requested, entities mapped from the verdicts, and the local temporal
+/// question-word entity prepended (winning text ties, as the old bridge
+/// did — it led the entity list there too).
+fn scope_and_entities(
+    response: &Value,
+    mentions: &Value,
+    np_mentions: &Value,
+    question: &str,
+    with_scope: bool,
+) -> (Vec<ScopeVerdict>, Vec<QueryEntity>) {
+    let scope = if with_scope {
+        parse_scope_verdicts(response)
+    } else {
+        Vec::new()
+    };
+    let mut entities = map_bekind_entities(response, mentions, np_mentions);
+    if let Some(temporal) = temporal_question_entity(question) {
+        entities.insert(0, temporal);
+        let mut seen = std::collections::HashSet::new();
+        entities.retain(|e| seen.insert(e.text.clone()));
+    }
+    (scope, entities)
+}
+
+// ---------------------------------------------------------------------------
+// Daemons.
+// ---------------------------------------------------------------------------
+
+/// Long-lived parse daemon: `scripts/behood_query.py --serve`.
+///
+/// Pure spaCy parsing, one pass per text over the already-loaded model.
+/// It never spawns a subprocess and never touches the bekind binary;
+/// judgment happens in [`BekindDaemon`], owned directly by this module.
+#[derive(Clone)]
+pub struct BehoodQueryDaemon {
+    daemon: JsonLinesDaemon,
+    cooldown: ServeCooldown,
+}
+
+impl BehoodQueryDaemon {
+    /// The process-wide parse daemon. Used by the production query path;
+    /// tests construct their own via [`BehoodQueryDaemon::new`] for
+    /// isolation.
+    pub fn global() -> &'static BehoodQueryDaemon {
+        static DAEMON: OnceLock<BehoodQueryDaemon> = OnceLock::new();
+        DAEMON.get_or_init(|| {
+            let script = script_path().unwrap_or_default();
+            BehoodQueryDaemon::new(script, python_executable())
+        })
+    }
+
+    /// A daemon over an explicit script (tests, benchmarks).
+    pub fn new(script: PathBuf, python: String) -> Self {
+        BehoodQueryDaemon {
+            daemon: JsonLinesDaemon::new("behood-query", script, python),
+            cooldown: ServeCooldown::new(),
+        }
+    }
+
+    /// Start the child now so the first real query does not pay the spawn
+    /// cost. Best-effort: failures are silent; queries fall back.
+    pub fn prewarm(&self) {
+        self.daemon.prewarm();
+    }
+
+    /// One raw JSON line through the daemon with serve-failure cooldown.
+    /// Returns `None` on cooldown, serialization failure, or any daemon
+    /// failure (including lock contention — the daemon is a fast path,
+    /// never a queue). Callers fail open on `None`.
+    fn raw_request(&self, payload: Value, timeout: Duration) -> Option<String> {
+        if !self.cooldown.gate() {
+            return None;
+        }
+        let line = serde_json::to_string(&payload).ok()?;
+        let response = match self.daemon.query(&line, timeout) {
+            Some(response) => response,
+            None => {
+                self.cooldown.note_failure();
+                return None;
+            }
+        };
+        self.cooldown.note_success();
+        Some(response)
+    }
+
+    /// Parse raw texts into bekind-ready descriptors via the daemon.
+    ///
+    /// Returns `None` on any failure (including lock contention); the
+    /// caller fails open. `Some(vec)` is authoritative: a text that failed
+    /// to parse is simply absent, each entry carrying its "p:{index}" id.
+    pub fn parse_texts(&self, texts: &[&str], timeout: Duration) -> Option<Vec<ParsedText>> {
+        if texts.is_empty() {
+            return Some(Vec::new());
+        }
+        let parse_texts: Vec<Value> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| json!({"id": format!("p:{i}"), "text": text}))
+            .collect();
+        let payload = json!({ "parse_texts": parse_texts });
+        let response = self.raw_request(payload, timeout)?;
+        let parsed: Value = serde_json::from_str(&response).ok()?;
+        let mut out = Vec::new();
+        for item in parsed
+            .get("parsed")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            out.push(ParsedText {
+                id: item
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                mentions: item.get("mentions").cloned().unwrap_or(json!([])),
+                np_mentions: item.get("np_mentions").cloned().unwrap_or(json!([])),
+            });
+        }
+        Some(out)
+    }
+
+    #[cfg(test)]
+    pub fn kill_child_for_test(&self) {
+        self.daemon.kill_child_for_test();
+    }
+}
+
+/// Long-lived judge daemon: `bekind --serve`, owned directly by lint-ai.
+///
+/// Pure judgment over descriptors: no parsing, no spaCy. One Request JSON
+/// line in, one Response JSON line out. This is what lets Rust pass the
+/// payload straight to the binary instead of routing through Python.
+#[derive(Clone)]
+pub struct BekindDaemon {
+    daemon: JsonLinesDaemon,
+    cooldown: ServeCooldown,
+}
+
+impl BekindDaemon {
+    /// The process-wide judge daemon.
+    pub fn global() -> &'static BekindDaemon {
+        static DAEMON: OnceLock<BekindDaemon> = OnceLock::new();
+        DAEMON.get_or_init(|| {
+            let binary = bekind_bin().unwrap_or_default();
+            BekindDaemon::new(binary)
+        })
+    }
+
+    /// A daemon over an explicit binary (tests).
+    pub fn new(binary: PathBuf) -> Self {
+        BekindDaemon {
+            daemon: JsonLinesDaemon::new_command(
+                "bekind",
+                vec![
+                    binary.to_string_lossy().into_owned(),
+                    "--serve".to_string(),
+                ],
+            ),
+            cooldown: ServeCooldown::new(),
+        }
+    }
+
+    /// Start the child now so the first real query does not pay the spawn
+    /// cost. Best-effort: failures are silent; queries fall back.
+    pub fn prewarm(&self) {
+        self.daemon.prewarm();
+    }
+
+    /// Judge one bekind Request: one JSON line through the daemon, one
+    /// Response JSON back. Returns `None` on any failure (including lock
+    /// contention — the daemon is a fast path, never a queue); the caller
+    /// fails open.
+    pub fn judge(&self, request: &Value, timeout: Duration) -> Option<Value> {
+        if !self.cooldown.gate() {
+            return None;
+        }
+        let line = serde_json::to_string(request).ok()?;
+        let response = match self.daemon.query(&line, timeout) {
+            Some(response) => response,
+            None => {
+                self.cooldown.note_failure();
+                return None;
+            }
+        };
+        self.cooldown.note_success();
+        serde_json::from_str(&response).ok()
+    }
+
+    #[cfg(test)]
+    pub fn kill_child_for_test(&self) {
+        self.daemon.kill_child_for_test();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query composition: parse, then judge.
+// ---------------------------------------------------------------------------
+
+/// Parse + judge one question through the daemon pair: the parse daemon
+/// turns the text into descriptors (one spaCy pass), the judge daemon
+/// judges them (one bekind call, no subprocess spawn anywhere).
+///
+/// `with_scope` carries the question as a scope text in the same judge
+/// call, so scope verdicts and entities come back together. Returns `None`
+/// when the pair cannot serve; the caller fails open or one-shots.
+fn query_judge(
+    parse: &BehoodQueryDaemon,
+    judge: &BekindDaemon,
+    question: &str,
+    with_scope: bool,
+) -> Option<(Vec<ScopeVerdict>, Vec<QueryEntity>)> {
+    let parsed = parse.parse_texts(&[question], DAEMON_TIMEOUT)?;
+    let first = parsed.iter().find(|p| p.id == "p:0");
+    let (mentions, np_mentions) = match first {
+        Some(p) => (p.mentions.clone(), p.np_mentions.clone()),
+        None => (json!([]), json!([])),
+    };
+    // No descriptors and no scope to judge: nothing for bekind to do.
+    // (Preserves the old bridge's early return; the temporal entity is
+    // dropped with it, exactly as before.)
+    if !with_scope && descriptors_empty(&mentions, &np_mentions) {
+        return Some((Vec::new(), Vec::new()));
+    }
+    let request = discourse_request(&mentions, &np_mentions, with_scope.then_some(question));
+    let response = judge.judge(&request, DAEMON_TIMEOUT)?;
+    Some(scope_and_entities(
+        &response,
+        &mentions,
+        &np_mentions,
+        question,
+        with_scope,
+    ))
+}
+
+/// One-shot fallback: `behood_query.py --parse` piped into one-shot
+/// `bekind`. Used only when the daemon pair cannot serve.
+fn oneshot_query_judge(
+    question: &str,
+    with_scope: bool,
+) -> Option<(Vec<ScopeVerdict>, Vec<QueryEntity>)> {
+    let script = script_path()?;
+    let binary = bekind_bin()?;
+    let parse_out = Command::new(python_executable())
+        .arg(&script)
+        .arg("--parse")
+        .arg(question)
+        .output()
+        .ok()?;
+    if !parse_out.status.success() {
+        return None;
+    }
+    let parsed: Value = serde_json::from_str(&String::from_utf8_lossy(&parse_out.stdout)).ok()?;
+    let first = parsed
+        .get("parsed")
+        .and_then(|v| v.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("p:0"))
+        });
+    let (mentions, np_mentions) = match first {
+        Some(p) => (
+            p.get("mentions").cloned().unwrap_or(json!([])),
+            p.get("np_mentions").cloned().unwrap_or(json!([])),
+        ),
+        None => (json!([]), json!([])),
+    };
+    if !with_scope && descriptors_empty(&mentions, &np_mentions) {
+        return Some((Vec::new(), Vec::new()));
+    }
+    let request = discourse_request(&mentions, &np_mentions, with_scope.then_some(question));
+    let response = oneshot_judge(&binary, &request)?;
+    Some(scope_and_entities(
+        &response,
+        &mentions,
+        &np_mentions,
+        question,
+        with_scope,
+    ))
+}
+
+/// One bekind invocation: Request JSON on stdin, Response JSON on stdout.
+/// Returns `None` on any failure.
+fn oneshot_judge(binary: &PathBuf, request: &Value) -> Option<Value> {
+    let mut child = Command::new(binary)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let payload = serde_json::to_vec(request).ok()?;
+    child.stdin.as_mut()?.write_all(&payload).ok()?;
+    // Close stdin so the one-shot child sees EOF.
+    let _ = child.stdin.take();
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).ok()
+}
+
+/// Analyze a question with behood, returning (text, kind) pairs.
+///
+/// Daemon pair first (parse, then judge). `None` from the pair means the
+/// daemons themselves failed (not "no entities"), and only then do we
+/// fall back to a one-shot chain. An empty vec is authoritative — callers
+/// fall back to heuristics, never to another subprocess. Fail-open
+/// throughout: callers fall back to heuristics.
+pub fn analyze_query_entities(question: &str) -> Vec<QueryEntity> {
+    if let Some((_, entities)) = query_judge(
+        BehoodQueryDaemon::global(),
+        BekindDaemon::global(),
+        question,
+        false,
+    ) {
+        return entities;
+    }
+    oneshot_query_judge(question, false)
+        .map(|(_, entities)| entities)
+        .unwrap_or_default()
+}
+
+/// Scope verdicts + query entities for one question: one spaCy parse plus
+/// one bekind judge call, through the daemon pair.
+///
+/// Daemon pair first, then a one-shot chain — mirroring
+/// [`analyze_query_entities`]' resilience. Fail-open: ([], []) on any
+/// failure; callers emit no tags.
+pub fn analyze_query_semantics(question: &str) -> (Vec<ScopeVerdict>, Vec<QueryEntity>) {
+    if let Some(pair) = query_judge(
+        BehoodQueryDaemon::global(),
+        BekindDaemon::global(),
+        question,
+        true,
+    ) {
+        return pair;
+    }
+    oneshot_query_judge(question, true).unwrap_or_default()
 }
 
 /// Extract person names from behood's query-time entities.
@@ -350,26 +662,34 @@ pub struct ScopeVerdict {
     pub habitual: bool,
 }
 
-/// Scope verdicts for raw text spans via the global daemon.
+/// Scope verdicts for raw text spans, straight from the judge daemon.
 ///
-/// Fail-open: any daemon failure — or a daemon whose script predates scope
-/// support — yields an empty vec, and the caller emits no scope tags.
-/// Search never breaks because of scope. There is deliberately no one-shot
-/// subprocess fallback: per-fact one-shots would pay the interpreter+spaCy
-/// spawn per candidate; the daemon is the scope path.
+/// Scope needs no parsing — raw texts go to bekind directly, so the parse
+/// daemon is not involved at all.
+///
+/// Fail-open: any daemon failure yields an empty vec, and the caller
+/// emits no scope tags. Search never breaks because of scope. There is
+/// deliberately no one-shot subprocess fallback (unchanged contract):
+/// per-batch one-shots would pay a process spawn per candidate batch; the
+/// daemon is the scope path.
 pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
-    BehoodQueryDaemon::global()
-        .analyze_scope(texts, Duration::from_secs(30))
+    if texts.is_empty() {
+        return Vec::new();
+    }
+    let scope_texts: Vec<Value> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, text)| json!({"id": format!("s:{i}"), "text": text}))
+        .collect();
+    BekindDaemon::global()
+        .judge(&json!({ "scope_texts": scope_texts }), DAEMON_TIMEOUT)
+        .map(|response| parse_scope_verdicts(&response))
         .unwrap_or_default()
 }
 
-fn parse_scope_verdicts(json_str: &str) -> Vec<ScopeVerdict> {
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+fn parse_scope_verdicts(response: &Value) -> Vec<ScopeVerdict> {
     let mut verdicts = Vec::new();
-    if let Some(arr) = parsed.get("scope_verdicts").and_then(|v| v.as_array()) {
+    if let Some(arr) = response.get("scope_verdicts").and_then(|v| v.as_array()) {
         for item in arr {
             let id = item
                 .get("id")
@@ -441,67 +761,210 @@ pub struct KindVerdict {
     pub kinds: Vec<KindHit>,
 }
 
-/// Kind verdicts for raw text spans via the global daemon.
+/// Kind verdicts for raw text spans: parse once per text (batched), judge
+/// once for all descriptors, split per text.
 ///
-/// Fail-open: any daemon failure — or a daemon whose script predates kind
-/// support — yields an empty vec, and the caller emits no kind tags.
-/// Search never breaks because of kind verdicts. Like scope, there is
-/// deliberately no one-shot subprocess fallback: per-fact one-shots would
-/// pay the interpreter+spaCy spawn per candidate; the daemon is the path.
+/// Fail-open: any daemon failure yields an empty vec, and the caller
+/// emits no kind tags. Search never breaks because of kind verdicts.
+/// Like scope, there is deliberately no one-shot subprocess fallback
+/// (unchanged contract): the daemon pair is the path.
 pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
-    BehoodQueryDaemon::global()
-        .analyze_kind(texts, Duration::from_secs(30))
-        .unwrap_or_default()
-}
-
-fn parse_kind_verdicts(json_str: &str) -> Vec<KindVerdict> {
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    if texts.is_empty() {
+        return Vec::new();
+    }
+    let parsed = match BehoodQueryDaemon::global().parse_texts(texts, DAEMON_TIMEOUT) {
+        Some(parsed) => parsed,
+        None => return Vec::new(),
     };
-    let mut verdicts = Vec::new();
-    if let Some(arr) = parsed.get("kind_verdicts").and_then(|v| v.as_array()) {
-        for item in arr {
-            let id = item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let kinds = item
-                .get("kinds")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .map(|k| KindHit {
-                            text: k
-                                .get("text")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                            kind: k
-                                .get("kind")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            verdicts.push(KindVerdict { id, kinds });
+    // Merge every text's noun-phrase descriptors into one judge call,
+    // prefixing descriptor ids as "k:{text_index}:{descriptor_id}" so
+    // verdicts map back per text. Only np_mentions: kind judges
+    // descriptors, not personhood mentions — same as the old bridge.
+    let mut all_np: Vec<Value> = Vec::new();
+    let mut id_to_text: HashMap<String, String> = HashMap::new();
+    for p in &parsed {
+        let text_index: usize = match p.id.strip_prefix("p:").and_then(|s| s.parse().ok()) {
+            Some(i) => i,
+            None => continue,
+        };
+        if text_index >= texts.len() {
+            continue;
+        }
+        if let Some(arr) = p.np_mentions.as_array() {
+            for d in arr {
+                let did = d.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let new_id = format!("k:{text_index}:{did}");
+                let text = d
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                id_to_text.insert(new_id.clone(), text);
+                let mut renamed = d.clone();
+                renamed["id"] = json!(new_id);
+                all_np.push(renamed);
+            }
         }
     }
-    verdicts
+    let response = match BekindDaemon::global().judge(
+        &json!({
+            "strategy": "discourse",
+            "mentions": [],
+            "chunks": [],
+            "np_mentions": all_np,
+            "context": {"speaker_names": []},
+        }),
+        DAEMON_TIMEOUT,
+    ) {
+        Some(response) => response,
+        None => return Vec::new(),
+    };
+    // One KindVerdict per input text, in input order (empty kinds when a
+    // text had no descriptors) — the same shape the old bridge produced.
+    let per_text = split_kind_hits(&response, &id_to_text, texts.len());
+    per_text
+        .into_iter()
+        .enumerate()
+        .map(|(i, kinds)| KindVerdict {
+            id: format!("k:{i}"),
+            kinds,
+        })
+        .collect()
+}
+
+/// Split phrase verdicts with "k:{index}:..." ids back into per-text kind
+/// hits, in input order. Pure: unit-testable, no I/O.
+fn split_kind_hits(
+    response: &Value,
+    id_to_text: &HashMap<String, String>,
+    text_count: usize,
+) -> Vec<Vec<KindHit>> {
+    let mut per_text: Vec<Vec<KindHit>> = vec![Vec::new(); text_count];
+    let arr = match response.get("phrase_verdicts").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return per_text,
+    };
+    for v in arr {
+        let vid = v.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut parts = vid.splitn(3, ':');
+        if parts.next() != Some("k") {
+            continue;
+        }
+        let index: usize = match parts.next().and_then(|s| s.parse().ok()) {
+            Some(i) if i < text_count => i,
+            _ => continue,
+        };
+        let text = match id_to_text.get(vid) {
+            Some(text) => text.clone(),
+            None => continue,
+        };
+        let kind = v
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("thing")
+            .to_string();
+        per_text[index].push(KindHit { text, kind });
+    }
+    per_text
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ---- pure-function tests (no I/O) ----
+
     #[test]
-    fn parse_entities_dedups() {
-        let json = r#"{"entities": [{"text": "John", "kind": "person"}, {"text": "John", "kind": "person"}]}"#;
-        let entities = parse_entities(json);
+    fn temporal_question_entity_matches_variants() {
+        let e = temporal_question_entity("When did Jean visit Paris?").expect("when");
+        assert_eq!(e.text, "when");
+        assert_eq!(e.kind, "time");
+        let e = temporal_question_entity("What time is dinner?").expect("what time");
+        assert_eq!(e.text, "what time");
+        assert_eq!(e.kind, "time");
+        let e = temporal_question_entity("HOW LONG is the drive?").expect("how long");
+        assert_eq!(e.text, "how long");
+        assert!(temporal_question_entity("Who visited Paris?").is_none());
+        assert!(temporal_question_entity("Which city is biggest?").is_none());
+    }
+
+    #[test]
+    fn map_bekind_entities_maps_verdicts_to_text() {
+        let mentions = json!([{"id": "m:0", "text": "Jean"}]);
+        let np_mentions = json!([
+            {"id": "q:0", "text": "cilantro"},
+            {"id": "q:1", "text": "Paris"},
+        ]);
+        let response = json!({
+            "phrase_verdicts": [
+                {"id": "q:0", "is_entity_mention": true, "kind": "herb"},
+                {"id": "q:1", "is_entity_mention": false, "kind": "thing"},
+            ],
+            "verdicts": [{"id": "m:0", "is_person": true}],
+        });
+        let entities = map_bekind_entities(&response, &mentions, &np_mentions);
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0].text, "cilantro");
+        assert_eq!(entities[0].kind, "herb");
+        assert_eq!(entities[1].text, "Jean");
+        assert_eq!(entities[1].kind, "person");
+    }
+
+    #[test]
+    fn map_bekind_entities_dedups_person_double_count() {
+        // "Jean" judged both as an entity mention and as a person: one entry.
+        let mentions = json!([{"id": "m:0", "text": "Jean"}]);
+        let np_mentions = json!([{"id": "q:0", "text": "Jean"}]);
+        let response = json!({
+            "phrase_verdicts": [{"id": "q:0", "is_entity_mention": true, "kind": "person"}],
+            "verdicts": [{"id": "m:0", "is_person": true}],
+        });
+        let entities = map_bekind_entities(&response, &mentions, &np_mentions);
         assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].text, "Jean");
+    }
+
+    #[test]
+    fn parse_scope_verdicts_reads_fields() {
+        let response = json!({
+            "scope_verdicts": [{
+                "id": "s:0",
+                "activity_phrase": "eat out",
+                "temporal_words": ["weekend"],
+                "habitual": true,
+            }],
+        });
+        let verdicts = parse_scope_verdicts(&response);
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].id, "s:0");
+        assert_eq!(verdicts[0].activity_phrase, "eat out");
+        assert_eq!(verdicts[0].temporal_words, vec!["weekend".to_string()]);
+        assert!(verdicts[0].habitual);
+    }
+
+    #[test]
+    fn parse_scope_verdicts_fail_open() {
+        assert!(parse_scope_verdicts(&json!({})).is_empty());
+        assert!(parse_scope_verdicts(&json!({"error": "bad"})).is_empty());
+    }
+
+    #[test]
+    fn split_kind_hits_groups_per_text() {
+        let mut id_to_text = HashMap::new();
+        id_to_text.insert("k:0:q:0".to_string(), "cilantro".to_string());
+        id_to_text.insert("k:1:q:0".to_string(), "basil".to_string());
+        let response = json!({
+            "phrase_verdicts": [
+                {"id": "k:1:q:0", "kind": "herb"},
+                {"id": "k:0:q:0", "kind": "herb"},
+                {"id": "other", "kind": "thing"},
+            ],
+        });
+        let per_text = split_kind_hits(&response, &id_to_text, 2);
+        assert_eq!(per_text.len(), 2);
+        assert_eq!(per_text[0].len(), 1);
+        assert_eq!(per_text[0][0].text, "cilantro");
+        assert_eq!(per_text[1][0].text, "basil");
     }
 
     #[test]
@@ -510,49 +973,96 @@ mod tests {
         assert_eq!(clean_person_text("John"), "John");
     }
 
-    #[test]
-    fn parse_entities_fail_open() {
-        assert!(parse_entities("not json").is_empty());
-        assert!(parse_entities("{}").is_empty());
-    }
+    // ---- daemon integration tests (fake children) ----
 
-    /// A fake `--serve` script: one {"question": ...} per stdin line, one
-    /// {"entities": [...]} per stdout line. A question containing "SLEEP-<n>"
-    /// sleeps n seconds before answering, simulating a hung child.
-    fn write_fake_serve_script(dir: &std::path::Path) -> PathBuf {
-        let path = dir.join("fake_behood_serve.py");
-        std::fs::write(
-            &path,
-            r#"import json, sys, time
+    /// A fake parse daemon: one {"parse_texts": [...]} per stdin line, one
+    /// {"parsed": [...]} per stdout line, with a canned descriptor. Counts
+    /// request lines in a side file so tests can assert round-trip counts.
+    fn write_fake_parse_script(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake_behood_parse.py");
+        let count_path = dir.join("parse_count.txt");
+        let script = format!(
+            r#"import json, sys
+count_path = {count_path:?}
+n = 0
 for line in sys.stdin:
     line = line.strip()
     if not line:
         continue
+    n += 1
+    open(count_path, "w").write(str(n))
     payload = json.loads(line)
-    question = payload.get("question", "")
-    if "SLEEP-" in question:
-        try:
-            time.sleep(int(question.split("SLEEP-")[1].split()[0]))
-        except Exception:
-            time.sleep(30)
-    sys.stdout.write(json.dumps({
-        "entities": [{"text": "canned", "kind": "person"}],
-    }) + "\n")
+    assert "parse_texts" in payload, "expected the parse request"
+    parsed = [
+        {{"id": t["id"], "mentions": [],
+          "np_mentions": [{{"id": "q:0", "text": "cilantro"}}]}}
+        for t in payload["parse_texts"]
+    ]
+    sys.stdout.write(json.dumps({{"parsed": parsed}}) + "\n")
     sys.stdout.flush()
-"#,
-        )
-        .expect("write fake serve script");
+"#
+        );
+        std::fs::write(&path, script).expect("write fake parse script");
         path
     }
 
-    fn test_daemon(script: PathBuf) -> BehoodQueryDaemon {
-        BehoodQueryDaemon::new(
-            script,
-            crate::segments::relations::python_executable(),
-        )
+    /// A fake `bekind --serve`: one Request JSON per stdin line, one
+    /// Response JSON per stdout line. Echoes scope verdicts for
+    /// `scope_texts` and herb-kind phrase verdicts for `np_mentions`.
+    /// Counts request lines in a side file.
+    fn write_fake_bekind_script(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("fake_bekind_serve.py");
+        let count_path = dir.join("bekind_count.txt");
+        let script = format!(
+            r#"import json, sys
+count_path = {count_path:?}
+n = 0
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    n += 1
+    open(count_path, "w").write(str(n))
+    payload = json.loads(line)
+    scope_verdicts = [
+        {{"id": t["id"], "activity_phrase": "",
+          "temporal_words": ["weekend"], "habitual": False}}
+        for t in payload.get("scope_texts", [])
+    ]
+    phrase_verdicts = [
+        {{"id": d["id"], "is_entity_mention": True, "kind": "herb"}}
+        for d in payload.get("np_mentions", [])
+    ]
+    sys.stdout.write(json.dumps({{
+        "verdicts": [], "entity_verdicts": [], "phrase_verdicts": phrase_verdicts,
+        "activity_verdicts": [], "scope_verdicts": scope_verdicts,
+    }}) + "\n")
+    sys.stdout.flush()
+"#
+        );
+        std::fs::write(&path, script).expect("write fake bekind script");
+        path
     }
 
-    fn unique_temp_dir(tag: &str) -> PathBuf {
+    fn test_parse_daemon(script: std::path::PathBuf) -> BehoodQueryDaemon {
+        BehoodQueryDaemon::new(script, python_executable())
+    }
+
+    fn test_judge_daemon(script: std::path::PathBuf) -> BekindDaemon {
+        BekindDaemon {
+            daemon: JsonLinesDaemon::new_command(
+                "bekind",
+                vec![
+                    python_executable(),
+                    script.to_string_lossy().into_owned(),
+                    "--serve".to_string(),
+                ],
+            ),
+            cooldown: ServeCooldown::new(),
+        }
+    }
+
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "behood-daemon-{}-test-{}",
             tag,
@@ -565,260 +1075,79 @@ for line in sys.stdin:
         dir
     }
 
-    #[test]
-    fn daemon_answers_end_to_end() {
-        let dir = unique_temp_dir("e2e");
-        let daemon = test_daemon(write_fake_serve_script(&dir));
-        let entities = daemon
-            .analyze("Who visited Paris?", Duration::from_secs(60))
-            .expect("daemon should answer");
-        assert_eq!(entities.len(), 1);
-        assert_eq!(entities[0].text, "canned");
-        assert_eq!(entities[0].kind, "person");
+    fn request_count(dir: &std::path::Path, name: &str) -> String {
+        std::fs::read_to_string(dir.join(name))
+            .expect("count file")
+            .trim()
+            .to_string()
     }
 
     #[test]
-    fn daemon_second_call_is_warm() {
-        let dir = unique_temp_dir("warm");
-        let daemon = test_daemon(write_fake_serve_script(&dir));
-        daemon
-            .analyze("first question", Duration::from_secs(120))
-            .expect("first call warms the daemon");
-        let start = std::time::Instant::now();
-        let entities = daemon
-            .analyze("second question", Duration::from_secs(60))
-            .expect("second call should succeed");
-        let elapsed = start.elapsed();
-        assert_eq!(entities[0].text, "canned");
-        // Warm daemon call reuses the child process, far below the spawn cost.
-        // Generous bound for loaded CI machines.
+    fn parse_daemon_returns_descriptors() {
+        let dir = unique_temp_dir("parse");
+        let daemon = test_parse_daemon(write_fake_parse_script(&dir));
+        let parsed = daemon
+            .parse_texts(&["cilantro question"], Duration::from_secs(60))
+            .expect("daemon should answer");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, "p:0");
+        assert_eq!(parsed[0].np_mentions[0]["text"], "cilantro");
+        assert_eq!(request_count(&dir, "parse_count.txt"), "1");
+    }
+
+    #[test]
+    fn bekind_daemon_judges_one_line() {
+        let dir = unique_temp_dir("judge");
+        let daemon = test_judge_daemon(write_fake_bekind_script(&dir));
+        let response = daemon
+            .judge(
+                &json!({"scope_texts": [{"id": "s:0", "text": "weekend run"}]}),
+                Duration::from_secs(60),
+            )
+            .expect("daemon should answer");
+        let verdicts = parse_scope_verdicts(&response);
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].temporal_words, vec!["weekend".to_string()]);
+        assert_eq!(request_count(&dir, "bekind_count.txt"), "1");
+    }
+
+    #[test]
+    fn query_judge_combines_parse_and_judge() {
+        let dir = unique_temp_dir("combined");
+        let parse = test_parse_daemon(write_fake_parse_script(&dir));
+        let judge = test_judge_daemon(write_fake_bekind_script(&dir));
+        let (scope, entities) = query_judge(&parse, &judge, "weekend cilantro?", true)
+            .expect("daemon pair should answer");
+        assert_eq!(scope.len(), 1);
+        assert_eq!(scope[0].temporal_words, vec!["weekend".to_string()]);
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].text, "cilantro");
+        assert_eq!(entities[0].kind, "herb");
+        assert_eq!(request_count(&dir, "parse_count.txt"), "1");
+        assert_eq!(request_count(&dir, "bekind_count.txt"), "1");
+    }
+
+    #[test]
+    fn query_judge_fails_open_when_parse_daemon_missing() {
+        let parse = test_parse_daemon(std::path::PathBuf::from("/nonexistent/behood_query.py"));
+        let judge = test_judge_daemon(write_fake_bekind_script(&unique_temp_dir("x")));
         assert!(
-            elapsed < Duration::from_secs(30),
-            "warm daemon call took too long: {elapsed:?}"
+            query_judge(&parse, &judge, "anything", true).is_none(),
+            "missing parse daemon must fail open"
         );
     }
 
     #[test]
     fn daemon_respawns_dead_child() {
         let dir = unique_temp_dir("respawn");
-        let daemon = test_daemon(write_fake_serve_script(&dir));
+        let daemon = test_parse_daemon(write_fake_parse_script(&dir));
         daemon
-            .analyze("first question", Duration::from_secs(120))
+            .parse_texts(&["first"], Duration::from_secs(120))
             .expect("first call starts the child");
         daemon.kill_child_for_test();
-        let entities = daemon
-            .analyze("after kill", Duration::from_secs(120))
+        let parsed = daemon
+            .parse_texts(&["after kill"], Duration::from_secs(120))
             .expect("daemon should respawn the child and succeed");
-        assert_eq!(entities[0].text, "canned");
-    }
-
-    #[test]
-    fn daemon_returns_none_when_script_missing() {
-        let daemon = test_daemon(PathBuf::from("/nonexistent/behood_query.py"));
-        assert!(
-            daemon
-                .analyze("anything", Duration::from_secs(5))
-                .is_none(),
-            "missing script must fail open"
-        );
-    }
-
-    #[test]
-    fn daemon_timeout_kills_and_respawns() {
-        let dir = unique_temp_dir("timeout");
-        let daemon = test_daemon(write_fake_serve_script(&dir));
-
-        // Fast path works against the fake script.
-        let fast = daemon
-            .analyze("anything", Duration::from_secs(10))
-            .expect("fake serve script should answer fast");
-        assert_eq!(fast[0].text, "canned");
-
-        // A hung child: the daemon must give up within the timeout and kill
-        // the child rather than hanging the caller.
-        let start = std::time::Instant::now();
-        assert!(
-            daemon
-                .analyze("SLEEP-30 please", Duration::from_secs(2))
-                .is_none(),
-            "hung child must time out"
-        );
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "timeout was not respected: {:?}",
-            start.elapsed()
-        );
-
-        // After a timeout the child is dead; the cooldown suppresses an
-        // immediate respawn, so this returns None fast rather than hanging.
-        let start = std::time::Instant::now();
-        assert!(
-            daemon
-                .analyze("anything", Duration::from_secs(10))
-                .is_none(),
-            "cooldown must suppress respawn right after a serve failure"
-        );
-        assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "cooldown was not respected: {:?}",
-            start.elapsed()
-        );
-    }
-
-    #[test]
-    fn parse_scope_verdicts_reads_fields() {
-        let json = r#"{"scope_verdicts": [
-            {"id": "s:0", "activity_phrase": "weekend runs",
-             "temporal_words": ["weekend"], "habitual": true,
-             "evidence": ["literal temporal word 'weekend'"]},
-            {"id": "s:1", "activity_phrase": "one-off dinner",
-             "temporal_words": [], "habitual": false, "evidence": []}
-        ]}"#;
-        let verdicts = parse_scope_verdicts(json);
-        assert_eq!(verdicts.len(), 2);
-        assert_eq!(verdicts[0].id, "s:0");
-        assert_eq!(verdicts[0].temporal_words, vec!["weekend"]);
-        assert!(verdicts[0].habitual);
-        assert!(verdicts[1].temporal_words.is_empty());
-        assert!(!verdicts[1].habitual);
-    }
-
-    #[test]
-    fn parse_scope_verdicts_fail_open() {
-        assert!(parse_scope_verdicts("not json").is_empty());
-        assert!(parse_scope_verdicts("{}").is_empty());
-        // A pre-scope daemon answers {"entities": [...]} to anything.
-        assert!(parse_scope_verdicts(r#"{"entities": []}"#).is_empty());
-    }
-
-    /// Fake `--serve` script that answers scope requests the way the real
-    /// script does: {"scope_texts": [...]} -> {"scope_verdicts": [...]}.
-    fn write_fake_scope_serve_script(dir: &std::path::Path) -> PathBuf {
-        let path = dir.join("fake_scope_serve.py");
-        std::fs::write(
-            &path,
-            r#"import json, sys
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    payload = json.loads(line)
-    if "scope_texts" in payload:
-        verdicts = [
-            {"id": t["id"], "activity_phrase": t["text"],
-             "temporal_words": ["weekend"], "habitual": True, "evidence": []}
-            for t in payload["scope_texts"]
-        ]
-        sys.stdout.write(json.dumps({"scope_verdicts": verdicts}) + "\n")
-    else:
-        sys.stdout.write(json.dumps({"entities": []}) + "\n")
-    sys.stdout.flush()
-"#,
-        )
-        .expect("write fake scope serve script");
-        path
-    }
-
-    #[test]
-    fn daemon_scope_round_trip() {
-        let dir = unique_temp_dir("scope");
-        let daemon = test_daemon(write_fake_scope_serve_script(&dir));
-        let verdicts = daemon
-            .analyze_scope(&["first text", "second text"], Duration::from_secs(60))
-            .expect("daemon should answer scope requests");
-        assert_eq!(verdicts.len(), 2);
-        assert_eq!(verdicts[0].id, "s:0");
-        assert_eq!(verdicts[1].id, "s:1");
-        assert_eq!(verdicts[0].temporal_words, vec!["weekend"]);
-        assert!(verdicts[1].habitual);
-    }
-
-    #[test]
-    fn daemon_scope_empty_input_short_circuits() {
-        let dir = unique_temp_dir("scope-empty");
-        let daemon = test_daemon(write_fake_scope_serve_script(&dir));
-        let verdicts = daemon
-            .analyze_scope(&[], Duration::from_secs(10))
-            .expect("empty input must not touch the daemon");
-        assert!(verdicts.is_empty());
-    }
-
-    #[test]
-    fn parse_kind_verdicts_reads_fields() {
-        let json = r#"{"kind_verdicts": [
-            {"id": "k:0", "kinds": [
-                {"text": "cilantro", "kind": "herb"},
-                {"text": "The user", "kind": "person"}]},
-            {"id": "k:1", "kinds": [{"text": "coffee", "kind": "food"}]}
-        ]}"#;
-        let verdicts = parse_kind_verdicts(json);
-        assert_eq!(verdicts.len(), 2);
-        assert_eq!(verdicts[0].id, "k:0");
-        assert_eq!(verdicts[0].kinds.len(), 2);
-        assert_eq!(verdicts[0].kinds[0].text, "cilantro");
-        assert_eq!(verdicts[0].kinds[0].kind, "herb");
-        assert_eq!(verdicts[1].kinds[0].kind, "food");
-    }
-
-    #[test]
-    fn parse_kind_verdicts_fail_open() {
-        assert!(parse_kind_verdicts("not json").is_empty());
-        assert!(parse_kind_verdicts("{}").is_empty());
-        // A pre-kind daemon answers {"entities": [...]} to anything.
-        assert!(parse_kind_verdicts(r#"{"entities": []}"#).is_empty());
-        // Missing "kinds" degrades to an empty hit list, not an error.
-        let v = parse_kind_verdicts(r#"{"kind_verdicts": [{"id": "k:0"}]}"#);
-        assert_eq!(v.len(), 1);
-        assert!(v[0].kinds.is_empty());
-    }
-
-    /// Fake `--serve` script that answers kind requests the way the real
-    /// script does: {"kind_texts": [...]} -> {"kind_verdicts": [...]}.
-    fn write_fake_kind_serve_script(dir: &std::path::Path) -> PathBuf {
-        let path = dir.join("fake_kind_serve.py");
-        std::fs::write(
-            &path,
-            r#"import json, sys
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    payload = json.loads(line)
-    if "kind_texts" in payload:
-        verdicts = [
-            {"id": t["id"], "kinds": [{"text": t["text"], "kind": "herb"}]}
-            for t in payload["kind_texts"]
-        ]
-        sys.stdout.write(json.dumps({"kind_verdicts": verdicts}) + "\n")
-    else:
-        sys.stdout.write(json.dumps({"entities": []}) + "\n")
-    sys.stdout.flush()
-"#,
-        )
-        .expect("write fake kind serve script");
-        path
-    }
-
-    #[test]
-    fn daemon_kind_round_trip() {
-        let dir = unique_temp_dir("kind");
-        let daemon = test_daemon(write_fake_kind_serve_script(&dir));
-        let verdicts = daemon
-            .analyze_kind(&["first text", "second text"], Duration::from_secs(60))
-            .expect("daemon should answer kind requests");
-        assert_eq!(verdicts.len(), 2);
-        assert_eq!(verdicts[0].id, "k:0");
-        assert_eq!(verdicts[1].id, "k:1");
-        assert_eq!(verdicts[0].kinds[0].kind, "herb");
-    }
-
-    #[test]
-    fn daemon_kind_empty_input_short_circuits() {
-        let dir = unique_temp_dir("kind-empty");
-        let daemon = test_daemon(write_fake_kind_serve_script(&dir));
-        let verdicts = daemon
-            .analyze_kind(&[], Duration::from_secs(10))
-            .expect("empty input must not touch the daemon");
-        assert!(verdicts.is_empty());
+        assert_eq!(parsed.len(), 1);
     }
 }

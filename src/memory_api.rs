@@ -634,25 +634,22 @@ fn activity_venue_match(activity: &str, fact: &crate::behood_query::KindVerdict)
 /// Activity↔venue rank boost over blended search results.
 ///
 /// Query-time only, no reindexing: the question's activity phrase comes
-/// from the behood daemon's scope verdict (existing
-/// `analyze_scope_verdicts` path — no new protocol), then all candidate
-/// fact texts go through the daemon in ONE batched kind request
+/// from the scope verdict already fetched for the query's semantic tags
+/// (one daemon round-trip per query — no second request here), then all
+/// candidate fact texts go through the daemon in ONE batched kind request
 /// (milliseconds), reusing the same verdict shape the kind boost needs.
 /// Fail-open throughout: no daemon, no binary, no scope/kind support,
 /// empty activity phrase, or an activity not in the admitted table →
 /// results returned unchanged.
 fn apply_activity_venue_boost(
     store: &IndexStore,
-    query: &str,
+    scope_verdicts: &[crate::behood_query::ScopeVerdict],
     mut results: Vec<crate::SearchResult>,
 ) -> Vec<crate::SearchResult> {
     if results.is_empty() {
         return results;
     }
-    let activity = match crate::behood_query::analyze_scope_verdicts(&[query])
-        .into_iter()
-        .next()
-    {
+    let activity = match scope_verdicts.first() {
         Some(v) => v.activity_phrase.trim().to_lowercase(),
         None => return results,
     };
@@ -1380,7 +1377,13 @@ impl MemoryService {
         // field, scored by BM25 inside tantivy — a match, not a bonus.
         // Fail-open: no tags when the daemon is unavailable or the question
         // carries no definitional content.
-        prepared.set_semantic_tags(crate::semantic_tags::query_semantic_tags(query));
+        //
+        // One behood daemon round-trip for the query's whole semantics
+        // (scope verdict + tags); the scope verdict is reused below by the
+        // activity↔venue boost instead of a second daemon request.
+        let (query_scope_verdicts, query_tags) =
+            crate::semantic_tags::query_semantics(query);
+        prepared.set_semantic_tags(query_tags);
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,
@@ -1442,7 +1445,7 @@ impl MemoryService {
         // never a filter. No-op when the behood daemon is unavailable,
         // the question names no admitted activity, or no fact names one
         // of its venues.
-        let results = apply_activity_venue_boost(&self.store, query, results);
+        let results = apply_activity_venue_boost(&self.store, &query_scope_verdicts, results);
         observe_session_search(
             &self.conversation_states,
             scope,

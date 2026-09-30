@@ -1,4 +1,4 @@
-//! Shared long-lived Python subprocess daemon for `--serve` scripts.
+//! Shared long-lived `--serve` subprocess daemon.
 //!
 //! Spawning a fresh Python interpreter and loading the spaCy model costs
 //! seconds; every per-request spawn paid that cost. This daemon keeps one
@@ -6,14 +6,18 @@
 //! stdin/stdout, so the model load is paid once per process instead of once
 //! per request.
 //!
-//! Fail-open by construction: every failure mode (missing script, spawn
-//! failure, dead child, timeout, bad output, lock contention) yields `None`,
-//! and callers fall back to a one-shot subprocess exactly as before. The
-//! daemon is a latency optimization only; it never changes judgment or
-//! extraction semantics.
+//! The child can be a Python `--serve` script or a native binary with a
+//! `--serve` mode (e.g. bekind): the daemon only moves lines, argv[0] is
+//! the executable.
+//!
+//! Fail-open by construction: every failure mode (missing executable,
+//! spawn failure, dead child, timeout, bad output, lock contention) yields
+//! `None`, and callers fall back to a one-shot subprocess exactly as
+//! before. The daemon is a latency optimization only; it never changes
+//! judgment or extraction semantics.
 //!
 //! Typed wrappers own their protocol: `crate::segments::extractor_daemon`
-//! (index-time extraction) and `crate::behood_query` (query-time entities)
+//! (index-time extraction) and `crate::behood_query` (query-time behood)
 //! build the request line and parse the response line; this module only
 //! moves lines.
 
@@ -35,11 +39,10 @@ pub struct JsonLinesDaemon {
 struct DaemonState {
     /// Short name for log lines and the reader thread, e.g. "extractor".
     name: &'static str,
-    script: PathBuf,
-    python: String,
-    /// Extra interpreter args placed before the script, e.g. `["-I"]` so
-    /// the daemon matches a `python -I script` one-shot invocation.
-    extra_args: Vec<String>,
+    /// Full child command line: argv[0] is the executable, the rest are
+    /// args. Python daemons: [python, extra_args..., script, "--serve"];
+    /// native daemons: [binary, "--serve"].
+    argv: Vec<String>,
     mutable: Mutex<DaemonMutable>,
 }
 
@@ -66,12 +69,22 @@ impl JsonLinesDaemon {
         python: String,
         extra_args: Vec<String>,
     ) -> Self {
+        let mut argv = Vec::with_capacity(extra_args.len() + 3);
+        argv.push(python);
+        argv.extend(extra_args);
+        argv.push(script.to_string_lossy().into_owned());
+        argv.push("--serve".to_string());
+        Self::new_command(name, argv)
+    }
+
+    /// A daemon over an explicit command line: argv[0] is the executable.
+    /// Used for native `--serve` binaries (bekind) that are not driven
+    /// through a Python interpreter.
+    pub fn new_command(name: &'static str, argv: Vec<String>) -> Self {
         JsonLinesDaemon {
             inner: std::sync::Arc::new(DaemonState {
                 name,
-                script,
-                python,
-                extra_args,
+                argv,
                 mutable: Mutex::new(DaemonMutable {
                     child: None,
                     stdin: None,
@@ -86,12 +99,7 @@ impl JsonLinesDaemon {
     /// one-shot subprocess.
     pub fn prewarm(&self) {
         if let Ok(mut mutable) = self.inner.mutable.lock() {
-            let _ = mutable.ensure_running(
-                self.inner.name,
-                &self.inner.script,
-                &self.inner.python,
-                &self.inner.extra_args,
-            );
+            let _ = mutable.ensure_running(self.inner.name, &self.inner.argv);
         }
     }
 
@@ -102,12 +110,7 @@ impl JsonLinesDaemon {
     pub fn query(&self, request_line: &str, timeout: Duration) -> Option<String> {
         // Fast path only: never block behind another in-flight request.
         let mut mutable = self.inner.mutable.try_lock().ok()?;
-        mutable.ensure_running(
-            self.inner.name,
-            &self.inner.script,
-            &self.inner.python,
-            &self.inner.extra_args,
-        )?;
+        mutable.ensure_running(self.inner.name, &self.inner.argv)?;
         if mutable.write_line(request_line).is_err() {
             mutable.kill();
             return None;
@@ -140,27 +143,26 @@ impl JsonLinesDaemon {
 impl DaemonMutable {
     /// Spawn the `--serve` child unless one is already alive. Returns
     /// `None` when the child cannot be started.
-    fn ensure_running(
-        &mut self,
-        name: &str,
-        script: &Path,
-        python: &str,
-        extra_args: &[String],
-    ) -> Option<()> {
+    fn ensure_running(&mut self, name: &str, argv: &[String]) -> Option<()> {
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(None) => return Some(()), // alive
                 _ => self.kill(),            // exited or unwaitable: respawn
             }
         }
-        if !script.is_file() {
-            eprintln!("{name} daemon: script missing: {}", script.display());
+        let exe = argv.first().map(String::as_str).unwrap_or("");
+        if exe.is_empty() {
+            eprintln!("{name} daemon: empty command line");
             return None;
         }
-        let mut child = Command::new(python)
-            .args(extra_args)
-            .arg(script)
-            .arg("--serve")
+        // A bare executable name resolves via PATH at spawn; only check
+        // existence when argv[0] names a path (as the old script check did).
+        if exe.contains(std::path::MAIN_SEPARATOR) && !Path::new(exe).is_file() {
+            eprintln!("{name} daemon: executable missing: {exe}");
+            return None;
+        }
+        let mut child = Command::new(exe)
+            .args(&argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Diagnostics surface in-protocol as {"error": ...}; the

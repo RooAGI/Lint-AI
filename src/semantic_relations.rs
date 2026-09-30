@@ -643,6 +643,23 @@ fn push_chain_pair_relation(
     }
     let source_doc = docs_by_id.get(claim.source_doc_id.as_str()).copied();
     let target_doc = docs_by_id.get(previous.source_doc_id.as_str()).copied();
+    // On date ties the chain order is arbitrary (doc-ID hash order), so the
+    // correction cue itself must determine direction: the doc bearing the cue
+    // ("instead of X") is the corrector and must be the relation source.
+    // Without this, cue-driven supersession is a coin flip on same-day writes.
+    let (claim, previous, source_doc, target_doc) =
+        if claim_date(claim) == claim_date(previous) {
+            let claim_has_cue = source_doc.is_some_and(|doc| has_correction_cue(&doc.content));
+            let previous_has_cue =
+                target_doc.is_some_and(|doc| has_correction_cue(&doc.content));
+            if previous_has_cue && !claim_has_cue {
+                (previous, claim, target_doc, source_doc)
+            } else {
+                (claim, previous, source_doc, target_doc)
+            }
+        } else {
+            (claim, previous, source_doc, target_doc)
+        };
     let direct_correction = source_doc.is_some_and(|doc| has_correction_cue(&doc.content));
     let chronological = claim_date(claim)
         .zip(claim_date(previous))
@@ -1139,7 +1156,11 @@ fn usage_claim(sentence: &str) -> Option<(String, &'static str, String)> {
             .expect("valid use-for regex")
     });
     if let Some(caps) = use_for.captures(sentence) {
-        return Some((caps[2].to_string(), "implementation", caps[1].to_string()));
+        return Some((
+            strip_correction_cue_tail(&caps[2]),
+            "implementation",
+            strip_correction_cue_tail(&caps[1]),
+        ));
     }
     let uses = USES.get_or_init(|| {
         Regex::new(r"(?i)(?:^|[:;])\s*(?:the\s+)?([a-z][a-z0-9 _/-]{1,80}?)\s+uses\s+(?:the\s+)?([a-z][a-z0-9 _/.-]{1,60})")
@@ -1153,7 +1174,7 @@ fn configuration_claim(sentence: &str) -> Option<(String, &'static str, String)>
     static SCALAR_CONFIGURATION: OnceLock<Regex> = OnceLock::new();
     let scalar = SCALAR_CONFIGURATION.get_or_init(|| {
         Regex::new(
-            r"(?i)^(?:[-*]\s*)?(?:the\s+)?([a-z][a-z0-9 _/.-]{1,100}?)\s*(?::|=)\s*(-?\d+(?:\.\d+)?(?:\s*(?:ms|s|sec(?:ond)?s?|m|min(?:ute)?s?|h|hours?|%|kb|mb|gb|tb))?|true|false|enabled|disabled)$",
+            r"(?i)(?:^|[:;])\s*(?:[-*]\s*)?(?:the\s+)?([a-z][a-z0-9 _/.-]{1,100}?)\s*(?::|=)\s*(-?\d+(?:\.\d+)?(?:\s*(?:ms|s|sec(?:ond)?s?|m|min(?:ute)?s?|h|hours?|%|kb|mb|gb|tb))?|true|false|enabled|disabled)$",
         )
         .expect("valid scalar configuration regex")
     });
@@ -1163,11 +1184,39 @@ fn configuration_claim(sentence: &str) -> Option<(String, &'static str, String)>
 }
 
 fn sentences(content: &str) -> Vec<&str> {
-    content
-        .split(['\n', '.', '!', '?'])
-        .map(str::trim)
-        .filter(|sentence| !sentence.is_empty())
-        .collect()
+    // Split on sentence terminators, but not on '.' inside a decimal number:
+    // "version: 2.0" must stay one sentence so the claim evidence matches the
+    // document content (otherwise the evidence fragment "version: 2" never
+    // equals the content "version: 2.0" and supersession degrades to conflict).
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut iter = content.char_indices().peekable();
+    while let Some((idx, ch)) = iter.next() {
+        let is_boundary = match ch {
+            '\n' | '!' | '?' => true,
+            '.' => {
+                let prev_is_digit = content[..idx]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_ascii_digit());
+                let next_is_digit = iter.peek().is_some_and(|(_, c)| c.is_ascii_digit());
+                !(prev_is_digit && next_is_digit)
+            }
+            _ => false,
+        };
+        if is_boundary {
+            let piece = content[start..idx].trim();
+            if !piece.is_empty() {
+                result.push(piece);
+            }
+            start = idx + ch.len_utf8();
+        }
+    }
+    let tail = content[start..].trim();
+    if !tail.is_empty() {
+        result.push(tail);
+    }
+    result
 }
 
 fn clean_phrase(value: &str) -> String {
@@ -1294,20 +1343,45 @@ fn source_kind(doc: &SourceDocument) -> &'static str {
     }
 }
 
+/// Phrases that mark a document as an explicit correction of prior content.
+/// Shared by `has_correction_cue` (document-level detection) and
+/// `strip_correction_cue_tail` (claim-level subject/object cleanup).
+const CORRECTION_CUES: &[&str] = &[
+    "supersedes",
+    "replaces",
+    "instead of",
+    "no longer",
+    "changed from",
+    "moved from",
+    "previously",
+    "formerly",
+];
+
 fn has_correction_cue(content: &str) -> bool {
     let lower = content.to_lowercase();
-    [
-        "supersedes",
-        "replaces",
-        "instead of",
-        "no longer",
-        "changed from",
-        "moved from",
-        "previously",
-        "formerly",
-    ]
-    .iter()
-    .any(|cue| lower.contains(cue))
+    CORRECTION_CUES
+        .iter()
+        .any(|cue| lower.contains(cue))
+}
+
+/// Truncate a claim subject/object at the first correction cue: in
+/// "we use MongoDB for analytics instead of Postgres" the purpose is
+/// "analytics", not "analytics instead of Postgres". Without this the cue
+/// is absorbed into the chain key and the new claim never lands in the same
+/// chain as the old one, so the correction is never detected. The cue must
+/// not be at the start (a leading cue means the whole phrase is the cue
+/// context, e.g. "formerly manual tasks").
+fn strip_correction_cue_tail(value: &str) -> String {
+    let lower = value.to_lowercase();
+    let mut cut = value.len();
+    for cue in CORRECTION_CUES {
+        if let Some(pos) = lower.find(cue) {
+            if !value[..pos].trim().is_empty() && pos < cut {
+                cut = pos;
+            }
+        }
+    }
+    value[..cut].trim().to_string()
 }
 
 fn claim_date(claim: &SemanticClaim) -> Option<chrono::NaiveDate> {
@@ -1943,6 +2017,105 @@ mod scalar_configuration_supersession_tests {
                 && relation.method == "canonical_claim_and_time"
                 && (relation.confidence - 0.90).abs() < f32::EPSILON
         }));
+    }
+
+    #[test]
+    fn role_prefixed_scalar_configuration_supersedes_by_time() {
+        // Regression: MemoryService::add prepends "{role}: " to message
+        // content, so production documents read "user: timeout: 100". The
+        // scalar-configuration extractor must tolerate that prefix, like the
+        // ownership/assignment/usage extractors do via (?:^|[:;]).
+        let mut old = scalar_doc("cfg-a", "user: timeout: 100", "2026-01-01");
+        old.group_id = Some("session-1".to_string());
+        let mut new = scalar_doc("cfg-b", "user: timeout: 150", "2026-06-01");
+        new.group_id = Some("session-1".to_string());
+        let store =
+            SemanticRelationStore::from_documents([&old, &new], SupersessionOptions::default());
+        assert_eq!(
+            store.document_state("cfg-a").status,
+            Some(SemanticStatus::Superseded)
+        );
+        assert_eq!(
+            store.document_state("cfg-a").superseded_by.as_deref(),
+            Some("cfg-b")
+        );
+    }
+
+    #[test]
+    fn decimal_values_survive_sentence_splitting() {
+        // Regression: sentences() split "version: 2.0" into "version: 2" and
+        // "0". The claim evidence ("user: version: 2") then never matched the
+        // document content ("user: version: 2.0"), so the supersession was
+        // downgraded to a conflict and the stale doc stayed visible.
+        let doc = scalar_doc("doc-a", "user: version: 2.0", "2026-11-15");
+        let claims = extract_claims(&doc);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].object, "2.0");
+        assert_eq!(claims[0].evidence, "user: version: 2.0");
+
+        let mut old = scalar_doc("ver-a", "user: version: 1.5", "2026-11-14");
+        old.group_id = Some("session-1".to_string());
+        let mut new = scalar_doc("ver-b", "user: version: 2.0", "2026-11-15");
+        new.group_id = Some("session-1".to_string());
+        let store =
+            SemanticRelationStore::from_documents([&old, &new], SupersessionOptions::default());
+        assert_eq!(
+            store.document_state("ver-a").status,
+            Some(SemanticStatus::Superseded)
+        );
+        assert_eq!(
+            store.document_state("ver-a").superseded_by.as_deref(),
+            Some("ver-b")
+        );
+    }
+
+    #[test]
+    fn correction_cue_not_absorbed_into_chain_key() {
+        // Regression: usage_claim captured "analytics instead of Postgres" as
+        // the subject, so the corrected claim landed in a different chain
+        // than "analytics" and the correction cue never fired.
+        let (subject, predicate, object) =
+            usage_claim("We use MongoDB for analytics instead of Postgres.").unwrap();
+        assert_eq!(subject, "analytics");
+        assert_eq!(predicate, "implementation");
+        assert_eq!(object, "MongoDB");
+
+        // A leading cue is not stripped: the whole phrase is cue context.
+        assert_eq!(
+            strip_correction_cue_tail("formerly manual tasks"),
+            "formerly manual tasks"
+        );
+        // Cue-free subjects are untouched.
+        assert_eq!(strip_correction_cue_tail("analytics"), "analytics");
+    }
+
+    #[test]
+    fn correction_cue_determines_direction_on_date_tie() {
+        // Regression: on identical claim dates the chain order falls back to
+        // doc-ID hash order, so a correction cue fired (or not) by luck.
+        // The cue-bearing doc must be treated as the corrector regardless of
+        // hash order. Use doc IDs whose hash order is adversarial: "zz-new"
+        // sorts after "aa-old".
+        let mut old = scalar_doc("aa-old", "user: We use Postgres for analytics.", "2023-11-14");
+        old.group_id = Some("s1".to_string());
+        let mut new = scalar_doc(
+            "zz-new",
+            "user: We use MongoDB for analytics instead of Postgres.",
+            "2023-11-14",
+        );
+        new.group_id = Some("s2".to_string());
+        let store =
+            SemanticRelationStore::from_documents([&old, &new], SupersessionOptions::default());
+        // The Postgres doc is superseded even though "zz-new" sorts after
+        // "aa-old" in hash order.
+        assert_eq!(
+            store.document_state("aa-old").status,
+            Some(SemanticStatus::Superseded)
+        );
+        assert_eq!(
+            store.document_state("aa-old").superseded_by.as_deref(),
+            Some("zz-new")
+        );
     }
 }
 

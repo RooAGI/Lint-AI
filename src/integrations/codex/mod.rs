@@ -125,15 +125,14 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         "startup_timeout_sec".to_string(),
         TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
     );
-    // Pin the project root explicitly so the MCP server does not depend on the
-    // client's working directory (which may be the user's home directory).
+    // This is a user-global config entry. Keep it disabled and unpinned so
+    // projects without their own trusted override cannot accidentally query
+    // another repository's memory.
     entry.insert(
         "args".to_string(),
-        TomlValue::Array(vec![
-            TomlValue::String("--codex-serve".to_string()),
-            TomlValue::String(root.to_string_lossy().into_owned()),
-        ]),
+        TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
     );
+    entry.insert("enabled".to_string(), TomlValue::Boolean(false));
     mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
 
     // Codex Desktop and newer Codex CLI builds gate lifecycle hooks behind
@@ -149,6 +148,63 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 
     write_text_object(&config_path, &toml::to_string_pretty(&config)?)
         .context("failed to write Codex config")?;
+    Ok(config_path)
+}
+
+/// Pins the MCP server working directory to this repository in its trusted
+/// project config. The user-global entry stays disabled; project config takes
+/// precedence and lets Codex launch multiple repositories independently.
+pub fn install_project_config(root: &Path) -> Result<PathBuf> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+    let config_path = root.join(".codex").join("config.toml");
+    let mut config = match fs::read_to_string(&config_path) {
+        Ok(current) if current.trim().is_empty() => TomlValue::Table(TomlMap::new()),
+        Ok(current) => current.parse::<TomlValue>().with_context(|| {
+            format!(
+                "failed to parse Codex project config {}",
+                config_path.display()
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            TomlValue::Table(TomlMap::new())
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", config_path.display()))
+        }
+    };
+    let table = config
+        .as_table_mut()
+        .context("Codex project config must be a TOML table")?;
+    let mcp_servers = table
+        .entry("mcp_servers".to_string())
+        .or_insert_with(|| TomlValue::Table(TomlMap::new()));
+    let mcp_servers = mcp_servers
+        .as_table_mut()
+        .context("Codex project config 'mcp_servers' must be a table")?;
+    let executable = env::current_exe()
+        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .to_string_lossy()
+        .into_owned();
+    let mut entry = TomlMap::new();
+    entry.insert("command".to_string(), TomlValue::String(executable));
+    entry.insert(
+        "startup_timeout_sec".to_string(),
+        TomlValue::Integer(MCP_STARTUP_TIMEOUT_SECONDS),
+    );
+    entry.insert("enabled".to_string(), TomlValue::Boolean(true));
+    entry.insert(
+        "args".to_string(),
+        TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
+    );
+    entry.insert(
+        "cwd".to_string(),
+        TomlValue::String(root.to_string_lossy().into_owned()),
+    );
+    mcp_servers.insert("lint-ai".to_string(), TomlValue::Table(entry));
+    write_text_object(&config_path, &toml::to_string_pretty(&config)?)
+        .with_context(|| format!("failed to write {}", config_path.display()))?;
     Ok(config_path)
 }
 
@@ -1106,8 +1162,63 @@ args = ["old"]
                 .map(TomlValue::as_str)
                 .collect::<Option<Vec<_>>>()
                 .unwrap(),
-            vec!["--codex-serve", root.to_string_lossy().as_ref()]
+            vec!["--codex-serve"]
         );
+        assert_eq!(
+            parsed["mcp_servers"]["lint-ai"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(parsed["mcp_servers"]["lint-ai"]
+            .as_table()
+            .unwrap()
+            .get("cwd")
+            .is_none());
+    }
+
+    #[test]
+    fn install_project_config_scopes_each_server_to_its_project() {
+        let first_root = temp_dir("codex-project-config-first");
+        let second_root = temp_dir("codex-project-config-second");
+        fs::create_dir_all(first_root.join(".codex")).unwrap();
+        fs::write(
+            first_root.join(".codex/config.toml"),
+            "profile = \"keep\"\n\n[mcp_servers.other]\ncommand = \"other-tool\"\nargs = []\n",
+        )
+        .unwrap();
+
+        let first_config = install_project_config(&first_root).unwrap();
+        let second_config = install_project_config(&second_root).unwrap();
+        let first: TomlValue = fs::read_to_string(first_config).unwrap().parse().unwrap();
+        let second: TomlValue = fs::read_to_string(second_config).unwrap().parse().unwrap();
+        let first_entry = &first["mcp_servers"]["lint-ai"];
+        let second_entry = &second["mcp_servers"]["lint-ai"];
+
+        assert_eq!(first["profile"].as_str(), Some("keep"));
+        assert_eq!(
+            first["mcp_servers"]["other"]["command"].as_str(),
+            Some("other-tool")
+        );
+        assert_eq!(first_entry["enabled"].as_bool(), Some(true));
+        assert_eq!(second_entry["enabled"].as_bool(), Some(true));
+        assert_eq!(
+            first_entry["cwd"].as_str(),
+            Some(first_root.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert_eq!(
+            second_entry["cwd"].as_str(),
+            Some(second_root.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert_ne!(first_entry["cwd"], second_entry["cwd"]);
+        for entry in [first_entry, second_entry] {
+            assert_eq!(
+                entry["args"].as_array().unwrap()[0].as_str(),
+                Some("--codex-serve")
+            );
+            assert!(entry["command"].as_str().is_some());
+        }
+
+        fs::remove_dir_all(first_root).ok();
+        fs::remove_dir_all(second_root).ok();
     }
 
     #[test]

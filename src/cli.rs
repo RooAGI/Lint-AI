@@ -178,8 +178,9 @@ pub struct Args {
     #[arg(long, default_value = "en_core_web_sm")]
     pub spacy_model: String,
     /// Content language. `auto` (default) detects per text from script
-    /// statistics; pass `zh`/`ko`/`en` to force it. Drives per-language
-    /// defaults such as the spaCy model when `--spacy-model` is not given.
+    /// statistics (plus Spanish signals for Latin text); pass
+    /// `zh`/`ko`/`es`/`en` to force it. Drives per-language defaults such
+    /// as the spaCy model when `--spacy-model` is not given.
     #[arg(long, value_enum, default_value = "auto")]
     pub lang: Lang,
     #[arg(long, value_enum, default_value = "heading")]

@@ -20,8 +20,8 @@ use lint_ai::telemetry::{
     ProviderLifecycleEvent, TelemetrySnapshot,
 };
 use lint_ai::{
-    default_production_pipeline_options, IndexStoreInspection, MemoryIndexLayout, PipelineOptions,
-    DEFAULT_SEGMENT_QUERY_TOP_N,
+    default_production_pipeline_options, lang::Lang, IndexStoreInspection, MemoryIndexLayout,
+    PipelineOptions, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -67,6 +67,11 @@ struct Args {
     /// best recall-per-latency trade-off (gated coverage-local).
     #[arg(long, value_enum, default_value_t = SegmentRoutingArg::GatedCoverageLocal)]
     segment_routing: SegmentRoutingArg,
+    /// Content language. `auto` (default) detects per text from script
+    /// statistics (plus Spanish signals for Latin text); pass
+    /// `zh`/`ko`/`es`/`en` to force it.
+    #[arg(long, value_enum, default_value = "auto")]
+    lang: Lang,
     /// Project root containing provider hook telemetry under `.lint-ai`.
     #[arg(long)]
     project_root: Option<PathBuf>,

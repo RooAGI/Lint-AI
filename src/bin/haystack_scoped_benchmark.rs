@@ -374,6 +374,7 @@ fn run_scoped_benchmark(
                 .map(|dt| dt.and_utc().timestamp_millis());
             let messages: Vec<Message> = turns
                 .iter()
+                .filter(|turn| !turn.content.trim().is_empty())
                 .map(|turn| Message {
                     role: turn.role.clone(),
                     content: turn.content.clone(),
@@ -382,6 +383,11 @@ fn run_scoped_benchmark(
                     supersedes_id: None,
                 })
                 .collect();
+            // Skip sessions where all turns are empty (validation rejects
+            // empty message content).
+            if messages.is_empty() {
+                continue;
+            }
             add_requests.push(AddRequest {
                 request_id: format!("bench-{session_id}"),
                 messages,

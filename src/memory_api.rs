@@ -8,6 +8,7 @@ use crate::query_semantics::analyze_query;
 use crate::segments::relations::{
     analyze_fact_question, extract_relations_via_spacy, extractor_model_for_turns,
     query_structured, relation_turns_from_docs, try_extract_key_phrases_via_spacy, RelationIndex,
+    RelationTurn,
 };
 use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
@@ -359,6 +360,16 @@ fn relations_fingerprint(docs: &[&SourceDocument]) -> u64 {
     hasher.finish()
 }
 
+/// Pick the spaCy model for structured relation extraction.
+/// An explicit non-`Auto` request language pins its model; `Lang::Auto`
+/// and an omitted language both follow the turns' detected script.
+fn spacy_model_for_request(lang: Option<Lang>, turns: &[RelationTurn]) -> &'static str {
+    match lang {
+        Some(l) if !matches!(l, Lang::Auto) => default_spacy_model_for_lang(l.resolve("")),
+        _ => extractor_model_for_turns(turns),
+    }
+}
+
 /// Build (or reuse) the relation index for one user's visible document set.
 /// Returns `None` when extraction fails or times out, so the caller falls
 /// through to the lexical path.
@@ -389,10 +400,7 @@ fn relations_index_for(
     // after the timeout, leaving the cache empty (fail-open to lexical).
     // An explicit request language selects the spaCy model; otherwise the
     // model follows the turns' detected script.
-    let model: String = match lang {
-        Some(l) => default_spacy_model_for_lang(l.resolve("")).to_string(),
-        None => extractor_model_for_turns(&turns).to_string(),
-    };
+    let model: String = spacy_model_for_request(lang, &turns).to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
@@ -2603,6 +2611,48 @@ fn timestamp_to_rfc3339(millis: i64, field: &str) -> anyhow::Result<String> {
 mod tests {
     use super::*;
     use crate::PipelineOptions;
+
+    #[test]
+    fn lang_auto_selects_spacy_model_from_turns() {
+        // P2: `"lang": "auto"` must behave like an omitted language — the
+        // model follows the document turns' script, not English.
+        let ko_turns = vec![RelationTurn {
+            speaker: "지민".to_string(),
+            text: "지민은 서울에서 일합니다".to_string(),
+            session_id: "s1".to_string(),
+            turn_idx: 0,
+            doc_id: "d1".to_string(),
+            session_date: None,
+        }];
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Auto), &ko_turns),
+            "ko_core_news_sm"
+        );
+        assert_eq!(spacy_model_for_request(None, &ko_turns), "ko_core_news_sm");
+
+        let zh_turns = vec![RelationTurn {
+            speaker: "小明".to_string(),
+            text: "小明在北京工作".to_string(),
+            session_id: "s1".to_string(),
+            turn_idx: 0,
+            doc_id: "d1".to_string(),
+            session_date: None,
+        }];
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Auto), &zh_turns),
+            "zh_core_web_sm"
+        );
+
+        // Explicit languages still pin their model.
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Ko), &ko_turns),
+            "ko_core_news_sm"
+        );
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::En), &ko_turns),
+            "en_core_web_sm"
+        );
+    }
 
     fn service() -> MemoryService {
         MemoryService::in_memory(PipelineOptions::default())

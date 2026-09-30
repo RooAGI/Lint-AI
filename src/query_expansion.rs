@@ -43,6 +43,17 @@ static NORMALIZE_RE: OnceLock<Regex> = OnceLock::new();
 const MAX_EXPANSIONS_PER_TERM: usize = 3;
 const CONCEPTNET_MIN_CONFIDENCE: f32 = 0.82;
 
+/// Eagerly load the WordNet/ConceptNet lexical expansion store.
+///
+/// The store is a process-wide `OnceLock` that is lazily initialized on the
+/// first query that needs expansion (cost: ~2s to decompress + parse 2.3MB
+/// of gzipped JSON). Call this at startup (e.g. MemoryService creation or
+/// binary main) to move that cost out of the query hot path. Idempotent:
+/// subsequent calls return immediately.
+pub fn preload_lexical_store() {
+    let _ = STORE.get_or_init(load_store);
+}
+
 /// Expand query terms with lexical relations (synonyms, hypernyms, ...).
 ///
 /// **Language coverage: English only.** The embedded store is built from

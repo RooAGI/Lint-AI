@@ -689,6 +689,11 @@ impl MemoryService {
     }
 
     pub(crate) fn new(store: IndexStore) -> Self {
+        // Eagerly load the WordNet/ConceptNet lexical expansion store at
+        // service creation, not on the first query. The store is a
+        // process-wide OnceLock; lazy init costs ~2s (decompress + parse
+        // 2.3MB gzipped JSON) on the first query's hot path.
+        crate::preload_lexical_store();
         let superseded_ids = store
             .source_documents()
             .into_iter()

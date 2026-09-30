@@ -397,10 +397,17 @@ fn run_scoped_benchmark(
         }
     }
     let total_sessions = add_requests.len();
-    eprintln!("indexing {total_sessions} unique sessions via add_batch...");
-    service
-        .add_batch(add_requests)
-        .context("failed to index sessions via add_batch")?;
+    // Chunk the batches: a single 19k add_batch OOM-kills (all AddRequests
+    // + the behood batch in memory at once). 1000 per batch keeps memory
+    // bounded while still getting the single-refresh-per-batch win
+    // (19 refreshes instead of 19k).
+    eprintln!("indexing {total_sessions} unique sessions via chunked add_batch...");
+    for (chunk_idx, chunk) in add_requests.chunks(1000).enumerate() {
+        service
+            .add_batch(chunk.to_vec())
+            .with_context(|| format!("failed to index batch {chunk_idx}"))?;
+        eprintln!("  batch {chunk_idx}: {} sessions", chunk.len());
+    }
     eprintln!("indexed {total_sessions} unique sessions");
 
     let mut per_query = Vec::with_capacity(entries.len());

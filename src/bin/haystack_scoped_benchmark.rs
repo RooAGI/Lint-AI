@@ -307,43 +307,43 @@ fn run_scoped_benchmark(
         eprintln!("running {} scoped questions...", entries.len());
     }
     let max_k = ks.iter().copied().max().unwrap_or(10).max(10);
-    let mut per_query = Vec::with_capacity(entries.len());
 
-    for (idx, entry) in entries.into_iter().enumerate() {
-        // PipelineOptions mirror the old direct-index benchmark so the
-        // --ner-provider / --text-rerank-* flags keep their meaning. The
-        // MemoryService applies them on both the add() and search() paths.
-        // structured_fact_retrieval is disabled: the spaCy dependency-parse
-        // extractor is too slow/brittle for a 500-question benchmark run
-        // (120s timeout killed the first attempt). The lexical + behood
-        // semantic-tag path is what we measure here.
-        let options = PipelineOptions {
-            ner_provider: ner_provider.clone(),
-            spacy_model: "en_core_web_sm".to_string(),
-            term_ranker: Tier1TermRankerKind::Yake,
-            chunk_strategy: ChunkStrategy::Heading,
-            chunk_lines: 40,
-            chunk_overlap: 10,
-            chunk_target_tokens: 450,
-            chunk_max_tokens: 800,
-            text_rerank_ngram,
-            text_rerank_lcs,
-            structured_fact_retrieval: false,
-            ..PipelineOptions::default()
-        };
+    // Production path: ONE shared MemoryService for all questions, like a
+    // real deployment (one persistent memory, many queries). All unique
+    // haystack sessions are indexed once up front; each question then
+    // searches the shared index. This is both faster (no 500x re-indexing)
+    // and more production-faithful than a fresh service per question.
+    //
+    // PipelineOptions mirror the old direct-index benchmark so the
+    // --ner-provider / --text-rerank-* flags keep their meaning. The
+    // MemoryService applies them on both the add() and search() paths.
+    // structured_fact_retrieval is disabled: the spaCy dependency-parse
+    // extractor is too slow/brittle for a 500-question benchmark run
+    // (120s timeout killed the first attempt). The lexical + behood
+    // semantic-tag path is what we measure here.
+    let options = PipelineOptions {
+        ner_provider: ner_provider.clone(),
+        spacy_model: "en_core_web_sm".to_string(),
+        term_ranker: Tier1TermRankerKind::Yake,
+        chunk_strategy: ChunkStrategy::Heading,
+        chunk_lines: 40,
+        chunk_overlap: 10,
+        chunk_target_tokens: 450,
+        chunk_max_tokens: 800,
+        text_rerank_ngram,
+        text_rerank_lcs,
+        structured_fact_retrieval: false,
+        ..PipelineOptions::default()
+    };
+    let mut service = MemoryService::in_memory(options);
 
-        // Fresh in-memory MemoryService per question: this is the production
-        // path. add() indexes with behood semantic tags; search() runs the
-        // full MemoryService pipeline (query analysis, retrieval, ranking).
-        let mut service = MemoryService::in_memory(options);
-
-        // Index each haystack session as its own add() call so session_id
-        // ownership matches what search() returns per hit.
-        // Deduplicate: the dataset can list the same session twice in one
-        // haystack; MemoryService rejects a repeated request_id with
-        // different content, so we index each session once.
-        let candidate_session_ids = entry.haystack_session_ids.clone();
-        let mut seen_sessions = std::collections::HashSet::new();
+    // Index every unique haystack session once. The dataset can list the
+    // same session in multiple questions' haystacks (and even twice within
+    // one haystack); MemoryService rejects a repeated request_id, so we
+    // dedupe by session_id globally.
+    let mut indexed_sessions = std::collections::HashSet::new();
+    let mut total_sessions = 0;
+    for entry in entries.iter() {
         for (sess_idx, (session_id, turns)) in entry
             .haystack_session_ids
             .iter()
@@ -353,9 +353,10 @@ fn run_scoped_benchmark(
             if turns.is_empty() {
                 continue;
             }
-            if !seen_sessions.insert(session_id.clone()) {
+            if !indexed_sessions.insert(session_id.clone()) {
                 continue;
             }
+            total_sessions += 1;
             let session_date = entry
                 .haystack_dates
                 .get(sess_idx)
@@ -379,13 +380,23 @@ fn run_scoped_benchmark(
                 .collect();
             service
                 .add(AddRequest {
-                    request_id: format!("bench-{}-{}", entry.question_id, session_id),
+                    request_id: format!("bench-{session_id}"),
                     messages,
                     user_id: BENCHMARK_USER_ID.to_string(),
                     session_id: session_id.clone(),
                 })
                 .with_context(|| format!("failed to index session {session_id}"))?;
         }
+    }
+    eprintln!("indexed {total_sessions} unique sessions");
+
+    let mut per_query = Vec::with_capacity(entries.len());
+
+    for (idx, entry) in entries.into_iter().enumerate() {
+        // Sessions were indexed once up front into the shared service.
+        // candidate_session_ids is this question's haystack (for reporting);
+        // the search runs against ALL indexed sessions, like production.
+        let candidate_session_ids = entry.haystack_session_ids.clone();
 
         // Production search. session_id/scope/filters are None: stateless
         // search as the benchmark user, no conversation-state scoping.

@@ -1,4 +1,5 @@
 mod build;
+pub(crate) mod cjk_tokenizer;
 mod helpers;
 mod model;
 mod query;

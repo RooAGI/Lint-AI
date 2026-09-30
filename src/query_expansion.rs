@@ -169,7 +169,45 @@ fn add_related(store: &mut LexicalStore, key: &str, rel: Related) {
 }
 
 pub fn normalize_for_index(input: &str) -> String {
-    let lowered = deunicode(input).to_lowercase();
+    // Script-aware: Han and Hangul runs are kept in the original script —
+    // no deunicode transliteration (which would turn Chinese into Pinyin
+    // and Korean into romanization, with homophone collisions like
+    // 是/十/事 -> "shi"), no English Porter stemming — so CJK text indexes
+    // as native-script tokens and the index and the query agree on script.
+    // Other runs keep the historical deunicode + stem behavior; mixed
+    // content gets both. For input with no Han/Hangul characters this is
+    // byte-identical to the old behavior.
+    let mut out: Vec<String> = Vec::new();
+    let mut latin_seg = String::new();
+    let mut cjk_run = String::new();
+    for ch in input.chars() {
+        if crate::lang::is_han(ch) || crate::lang::is_hangul(ch) {
+            if !latin_seg.is_empty() {
+                out.push(normalize_latin_segment(&latin_seg));
+                latin_seg.clear();
+            }
+            cjk_run.push(ch);
+        } else {
+            if !cjk_run.is_empty() {
+                out.push(std::mem::take(&mut cjk_run));
+            }
+            latin_seg.push(ch);
+        }
+    }
+    if !latin_seg.is_empty() {
+        out.push(normalize_latin_segment(&latin_seg));
+    }
+    if !cjk_run.is_empty() {
+        out.push(cjk_run);
+    }
+    out.into_iter()
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_latin_segment(seg: &str) -> String {
+    let lowered = deunicode(seg).to_lowercase();
     let token_re =
         NORMALIZE_RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9]{1,}").expect("valid regex"));
     let stemmer = STEMMER.get_or_init(|| Stemmer::create(Algorithm::English));

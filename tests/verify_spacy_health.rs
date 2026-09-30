@@ -34,7 +34,7 @@ fn spacy_extraction_healthy() {
     let turns = real_turns();
     println!("Running spaCy extraction on {} turns...", turns.len());
     
-    let output = extract_relations_via_spacy(&turns, Duration::from_secs(120));
+    let output = extract_relations_via_spacy(&turns, Duration::from_secs(120), "en_core_web_sm");
     
     println!("Extracted {} relations", output.relations.len());
     println!("Extracted {} key phrases", output.key_phrases.len());

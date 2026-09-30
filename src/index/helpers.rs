@@ -28,15 +28,59 @@ pub(crate) fn claim_tokens(claim: &Claim) -> Vec<String> {
 
 pub(crate) fn sanitize_bm25_query(query: &str) -> String {
     static FALLBACK_RE: OnceLock<Regex> = OnceLock::new();
-    let lowered = deunicode(query).to_lowercase();
     let token_re = FALLBACK_RE.get_or_init(|| {
         Regex::new(r"[A-Za-z0-9][A-Za-z0-9_-]*").expect("valid fallback query regex")
     });
-    token_re
-        .find_iter(&lowered)
-        .map(|m| m.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
+    // Script-aware like the index tokenizer: Han runs become character
+    // bigrams and Hangul runs become eojeol + particle-stripped stem, so
+    // the fallback query still matches the natively-indexed fields
+    // (Pinyin/romanized transliteration would never match them); other
+    // runs keep the historical deunicode behavior. CJK-free input is
+    // unchanged.
+    let mut parts: Vec<String> = Vec::new();
+    let mut latin_seg = String::new();
+    let mut cjk_run = String::new();
+    let mut cjk_is_han = true;
+    for ch in query.chars() {
+        let is_han = crate::lang::is_han(ch);
+        let is_hangul = crate::lang::is_hangul(ch);
+        if is_han || is_hangul {
+            if !latin_seg.is_empty() {
+                let lowered = deunicode(&latin_seg).to_lowercase();
+                parts.extend(token_re.find_iter(&lowered).map(|m| m.as_str().to_string()));
+                latin_seg.clear();
+            }
+            if !cjk_run.is_empty() && ((is_han && !cjk_is_han) || (is_hangul && cjk_is_han)) {
+                flush_cjk_run(&mut parts, &cjk_run, cjk_is_han);
+                cjk_run.clear();
+            }
+            cjk_is_han = is_han;
+            cjk_run.push(ch);
+        } else {
+            if !cjk_run.is_empty() {
+                flush_cjk_run(&mut parts, &cjk_run, cjk_is_han);
+                cjk_run.clear();
+            }
+            latin_seg.push(ch);
+        }
+    }
+    if !latin_seg.is_empty() {
+        let lowered = deunicode(&latin_seg).to_lowercase();
+        parts.extend(token_re.find_iter(&lowered).map(|m| m.as_str().to_string()));
+    }
+    if !cjk_run.is_empty() {
+        flush_cjk_run(&mut parts, &cjk_run, cjk_is_han);
+    }
+    parts.join(" ")
+}
+
+fn flush_cjk_run(parts: &mut Vec<String>, run: &str, is_han: bool) {
+    if is_han {
+        parts.extend(crate::tokenizer::han_bigrams(run));
+    } else {
+        // A CJK run here is a maximal Hangul run = one eojeol.
+        parts.extend(crate::tokenizer::hangul_eojeol_tokens(run));
+    }
 }
 
 pub(crate) fn candidate_rerank_text(doc: &DocRecord) -> String {

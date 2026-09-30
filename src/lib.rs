@@ -45,6 +45,7 @@ mod conversational_rerank;
 pub mod daemon;
 mod ids;
 pub mod index;
+pub mod lang;
 #[cfg(any(
     feature = "claude-code",
     feature = "codex",
@@ -370,6 +371,7 @@ impl PyMemoryCore {
             session_id: None,
             scope: None,
             filters: None,
+            lang: None,
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,

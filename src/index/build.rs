@@ -785,6 +785,13 @@ impl MemoryIndex {
             writer.commit()?;
             ram
         };
+        // CJK-aware tokenization for all TEXT fields (overrides the
+        // built-in "default"): Han runs index as character bigrams and
+        // Hangul runs as eojeol + particle-stripped stem, so Chinese and
+        // Korean content is retrievable; pure-English text is unaffected.
+        // QueryParser resolves the field tokenizer through this manager,
+        // so index-time and query-time segmentation agree.
+        crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
         let reader = index.reader()?;
         let schema_ref = index.schema();
         let doc_id_f = schema_ref.get_field("doc_id")?;

@@ -231,6 +231,11 @@ pub struct SpacyKeyEntityRanker {
     pub script_path: String,
 }
 
+/// The spaCy model used when the user did not pass `--spacy-model`.
+/// Compared by value (not by "was the flag passed") to decide whether the
+/// per-language default applies — see `PipelineOptions::spacy_model_for_text`.
+pub const DEFAULT_SPACY_MODEL: &str = "en_core_web_sm";
+
 pub fn default_spacy_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_ner.py")
 }
@@ -450,7 +455,7 @@ mod subprocess_tests {
 }
 
 fn default_stopwords() -> HashSet<&'static str> {
-    [
+    let mut set: HashSet<&'static str> = [
         "a", "an", "the", "is", "are", "was", "were", "be", "to", "for", "of", "on", "in", "by",
         "as", "or", "and", "that", "this", "with", "from", "it", "its", "at", "into", "about",
         "over", "under", "also", "can", "could", "should", "would", "will", "may", "might", "do",
@@ -459,14 +464,30 @@ fn default_stopwords() -> HashSet<&'static str> {
     ]
     .iter()
     .copied()
-    .collect()
+    .collect();
+    // Korean particles/function words: without these, the term ranker
+    // would surface e.g. "것" or "수" as top terms for Korean docs.
+    set.extend(crate::tokenizer::korean_stopwords().iter().copied());
+    set
 }
 
 fn tokenize_words(content: &str) -> Vec<String> {
-    content_word_regex()
+    let mut tokens: Vec<String> = content_word_regex()
         .find_iter(content)
         .map(|m| m.as_str().to_lowercase())
-        .collect()
+        .collect();
+    // The Latin regex skips Hangul/Han runs entirely; add them via the
+    // shared script-aware tokenizer so Korean/Chinese terms participate
+    // in term ranking (Han → bigrams, Hangul → eojeol + stem).
+    tokens.extend(
+        crate::tokenizer::tokenize(content, crate::tokenizer::TokenizerMode::Unstemmed)
+            .into_iter()
+            .filter(|t| {
+                t.chars()
+                    .any(|c| crate::lang::is_han(c) || crate::lang::is_hangul(c))
+            }),
+    );
+    tokens
 }
 
 fn sentence_count(content: &str) -> usize {

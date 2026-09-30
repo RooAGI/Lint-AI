@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use crate::pipeline::{ChunkStrategy, Tier1NerProvider, Tier1TermRankerKind};
 use clap::{Parser, ValueEnum};
 
@@ -176,6 +177,11 @@ pub struct Args {
     pub tier1_term_ranker: Tier1TermRankerKind,
     #[arg(long, default_value = "en_core_web_sm")]
     pub spacy_model: String,
+    /// Content language. `auto` (default) detects per text from script
+    /// statistics; pass `zh`/`ko`/`en` to force it. Drives per-language
+    /// defaults such as the spaCy model when `--spacy-model` is not given.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub lang: Lang,
     #[arg(long, value_enum, default_value = "heading")]
     pub chunk_strategy: ChunkStrategy,
     #[arg(long, default_value_t = 40)]

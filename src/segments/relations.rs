@@ -362,8 +362,12 @@ pub(crate) fn extractor_script_path() -> std::path::PathBuf {
 /// extractor daemon so the spaCy model load is paid once per process; every
 /// daemon failure falls back to a one-shot subprocess, which is also what
 /// script overrides always use.
-pub fn extract_relations_via_spacy(turns: &[RelationTurn], timeout: Duration) -> ExtractorOutput {
-    run_extractor(turns, false, None, timeout).unwrap_or_default()
+pub fn extract_relations_via_spacy(
+    turns: &[RelationTurn],
+    timeout: Duration,
+    model: &str,
+) -> ExtractorOutput {
+    run_extractor(turns, false, None, timeout, model).unwrap_or_default()
 }
 
 /// Key-phrase half of the extractor: grammar-accepted entity mentions for
@@ -374,8 +378,9 @@ pub fn extract_key_phrases_via_spacy(
     turns: &[RelationTurn],
     script_override: Option<&std::path::Path>,
     timeout: Duration,
+    model: &str,
 ) -> Vec<RawKeyPhrase> {
-    try_extract_key_phrases_via_spacy(turns, script_override, timeout).unwrap_or_default()
+    try_extract_key_phrases_via_spacy(turns, script_override, timeout, model).unwrap_or_default()
 }
 
 /// Fallible variant: `None` when the extractor subprocess failed to run or
@@ -386,8 +391,9 @@ pub fn try_extract_key_phrases_via_spacy(
     turns: &[RelationTurn],
     script_override: Option<&std::path::Path>,
     timeout: Duration,
+    model: &str,
 ) -> Option<Vec<RawKeyPhrase>> {
-    run_extractor(turns, true, script_override, timeout).map(|output| output.key_phrases)
+    run_extractor(turns, true, script_override, timeout, model).map(|output| output.key_phrases)
 }
 
 /// Parse one extractor response object (one-shot stdout or one daemon
@@ -415,6 +421,18 @@ pub(crate) fn parse_extractor_output(response: &str) -> Option<ExtractorOutput> 
     })
 }
 
+/// Pick the spaCy model for a batch of extractor turns from the turns'
+/// detected script: Korean turns get `ko_core_news_sm`, Chinese turns get
+/// `zh_core_web_sm`, everything else the English default.
+pub(crate) fn extractor_model_for_turns(turns: &[RelationTurn]) -> &'static str {
+    let mut text = String::new();
+    for t in turns {
+        text.push_str(&t.text);
+        text.push('\n');
+    }
+    crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&text))
+}
+
 /// Runs the spaCy extractor script. Returns `None` when the subprocess
 /// could not run or its output was unusable; `Some` on a completed run even
 /// when it produced no relations or phrases.
@@ -423,19 +441,21 @@ fn run_extractor(
     key_phrases_only: bool,
     script_override: Option<&std::path::Path>,
     timeout: Duration,
+    model: &str,
 ) -> Option<ExtractorOutput> {
     if script_override.is_none() {
         if let Some(output) = super::extractor_daemon::ExtractorDaemon::global().extract(
             turns,
             key_phrases_only,
             timeout,
+            model,
         ) {
             return Some(output);
         }
         // Daemon unavailable (first-start failure, dead child, timeout,
         // contention): fall through to a one-shot subprocess.
     }
-    run_extractor_oneshot(turns, key_phrases_only, script_override)
+    run_extractor_oneshot(turns, key_phrases_only, script_override, model)
 }
 
 /// One-shot extractor subprocess: spawn Python, feed the payload on stdin,
@@ -444,6 +464,7 @@ fn run_extractor_oneshot(
     turns: &[RelationTurn],
     key_phrases_only: bool,
     script_override: Option<&std::path::Path>,
+    model: &str,
 ) -> Option<ExtractorOutput> {
     let script = match script_override {
         Some(path) => path.to_path_buf(),
@@ -454,7 +475,7 @@ fn run_extractor_oneshot(
         return None;
     }
     let payload = serde_json::json!({
-        "model": "en_core_web_sm",
+        "model": model,
         "turns": turns,
         "key_phrases_only": key_phrases_only,
     });

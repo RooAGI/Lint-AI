@@ -67,11 +67,158 @@ pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
     {
         return Some(AggregateIntent::Sum);
     }
+    // Korean aggregate triggers. Token-prefix matching (not substring) so
+    // that e.g. "총" does not fire inside "대통령".
+    if ko_token_starts_with(&q, &["몇"]) {
+        return Some(AggregateIntent::Count);
+    }
+    if ko_token_starts_with(&q, &["총", "합계", "얼마나"]) {
+        return Some(AggregateIntent::Sum);
+    }
     None
 }
 
+/// True when any whitespace-delimited token of `query` starts with one of
+/// `forms`. Korean particles attach inside the eojeol, so prefix matching
+/// covers inflected forms (`합계는`, `몇개를`) while keeping the trigger
+/// precise.
+fn ko_token_starts_with(query: &str, forms: &[&str]) -> bool {
+    query
+        .split_whitespace()
+        .any(|tok| forms.iter().any(|f| tok.starts_with(f)))
+}
+
 pub fn normalize_number_words(query: &str) -> String {
-    replace_numbers_in_text(query, &Language::english(), 0.0)
+    let replaced = replace_numbers_in_text(query, &Language::english(), 0.0);
+    normalize_korean_number_words(&replaced)
+}
+
+/// Replace Korean number words with digits.
+///
+/// Covers Sino-Korean numerals (`삼백오십` → `350`, `오만` → `50000`) when
+/// followed by a counter (`원`, `개`, `명`, …) or a non-Hangul boundary,
+/// and common native numerals (`하나` → `1`, `스물` → `20`). Runs that
+/// continue into other Hangul (e.g. `일` in `일요일`) are left alone.
+///
+/// Documented limitations: compound native numbers (`스물다섯`),
+/// attributive-only single syllables in running text, and consecutive
+/// bare Sino-Korean digits without units are not parsed.
+fn normalize_korean_number_words(text: &str) -> String {
+    static KO_NUM_RE: OnceLock<Regex> = OnceLock::new();
+    // Note: the `regex` crate has no lookahead, so the "not followed by
+    // Hangul" boundary is enforced in the replacement closure via group 5:
+    // when group 5 matches, the numeral run continues into a larger Hangul
+    // word and the match is left unchanged.
+    let re = KO_NUM_RE.get_or_init(|| {
+        Regex::new(
+            r"(하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열|스물|서른|마흔|쉰|예순|일흔|여든|아흔|한|두|세|네)(은|는|이|가|을|를|에|의|과|와|도|만)?([가-힣])?|([일이삼사오육칠팔구]*[십백천만억][일이삼사오육칠팔구십백천만억]*)(원|달러|개|명|번|회|권|대|살|층|호)?([가-힣])?",
+        )
+        .expect("valid Korean numeral regex")
+    });
+    re.replace_all(text, |caps: &regex::Captures| {
+        // Native word: group 1 (+ particle group 2, + following-Hangul
+        // group 3). Sino-Korean run: group 4 (+ counter group 5, +
+        // following-Hangul group 6).
+        let (num, suffix, following) = if caps.get(1).is_some() {
+            (
+                caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                caps.get(2).map(|s| s.as_str()).unwrap_or(""),
+                caps.get(3).map(|s| s.as_str()).unwrap_or(""),
+            )
+        } else {
+            (
+                caps.get(4).map(|m| m.as_str()).unwrap_or(""),
+                caps.get(5).map(|s| s.as_str()).unwrap_or(""),
+                caps.get(6).map(|s| s.as_str()).unwrap_or(""),
+            )
+        };
+        // A bare numeral run directly followed by Hangul is part of a
+        // larger word (not a numeral); leave it unchanged. A trailing
+        // particle/counter terminates the numeral, so following Hangul is
+        // kept verbatim after the digits.
+        if suffix.is_empty() && !following.is_empty() {
+            return caps[0].to_string();
+        }
+        match parse_korean_numeral(num) {
+            Some(v) => format!("{v}{suffix}{following}"),
+            None => caps[0].to_string(),
+        }
+    })
+    .into_owned()
+}
+
+/// Parse a Korean numeral word into a number. Returns `None` for forms
+/// outside the supported table (the caller keeps the original text).
+fn parse_korean_numeral(word: &str) -> Option<i64> {
+    // Native numerals (single words only; compounds like 스물다섯 are out
+    // of scope).
+    let native = match word {
+        "하나" | "한" => 1,
+        "둘" | "두" => 2,
+        "셋" | "세" => 3,
+        "넷" | "네" => 4,
+        "다섯" => 5,
+        "여섯" => 6,
+        "일곱" => 7,
+        "여덟" => 8,
+        "아홉" => 9,
+        "열" => 10,
+        "스물" => 20,
+        "서른" => 30,
+        "마흔" => 40,
+        "쉰" => 50,
+        "예순" => 60,
+        "일흔" => 70,
+        "여든" => 80,
+        "아흔" => 90,
+        _ => -1,
+    };
+    if native >= 0 {
+        return Some(native);
+    }
+    // Sino-Korean: digits, small units (십백천), big units (만억).
+    fn digit(c: char) -> Option<i64> {
+        match c {
+            '일' => Some(1),
+            '이' => Some(2),
+            '삼' => Some(3),
+            '사' => Some(4),
+            '오' => Some(5),
+            '육' => Some(6),
+            '칠' => Some(7),
+            '팔' => Some(8),
+            '구' => Some(9),
+            _ => None,
+        }
+    }
+    let mut total: i64 = 0;
+    let mut section: i64 = 0;
+    let mut pending: Option<i64> = None;
+    for c in word.chars() {
+        if let Some(d) = digit(c) {
+            pending = Some(d);
+        } else if let Some(unit) = match c {
+            '십' => Some(10),
+            '백' => Some(100),
+            '천' => Some(1000),
+            _ => None,
+        } {
+            section += pending.unwrap_or(1) * unit;
+            pending = None;
+        } else if let Some(big) = match c {
+            '만' => Some(10_000),
+            '억' => Some(100_000_000),
+            _ => None,
+        } {
+            let base = section + pending.unwrap_or(0);
+            total += if base == 0 { big } else { base * big };
+            section = 0;
+            pending = None;
+        } else {
+            return None;
+        }
+    }
+    Some(total + section + pending.unwrap_or(0))
 }
 
 pub fn build_aggregate_output(
@@ -300,6 +447,38 @@ mod tests {
         let out = normalize_number_words("I walked two miles and ate three apples");
         assert!(out.contains("2"));
         assert!(out.contains("3"));
+    }
+
+    #[test]
+    fn korean_aggregate_triggers() {
+        assert_eq!(
+            classify_aggregate_intent("이번 달에 몇 개의 약속이 있어?"),
+            Some(AggregateIntent::Count)
+        );
+        assert_eq!(
+            classify_aggregate_intent("총 얼마를 썼어?"),
+            Some(AggregateIntent::Sum)
+        );
+        assert_eq!(
+            classify_aggregate_intent("합계는 얼마야?"),
+            Some(AggregateIntent::Sum)
+        );
+        // "총" inside another word must not trigger.
+        assert_eq!(classify_aggregate_intent("대통령에 대해 알려줘"), None);
+    }
+
+    #[test]
+    fn korean_numerals_normalize() {
+        assert_eq!(
+            normalize_number_words("삼천원을 썼다"),
+            "3000원을 썼다"
+        );
+        assert_eq!(normalize_number_words("오만개"), "50000개");
+        assert_eq!(normalize_number_words("하나의 사과"), "1의 사과");
+        assert_eq!(normalize_number_words("스물 명"), "20 명");
+        // Non-numeric Hangul is untouched.
+        assert_eq!(normalize_number_words("일요일에 만났다"), "일요일에 만났다");
+        assert_eq!(normalize_number_words("이 책"), "이 책");
     }
 
     #[test]

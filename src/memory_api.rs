@@ -1,12 +1,14 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
+use crate::lang::{default_spacy_model_for_lang, Lang};
 use crate::pipeline::PipelineOptions;
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::analyze_query;
 use crate::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, query_structured, relation_turns_from_docs,
-    try_extract_key_phrases_via_spacy, RelationIndex,
+    analyze_fact_question, extract_relations_via_spacy, extractor_model_for_turns,
+    query_structured, relation_turns_from_docs, try_extract_key_phrases_via_spacy, RelationIndex,
+    RelationTurn,
 };
 use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
@@ -71,6 +73,12 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
+    /// Content language override (`"en"`, `"zh"`, `"ko"`). Absent (default)
+    /// auto-detects per text from script statistics. Currently selects the
+    /// spaCy model for the structured-relations path; lexical retrieval is
+    /// script-aware regardless.
+    #[serde(default)]
+    pub lang: Option<Lang>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,10 +266,12 @@ fn run_key_phrase_extraction_bounded(
     let script = script.map(|s| s.to_path_buf());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let model = extractor_model_for_turns(&turns);
         let out = try_extract_key_phrases_via_spacy(
             &turns,
             script.as_deref(),
             std::time::Duration::from_secs(timeout_secs),
+            model,
         );
         let _ = tx.send(out);
     });
@@ -350,6 +360,16 @@ fn relations_fingerprint(docs: &[&SourceDocument]) -> u64 {
     hasher.finish()
 }
 
+/// Pick the spaCy model for structured relation extraction.
+/// An explicit non-`Auto` request language pins its model; `Lang::Auto`
+/// and an omitted language both follow the turns' detected script.
+fn spacy_model_for_request(lang: Option<Lang>, turns: &[RelationTurn]) -> &'static str {
+    match lang {
+        Some(l) if !matches!(l, Lang::Auto) => default_spacy_model_for_lang(l.resolve("")),
+        _ => extractor_model_for_turns(turns),
+    }
+}
+
 /// Build (or reuse) the relation index for one user's visible document set.
 /// Returns `None` when extraction fails or times out, so the caller falls
 /// through to the lexical path.
@@ -357,6 +377,7 @@ fn relations_index_for(
     docs: &[&SourceDocument],
     user_id: &str,
     cache: &Mutex<RelationsCache>,
+    lang: Option<Lang>,
 ) -> Option<Arc<RelationIndex>> {
     // The lock is held across the build so concurrent structured queries for
     // the same user share one extractor run instead of racing duplicates.
@@ -377,11 +398,15 @@ fn relations_index_for(
     let turns = relation_turns_from_docs(docs);
     // Bound the subprocess: run extraction on a worker thread and give up
     // after the timeout, leaving the cache empty (fail-open to lexical).
+    // An explicit request language selects the spaCy model; otherwise the
+    // model follows the turns' detected script.
+    let model: String = spacy_model_for_request(lang, &turns).to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
             &turns,
             std::time::Duration::from_secs(RELATIONS_EXTRACT_TIMEOUT_SECS),
+            &model,
         );
         let _ = tx.send(output.relations);
     });
@@ -449,7 +474,7 @@ fn structured_fact_results(
         })
         .collect();
     visible.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-    let index = match relations_index_for(&visible, &request.user_id, cache) {
+    let index = match relations_index_for(&visible, &request.user_id, cache, request.lang) {
         Some(index) => index,
         None => return Vec::new(),
     };
@@ -1340,6 +1365,7 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
+                    lang: None,
                 };
                 let docs: Vec<&SourceDocument> = self.store.source_documents();
                 structured_fact_results(
@@ -2586,6 +2612,48 @@ mod tests {
     use super::*;
     use crate::PipelineOptions;
 
+    #[test]
+    fn lang_auto_selects_spacy_model_from_turns() {
+        // P2: `"lang": "auto"` must behave like an omitted language — the
+        // model follows the document turns' script, not English.
+        let ko_turns = vec![RelationTurn {
+            speaker: "지민".to_string(),
+            text: "지민은 서울에서 일합니다".to_string(),
+            session_id: "s1".to_string(),
+            turn_idx: 0,
+            doc_id: "d1".to_string(),
+            session_date: None,
+        }];
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Auto), &ko_turns),
+            "ko_core_news_sm"
+        );
+        assert_eq!(spacy_model_for_request(None, &ko_turns), "ko_core_news_sm");
+
+        let zh_turns = vec![RelationTurn {
+            speaker: "小明".to_string(),
+            text: "小明在北京工作".to_string(),
+            session_id: "s1".to_string(),
+            turn_idx: 0,
+            doc_id: "d1".to_string(),
+            session_date: None,
+        }];
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Auto), &zh_turns),
+            "zh_core_web_sm"
+        );
+
+        // Explicit languages still pin their model.
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Ko), &ko_turns),
+            "ko_core_news_sm"
+        );
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::En), &ko_turns),
+            "en_core_web_sm"
+        );
+    }
+
     fn service() -> MemoryService {
         MemoryService::in_memory(PipelineOptions::default())
     }
@@ -2728,10 +2796,119 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
+    }
+
+    #[test]
+    fn korean_particle_mismatch_still_retrieves() {
+        // Smoke test: the document inflects "학교" as "학교에"/"학교에서";
+        // the bare-stem query "학교" must still retrieve it via the
+        // particle-stripped index tokens.
+        let mut service = service();
+        service
+            .add(AddRequest {
+                request_id: "ko-1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "김철수는 학교에 갔다. 학교에서 친구를 만났다.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-ko".into(),
+                session_id: "session-ko".into(),
+            })
+            .unwrap();
+        let response = service
+            .search(SearchRequest {
+                query: "학교".into(),
+                options: None,
+                user_id: "user-ko".into(),
+                top_k: 100,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1, "bare stem query should retrieve the doc");
+        assert!(response.data[0].content.contains("학교에"));
+
+        // Inflected query form also retrieves.
+        let response = service
+            .search(SearchRequest {
+                query: "학교에서".into(),
+                options: None,
+                user_id: "user-ko".into(),
+                top_k: 100,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+    }
+
+    #[test]
+    fn korean_question_retrieves_answer_memory() {
+        // End-to-end: a natural Korean question (with interrogative 어디)
+        // retrieves the memory holding its answer and ranks it above a
+        // distractor that shares no content words.
+        let mut service = service();
+        service
+            .add(AddRequest {
+                request_id: "ko-q-target".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "박영희는 부산에서 태어났다. 지금은 서울에 산다.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-ko".into(),
+                session_id: "session-ko".into(),
+            })
+            .unwrap();
+        service
+            .add(AddRequest {
+                request_id: "ko-q-d1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "김철수는 주말에 공원에서 조깅을 즐긴다.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-ko".into(),
+                session_id: "session-ko".into(),
+            })
+            .unwrap();
+        let response = service
+            .search(SearchRequest {
+                query: "박영희는 어디에서 태어났나?".into(),
+                options: None,
+                user_id: "user-ko".into(),
+                top_k: 100,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert!(
+            !response.data.is_empty(),
+            "Korean question should retrieve the answer memory"
+        );
+        assert!(
+            response.data[0].content.contains("부산에서"),
+            "target should rank first, got {:?}",
+            response.data.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2765,6 +2942,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response
@@ -2821,6 +2999,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
             })
             .unwrap();
         let ids: Vec<&str> = response
@@ -2884,6 +3063,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
             })
             .unwrap();
         let ids: Vec<&str> = response
@@ -2929,6 +3109,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let b = service
@@ -2940,6 +3121,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(a.data.len(), 1);
@@ -3059,6 +3241,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response
@@ -3093,6 +3276,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response.data.is_empty());
@@ -3131,6 +3315,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3179,6 +3364,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3413,6 +3599,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
 
@@ -3427,6 +3614,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
@@ -3450,6 +3638,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
@@ -3505,6 +3694,7 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap()
     }
@@ -3547,6 +3737,7 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
+                lang: None,
 })
                 .unwrap_err();
             assert!(
@@ -3846,6 +4037,7 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
+            lang: None,
         }
     }
 
@@ -4164,6 +4356,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response
@@ -4199,6 +4392,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -4308,6 +4502,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
+                lang: None,
 });
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -4351,6 +4546,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(!response.data.is_empty());
@@ -4669,6 +4865,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let _ = response;

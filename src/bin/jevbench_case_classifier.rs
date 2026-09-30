@@ -258,6 +258,7 @@ fn main() -> anyhow::Result<()> {
             session_id: None,
             scope: None,
             filters: None,
+            lang: None,
         })?;
 
         // Dedup hits by session, keep max score, map to bank decisions.

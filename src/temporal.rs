@@ -138,6 +138,12 @@ pub fn parse_temporal_date(input: Option<&str>) -> Option<NaiveDate> {
 pub fn resolve_temporal_target(query: &str, anchor_date: Option<&str>) -> Option<TemporalTarget> {
     let base_date = parse_date(anchor_date)
         .unwrap_or_else(|| DateTime::<Utc>::from(SystemTime::now()).date_naive());
+    // Korean pre-layer: native relative-date expressions and explicit
+    // `2026년 9월 29일`-style dates, checked before the English patterns
+    // (the scripts are disjoint, so order is just convention).
+    if let Some(target) = resolve_korean_temporal_target(query, base_date) {
+        return Some(target);
+    }
     let lower = query.to_lowercase();
 
     if lower.contains("today") {
@@ -284,6 +290,100 @@ pub fn resolve_temporal_target(query: &str, anchor_date: Option<&str>) -> Option
     }
 
     resolve_temporal_target_with_temps(query, base_date)
+}
+
+/// Korean temporal pre-layer for [`resolve_temporal_target`].
+///
+/// Table-driven over native relative-date expressions (`오늘`, `어제`,
+/// `지난주`, …) plus a regex for explicit `2026년 9월 29일`-style dates.
+/// Shapes mirror the English arms above (same window sizes). Returns
+/// `None` when the query carries no Korean temporal expression, letting
+/// the English path run unchanged.
+fn resolve_korean_temporal_target(query: &str, base_date: NaiveDate) -> Option<TemporalTarget> {
+    let day = |offset: i64| TemporalTarget {
+        target_date: base_date + Duration::days(offset),
+        window_days: 2,
+    };
+    let week = |offset: i64| TemporalTarget {
+        target_date: base_date + Duration::weeks(offset),
+        window_days: 7,
+    };
+    let month = |offset: i32| TemporalTarget {
+        target_date: shift_months(base_date, offset),
+        window_days: 14,
+    };
+    let year = |offset: i32| TemporalTarget {
+        target_date: shift_years(base_date, offset),
+        window_days: 30,
+    };
+
+    // Days.
+    if query.contains("오늘") {
+        return Some(day(0));
+    }
+    if query.contains("어제") {
+        return Some(day(-1));
+    }
+    if query.contains("내일") {
+        return Some(day(1));
+    }
+    if query.contains("그저께") || query.contains("그제") {
+        return Some(day(-2));
+    }
+    if query.contains("모레") {
+        return Some(day(2));
+    }
+    // Weeks.
+    if query.contains("지난주") {
+        return Some(week(-1));
+    }
+    if query.contains("이번주") {
+        return Some(week(0));
+    }
+    if query.contains("다음주") {
+        return Some(week(1));
+    }
+    // Months.
+    if query.contains("지난달") {
+        return Some(month(-1));
+    }
+    if query.contains("이번달") {
+        return Some(month(0));
+    }
+    if query.contains("다음달") {
+        return Some(month(1));
+    }
+    // Years.
+    if query.contains("작년") {
+        return Some(year(-1));
+    }
+    if query.contains("올해") {
+        return Some(year(0));
+    }
+    if query.contains("내년") {
+        return Some(year(1));
+    }
+    // Explicit `2026년 9월 29일` (also `2026년9월29일` — no spaces).
+    if let Some(date) = parse_korean_explicit_date(query) {
+        return Some(TemporalTarget {
+            target_date: date,
+            window_days: 2,
+        });
+    }
+    None
+}
+
+/// Parse `YYYY년 M월 D일` (spaces optional) into a [`NaiveDate`].
+fn parse_korean_explicit_date(query: &str) -> Option<NaiveDate> {
+    static KO_DATE_RE: OnceLock<Regex> = OnceLock::new();
+    let re = KO_DATE_RE.get_or_init(|| {
+        Regex::new(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일").expect("valid Korean date regex")
+    });
+    let caps = re.captures(query)?;
+    let y: i32 = caps.get(1)?.as_str().parse().ok()?;
+    let m: u32 = caps.get(2)?.as_str().parse().ok()?;
+    let d: u32 = caps.get(3)?.as_str().parse().ok()?;
+    NaiveDate::from_ymd_opt(y, m, d)
 }
 
 fn resolve_temporal_target_with_temps(query: &str, base_date: NaiveDate) -> Option<TemporalTarget> {
@@ -740,6 +840,45 @@ fn word_to_num(input: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_relative_dates() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = resolve_temporal_target("오늘 뭐 했어?", None).unwrap();
+        // base_date falls back to today when anchor is None; just check
+        // the shape resolves (window 2) and the date is a real date.
+        assert_eq!(t.window_days, 2);
+
+        let t = resolve_korean_temporal_target("어제 만난 사람", base).unwrap();
+        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2026, 9, 28).unwrap());
+        assert_eq!(t.window_days, 2);
+
+        let t = resolve_korean_temporal_target("내일 일정", base).unwrap();
+        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2026, 9, 30).unwrap());
+
+        let t = resolve_korean_temporal_target("지난주 회의", base).unwrap();
+        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2026, 9, 22).unwrap());
+        assert_eq!(t.window_days, 7);
+
+        let t = resolve_korean_temporal_target("다음달 여행", base).unwrap();
+        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2026, 10, 29).unwrap());
+        assert_eq!(t.window_days, 14);
+
+        let t = resolve_korean_temporal_target("작년 여름", base).unwrap();
+        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2025, 9, 29).unwrap());
+        assert_eq!(t.window_days, 30);
+    }
+
+    #[test]
+    fn korean_explicit_date() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = resolve_korean_temporal_target("2026년 9월 29일에 뭐 했어?", base).unwrap();
+        assert_eq!(t.target_date, base);
+        let t = resolve_korean_temporal_target("2024년5월1일 회의", base).unwrap();
+        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2024, 5, 1).unwrap());
+        // Non-temporal Korean query: no target.
+        assert!(resolve_korean_temporal_target("학교에 갔다", base).is_none());
+    }
 
     #[test]
     fn augments_last_weekday() {

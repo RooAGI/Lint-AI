@@ -6,6 +6,7 @@ ALLOWED_MODELS = {
     "en_core_web_sm",
     "en_core_web_md",
     "en_core_web_lg",
+    "ko_core_news_sm",
 }
 
 

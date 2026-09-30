@@ -1357,6 +1357,7 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
+                    lang: None,
                 };
                 let docs: Vec<&SourceDocument> = self.store.source_documents();
                 structured_fact_results(
@@ -2745,10 +2746,62 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
+    }
+
+    #[test]
+    fn korean_particle_mismatch_still_retrieves() {
+        // Smoke test: the document inflects "학교" as "학교에"/"학교에서";
+        // the bare-stem query "학교" must still retrieve it via the
+        // particle-stripped index tokens.
+        let mut service = service();
+        service
+            .add(AddRequest {
+                request_id: "ko-1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "김철수는 학교에 갔다. 학교에서 친구를 만났다.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-ko".into(),
+                session_id: "session-ko".into(),
+            })
+            .unwrap();
+        let response = service
+            .search(SearchRequest {
+                query: "학교".into(),
+                options: None,
+                user_id: "user-ko".into(),
+                top_k: 100,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1, "bare stem query should retrieve the doc");
+        assert!(response.data[0].content.contains("학교에"));
+
+        // Inflected query form also retrieves.
+        let response = service
+            .search(SearchRequest {
+                query: "학교에서".into(),
+                options: None,
+                user_id: "user-ko".into(),
+                top_k: 100,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
     }
 
     #[test]
@@ -2782,6 +2835,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response
@@ -2838,6 +2892,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
             })
             .unwrap();
         let ids: Vec<&str> = response
@@ -2901,6 +2956,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
             })
             .unwrap();
         let ids: Vec<&str> = response
@@ -2946,6 +3002,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let b = service
@@ -2957,6 +3014,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(a.data.len(), 1);
@@ -3076,6 +3134,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response
@@ -3110,6 +3169,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response.data.is_empty());
@@ -3148,6 +3208,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3196,6 +3257,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3430,6 +3492,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
 
@@ -3444,6 +3507,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
@@ -3467,6 +3531,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
@@ -3522,6 +3587,7 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap()
     }
@@ -3564,6 +3630,7 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
+                lang: None,
 })
                 .unwrap_err();
             assert!(
@@ -3863,6 +3930,17 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
+            lang: None,
+        }
+    }{
+            query: query.to_string(),
+            options: None,
+            user_id: user.to_string(),
+            top_k: 10,
+            session_id: None,
+            scope: None,
+            filters: None,
+            lang: None,
         }
     }
 
@@ -4181,6 +4259,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(response
@@ -4216,6 +4295,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -4325,6 +4405,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
+                lang: None,
 });
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -4368,6 +4449,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         assert!(!response.data.is_empty());
@@ -4686,6 +4768,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                lang: None,
 })
             .unwrap();
         let _ = response;

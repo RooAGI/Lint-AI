@@ -371,6 +371,7 @@ impl PyMemoryCore {
             session_id: None,
             scope: None,
             filters: None,
+            lang: None,
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,

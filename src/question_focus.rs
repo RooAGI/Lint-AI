@@ -77,7 +77,19 @@ pub fn identify_focus(query: &str) -> QuestionFocus {
 pub(crate) fn is_question_word(term: &str) -> bool {
     matches!(
         term,
+        // English interrogatives.
         "what" | "when" | "where" | "who" | "whom" | "whos" | "why" | "how" | "which" | "would"
+        // Korean interrogatives ( Hangul runs are not stemmed, so match
+        // the common surface forms; the tokenizer also emits
+        // particle-stripped stems, which are listed alongside).
+        | "누구" | "누가" | "누구를" | "누구의"        // who
+        | "무엇" | "뭐" | "무슨" | "무엇을" | "무엇이"  // what
+        | "어디" | "어디에" | "어디서"                // where
+        | "언제"                                     // when
+        | "얼마" | "얼마나"                           // how much / many
+        | "왜"                                       // why
+        | "어떻게" | "어떡해"                         // how
+        | "어느" | "어떤"                            // which
     )
 }
 
@@ -110,6 +122,17 @@ fn stem_token(token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_question_words_recognized() {
+        for w in [
+            "누구", "누가", "무엇", "뭐", "무슨", "어디", "언제", "얼마", "얼마나", "왜", "어떻게",
+            "어느", "어떤",
+        ] {
+            assert!(is_question_word(w), "{w} should be a question word");
+        }
+        assert!(!is_question_word("학교"));
+    }
 
     #[test]
     fn certificate_question_focus_is_certificate() {

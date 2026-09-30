@@ -527,6 +527,42 @@ fn classify_query_kind(query: &str) -> QueryKind {
     if lower.starts_with("why ") || lower == "why" {
         return QueryKind::Why;
     }
+    // Korean interrogative prefixes. Korean is head-final, so the
+    // question word can appear anywhere; match at start (common) and as
+    // a whitespace-delimited token anywhere in the query.
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    let ko_kind = |forms: &[&str], kind: QueryKind| -> Option<QueryKind> {
+        for form in forms {
+            if lower.starts_with(form) || tokens.iter().any(|t| *t == *form) {
+                return Some(kind);
+            }
+        }
+        None
+    };
+    if let Some(k) = ko_kind(
+        &["누구", "누가", "누구를", "누구의"],
+        QueryKind::Who,
+    ) {
+        return k;
+    }
+    if let Some(k) = ko_kind(&["무엇", "뭐", "무슨"], QueryKind::What) {
+        return k;
+    }
+    if let Some(k) = ko_kind(&["언제"], QueryKind::When) {
+        return k;
+    }
+    if let Some(k) = ko_kind(&["어디"], QueryKind::Where) {
+        return k;
+    }
+    if let Some(k) = ko_kind(&["어느", "어떤"], QueryKind::Which) {
+        return k;
+    }
+    if let Some(k) = ko_kind(&["왜"], QueryKind::Why) {
+        return k;
+    }
+    if let Some(k) = ko_kind(&["얼마나", "얼마"], QueryKind::HowMuch) {
+        return k;
+    }
     QueryKind::Statement
 }
 
@@ -1507,6 +1543,21 @@ fn dedup_spans(spans: Vec<QuerySpan>) -> Vec<QuerySpan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn korean_query_kinds_classified() {
+        assert_eq!(classify_query_kind("누가 갔어?"), QueryKind::Who);
+        assert_eq!(classify_query_kind("무엇을 샀어?"), QueryKind::What);
+        assert_eq!(classify_query_kind("언제 만났어?"), QueryKind::When);
+        assert_eq!(classify_query_kind("어디에 있어?"), QueryKind::Where);
+        assert_eq!(classify_query_kind("어떤 책이야?"), QueryKind::Which);
+        assert_eq!(classify_query_kind("왜 안 왔어?"), QueryKind::Why);
+        assert_eq!(classify_query_kind("얼마나 걸려?"), QueryKind::HowMuch);
+        // Mid-sentence question word (Korean is head-final).
+        assert_eq!(classify_query_kind("어제 누가 왔어?"), QueryKind::Who);
+        // Non-question stays a statement.
+        assert_eq!(classify_query_kind("학교에 갔다"), QueryKind::Statement);
+    }
 
     #[test]
     fn resolves_relative_anchors_against_reference_date() {

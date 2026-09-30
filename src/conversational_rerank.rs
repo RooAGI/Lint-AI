@@ -73,6 +73,9 @@ fn tokenize_simple(s: &str) -> HashSet<String> {
 const WH_WORDS: &[&str] = &[
     "what", "when", "where", "who", "whom", "whose", "which", "why", "how", "do", "does", "did",
     "is", "are", "was", "were", "can", "could", "would", "have", "has", "will",
+    // Korean interrogatives (common surface forms; see question_focus).
+    "누구", "누가", "누구를", "누구의", "무엇", "뭐", "무슨", "어디", "언제", "얼마", "얼마나", "왜",
+    "어떻게", "어떡해", "어느", "어떤",
 ];
 
 /// Strip the indexer's structured "{role}: " prefix so turn-level heuristics
@@ -115,6 +118,8 @@ pub fn is_wh_question(query: &str) -> bool {
             matches!(
                 lw.as_str(),
                 "what" | "when" | "where" | "who" | "whom" | "whose" | "which" | "why" | "how"
+                | "누구" | "누가" | "누구를" | "누구의" | "무엇" | "뭐" | "무슨" | "어디" | "언제"
+                | "얼마" | "얼마나" | "왜" | "어떻게" | "어떡해" | "어느" | "어떤"
             )
         })
         .unwrap_or(false)

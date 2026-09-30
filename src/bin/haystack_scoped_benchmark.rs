@@ -308,11 +308,9 @@ fn run_scoped_benchmark(
     }
     let max_k = ks.iter().copied().max().unwrap_or(10).max(10);
 
-    // Production path: ONE shared MemoryService for all questions, like a
-    // real deployment (one persistent memory, many queries). All unique
-    // haystack sessions are indexed once up front; each question then
-    // searches the shared index. This is both faster (no 500x re-indexing)
-    // and more production-faithful than a fresh service per question.
+    // Per-question fresh MemoryService, like the old scoped benchmark:
+    // each question gets its own index with only its haystack sessions.
+    // This preserves the LongMemEval methodology (isolated per-question).
     //
     // PipelineOptions mirror the old direct-index benchmark so the
     // --ner-provider / --text-rerank-* flags keep their meaning. The
@@ -322,43 +320,42 @@ fn run_scoped_benchmark(
     // structured_fact_retrieval stays off for the benchmark: the spaCy
     // dependency-parse extractor is too slow/brittle for 500 questions
     // (120s timeout killed the first attempt) when ner_provider=spacy.
-    let options = PipelineOptions {
-        ner_provider: ner_provider.clone(),
-        spacy_model: "en_core_web_sm".to_string(),
-        term_ranker: Tier1TermRankerKind::Yake,
-        chunk_strategy: ChunkStrategy::Heading,
-        chunk_lines: 40,
-        chunk_overlap: 10,
-        chunk_target_tokens: 450,
-        chunk_max_tokens: 800,
-        text_rerank_ngram,
-        text_rerank_lcs,
-        structured_fact_retrieval: false,
-        ..PipelineOptions::default()
-    };
-    let mut service = MemoryService::in_memory(options);
-
-    // Index every unique haystack session once. The dataset can list the
-    // same session in multiple questions' haystacks (and even twice within
-    // one haystack); MemoryService rejects a repeated request_id, so we
-    // dedupe by session_id globally.
     //
-    // Use add_batch(): add() calls store.refresh() per request (19k behood
-    // round-trips); add_batch() does one refresh for all requests (1 behood
-    // batch). This is the difference between 10 hours and 10 minutes.
-    let mut indexed_sessions = std::collections::HashSet::new();
-    let mut add_requests = Vec::new();
-    for entry in entries.iter() {
+    // Indexing uses add_batch() (one refresh per question) instead of
+    // add() in a loop (one refresh per session) — same semantics, ~50x
+    // fewer behood round-trips per question.
+    let mut per_query = Vec::with_capacity(entries.len());
+
+    for (idx, entry) in entries.into_iter().enumerate() {
+        let options = PipelineOptions {
+            ner_provider: ner_provider.clone(),
+            spacy_model: "en_core_web_sm".to_string(),
+            term_ranker: Tier1TermRankerKind::Yake,
+            chunk_strategy: ChunkStrategy::Heading,
+            chunk_lines: 40,
+            chunk_overlap: 10,
+            chunk_target_tokens: 450,
+            chunk_max_tokens: 800,
+            text_rerank_ngram,
+            text_rerank_lcs,
+            structured_fact_retrieval: false,
+            ..PipelineOptions::default()
+        };
+        let mut service = MemoryService::in_memory(options);
+
+        // Index this question's haystack sessions via add_batch (one
+        // refresh). Dedupe: the dataset can list the same session twice
+        // in one haystack; MemoryService rejects repeated request_ids.
+        // Filter empty message content (validation rejects it).
+        let mut seen = std::collections::HashSet::new();
+        let mut add_requests = Vec::new();
         for (sess_idx, (session_id, turns)) in entry
             .haystack_session_ids
             .iter()
             .zip(entry.haystack_sessions.iter())
             .enumerate()
         {
-            if turns.is_empty() {
-                continue;
-            }
-            if !indexed_sessions.insert(session_id.clone()) {
+            if turns.is_empty() || !seen.insert(session_id.clone()) {
                 continue;
             }
             let session_date = entry
@@ -366,9 +363,6 @@ fn run_scoped_benchmark(
                 .get(sess_idx)
                 .cloned()
                 .unwrap_or_else(|| entry.question_date.clone());
-            // Dataset dates look like "2023/05/20 (Sat) 02:21".
-            // parse_reference_date normalizes '/' -> '-' and takes the
-            // leading YYYY-MM-DD; None when unparseable.
             let timestamp_ms = parse_reference_date(&session_date)
                 .and_then(|d| d.and_hms_opt(0, 0, 0))
                 .map(|dt| dt.and_utc().timestamp_millis());
@@ -383,8 +377,6 @@ fn run_scoped_benchmark(
                     supersedes_id: None,
                 })
                 .collect();
-            // Skip sessions where all turns are empty (validation rejects
-            // empty message content).
             if messages.is_empty() {
                 continue;
             }
@@ -395,27 +387,13 @@ fn run_scoped_benchmark(
                 session_id: session_id.clone(),
             });
         }
-    }
-    let total_sessions = add_requests.len();
-    // Chunk the batches: a single 19k add_batch OOM-kills (all AddRequests
-    // + the behood batch in memory at once). 1000 per batch keeps memory
-    // bounded while still getting the single-refresh-per-batch win
-    // (19 refreshes instead of 19k).
-    eprintln!("indexing {total_sessions} unique sessions via chunked add_batch...");
-    for (chunk_idx, chunk) in add_requests.chunks(1000).enumerate() {
-        service
-            .add_batch(chunk.to_vec())
-            .with_context(|| format!("failed to index batch {chunk_idx}"))?;
-        eprintln!("  batch {chunk_idx}: {} sessions", chunk.len());
-    }
-    eprintln!("indexed {total_sessions} unique sessions");
+        if !add_requests.is_empty() {
+            service
+                .add_batch(add_requests)
+                .with_context(|| format!("failed to index haystack for {}", entry.question_id))?;
+        }
 
-    let mut per_query = Vec::with_capacity(entries.len());
-
-    for (idx, entry) in entries.into_iter().enumerate() {
-        // Sessions were indexed once up front into the shared service.
-        // candidate_session_ids is this question's haystack (for reporting);
-        // the search runs against ALL indexed sessions, like production.
+        // candidate_session_ids is this question's haystack (for reporting).
         let candidate_session_ids = entry.haystack_session_ids.clone();
 
         // Production search. session_id/scope/filters are None: stateless

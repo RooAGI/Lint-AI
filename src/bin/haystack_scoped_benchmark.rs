@@ -342,8 +342,12 @@ fn run_scoped_benchmark(
     // same session in multiple questions' haystacks (and even twice within
     // one haystack); MemoryService rejects a repeated request_id, so we
     // dedupe by session_id globally.
+    //
+    // Use add_batch(): add() calls store.refresh() per request (19k behood
+    // round-trips); add_batch() does one refresh for all requests (1 behood
+    // batch). This is the difference between 10 hours and 10 minutes.
     let mut indexed_sessions = std::collections::HashSet::new();
-    let mut total_sessions = 0;
+    let mut add_requests = Vec::new();
     for entry in entries.iter() {
         for (sess_idx, (session_id, turns)) in entry
             .haystack_session_ids
@@ -357,7 +361,6 @@ fn run_scoped_benchmark(
             if !indexed_sessions.insert(session_id.clone()) {
                 continue;
             }
-            total_sessions += 1;
             let session_date = entry
                 .haystack_dates
                 .get(sess_idx)
@@ -379,16 +382,19 @@ fn run_scoped_benchmark(
                     supersedes_id: None,
                 })
                 .collect();
-            service
-                .add(AddRequest {
-                    request_id: format!("bench-{session_id}"),
-                    messages,
-                    user_id: BENCHMARK_USER_ID.to_string(),
-                    session_id: session_id.clone(),
-                })
-                .with_context(|| format!("failed to index session {session_id}"))?;
+            add_requests.push(AddRequest {
+                request_id: format!("bench-{session_id}"),
+                messages,
+                user_id: BENCHMARK_USER_ID.to_string(),
+                session_id: session_id.clone(),
+            });
         }
     }
+    let total_sessions = add_requests.len();
+    eprintln!("indexing {total_sessions} unique sessions via add_batch...");
+    service
+        .add_batch(add_requests)
+        .context("failed to index sessions via add_batch")?;
     eprintln!("indexed {total_sessions} unique sessions");
 
     let mut per_query = Vec::with_capacity(entries.len());

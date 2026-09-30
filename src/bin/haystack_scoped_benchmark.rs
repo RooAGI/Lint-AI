@@ -58,7 +58,13 @@ struct Args {
     /// Segment routing strategy to use for segmented comparison modes.
     #[arg(long, value_enum, default_value_t = SegmentRouterArg::TypedEvidenceMultiplicative)]
     segment_router: SegmentRouterArg,
+
+    /// Tier1 NER backend. `heuristic` reproduces the published
+    /// docs/benchmark.md numbers; `spacy` is the current default.
+    #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
+    ner_provider: Tier1NerProvider,
 }
+
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SegmentRouterArg {
@@ -204,6 +210,7 @@ struct TypeMetrics {
 
 #[derive(Debug, Clone, Serialize)]
 struct BenchmarkReport {
+    ner_provider: Tier1NerProvider,
     aggregate: AggregateMetrics,
     by_question_type: HashMap<String, TypeMetrics>,
     per_query: Vec<QueryMetrics>,
@@ -238,6 +245,7 @@ fn main() -> Result<()> {
         args.segment_compare,
         args.segment_top_n,
         args.segment_router.into(),
+        args.ner_provider.clone(),
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -263,6 +271,7 @@ fn run_scoped_benchmark(
     segment_compare: bool,
     segment_top_n: usize,
     segment_router: SegmentRoutingStrategy,
+    ner_provider: Tier1NerProvider,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -298,7 +307,7 @@ fn run_scoped_benchmark(
         let candidate_session_ids = entry.haystack_session_ids.clone();
         let source_docs = build_scoped_source_docs(&entry);
         let options = PipelineOptions {
-            ner_provider: Tier1NerProvider::Spacy,
+            ner_provider: ner_provider.clone(),
             spacy_model: "en_core_web_sm".to_string(),
             term_ranker: Tier1TermRankerKind::Yake,
             chunk_strategy: ChunkStrategy::Heading,
@@ -444,6 +453,7 @@ fn run_scoped_benchmark(
     }
 
     Ok(BenchmarkReport {
+        ner_provider,
         aggregate: aggregate_metrics(&per_query, ks),
         by_question_type: aggregate_by_question_type(&per_query, ks),
         per_query,

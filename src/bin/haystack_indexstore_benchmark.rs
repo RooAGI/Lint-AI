@@ -34,7 +34,13 @@ struct Args {
     /// Optional output path for JSON results.
     #[arg(long)]
     out: Option<PathBuf>,
+
+    /// Tier1 NER backend. `heuristic` reproduces the published
+    /// docs/benchmark.md numbers; `spacy` is the current default.
+    #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
+    ner_provider: Tier1NerProvider,
 }
+
 
 #[derive(Debug, Clone, Deserialize)]
 struct LongMemEvalEntry {
@@ -98,6 +104,7 @@ struct TypeMetrics {
 
 #[derive(Debug, Clone, Serialize)]
 struct BenchmarkReport {
+    ner_provider: Tier1NerProvider,
     query_path: &'static str,
     aggregate: AggregateMetrics,
     by_question_type: BTreeMap<String, TypeMetrics>,
@@ -123,7 +130,13 @@ fn main() -> Result<()> {
     let raw: Vec<LongMemEvalEntry> =
         serde_json::from_str(&data).context("failed to parse LongMemEval JSON")?;
 
-    let report = run_benchmark(raw, args.limit, args.question_type.as_deref(), &ks)?;
+    let report = run_benchmark(
+        raw,
+        args.limit,
+        args.question_type.as_deref(),
+        &ks,
+        args.ner_provider.clone(),
+    )?;
     let json = serde_json::to_string_pretty(&report)?;
     if let Some(out) = args.out {
         fs::write(&out, &json).with_context(|| format!("failed to write {}", out.display()))?;
@@ -139,6 +152,7 @@ fn run_benchmark(
     limit: Option<usize>,
     question_type: Option<&str>,
     ks: &[usize],
+    ner_provider: Tier1NerProvider,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -166,7 +180,7 @@ fn run_benchmark(
         let candidate_session_ids = entry.haystack_session_ids.clone();
         let source_docs = build_scoped_source_docs(&entry);
         let options = PipelineOptions {
-            ner_provider: Tier1NerProvider::Spacy,
+            ner_provider: ner_provider.clone(),
             spacy_model: "en_core_web_sm".to_string(),
             term_ranker: Tier1TermRankerKind::Yake,
             chunk_strategy: ChunkStrategy::Heading,
@@ -243,6 +257,7 @@ fn run_benchmark(
     }
 
     Ok(BenchmarkReport {
+        ner_provider,
         query_path: "IndexStore::query_prepared",
         aggregate: aggregate_metrics(&per_query, ks),
         by_question_type: aggregate_by_question_type(&per_query, ks),

@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use serde::Serialize;
 use std::path::PathBuf;
 use tantivy::doc;
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, ValueEnum, Serialize)]
 pub enum Tier1NerProvider {
     Heuristic,
     Spacy,

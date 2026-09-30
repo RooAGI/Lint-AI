@@ -42,7 +42,13 @@ struct Args {
     /// Optional output path for JSON results.
     #[arg(long)]
     out: Option<PathBuf>,
+
+    /// Tier1 NER backend. `heuristic` reproduces the published
+    /// docs/benchmark.md numbers; `spacy` is the current default.
+    #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
+    ner_provider: Tier1NerProvider,
 }
+
 
 #[derive(Debug, Deserialize)]
 struct LocomoConversation {
@@ -98,6 +104,7 @@ struct Aggregate {
 
 #[derive(Debug, Serialize)]
 struct Report {
+    ner_provider: Tier1NerProvider,
     dataset: String,
     conversations: usize,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -331,7 +338,7 @@ fn main() -> Result<()> {
     eprintln!("processing {} conversations...", conversations.len());
 
     let options = PipelineOptions {
-        ner_provider: Tier1NerProvider::Spacy,
+        ner_provider: args.ner_provider.clone(),
         spacy_model: "en_core_web_sm".to_string(),
         term_ranker: Tier1TermRankerKind::Yake,
         chunk_strategy: ChunkStrategy::Heading,
@@ -436,6 +443,7 @@ fn main() -> Result<()> {
     };
 
     let report = Report {
+        ner_provider: args.ner_provider.clone(),
         dataset: "LoCoMo (snap-research/locomo locomo10.json)".to_string(),
         conversations: conversations.len(),
         aggregate: aggregate_metrics(&per_query, &ks),

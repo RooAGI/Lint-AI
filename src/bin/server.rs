@@ -284,12 +284,16 @@ async fn main() -> anyhow::Result<()> {
     // interpreter+model load (~2-3s).
     // Best-effort — extraction/analysis falls back to one-shot subprocesses
     // if a daemon cannot start.
+    //
+    // The NER daemon is deliberately NOT prewarmed: it starts lazily on the
+    // first NER request. Prewarming would force a third Python+spaCy child
+    // (~145MB RSS) on every server start, even when the heuristic NER
+    // provider is configured and spaCy is never used. (Luyi 2026-09-29 P2.)
     std::thread::Builder::new()
         .name("python-daemon-prewarm".to_string())
         .spawn(|| {
             lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
             lint_ai::behood_query::BehoodQueryDaemon::global().prewarm();
-            lint_ai::NerDaemon::global().prewarm();
         })
         .ok();
     let app = Router::new()

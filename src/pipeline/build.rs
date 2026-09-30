@@ -421,7 +421,8 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
 /// instead of extracting twice.
 /// Run spaCy NER with per-language model selection: docs are grouped by
 /// the model [`PipelineOptions::spacy_model_for_text`] picks for their
-/// content, so Korean docs get `ko_core_news_sm` with no flags while an
+/// content, so Chinese docs get `zh_core_web_sm` and Korean docs get
+/// `ko_core_news_sm` with no flags while an
 /// explicit `--spacy-model` still applies to everything. Fail-open per
 /// group: a group whose model is unavailable falls back to the heuristic
 /// ranker for just those docs.
@@ -697,6 +698,7 @@ pub fn build_query_snapshot_from_source_documents(
     let options = PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
+        lang: crate::lang::Lang::Auto,
         term_ranker: ranker_kind.clone(),
         chunk_strategy: chunk_strategy.clone(),
         chunk_lines,

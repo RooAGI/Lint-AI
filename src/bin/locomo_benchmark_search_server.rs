@@ -35,7 +35,9 @@ use axum::{
 use clap::Parser;
 use lint_ai::memory_api::MemoryService;
 use lint_ai::question_focus::identify_focus;
-use lint_ai::segments::relations::{analyze_fact_question, extract_relations_via_spacy, RelationTurn};
+use lint_ai::segments::relations::{
+    analyze_fact_question, extract_relations_via_spacy, RelationTurn,
+};
 use lint_ai::{default_production_pipeline_options, search_results, SourceDocument};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -251,7 +253,9 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
         .map(|(sid, kps)| {
             (
                 sid.clone(),
-                kps.iter().map(|kp| (kp.text.clone(), kp.kind.clone())).collect(),
+                kps.iter()
+                    .map(|kp| (kp.text.clone(), kp.kind.clone()))
+                    .collect(),
             )
         })
         .collect();

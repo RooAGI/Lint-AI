@@ -231,6 +231,14 @@ mod tests {
     }
 
     #[test]
+    fn normalize_keeps_chinese_in_original_script() {
+        // No Pinyin transliteration: the original Han is preserved so the
+        // index and the query agree on script.
+        assert_eq!(normalize_for_index("清华大学"), "清华大学");
+        assert_eq!(normalize_for_index("我在学习Rust"), "我在学习 rust");
+    }
+
+    #[test]
     fn expansion_caps_and_dedups() {
         let terms = vec!["install".to_string(), "setup".to_string()];
         let out = expand_query_terms(&terms);
@@ -333,28 +341,180 @@ mod tests {
 /// is systematic and applies uniformly.
 pub(crate) fn is_expandable_concept(term: &str) -> bool {
     // Question words (stemmed forms)
-    const QUESTION_WORDS: &[&str] = &["what", "when", "where", "who", "whom", "whos", "why", "how", "which", "would"];
+    const QUESTION_WORDS: &[&str] = &[
+        "what", "when", "where", "who", "whom", "whos", "why", "how", "which", "would",
+    ];
     if QUESTION_WORDS.contains(&term) {
         return false;
     }
     // Pronouns (stemmed forms)
-    const PRONOUNS: &[&str] = &["i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "its", "our", "their", "mine", "yours", "hers", "ours", "theirs"];
+    const PRONOUNS: &[&str] = &[
+        "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "my",
+        "your", "his", "its", "our", "their", "mine", "yours", "hers", "ours", "theirs",
+    ];
     if PRONOUNS.contains(&term) {
         return false;
     }
     // Generic verbs whose expansions are noise (stemmed forms)
-    const GENERIC_VERBS: &[&str] = &["be", "is", "are", "was", "were", "been", "do", "doe", "did", "done", "have", "has", "had", "get", "got", "make", "take", "give", "receiv", "go", "come", "see", "know", "think", "want", "like", "use"];
+    const GENERIC_VERBS: &[&str] = &[
+        "be", "is", "are", "was", "were", "been", "do", "doe", "did", "done", "have", "has", "had",
+        "get", "got", "make", "take", "give", "receiv", "go", "come", "see", "know", "think",
+        "want", "like", "use",
+    ];
     if GENERIC_VERBS.contains(&term) {
         return false;
     }
     // Auxiliary/modal verbs (stemmed forms) — structure, not concepts.
-    const AUXILIARIES: &[&str] = &["will", "shall", "should", "can", "could", "may", "might", "must"];
+    const AUXILIARIES: &[&str] = &[
+        "will", "shall", "should", "can", "could", "may", "might", "must",
+    ];
     if AUXILIARIES.contains(&term) {
         return false;
     }
     // Common person names (stemmed forms) - expanding these gives biblical/
     // historical noise ("john" -> "gospel accord to john")
-    const COMMON_NAMES: &[&str] = &["john", "maria", "jame", "michael", "david", "sarah", "jennifer", "robert", "lisa", "william", "elizabeth", "thoma", "charle", "mary", "joseph", "daniel", "matthew", "anthony", "mark", "paul", "steven", "andrew", "joshua", "kevin", "brian", "georg", "edward", "jason", "jeffrey", "ryan", "jacob", "nichola", "gary", "jon", "nathan", "eric", "jonathan", "stephen", "scott", "justin", "brandon", "frank", "gregory", "samuel", "raymond", "alexander", "patrick", "jack", "denni", "jerry", "tyler", "aaron", "henry", "dougla", "nathaniel", "peter", "kyle", "ethan", "walter", "jeremy", "keith", "roger", "gerald", "carl", "arthur", "lawrenc", "dylan", "bryan", "gabriel", "logan", "alan", "juan", "wayn", "ralph", "roy", "eugen", "russel", "bobby", "victor", "martin", "philip", "todd", "jesse", "austin", "dian", "nanc", "sandra", "betty", "ashley", "dorothi", "kimberli", "michel", "carol", "ruth", "sharon", "laura", "helen", "deborah", "jessica", "shirley", "cynthia", "angela", "melissa", "brenda", "amy", "anna", "rebecca", "virginia", "kathleen", "pamela", "martha", "debra", "amanda", "stephani", "carolyn", "christina", "marilyn", "janet", "caitlin", "france", "heather", "diane", "julie", "olivia", "joyc", "victoria", "kelly", "christin", "russ", "emma", "monica", "melani", "audrey", "jolen", "sam", "evan", "dave", "calvin", "nat", "nate"];
+    const COMMON_NAMES: &[&str] = &[
+        "john",
+        "maria",
+        "jame",
+        "michael",
+        "david",
+        "sarah",
+        "jennifer",
+        "robert",
+        "lisa",
+        "william",
+        "elizabeth",
+        "thoma",
+        "charle",
+        "mary",
+        "joseph",
+        "daniel",
+        "matthew",
+        "anthony",
+        "mark",
+        "paul",
+        "steven",
+        "andrew",
+        "joshua",
+        "kevin",
+        "brian",
+        "georg",
+        "edward",
+        "jason",
+        "jeffrey",
+        "ryan",
+        "jacob",
+        "nichola",
+        "gary",
+        "jon",
+        "nathan",
+        "eric",
+        "jonathan",
+        "stephen",
+        "scott",
+        "justin",
+        "brandon",
+        "frank",
+        "gregory",
+        "samuel",
+        "raymond",
+        "alexander",
+        "patrick",
+        "jack",
+        "denni",
+        "jerry",
+        "tyler",
+        "aaron",
+        "henry",
+        "dougla",
+        "nathaniel",
+        "peter",
+        "kyle",
+        "ethan",
+        "walter",
+        "jeremy",
+        "keith",
+        "roger",
+        "gerald",
+        "carl",
+        "arthur",
+        "lawrenc",
+        "dylan",
+        "bryan",
+        "gabriel",
+        "logan",
+        "alan",
+        "juan",
+        "wayn",
+        "ralph",
+        "roy",
+        "eugen",
+        "russel",
+        "bobby",
+        "victor",
+        "martin",
+        "philip",
+        "todd",
+        "jesse",
+        "austin",
+        "dian",
+        "nanc",
+        "sandra",
+        "betty",
+        "ashley",
+        "dorothi",
+        "kimberli",
+        "michel",
+        "carol",
+        "ruth",
+        "sharon",
+        "laura",
+        "helen",
+        "deborah",
+        "jessica",
+        "shirley",
+        "cynthia",
+        "angela",
+        "melissa",
+        "brenda",
+        "amy",
+        "anna",
+        "rebecca",
+        "virginia",
+        "kathleen",
+        "pamela",
+        "martha",
+        "debra",
+        "amanda",
+        "stephani",
+        "carolyn",
+        "christina",
+        "marilyn",
+        "janet",
+        "caitlin",
+        "france",
+        "heather",
+        "diane",
+        "julie",
+        "olivia",
+        "joyc",
+        "victoria",
+        "kelly",
+        "christin",
+        "russ",
+        "emma",
+        "monica",
+        "melani",
+        "audrey",
+        "jolen",
+        "sam",
+        "evan",
+        "dave",
+        "calvin",
+        "nat",
+        "nate",
+    ];
     if COMMON_NAMES.contains(&term) {
         return false;
     }

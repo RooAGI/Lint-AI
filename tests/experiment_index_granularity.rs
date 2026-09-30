@@ -63,6 +63,7 @@ fn experiment_turn_vs_session_indexing() {
             session_id: None,
             scope: Some("test".to_string()),
             filters: None,
+
             lang: None,
         })
         .unwrap();
@@ -94,6 +95,7 @@ fn experiment_turn_vs_session_indexing() {
             session_id: None,
             scope: Some("test".to_string()),
             filters: None,
+
             lang: None,
         })
         .unwrap();
@@ -115,10 +117,7 @@ fn experiment_turn_vs_session_indexing() {
         .data
         .iter()
         .position(|r| r.id.starts_with("s13"));
-    let sess_s13_rank = sess_results
-        .data
-        .iter()
-        .position(|r| r.id == "s13");
+    let sess_s13_rank = sess_results.data.iter().position(|r| r.id == "s13");
 
     println!("\nTurn-level s13 rank: {turn_s13_rank:?}");
     println!("Session-level s13 rank: {sess_s13_rank:?}");

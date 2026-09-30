@@ -22,13 +22,16 @@ use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenizerMode {
-    /// Regex-bounded terms (`[A-Za-z][A-Za-z0-9_-]{2,}`, min length 3),
-    /// lowercased, not stemmed. Used by `crate::index`'s lexical/rerank
-    /// path.
+    /// Regex-bounded Latin terms (`[A-Za-z][A-Za-z0-9_-]{2,}`, min length 3),
+    /// lowercased, not stemmed; Han runs become sliding character bigrams;
+    /// Hangul runs emit the eojeol plus a particle-stripped stem. Used by
+    /// `crate::index`'s lexical/rerank path.
     Unstemmed,
     /// Terms split on non-alphanumeric boundaries (min length 2), each
     /// stemmed with an English Porter stemmer via
-    /// [`normalize_for_index`]. Used by `crate::segments`'s routing path.
+    /// [`normalize_for_index`]; Han runs become character bigrams and
+    /// Hangul runs become eojeol + stem with no stemming. Used by
+    /// `crate::segments`'s routing path.
     Stemmed,
 }
 
@@ -356,6 +359,50 @@ mod tests {
             let actual = tokenize(s, TokenizerMode::Unstemmed);
             assert_eq!(expected, actual, "mismatch for {s:?}");
         }
+    }
+
+    #[test]
+    fn unstemmed_chinese_emits_bigrams() {
+        assert_eq!(
+            tokenize("我毕业于清华大学", TokenizerMode::Unstemmed),
+            vec!["我毕", "毕业", "业于", "于清", "清华", "华大", "大学"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unstemmed_mixed_content_keeps_both() {
+        // Latin regex behavior is unchanged around Han runs.
+        assert_eq!(
+            tokenize("我在学习Rust编程", TokenizerMode::Unstemmed),
+            vec!["我在", "在学", "学习", "rust", "编程"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unstemmed_single_han_char_is_kept() {
+        assert_eq!(
+            tokenize("天", TokenizerMode::Unstemmed),
+            vec!["天".to_string()]
+        );
+    }
+
+    #[test]
+    fn stemmed_chinese_emits_bigrams_without_pinyin() {
+        let tokens = tokenize("我毕业于清华大学", TokenizerMode::Stemmed);
+        assert!(
+            tokens.contains(&"清华".to_string()),
+            "expected Han bigrams, got {tokens:?}"
+        );
+        assert!(
+            !tokens.iter().any(|t| t.chars().all(|c| c.is_ascii_alphabetic())),
+            "no Pinyin transliteration expected, got {tokens:?}"
+        );
     }
 
     #[test]

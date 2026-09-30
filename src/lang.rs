@@ -25,6 +25,8 @@ pub enum Lang {
     Zh,
     #[value(name = "ko")]
     Ko,
+    #[value(name = "es")]
+    Es,
 }
 
 impl Lang {
@@ -95,6 +97,7 @@ pub fn default_spacy_model_for_lang(lang: Lang) -> &'static str {
     match lang {
         Lang::Zh => "zh_core_web_sm",
         Lang::Ko => "ko_core_news_sm",
+        Lang::Es => "es_core_news_sm",
         _ => "en_core_web_sm",
     }
 }
@@ -135,6 +138,7 @@ mod tests {
     fn spacy_model_defaults() {
         assert_eq!(default_spacy_model_for_lang(Lang::Zh), "zh_core_web_sm");
         assert_eq!(default_spacy_model_for_lang(Lang::Ko), "ko_core_news_sm");
+        assert_eq!(default_spacy_model_for_lang(Lang::Es), "es_core_news_sm");
         assert_eq!(default_spacy_model_for_lang(Lang::En), "en_core_web_sm");
     }
 }

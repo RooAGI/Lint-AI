@@ -275,9 +275,7 @@ pub fn predicate_family(predicate: &str) -> Option<PredicateFamily> {
         | "walk_to" | "take_to" | "get_to" | "head_to" | "return_to" | "visit" | "be_in"
         | "stay_in" | "live_in" | "arrive_in" | "stay_at" | "arrive_at" | "volunteer_at"
         | "work_at" => PredicateFamily::PlacePresence,
-        "develop" | "create" | "make" | "build" | "work_on" | "design" => {
-            PredicateFamily::Creation
-        }
+        "develop" | "create" | "make" | "build" | "work_on" | "design" => PredicateFamily::Creation,
         _ => return None,
     })
 }
@@ -750,11 +748,7 @@ impl RelationIndex {
     /// routing keywords. The index already carries behood's `object_kind`,
     /// so event venues count via `place_like()`.
 
-    pub fn place_keywords_for_activity(
-        &self,
-        person: &str,
-        activity_verb: &str,
-    ) -> Vec<String> {
+    pub fn place_keywords_for_activity(&self, person: &str, activity_verb: &str) -> Vec<String> {
         self.keywords_for_question(person, activity_verb, AnswerKind::Place)
     }
 
@@ -1428,8 +1422,18 @@ const COMM_NOUNS: &[&str] = &[
 /// Communication verbs that signal directed communication ("what did X tell Y").
 /// Systematic: covers the communication-verb family.
 const COMM_VERBS: &[&str] = &[
-    "tell", "told", "say", "said", "advise", "advised", "suggest", "suggested", "warn",
-    "warned", "recommend", "recommended",
+    "tell",
+    "told",
+    "say",
+    "said",
+    "advise",
+    "advised",
+    "suggest",
+    "suggested",
+    "warn",
+    "warned",
+    "recommend",
+    "recommended",
 ];
 
 /// Detect directed communication: "What is X's [advice] to Y [regarding Z]?"
@@ -1463,12 +1467,8 @@ fn extract_directed_comm(question: &str, persons: &[String]) -> Option<DirectedC
                 if i + 2 < words.len() && words[i + 1] == "to" {
                     let recip_word = words[i + 2];
                     // Match against persons (case-insensitive)
-                    let speaker_match = persons
-                        .iter()
-                        .find(|p| p.to_lowercase() == name_word);
-                    let recip_match = persons
-                        .iter()
-                        .find(|p| p.to_lowercase() == recip_word);
+                    let speaker_match = persons.iter().find(|p| p.to_lowercase() == name_word);
+                    let recip_match = persons.iter().find(|p| p.to_lowercase() == recip_word);
                     if let (Some(s), Some(r)) = (speaker_match, recip_match) {
                         speaker = Some(s);
                         recipient = Some(r);
@@ -1493,12 +1493,8 @@ fn extract_directed_comm(question: &str, persons: &[String]) -> Option<DirectedC
                     (words[i + 1], i + 1)
                 };
                 let _ = recip_idx;
-                let speaker_match = persons
-                    .iter()
-                    .find(|p| p.to_lowercase() == prev_word);
-                let recip_match = persons
-                    .iter()
-                    .find(|p| p.to_lowercase() == recip_word);
+                let speaker_match = persons.iter().find(|p| p.to_lowercase() == prev_word);
+                let recip_match = persons.iter().find(|p| p.to_lowercase() == recip_word);
                 if let (Some(s), Some(r)) = (speaker_match, recip_match) {
                     speaker = Some(s);
                     recipient = Some(r);
@@ -1517,11 +1513,50 @@ fn extract_directed_comm(question: &str, persons: &[String]) -> Option<DirectedC
     // Topic keywords: content words excluding question words, comm words,
     // person names, and common stopwords.
     let stopwords: std::collections::HashSet<&str> = [
-        "what", "which", "where", "when", "who", "whom", "whose", "how", "is", "are", "was",
-        "were", "do", "does", "did", "has", "have", "had", "can", "could", "would", "will",
-        "the", "a", "an", "to", "of", "in", "on", "for", "regarding", "about", "s",
-        "his", "her", "their", "its", "my", "your", "our",
-        "kind", "or", "and", "some",
+        "what",
+        "which",
+        "where",
+        "when",
+        "who",
+        "whom",
+        "whose",
+        "how",
+        "is",
+        "are",
+        "was",
+        "were",
+        "do",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "can",
+        "could",
+        "would",
+        "will",
+        "the",
+        "a",
+        "an",
+        "to",
+        "of",
+        "in",
+        "on",
+        "for",
+        "regarding",
+        "about",
+        "s",
+        "his",
+        "her",
+        "their",
+        "its",
+        "my",
+        "your",
+        "our",
+        "kind",
+        "or",
+        "and",
+        "some",
     ]
     .into_iter()
     .collect();
@@ -1595,7 +1630,8 @@ fn is_activity_seeking(question: &str) -> bool {
     // "what does X do", "what do X do", "what did X do"
     if qlow.starts_with("what does ")
         || qlow.starts_with("what do ")
-        || qlow.starts_with("what did ") {
+        || qlow.starts_with("what did ")
+    {
         return true;
     }
     // "what ... does X face", "what ... did X experience", etc.
@@ -1676,8 +1712,8 @@ pub fn extract_answer_kind(question: &str) -> Option<AnswerKind> {
 
 /// Auxiliaries that are never the activity verb.
 const AUXILIARIES: &[&str] = &[
-    "has", "have", "had", "is", "are", "was", "were", "do", "does", "did", "can", "could",
-    "would", "will", "shall", "should",
+    "has", "have", "had", "is", "are", "was", "were", "do", "does", "did", "can", "could", "would",
+    "will", "shall", "should",
 ];
 
 /// Irregular past-tense -> base form for activity matching.
@@ -1789,8 +1825,8 @@ pub fn analyze_fact_question(question: &str) -> Option<StructuredFactQuery> {
     // Answer kind: behood's query-time kind judgment first (it judges
     // "what places" as place-kind), falling back to keyword matching.
     // Luyi's design: behood provides the kinds; lint-ai uses them.
-    let answer_kind = answer_kind_from_behood(&behood_entities)
-        .or_else(|| extract_answer_kind(question));
+    let answer_kind =
+        answer_kind_from_behood(&behood_entities).or_else(|| extract_answer_kind(question));
     // Object/date-seeking questions with one person and no time window take
     // the generalized keyword path directly, bypassing the answer-type
     // fallback (which would decline them).
@@ -1988,8 +2024,7 @@ pub fn query_structured(index: &RelationIndex, question: &str) -> Option<Vec<Str
             if doc_ids.is_empty() {
                 return None;
             }
-            let answers =
-                index.keywords_for_question(&fq.persons[0], &activity, AnswerKind::Place);
+            let answers = index.keywords_for_question(&fq.persons[0], &activity, AnswerKind::Place);
             let answer_str = if answers.is_empty() {
                 String::new()
             } else {
@@ -2702,7 +2737,9 @@ mod tests {
             ]
         );
         // Unknown activity -> no keywords, not a panic.
-        assert!(index.place_keywords_for_activity("Nate", "marry").is_empty());
+        assert!(index
+            .place_keywords_for_activity("Nate", "marry")
+            .is_empty());
     }
 
     #[test]
@@ -2734,7 +2771,8 @@ mod tests {
         // place OR event, not strict place-only.
         for h in &hits {
             assert!(
-                h.evidence_label.contains("another regional video game tournament"),
+                h.evidence_label
+                    .contains("another regional video game tournament"),
                 "tournament (event) is a valid place answer: {}",
                 h.evidence_label
             );
@@ -2970,10 +3008,7 @@ mod tests {
             extract_answer_kind("When will John start his new job?"),
             Some(AnswerKind::Date)
         );
-        assert_eq!(
-            extract_answer_kind("What did Gina and Jon discuss?"),
-            None
-        );
+        assert_eq!(extract_answer_kind("What did Gina and Jon discuss?"), None);
     }
 
     #[test]
@@ -2982,17 +3017,21 @@ mod tests {
         // A place-kind entity in the question -> AnswerKind::Place.
         use crate::behood_query::QueryEntity;
         let entities = vec![
-            QueryEntity { text: "What places".to_string(), kind: "place".to_string() },
-            QueryEntity { text: "Nate".to_string(), kind: "person".to_string() },
+            QueryEntity {
+                text: "What places".to_string(),
+                kind: "place".to_string(),
+            },
+            QueryEntity {
+                text: "Nate".to_string(),
+                kind: "person".to_string(),
+            },
         ];
-        assert_eq!(
-            answer_kind_from_behood(&entities),
-            Some(AnswerKind::Place)
-        );
+        assert_eq!(answer_kind_from_behood(&entities), Some(AnswerKind::Place));
         // No place-kind entity -> None (falls back to keyword matching).
-        let entities = vec![
-            QueryEntity { text: "Nate".to_string(), kind: "person".to_string() },
-        ];
+        let entities = vec![QueryEntity {
+            text: "Nate".to_string(),
+            kind: "person".to_string(),
+        }];
         assert_eq!(answer_kind_from_behood(&entities), None);
     }
 
@@ -3002,13 +3041,16 @@ mod tests {
         // A time-kind entity in the question -> AnswerKind::Date.
         use crate::behood_query::QueryEntity;
         let entities = vec![
-            QueryEntity { text: "when".to_string(), kind: "time".to_string() },
-            QueryEntity { text: "John".to_string(), kind: "person".to_string() },
+            QueryEntity {
+                text: "when".to_string(),
+                kind: "time".to_string(),
+            },
+            QueryEntity {
+                text: "John".to_string(),
+                kind: "person".to_string(),
+            },
         ];
-        assert_eq!(
-            answer_kind_from_behood(&entities),
-            Some(AnswerKind::Date)
-        );
+        assert_eq!(answer_kind_from_behood(&entities), Some(AnswerKind::Date));
     }
 
     #[test]

@@ -55,7 +55,6 @@ pub mod lang;
     feature = "openclaw"
 ))]
 mod integrations;
-pub mod lang;
 #[cfg(any(
     feature = "claude-code",
     feature = "codex",

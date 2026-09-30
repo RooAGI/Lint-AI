@@ -73,10 +73,10 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
-    /// Content language override (`"en"`, `"zh"`, `"ko"`). Absent (default)
-    /// auto-detects per text from script statistics. Currently selects the
-    /// spaCy model for the structured-relations path; lexical retrieval is
-    /// script-aware regardless.
+    /// Content language override (`"en"`, `"zh"`, `"ko"`, `"es"`). Absent
+    /// (default) auto-detects per text from script statistics. Currently
+    /// selects the spaCy model for the structured-relations path; lexical
+    /// retrieval is script-aware regardless.
     #[serde(default)]
     pub lang: Option<Lang>,
 }
@@ -401,7 +401,6 @@ fn relations_index_for(
     // An explicit request language selects the spaCy model; otherwise the
     // model follows the turns' detected script.
     let model: String = spacy_model_for_request(lang, &turns).to_string();
->>>>>>> 7711f9d (Shared i18n foundation: lang.rs (En/Zh/Ko/Es), CJK tantivy tokenizer, --lang plumbing)
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(

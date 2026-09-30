@@ -46,7 +46,13 @@ pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
         ]
         .iter()
         .any(|cue| q.contains(cue));
-    if asks_for_recommended_quantity {
+    // Chinese: 应该买多少本书 (how many books should I buy) is advice,
+    // not a count over memories.
+    let asks_for_recommended_quantity_zh = ["应该", "建议", "最多", "最少", "限制"]
+        .iter()
+        .any(|cue| q.contains(cue))
+        && ["多少", "几个", "几次"].iter().any(|cue| q.contains(cue));
+    if asks_for_recommended_quantity || asks_for_recommended_quantity_zh {
         return None;
     }
     if q.contains("how many")
@@ -55,7 +61,19 @@ pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
         || q.contains(" number of")
         || q.contains("count the ")
         || q.contains("times did i")
+        || q.contains("多少")
+        || q.contains("几个")
+        || q.contains("几次")
+        || q.contains("数量")
     {
+        // 总共/一共/合计 + 多少 = a sum question ("how much in total"),
+        // not a count.
+        if ["总共", "一共", "合计", "总计", "总额", "总和"]
+            .iter()
+            .any(|cue| q.contains(cue))
+        {
+            return Some(AggregateIntent::Sum);
+        }
         return Some(AggregateIntent::Count);
     }
     if q.contains("how much")
@@ -64,6 +82,12 @@ pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
         || q.contains("combined")
         || q.contains("in all")
         || q.contains("sum ")
+        || q.contains("总共")
+        || q.contains("一共")
+        || q.contains("合计")
+        || q.contains("总计")
+        || q.contains("总额")
+        || q.contains("总和")
     {
         return Some(AggregateIntent::Sum);
     }
@@ -89,7 +113,11 @@ fn ko_token_starts_with(query: &str, forms: &[&str]) -> bool {
 }
 
 pub fn normalize_number_words(query: &str) -> String {
-    let replaced = replace_numbers_in_text(query, &Language::english(), 0.0);
+    // Chinese numerals first (Rust-side; the Python rule forbids new
+    // Python logic), then the historical English text2num pass, then
+    // Korean number words.
+    let zh_normalized = crate::lang::normalize_chinese_numbers(query);
+    let replaced = replace_numbers_in_text(&zh_normalized, &Language::english(), 0.0);
     normalize_korean_number_words(&replaced)
 }
 
@@ -350,11 +378,23 @@ fn aggregate_text(doc: &crate::index::DocRecord) -> String {
 
 fn extract_numeric_value(text: &str) -> Option<f64> {
     let normalized = normalize_number_words(text);
+    // Han-aware boundaries: in the `regex` crate \w matches Han letters,
+    // so \b never fires between a digit and an adjacent Han char
+    // (3本书). Space them apart first; English text has no Han chars and
+    // is untouched.
+    static HAN_DIGIT_RE: OnceLock<Regex> = OnceLock::new();
+    static DIGIT_HAN_RE: OnceLock<Regex> = OnceLock::new();
+    let han_digit = HAN_DIGIT_RE
+        .get_or_init(|| Regex::new(r"([\u{4e00}-\u{9fff}\u{3400}-\u{4dbf}])(\d)").unwrap());
+    let digit_han = DIGIT_HAN_RE
+        .get_or_init(|| Regex::new(r"(\d)([\u{4e00}-\u{9fff}\u{3400}-\u{4dbf}])").unwrap());
+    let spaced = han_digit.replace_all(&normalized, "$1 $2");
+    let spaced = digit_han.replace_all(&spaced, "$1 $2");
     static NUMBER_RE: OnceLock<Regex> = OnceLock::new();
     let re = NUMBER_RE
         .get_or_init(|| Regex::new(r"(?i)\b\d+(?:\.\d+)?\b").expect("valid numeric regex"));
     let mut values = Vec::new();
-    for mat in re.find_iter(&normalized) {
+    for mat in re.find_iter(&spaced) {
         if let Ok(v) = mat.as_str().parse::<f64>() {
             values.push(v);
         }
@@ -479,6 +519,47 @@ mod tests {
         // Non-numeric Hangul is untouched.
         assert_eq!(normalize_number_words("일요일에 만났다"), "일요일에 만났다");
         assert_eq!(normalize_number_words("이 책"), "이 책");
+    }
+
+    #[test]
+    fn classifies_chinese_count_and_sum_intents() {
+        assert_eq!(
+            classify_aggregate_intent("我买了多少本书"),
+            Some(AggregateIntent::Count)
+        );
+        assert_eq!(
+            classify_aggregate_intent("我去了几次北京"),
+            Some(AggregateIntent::Count)
+        );
+        assert_eq!(
+            classify_aggregate_intent("一共花了多少钱"),
+            Some(AggregateIntent::Sum)
+        );
+        assert_eq!(
+            classify_aggregate_intent("总共买了几本书"),
+            Some(AggregateIntent::Sum)
+        );
+        // Advice-seeking is not a count over memories.
+        assert_eq!(classify_aggregate_intent("我应该买多少本书"), None);
+    }
+
+    #[test]
+    fn normalizes_chinese_number_words() {
+        let out = normalize_number_words("我买了三本书");
+        assert!(out.contains('3'), "expected 3 in {out:?}");
+        let out = normalize_number_words("二十五天后见");
+        assert!(out.contains("25"), "expected 25 in {out:?}");
+    }
+
+    #[test]
+    fn extracts_numbers_adjacent_to_han() {
+        // Digits touching Han chars have no \b boundary; they must count.
+        assert_eq!(extract_numeric_value("买了3本书"), Some(3.0));
+        assert_eq!(extract_numeric_value("买了三本书"), Some(3.0));
+        assert_eq!(extract_numeric_value("花了25元"), Some(25.0));
+        // English behavior unchanged.
+        assert_eq!(extract_numeric_value("walked 2 miles"), Some(2.0));
+        assert_eq!(extract_numeric_value("no numbers here"), None);
     }
 
     #[test]

@@ -52,12 +52,22 @@ pub fn tokenize(input: &str, mode: TokenizerMode) -> Vec<String> {
 pub fn is_stopword(token: &str, mode: TokenizerMode) -> bool {
     match mode {
         TokenizerMode::Unstemmed => {
-            unstemmed_stopwords().contains(token) || korean_stopwords().contains(token)
+            unstemmed_stopwords().contains(token)
+                || korean_stopwords().contains(token)
+                || chinese_stopwords().contains(token)
         }
         TokenizerMode::Stemmed => {
-            stemmed_stopwords().contains(token) || korean_stopwords().contains(token)
+            stemmed_stopwords().contains(token)
+                || korean_stopwords().contains(token)
+                || chinese_stopwords().contains(token)
         }
     }
+}
+
+/// True if `token` is a Chinese function word. Shared with
+/// `crate::query_expansion` (focus classification) and `crate::tier1`.
+pub(crate) fn is_chinese_stopword(token: &str) -> bool {
+    chinese_stopwords().contains(token)
 }
 
 fn unstemmed_tokens(input: &str) -> Vec<String> {
@@ -341,6 +351,43 @@ pub(crate) fn korean_stopwords() -> &'static HashSet<&'static str> {
     })
 }
 
+/// Chinese function words (particles, prepositions, conjunctions,
+/// pronouns, modals). Tokens are character bigrams, so the list holds
+/// single characters (for lone-character tokens) and common function
+/// bigrams. Interrogatives are deliberately excluded — they are detected
+/// separately by `crate::question_focus`.
+/// Shared with the tier-1 term ranker (`crate::tier1`).
+pub(crate) fn chinese_stopwords() -> &'static HashSet<&'static str> {
+    static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    STOP.get_or_init(|| {
+        [
+            // Single-character function words.
+            "的", "了", "着", "过", "在", "是", "有", "和", "与", "或", "但", "而", "就", "都",
+            "也", "很", "不", "没", "非", "未", "别", "我", "你", "他", "她", "它", "这", "那",
+            "个", "为", "对", "从", "到", "向", "往", "及", "比", "被", "把", "将", "会", "可",
+            "应", "能", "够", "以", "之", "其", "些", "每", "各", "该", "此", "若", "如", "乃",
+            "则", "然", "故", "因", "虽", "即", "既", "亦", "又", "再", "更", "最", "太", "吗",
+            "呢", "吧", "啊", "呀", "哇", "哦", "嗯",
+            // Pronouns and demonstratives.
+            "我们", "你们", "他们", "她们", "它们", "我的", "你的", "他的", "她的", "它的",
+            "这是", "那是", "这个", "那个", "这些", "那些", "这里", "那里", "这种", "那种",
+            "这样", "那样",
+            // Conjunctions.
+            "然后", "但是", "因为", "所以", "如果", "虽然", "还是", "或者", "以及", "并且",
+            "而且", "不过", "然而", "于是", "因此", "其实", "比如", "例如",
+            // Prepositions / coverbs.
+            "关于", "对于", "由于", "随着", "通过", "作为",
+            // Modals and auxiliaries.
+            "可以", "应该", "必须", "能够", "可能",
+            // Common function bigrams.
+            "的是", "在了", "有了", "是的", "的话", "之一", "之间", "之中", "以内", "以外",
+            "以前", "以后", "之前", "之后", "正在", "已经", "曾经",
+        ]
+        .into_iter()
+        .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,7 +447,9 @@ mod tests {
             "expected Han bigrams, got {tokens:?}"
         );
         assert!(
-            !tokens.iter().any(|t| t.chars().all(|c| c.is_ascii_alphabetic())),
+            !tokens
+                .iter()
+                .any(|t| t.chars().all(|c| c.is_ascii_alphabetic())),
             "no Pinyin transliteration expected, got {tokens:?}"
         );
     }
@@ -430,6 +479,32 @@ mod tests {
             );
         }
         for word in ["degre", "graduat", "mile", "pasta"] {
+            assert!(
+                !is_stopword(word, TokenizerMode::Stemmed),
+                "{word} should not be a stopword"
+            );
+        }
+    }
+
+    #[test]
+    fn chinese_stopwords_apply_to_both_modes() {
+        for word in [
+            "的", "了", "在", "是", "我们", "你们", "这个", "那个", "因为", "所以", "可以",
+        ] {
+            assert!(
+                is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should be a stopword"
+            );
+            assert!(
+                is_stopword(word, TokenizerMode::Stemmed),
+                "{word} should be a stopword"
+            );
+        }
+        for word in ["清华", "学习", "北京"] {
+            assert!(
+                !is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should not be a stopword"
+            );
             assert!(
                 !is_stopword(word, TokenizerMode::Stemmed),
                 "{word} should not be a stopword"

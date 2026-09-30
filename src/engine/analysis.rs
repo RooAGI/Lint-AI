@@ -579,7 +579,6 @@ pub(crate) fn build_memory_index(
         structured_fact_retrieval: true,
         key_phrase_enrichment: false,
         extractor_script: None,
-        lang: crate::lang::Lang::Auto,
     };
     crate::pipeline::build_query_snapshot(&source_docs, &options)
 }

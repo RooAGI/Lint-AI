@@ -285,15 +285,13 @@ fn acronym_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,8})\b").expect("valid regex"))
 }
 
-fn content_word_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"))
-}
-
 fn rake_token_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{1,}").expect("valid regex"))
 }
+
+/// Sentence-boundary characters: ASCII plus CJK fullwidth forms.
+const SENTENCE_ENDINGS: &[char] = &['.', '!', '?', '。', '！', '？'];
 
 #[derive(Serialize)]
 struct SpacyDocInput<'a> {
@@ -465,6 +463,10 @@ fn default_stopwords() -> HashSet<&'static str> {
     .iter()
     .copied()
     .collect();
+    // Multilingual: the shared tokenizer emits Han bigrams and Hangul
+    // eojeol, so the English-only list would let CJK function words
+    // through as "content". Union with the shared stopword sets.
+    set.extend(crate::tokenizer::chinese_stopwords().iter().copied());
     // Korean particles/function words: without these, the term ranker
     // would surface e.g. "것" or "수" as top terms for Korean docs.
     set.extend(crate::tokenizer::korean_stopwords().iter().copied());
@@ -472,27 +474,75 @@ fn default_stopwords() -> HashSet<&'static str> {
 }
 
 fn tokenize_words(content: &str) -> Vec<String> {
-    let mut tokens: Vec<String> = content_word_regex()
-        .find_iter(content)
-        .map(|m| m.as_str().to_lowercase())
-        .collect();
-    // The Latin regex skips Hangul/Han runs entirely; add them via the
-    // shared script-aware tokenizer so Korean/Chinese terms participate
-    // in term ranking (Han → bigrams, Hangul → eojeol + stem).
-    tokens.extend(
-        crate::tokenizer::tokenize(content, crate::tokenizer::TokenizerMode::Unstemmed)
-            .into_iter()
-            .filter(|t| {
-                t.chars()
-                    .any(|c| crate::lang::is_han(c) || crate::lang::is_hangul(c))
-            }),
-    );
-    tokens
+    // Unstemmed mode keeps the exact historical Latin behavior (the shared
+    // tokenizer's Latin path matches the old content-word regex
+    // `[A-Za-z][A-Za-z0-9_-]{2,}`) and adds Han bigrams / Hangul eojeol
+    // for CJK text.
+    crate::tokenizer::tokenize(content, crate::tokenizer::TokenizerMode::Unstemmed)
+}
+
+/// RAKE tokens: like the shared tokenizer, but keeps RAKE's historical
+/// `{1,}` Latin minimum (so 2-letter English tokens still count) instead
+/// of the shared `{2,}`. Script-aware single pass so mixed-language order
+/// is preserved for phrase building.
+fn rake_tokens(content: &str) -> Vec<String> {
+    let rake_re = rake_token_regex();
+    let mut out = Vec::new();
+    let mut latin = String::new();
+    let mut han = String::new();
+    let mut hangul = String::new();
+    let flush_latin = |latin: &mut String, out: &mut Vec<String>| {
+        for m in rake_re.find_iter(latin) {
+            out.push(m.as_str().to_lowercase());
+        }
+        latin.clear();
+    };
+    for ch in content.chars() {
+        if crate::lang::is_han(ch) {
+            flush_latin(&mut latin, &mut out);
+            if !hangul.is_empty() {
+                for t in crate::tokenizer::hangul_eojeol_tokens(&hangul) {
+                    out.push(t);
+                }
+                hangul.clear();
+            }
+            han.push(ch);
+        } else if crate::lang::is_hangul(ch) {
+            flush_latin(&mut latin, &mut out);
+            if !han.is_empty() {
+                out.extend(crate::tokenizer::han_tokens(&han));
+                han.clear();
+            }
+            hangul.push(ch);
+        } else {
+            if !han.is_empty() {
+                out.extend(crate::tokenizer::han_tokens(&han));
+                han.clear();
+            }
+            if !hangul.is_empty() {
+                for t in crate::tokenizer::hangul_eojeol_tokens(&hangul) {
+                    out.push(t);
+                }
+                hangul.clear();
+            }
+            latin.push(ch);
+        }
+    }
+    flush_latin(&mut latin, &mut out);
+    if !han.is_empty() {
+        out.extend(crate::tokenizer::han_tokens(&han));
+    }
+    if !hangul.is_empty() {
+        for t in crate::tokenizer::hangul_eojeol_tokens(&hangul) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 fn sentence_count(content: &str) -> usize {
     let count = content
-        .split(['.', '!', '?'])
+        .split(SENTENCE_ENDINGS)
         .filter(|s| !s.trim().is_empty())
         .count();
     count.max(1)
@@ -527,7 +577,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
             *freq.entry(t.clone()).or_insert(0) += 1;
             first_pos.entry(t.clone()).or_insert(i);
         }
-        for sent in doc.content.split(['.', '!', '?']) {
+        for sent in doc.content.split(SENTENCE_ENDINGS) {
             let s_tokens = tokenize_words(sent);
             let unique: HashSet<String> = s_tokens.into_iter().collect();
             for t in unique {
@@ -564,10 +614,7 @@ impl ImportantTermRanker for RakeStyleTermRanker {
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
         let stop = default_stopwords();
-        let tokens: Vec<String> = rake_token_regex()
-            .find_iter(&doc.content)
-            .map(|m| m.as_str().to_lowercase())
-            .collect();
+        let tokens: Vec<String> = rake_tokens(&doc.content);
         let mut phrases: Vec<Vec<String>> = Vec::new();
         let mut current = Vec::new();
         for t in tokens {
@@ -736,5 +783,114 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
             })
             .collect();
         sorted_terms(out, 12)
+    }
+}
+
+#[cfg(test)]
+mod cjk_term_tests {
+    use super::*;
+
+    fn doc(content: &str) -> Tier1DocInput {
+        Tier1DocInput {
+            id: "t".to_string(),
+            source: "test".to_string(),
+            content: content.to_string(),
+            concept: String::new(),
+            headings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn chinese_content_terms_are_ranked() {
+        let terms = YakeStyleTermRanker.rank_terms(&doc("我毕业于清华大学，专业是计算机科学。"));
+        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
+        assert!(
+            names.iter().any(|t| t.contains("清华")),
+            "expected a 清华 bigram in ranked terms, got {names:?}"
+        );
+        // Chinese function words must not surface as content terms.
+        assert!(
+            !names.iter().any(|t| ["的", "了", "在", "是"].contains(t)),
+            "stopwords leaked into terms: {names:?}"
+        );
+    }
+
+    #[test]
+    fn chinese_sentence_splitting_counts_cjk_boundaries() {
+        assert_eq!(sentence_count("第一句。第二句！第三句？"), 3);
+        assert_eq!(sentence_count("第一句。第二句!"), 2);
+        assert_eq!(sentence_count("没有标点"), 1);
+    }
+
+    #[test]
+    fn rake_tokens_emit_chinese_bigrams() {
+        let toks = rake_tokens("我喜欢学习Rust编程");
+        assert!(
+            toks.iter().any(|t| t == "喜欢"),
+            "expected 喜欢 bigram, got {toks:?}"
+        );
+        assert!(
+            toks.iter().any(|t| t == "rust"),
+            "expected rust latin token, got {toks:?}"
+        );
+    }
+
+    #[test]
+    fn rake_keeps_two_letter_latin_tokens() {
+        let toks = rake_tokens("AI is here");
+        assert!(
+            toks.iter().any(|t| t == "ai"),
+            "RAKE must keep 2-letter Latin tokens, got {toks:?}"
+        );
+    }
+
+    #[test]
+    fn english_ranking_unchanged_by_cjk_work() {
+        // Guard: shared-tokenizer switch must not alter Latin behavior.
+        let terms = YakeStyleTermRanker.rank_terms(&doc(
+            "The certificate program awarded a degree in computer science.",
+        ));
+        let names: Vec<&str> = terms.iter().map(|t| t.term.as_str()).collect();
+        assert!(
+            names.iter().any(|t| *t == "certificate" || *t == "degree"),
+            "expected content terms, got {names:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod spacy_chinese_tests {
+    use super::*;
+
+    /// Chinese NER through the real `spacy_ner.py` with the Rust-selected
+    /// `zh_core_web_sm` model. Skips gracefully when spaCy is unavailable;
+    /// run with PYTHON_EXECUTABLE=~/workspace/venvs/spacy-ner/bin/python
+    /// for the isolated venv that carries the model.
+    #[test]
+    fn spacy_chinese_ner_extracts_entities() {
+        let ranker = SpacyKeyEntityRanker {
+            model: "zh_core_web_sm".to_string(),
+            script_path: default_spacy_script_path().to_string_lossy().to_string(),
+        };
+        let docs = vec![Tier1DocInput {
+            id: "zh-ner-1".to_string(),
+            source: "test".to_string(),
+            content: "我毕业于清华大学，专业是计算机科学。".to_string(),
+            concept: String::new(),
+            headings: Vec::new(),
+        }];
+        let result = match ranker.rank_docs(&docs) {
+            Ok(map) => map,
+            Err(e) => {
+                println!("SKIPPED: spaCy NER unavailable ({e})");
+                return;
+            }
+        };
+        let entities = result.get("zh-ner-1").cloned().unwrap_or_default();
+        println!("Chinese NER entities: {entities:?}");
+        assert!(
+            entities.iter().any(|e| e.text.contains("清华大学")),
+            "expected 清华大学 entity, got {entities:?}"
+        );
     }
 }

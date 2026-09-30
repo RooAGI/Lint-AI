@@ -77,6 +77,7 @@ nav:
       - Distributed segment index: distributed-segment-index.md
       - Remote query contract: remote-query-contract.md
       - Lexical expansion data: lexical-data.md
+      - Language support: language-support.md
       - Claude Code hooks design: claude-code-hooks-design.md
       - C++ code adapter design: cpp-code-adapter-design.md
       - Integration testing: integration-test-strategy.md

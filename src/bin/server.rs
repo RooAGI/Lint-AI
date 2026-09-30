@@ -9,6 +9,7 @@ use axum::{
 };
 use clap::Parser;
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use lint_ai::lang::Lang;
 use lint_ai::memory_api::{
     AddRequest, DeleteRequest, GetRequest, ListRequest, MemoryService, SearchRequest,
     SupersedeRequest, UpdateRequest,
@@ -1526,7 +1527,15 @@ mod tests {
             ),
         ] {
             assert_eq!(arg.strategy(), expected);
-            let options = memory_pipeline_options(None, false, false, false, true, arg.strategy(), Lang::Auto);
+            let options = memory_pipeline_options(
+                None,
+                false,
+                false,
+                false,
+                true,
+                arg.strategy(),
+                Lang::Auto,
+            );
             assert!(matches!(
                 options.memory_index_layout,
                 MemoryIndexLayout::Segmented {

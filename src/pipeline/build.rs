@@ -716,7 +716,6 @@ pub fn build_query_snapshot_from_source_documents(
         structured_fact_retrieval: true,
         key_phrase_enrichment: false,
         extractor_script: None,
-        lang: crate::lang::Lang::Auto,
     };
     build_query_snapshot(source_docs, &options)
 }

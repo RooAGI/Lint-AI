@@ -1165,6 +1165,34 @@ impl MemoryService {
         self.store.semantic_document_state(doc_id)
     }
 
+    /// Rebuilds a write-adjudication receipt for a request whose documents
+    /// were persisted by an earlier process lifetime. Doc IDs are stable
+    /// (user_id + request_id + message index) and each doc carries the
+    /// request_id in its filters, so the original write's documents can be
+    /// located without the in-memory cache. Returns None when no documents
+    /// for the request exist.
+    fn rebuild_receipt(
+        &self,
+        request_key: &(String, String),
+    ) -> Option<WriteAdjudicationReceipt> {
+        let (user_id, request_id) = request_key;
+        let doc_ids: Vec<String> = self
+            .store
+            .source_documents()
+            .into_iter()
+            .filter(|doc| {
+                doc.filters.get("request_id").map(|s| s.as_str()) == Some(request_id.as_str())
+                    && doc.filters.get(USER_FILTER).map(|s| s.as_str())
+                        == Some(user_id.as_str())
+            })
+            .map(|doc| doc.doc_id.clone())
+            .collect();
+        if doc_ids.is_empty() {
+            return None;
+        }
+        Some(self.build_adjudication_receipt(request_id.clone(), &doc_ids))
+    }
+
     /// Builds the write-adjudication receipt for one request from the
     /// post-refresh semantic state. Only relations and claims touching the
     /// request's documents are included.
@@ -1259,8 +1287,20 @@ impl MemoryService {
                     user_id: request.user_id,
                     session_id: request.session_id,
                     // Idempotent retry: return the original write's receipt so
-                    // the response is identical to the first call.
-                    adjudication: self.request_receipts.get(&request_key).cloned(),
+                    // the response is identical to the first call. After a
+                    // service restart the in-memory cache is empty; rebuild
+                    // the receipt from the persisted documents instead of
+                    // returning None.
+                    adjudication: self
+                        .request_receipts
+                        .get(&request_key)
+                        .cloned()
+                        .or_else(|| {
+                            let receipt = self.rebuild_receipt(&request_key)?;
+                            self.request_receipts
+                                .insert(request_key.clone(), receipt.clone());
+                            Some(receipt)
+                        }),
                 },
                 Vec::new(),
             ));
@@ -3449,6 +3489,46 @@ mod tests {
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("MongoDB"));
+    }
+
+#[test]
+    fn retry_after_restart_returns_rebuilt_receipt() {
+        // The receipt cache is in-memory only; after reopening the service a
+        // retry of the same request_id must still return the adjudication,
+        // rebuilt from the persisted documents.
+        let dir = std::env::temp_dir().join(format!(
+            "lint-ai-receipt-restart-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let options = crate::default_production_pipeline_options();
+        let args = || AddRequest {
+            request_id: "rr-1".into(),
+            messages: vec![Message {
+                role: "user".into(),
+                timestamp: Some(1_699_939_200_000i64),
+                content: "The bicycle is owned by Rossi.".into(),
+                expires_at_ms: None,
+                supersedes_id: None,
+            }],
+            user_id: "user-a".into(),
+            session_id: "s1".into(),
+        };
+        let first_receipt = {
+            let mut service =
+                MemoryService::at_path(&dir, options.clone()).expect("open failed");
+            let response = service.add(args()).expect("add failed");
+            response.adjudication.expect("receipt missing")
+        };
+        // Reopen: the in-memory receipt cache is empty.
+        let mut service =
+            MemoryService::at_path(&dir, options).expect("reopen failed");
+        let retry = service.add(args()).expect("retry failed");
+        let retry_receipt = retry.adjudication.expect("retry receipt missing");
+        assert_eq!(retry_receipt.request_id, first_receipt.request_id);
+        assert_eq!(retry_receipt.doc_ids, first_receipt.doc_ids);
+        assert_eq!(retry_receipt.claims.len(), first_receipt.claims.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
 #[test]

@@ -105,14 +105,15 @@ Lint-AI's fractional recall is 85.6% at 5, 92.0% at 10, and 93.1% at 20.
 
 The published numbers above used heuristic Tier1 NER. Note: this benchmark's
 query loop (`analyze_query` → lexical search → aggregation) never invokes
-behood's descriptor parser, so the parse backend cannot affect these numbers;
-`--parse-provider` is accepted for uniformity but is a no-op here. The parse
-backend matters on paths that actually judge questions with behood: the
-production `MemoryService::search` structured-fact path and semantic tags.
-A 500-question parse→judge A/B (spaCy parse vs heuristic parse, same bekind
-binary) gave identical scope verdicts on all 500 questions; entity verdicts
-matched on 228/500, the gap being spaCy-NER teacher votes the heuristic
-backend deliberately does not invent.
+behood, so the numbers are independent of the behood path.
+
+behood (bekind) owns the full tag→chunk→judge pipeline (Luyi 2026-09-30):
+the query path sends raw texts to `bekind --serve` and gets per-text
+verdicts back. No descriptors cross the process boundary and no Python
+process is involved. A 500-question parse→judge A/B (pre-move: spaCy parse
+vs heuristic parse, same bekind binary) gave identical scope verdicts on
+all 500 questions; entity verdicts matched on 228/500, the gap being
+spaCy-NER teacher votes the heuristic backend deliberately does not invent.
 
 ### Segmented-index comparison
 

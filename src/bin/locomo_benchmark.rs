@@ -17,7 +17,6 @@ use lint_ai::{
     analyze_query, build_query_snapshot_from_source_documents, ChunkStrategy, PipelineOptions,
     SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
-use lint_ai::behood_query::{resolve_parse_provider, set_behood_parse_provider, BehoodParseProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -48,11 +47,6 @@ struct Args {
     /// docs/benchmark.md numbers; `spacy` is the current default.
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
-
-    /// Behood parse backend. When omitted it follows `--ner-provider`
-    /// (`heuristic` NER => heuristic parse, fully spaCy-free).
-    #[arg(long, value_enum)]
-    parse_provider: Option<BehoodParseProvider>,
 }
 
 
@@ -320,10 +314,6 @@ fn aggregate_metrics(queries: &[QueryMetrics], ks: &[usize]) -> Aggregate {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    set_behood_parse_provider(resolve_parse_provider(
-        args.parse_provider,
-        matches!(args.ner_provider, Tier1NerProvider::Heuristic),
-    ));
     let mut ks = args
         .ks
         .into_iter()

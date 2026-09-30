@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
 use lint_ai::index::{DocRecord, TemporalQueryHint};
-use lint_ai::behood_query::{resolve_parse_provider, set_behood_parse_provider, BehoodParseProvider};
 use lint_ai::{
     analyze_query, build_aggregate_output, build_doc_records, build_query_snapshot_from_records,
     normalize_for_index, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
@@ -71,11 +70,6 @@ struct Args {
     /// docs/benchmark.md numbers; `spacy` is the current default.
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
-
-    /// Behood parse backend. When omitted it follows `--ner-provider`
-    /// (`heuristic` NER => heuristic parse, fully spaCy-free).
-    #[arg(long, value_enum)]
-    parse_provider: Option<BehoodParseProvider>,
 }
 
 
@@ -342,10 +336,6 @@ struct RouterMissEvidenceBucket {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    set_behood_parse_provider(resolve_parse_provider(
-        args.parse_provider,
-        matches!(args.ner_provider, Tier1NerProvider::Heuristic),
-    ));
     let mut ks = args
         .ks
         .into_iter()

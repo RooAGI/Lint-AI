@@ -242,22 +242,11 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(std::env::current_dir()?)
         .canonicalize()?;
     let discovered_indexes = discover_index_paths(&project_root);
-    // The behood parse backend follows the NER provider: choosing the
-    // heuristic NER provider bypasses the spaCy parse daemon on the behood
-    // query path (Luyi 2026-09-29 — "if we choose the heuristic, why ...
-    // still using spacy"). Set once, before any daemon starts.
+    // behood (bekind) owns the full tag→chunk→judge pipeline (Luyi
+    // 2026-09-30): the query path sends raw texts to `bekind --serve` and
+    // gets verdicts back. No parse backend to select, no spaCy involved.
     // Note: the structured-relations extractor (ExtractorDaemon,
-    // scripts/spacy_relations.py) is a separate spaCy component and is
-    // unaffected by this flag.
-    let heuristic_parse = matches!(
-        options.ner_provider,
-        lint_ai::pipeline::Tier1NerProvider::Heuristic
-    );
-    lint_ai::behood_query::set_behood_parse_provider(if heuristic_parse {
-        lint_ai::behood_query::BehoodParseProvider::Heuristic
-    } else {
-        lint_ai::behood_query::BehoodParseProvider::Spacy
-    });
+    // scripts/spacy_relations.py) is a separate spaCy component.
     let service = match args.index {
         Some(path) => MemoryService::at_path(&path, options)?,
         None => discovered_indexes
@@ -295,9 +284,8 @@ async fn main() -> anyhow::Result<()> {
         project_root,
     };
     // Warm the Python daemon children in the background: the first query
-    // that needs key-phrase backfill, structured relations, or behood
-    // entities then pays inference only (~100ms) instead of
-    // interpreter+model load (~2-3s).
+    // that needs key-phrase backfill or structured relations then pays
+    // inference only (~100ms) instead of interpreter+model load (~2-3s).
     // Best-effort — extraction/analysis falls back to one-shot subprocesses
     // if a daemon cannot start.
     //
@@ -305,18 +293,12 @@ async fn main() -> anyhow::Result<()> {
     // first NER request. Prewarming would force a third Python+spaCy child
     // (~145MB RSS) on every server start, even when the heuristic NER
     // provider is configured and spaCy is never used. (Luyi 2026-09-29 P2.)
-    //
-    // The behood parse daemon is likewise NOT prewarmed when the heuristic
-    // parse backend is selected — there is no spaCy process to warm.
     std::thread::Builder::new()
         .name("python-daemon-prewarm".to_string())
         .spawn(move || {
             lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
-            if !heuristic_parse {
-                lint_ai::behood_query::BehoodQueryDaemon::global().prewarm();
-            }
             // The judge daemon is tiny (a Rust binary, ~ms startup); warm it
-            // alongside the parse daemon so the first query pays no spawn.
+            // so the first query pays no spawn.
             lint_ai::behood_query::BekindDaemon::global().prewarm();
         })
         .ok();

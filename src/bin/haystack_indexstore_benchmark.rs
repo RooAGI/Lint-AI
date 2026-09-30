@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use lint_ai::query_plan::PreparedQuery;
-use lint_ai::behood_query::{resolve_parse_provider, set_behood_parse_provider, BehoodParseProvider};
 use lint_ai::{
     build_index_store, ChunkStrategy, PipelineOptions, SearchResult, SourceDocument,
     Tier1NerProvider, Tier1TermRankerKind,
@@ -40,11 +39,6 @@ struct Args {
     /// docs/benchmark.md numbers; `spacy` is the current default.
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
-
-    /// Behood parse backend. When omitted it follows `--ner-provider`
-    /// (`heuristic` NER => heuristic parse, fully spaCy-free).
-    #[arg(long, value_enum)]
-    parse_provider: Option<BehoodParseProvider>,
 }
 
 
@@ -119,10 +113,6 @@ struct BenchmarkReport {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    set_behood_parse_provider(resolve_parse_provider(
-        args.parse_provider,
-        matches!(args.ner_provider, Tier1NerProvider::Heuristic),
-    ));
     let mut ks = args.ks.into_iter().filter(|k| *k > 0).collect::<Vec<_>>();
     ks.sort_unstable();
     ks.dedup();

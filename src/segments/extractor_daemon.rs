@@ -52,14 +52,19 @@ impl ExtractorDaemon {
     /// Extract over `turns` via the daemon. Returns `None` on any failure
     /// (including lock contention — the daemon is a fast path, never a
     /// queue); the caller falls back to a one-shot subprocess.
+    ///
+    /// `model` is the spaCy model name sent to the script (e.g.
+    /// `ko_core_news_sm` for Korean turns); the script caches models by
+    /// name, so mixed-language processes are fine.
     pub fn extract(
         &self,
         turns: &[RelationTurn],
         key_phrases_only: bool,
         timeout: Duration,
+        model: &str,
     ) -> Option<ExtractorOutput> {
         let payload = serde_json::json!({
-            "model": "en_core_web_sm",
+            "model": model,
             "turns": turns,
             "key_phrases_only": key_phrases_only,
         });
@@ -148,7 +153,7 @@ for line in sys.stdin:
             "the Paris jazz festival was wonderful",
         )];
         let output = daemon
-            .extract(&turns, true, Duration::from_secs(60))
+            .extract(&turns, true, Duration::from_secs(60), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("daemon extraction should succeed");
         let texts: Vec<&str> = output.key_phrases.iter().map(|p| p.text.as_str()).collect();
         assert!(
@@ -174,11 +179,11 @@ for line in sys.stdin:
             "the Paris jazz festival was wonderful",
         )];
         daemon
-            .extract(&turns, true, Duration::from_secs(120))
+            .extract(&turns, true, Duration::from_secs(120), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("first call warms the daemon");
         let start = std::time::Instant::now();
         let output = daemon
-            .extract(&turns, true, Duration::from_secs(60))
+            .extract(&turns, true, Duration::from_secs(60), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("second call should succeed");
         let elapsed = start.elapsed();
         assert!(!output.key_phrases.is_empty());
@@ -207,11 +212,11 @@ for line in sys.stdin:
             "the Paris jazz festival was wonderful",
         )];
         daemon
-            .extract(&turns, true, Duration::from_secs(120))
+            .extract(&turns, true, Duration::from_secs(120), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("first call starts the child");
         daemon.kill_child_for_test();
         let output = daemon
-            .extract(&turns, true, Duration::from_secs(120))
+            .extract(&turns, true, Duration::from_secs(120), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("daemon should respawn the child and succeed");
         assert!(!output.key_phrases.is_empty());
     }
@@ -225,7 +230,7 @@ for line in sys.stdin:
         let turns = vec![daemon_turn("doc-1", "anything")];
         assert!(
             daemon
-                .extract(&turns, true, Duration::from_secs(5))
+                .extract(&turns, true, Duration::from_secs(5), crate::tier1::DEFAULT_SPACY_MODEL)
                 .is_none(),
             "missing script must fail open"
         );
@@ -247,7 +252,7 @@ for line in sys.stdin:
         // Fast path works against the fake script.
         let fast_turns = vec![daemon_turn("doc-1", "anything")];
         let fast = daemon
-            .extract(&fast_turns, true, Duration::from_secs(10))
+            .extract(&fast_turns, true, Duration::from_secs(10), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("fake serve script should answer fast");
         assert_eq!(fast.key_phrases[0].text, "canned phrase");
         assert_eq!(fast.key_phrases[0].doc_id, "doc-1");
@@ -258,7 +263,7 @@ for line in sys.stdin:
         let start = std::time::Instant::now();
         assert!(
             daemon
-                .extract(&hung_turns, true, Duration::from_secs(2))
+                .extract(&hung_turns, true, Duration::from_secs(2), crate::tier1::DEFAULT_SPACY_MODEL)
                 .is_none(),
             "hung child must time out"
         );
@@ -273,7 +278,7 @@ for line in sys.stdin:
         // misattributing) the abandoned in-flight response.
         let start = std::time::Instant::now();
         let recovered = daemon
-            .extract(&fast_turns, true, Duration::from_secs(10))
+            .extract(&fast_turns, true, Duration::from_secs(10), crate::tier1::DEFAULT_SPACY_MODEL)
             .expect("daemon should serve after killing the hung child");
         assert_eq!(recovered.key_phrases[0].text, "canned phrase");
         assert!(

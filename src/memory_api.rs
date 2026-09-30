@@ -1,12 +1,13 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
+use crate::lang::{default_spacy_model_for_lang, Lang};
 use crate::pipeline::PipelineOptions;
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::analyze_query;
 use crate::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, query_structured, relation_turns_from_docs,
-    try_extract_key_phrases_via_spacy, RelationIndex,
+    analyze_fact_question, extract_relations_via_spacy, extractor_model_for_turns,
+    query_structured, relation_turns_from_docs, try_extract_key_phrases_via_spacy, RelationIndex,
 };
 use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
@@ -71,6 +72,12 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
+    /// Content language override (`"en"`, `"zh"`, `"ko"`). Absent (default)
+    /// auto-detects per text from script statistics. Currently selects the
+    /// spaCy model for the structured-relations path; lexical retrieval is
+    /// script-aware regardless.
+    #[serde(default)]
+    pub lang: Option<Lang>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -258,10 +265,12 @@ fn run_key_phrase_extraction_bounded(
     let script = script.map(|s| s.to_path_buf());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let model = extractor_model_for_turns(&turns);
         let out = try_extract_key_phrases_via_spacy(
             &turns,
             script.as_deref(),
             std::time::Duration::from_secs(timeout_secs),
+            model,
         );
         let _ = tx.send(out);
     });
@@ -357,6 +366,7 @@ fn relations_index_for(
     docs: &[&SourceDocument],
     user_id: &str,
     cache: &Mutex<RelationsCache>,
+    lang: Option<Lang>,
 ) -> Option<Arc<RelationIndex>> {
     // The lock is held across the build so concurrent structured queries for
     // the same user share one extractor run instead of racing duplicates.
@@ -377,11 +387,18 @@ fn relations_index_for(
     let turns = relation_turns_from_docs(docs);
     // Bound the subprocess: run extraction on a worker thread and give up
     // after the timeout, leaving the cache empty (fail-open to lexical).
+    // An explicit request language selects the spaCy model; otherwise the
+    // model follows the turns' detected script.
+    let model: String = match lang {
+        Some(l) => default_spacy_model_for_lang(l.resolve("")).to_string(),
+        None => extractor_model_for_turns(&turns).to_string(),
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
             &turns,
             std::time::Duration::from_secs(RELATIONS_EXTRACT_TIMEOUT_SECS),
+            &model,
         );
         let _ = tx.send(output.relations);
     });
@@ -449,7 +466,7 @@ fn structured_fact_results(
         })
         .collect();
     visible.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-    let index = match relations_index_for(&visible, &request.user_id, cache) {
+    let index = match relations_index_for(&visible, &request.user_id, cache, request.lang) {
         Some(index) => index,
         None => return Vec::new(),
     };

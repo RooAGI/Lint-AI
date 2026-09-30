@@ -419,6 +419,47 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
 /// benchmark harness calls it once per question and builds both the
 /// single-layout snapshot and the segmented index from the same records
 /// instead of extracting twice.
+/// Run spaCy NER with per-language model selection: docs are grouped by
+/// the model [`PipelineOptions::spacy_model_for_text`] picks for their
+/// content, so Korean docs get `ko_core_news_sm` with no flags while an
+/// explicit `--spacy-model` still applies to everything. Fail-open per
+/// group: a group whose model is unavailable falls back to the heuristic
+/// ranker for just those docs.
+fn spacy_key_entities_by_lang(
+    docs: &[Tier1DocInput],
+    options: &PipelineOptions,
+    heuristic: &HeuristicKeyEntityRanker,
+) -> Result<HashMap<String, Vec<Tier1Entity>>> {
+    let mut by_model: HashMap<String, Vec<Tier1DocInput>> = HashMap::new();
+    for doc in docs {
+        by_model
+            .entry(options.spacy_model_for_text(&doc.content))
+            .or_default()
+            .push(doc.clone());
+    }
+    let script_path = default_spacy_script_path().display().to_string();
+    let mut out: HashMap<String, Vec<Tier1Entity>> = HashMap::new();
+    // BTreeMap for deterministic model order across runs.
+    let by_model: std::collections::BTreeMap<_, _> = by_model.into_iter().collect();
+    for (model, group_docs) in by_model {
+        let spacy = SpacyKeyEntityRanker {
+            model: model.clone(),
+            script_path: script_path.clone(),
+        };
+        match spacy.rank_docs(&group_docs) {
+            Ok(entities) => out.extend(entities),
+            Err(err) => {
+                eprintln!(
+                    "warning: {} ranker unavailable for model {model} ({err}), falling back to heuristic",
+                    spacy.name(),
+                );
+                out.extend(heuristic.rank_docs(&group_docs).unwrap_or_default());
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn build_doc_records(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,
@@ -428,23 +469,7 @@ pub fn build_doc_records(
     let heuristic = HeuristicKeyEntityRanker;
     let entities_by_doc = match &options.ner_provider {
         Tier1NerProvider::Heuristic => heuristic.rank_docs(&docs)?,
-        Tier1NerProvider::Spacy => {
-            let spacy = SpacyKeyEntityRanker {
-                model: options.spacy_model.clone(),
-                script_path: default_spacy_script_path().display().to_string(),
-            };
-            match spacy.rank_docs(&docs) {
-                Ok(out) => out,
-                Err(err) => {
-                    eprintln!(
-                        "warning: {} ranker unavailable ({}), falling back to heuristic",
-                        spacy.name(),
-                        err
-                    );
-                    heuristic.rank_docs(&docs).unwrap_or_default()
-                }
-            }
-        }
+        Tier1NerProvider::Spacy => spacy_key_entities_by_lang(&docs, options, &heuristic)?,
     };
 
     let term_ranker = select_term_ranker(&options.term_ranker);
@@ -494,15 +519,16 @@ pub(crate) fn build_doc_record(
             .remove(&doc.id)
             .unwrap_or_default(),
         Tier1NerProvider::Spacy => {
+            let model = options.spacy_model_for_text(&doc.content);
             let spacy = SpacyKeyEntityRanker {
-                model: options.spacy_model.clone(),
+                model: model.clone(),
                 script_path: default_spacy_script_path().display().to_string(),
             };
             match spacy.rank_docs(std::slice::from_ref(&doc)) {
                 Ok(mut out) => out.remove(&doc.id).unwrap_or_default(),
                 Err(err) => {
                     eprintln!(
-                        "warning: {} ranker unavailable ({}), falling back to heuristic",
+                        "warning: {} ranker unavailable for model {model} ({}), falling back to heuristic",
                         spacy.name(),
                         err
                     );

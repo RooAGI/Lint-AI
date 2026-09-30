@@ -105,25 +105,42 @@ pub fn normalize_number_words(query: &str) -> String {
 /// bare Sino-Korean digits without units are not parsed.
 fn normalize_korean_number_words(text: &str) -> String {
     static KO_NUM_RE: OnceLock<Regex> = OnceLock::new();
+    // Note: the `regex` crate has no lookahead, so the "not followed by
+    // Hangul" boundary is enforced in the replacement closure via group 5:
+    // when group 5 matches, the numeral run continues into a larger Hangul
+    // word and the match is left unchanged.
     let re = KO_NUM_RE.get_or_init(|| {
         Regex::new(
-            r"(하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열|스물|서른|마흔|쉰|예순|일흔|여든|아흔|한|두|세|네)(은|는|이|가|을|를|에|의|과|와|도|만)?(?![가-힣])|([일이삼사오육칠팔구]*[십백천만억][일이삼사오육칠팔구십백천만억]*)(원|달러|개|명|번|회|권|대|살|층|호)?(?![가-힣])",
+            r"(하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열|스물|서른|마흔|쉰|예순|일흔|여든|아흔|한|두|세|네)(은|는|이|가|을|를|에|의|과|와|도|만)?([가-힣])?|([일이삼사오육칠팔구]*[십백천만억][일이삼사오육칠팔구십백천만억]*)(원|달러|개|명|번|회|권|대|살|층|호)?([가-힣])?",
         )
         .expect("valid Korean numeral regex")
     });
     re.replace_all(text, |caps: &regex::Captures| {
-        // Native word: group 1 (+ particle group 2). Sino-Korean run:
-        // group 3 (+ counter group 4, kept verbatim).
-        let (num, suffix) = if let Some(m) = caps.get(1) {
-            (m.as_str(), caps.get(2).map(|s| s.as_str()).unwrap_or(""))
+        // Native word: group 1 (+ particle group 2, + following-Hangul
+        // group 3). Sino-Korean run: group 4 (+ counter group 5, +
+        // following-Hangul group 6).
+        let (num, suffix, following) = if caps.get(1).is_some() {
+            (
+                caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                caps.get(2).map(|s| s.as_str()).unwrap_or(""),
+                caps.get(3).map(|s| s.as_str()).unwrap_or(""),
+            )
         } else {
             (
-                caps.get(3).map(|m| m.as_str()).unwrap_or(""),
-                caps.get(4).map(|s| s.as_str()).unwrap_or(""),
+                caps.get(4).map(|m| m.as_str()).unwrap_or(""),
+                caps.get(5).map(|s| s.as_str()).unwrap_or(""),
+                caps.get(6).map(|s| s.as_str()).unwrap_or(""),
             )
         };
+        // A bare numeral run directly followed by Hangul is part of a
+        // larger word (not a numeral); leave it unchanged. A trailing
+        // particle/counter terminates the numeral, so following Hangul is
+        // kept verbatim after the digits.
+        if suffix.is_empty() && !following.is_empty() {
+            return caps[0].to_string();
+        }
         match parse_korean_numeral(num) {
-            Some(v) => format!("{v}{suffix}"),
+            Some(v) => format!("{v}{suffix}{following}"),
             None => caps[0].to_string(),
         }
     })

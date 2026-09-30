@@ -65,6 +65,14 @@ at the character level throughout.
 - **Stopwords**: Chinese function words are filtered in the shared
   tokenizer, the tier-1 term rankers, focus classification, and query
   expansion gating (`的 / 了 / 在 / 是 / 我们 / 因为 / 可以` …).
+  Stopword lists are vendored word data (no Python at runtime): the
+  hand-built Chinese/Korean lists unioned with spaCy's `stop_words`
+  (`spacy.lang.{en,es,zh,ko}`, MIT) via `scripts/gen_stopwords_data.py`
+  → `src/stopwords_data.rs`. The English stemmed set is derived by
+  running the runtime Snowball stemmer over the spaCy `en` list, so every
+  entry matches what the tokenizer emits. Spanish adds diacritic-folded
+  twins (`está`/`esta`) and is gated on explicit `Lang::Es` — script
+  auto-detection cannot tell Spanish from English.
 - **Numbers and aggregation** (`src/aggregation.rs`,
   `src/lang.rs`): Chinese numerals (`二十五`, `三千五百万`) normalize to
   digits — single-character numerals only when followed by a measure word,

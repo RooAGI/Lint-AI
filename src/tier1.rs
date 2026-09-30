@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -452,25 +453,31 @@ mod subprocess_tests {
     }
 }
 
-fn default_stopwords() -> HashSet<&'static str> {
-    let mut set: HashSet<&'static str> = [
-        "a", "an", "the", "is", "are", "was", "were", "be", "to", "for", "of", "on", "in", "by",
-        "as", "or", "and", "that", "this", "with", "from", "it", "its", "at", "into", "about",
-        "over", "under", "also", "can", "could", "should", "would", "will", "may", "might", "do",
-        "does", "did", "done", "not", "no", "yes", "if", "then", "than", "there", "their", "we",
-        "you", "they", "he", "she", "them", "our", "your",
-    ]
-    .iter()
-    .copied()
-    .collect();
-    // Multilingual: the shared tokenizer emits Han bigrams and Hangul
-    // eojeol, so the English-only list would let CJK function words
-    // through as "content". Union with the shared stopword sets.
-    set.extend(crate::tokenizer::chinese_stopwords().iter().copied());
-    // Korean particles/function words: without these, the term ranker
-    // would surface e.g. "것" or "수" as top terms for Korean docs.
-    set.extend(crate::tokenizer::korean_stopwords().iter().copied());
-    set
+/// Stopwords for the YAKE/RAKE/TextRank term rankers, per language.
+/// The English base is the canonical spaCy list
+/// (`crate::tokenizer::english_stopwords`); Chinese/Korean function words
+/// can never collide with Latin tokens so they are unioned for every
+/// language; Spanish is added only for Spanish docs — its words collide
+/// with English (`no`, `son`, `era`).
+fn default_stopwords_for_lang(lang: Lang) -> HashSet<String> {
+    let mut stop: HashSet<String> = crate::tokenizer::english_stopwords()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    stop.extend(
+        crate::tokenizer::chinese_stopwords()
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    stop.extend(
+        crate::tokenizer::korean_stopwords()
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    if matches!(lang, Lang::Es) {
+        stop.extend(crate::tokenizer::spanish_stopwords().iter().cloned());
+    }
+    stop
 }
 
 fn tokenize_words(content: &str) -> Vec<String> {
@@ -597,7 +604,7 @@ impl ImportantTermRanker for YakeStyleTermRanker {
     }
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
-        let stop = default_stopwords();
+        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&doc.content));
         let raw_tokens = tokenize_words(&doc.content);
         let total = raw_tokens.len().max(1) as f32;
         let sentences = sentence_count(&doc.content) as f32;
@@ -648,7 +655,7 @@ impl ImportantTermRanker for RakeStyleTermRanker {
     }
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
-        let stop = default_stopwords();
+        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&doc.content));
         let tokens: Vec<String> = rake_tokens(&doc.content);
         let mut phrases: Vec<Vec<String>> = Vec::new();
         let mut current = Vec::new();
@@ -771,7 +778,7 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
     }
 
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm> {
-        let stop = default_stopwords();
+        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&doc.content));
         let tokens: Vec<String> = tokenize_words(&doc.content)
             .into_iter()
             .filter(|t| !stop.contains(t.as_str()))
@@ -976,5 +983,67 @@ mod spacy_chinese_tests {
             entities.iter().any(|e| e.text.contains("清华大学")),
             "expected 清华大学 entity, got {entities:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod stopword_tests {
+    use super::*;
+
+    #[test]
+    fn per_language_stopwords_use_canonical_lists() {
+        let en = default_stopwords_for_lang(Lang::En);
+        let es = default_stopwords_for_lang(Lang::Es);
+        // Canonical spaCy English base in both.
+        for w in ["the", "however", "therefore"] {
+            assert!(en.contains(w), "{w} should stop in English");
+            assert!(es.contains(w), "{w} should stop in Spanish docs too");
+        }
+        // CJK unions apply to every language (no collision possible).
+        for w in ["的", "은"] {
+            assert!(en.contains(w), "{w} should stop in English");
+            assert!(es.contains(w), "{w} should stop in Spanish");
+        }
+        // Spanish gated on Lang::Es: "son"/"era" collide with English words.
+        for w in ["está", "esta", "son", "era"] {
+            assert!(es.contains(w), "{w} should stop for Spanish docs");
+            assert!(!en.contains(w), "{w} must not stop for English docs");
+        }
+        // "now" is not a stopword: it anchors current-state retrieval
+        // ("what is X now" must keep the temporal signal).
+        assert!(
+            !en.contains("now"),
+            "\"now\" must not be an English stopword"
+        );
+    }
+
+    #[test]
+    fn auto_detect_is_script_based_so_spanish_needs_explicit_lang() {
+        // Script-based detection cannot tell Spanish from English (both
+        // Latin), so a Spanish doc via Auto gets the English set — the
+        // Spanish set applies only when callers pass Lang::Es explicitly
+        // (e.g. --lang es plumbing, owned by the es track).
+        let es_doc = Tier1DocInput {
+            id: "1".into(),
+            source: "t".into(),
+            content: "El niño está en la escuela porque tiene clases".into(),
+            concept: "".into(),
+            headings: vec![],
+        };
+        let stop = default_stopwords_for_lang(Lang::Auto.resolve(&es_doc.content));
+        assert!(!stop.contains("está"));
+        let stop_es = default_stopwords_for_lang(Lang::Es);
+        assert!(stop_es.contains("está"));
+        // English content words that collide with Spanish stopwords survive.
+        let en_doc = Tier1DocInput {
+            id: "2".into(),
+            source: "t".into(),
+            content: "The son went to school in an era of change".into(),
+            concept: "".into(),
+            headings: vec![],
+        };
+        let stop_en = default_stopwords_for_lang(Lang::Auto.resolve(&en_doc.content));
+        assert!(!stop_en.contains("son"), "English 'son' must survive");
+        assert!(!stop_en.contains("era"), "English 'era' must survive");
     }
 }

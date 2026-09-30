@@ -98,6 +98,7 @@ mod symbols;
 mod temporal;
 mod tier1;
 pub mod tokenizer;
+mod stopwords_data;
 mod usage;
 
 pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};

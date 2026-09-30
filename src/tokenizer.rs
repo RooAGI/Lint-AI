@@ -17,8 +17,10 @@
 
 use crate::query_expansion::normalize_for_index;
 use regex::Regex;
+use rust_stemmers::{Algorithm, Stemmer};
 use std::collections::HashSet;
 use std::sync::OnceLock;
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenizerMode {
@@ -264,74 +266,29 @@ fn strip_one_korean_suffix(word: &str) -> Option<String> {
     None
 }
 
-fn unstemmed_stopwords() -> &'static HashSet<&'static str> {
+/// Canonical English stopwords: the vendored spaCy `en` list
+/// (`crate::stopwords_data::STOPWORDS_EN`, MIT). Replaces the old ~46-word
+/// hand-built list. Shared with the tier-1 term ranker (`crate::tier1`).
+pub(crate) fn english_stopwords() -> &'static HashSet<&'static str> {
     static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    STOP.get_or_init(|| {
-        [
-            "how",
-            "many",
-            "much",
-            "what",
-            "which",
-            "who",
-            "when",
-            "where",
-            "why",
-            "did",
-            "does",
-            "have",
-            "has",
-            "had",
-            "been",
-            "being",
-            "was",
-            "were",
-            "are",
-            "the",
-            "and",
-            "or",
-            "for",
-            "from",
-            "with",
-            "that",
-            "this",
-            "these",
-            "those",
-            "currently",
-            "recently",
-            "past",
-            "last",
-            "next",
-            "into",
-            "onto",
-            "about",
-            "after",
-            "before",
-            "over",
-            "under",
-            "between",
-            "during",
-            "i",
-            "you",
-            "we",
-            "they",
-        ]
-        .into_iter()
-        .collect()
-    })
+    STOP.get_or_init(|| crate::stopwords_data::STOPWORDS_EN.iter().copied().collect())
 }
 
-fn stemmed_stopwords() -> &'static HashSet<&'static str> {
-    static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
+fn unstemmed_stopwords() -> &'static HashSet<&'static str> {
+    english_stopwords()
+}
+
+fn stemmed_stopwords() -> &'static HashSet<String> {
+    static STOP: OnceLock<HashSet<String>> = OnceLock::new();
     STOP.get_or_init(|| {
-        [
-            "a", "an", "and", "are", "can", "did", "do", "doe", "for", "from", "had", "have",
-            "how", "i", "in", "is", "it", "many", "mani", "me", "my", "of", "on", "or", "that",
-            "the", "thi", "this", "to", "wa", "what", "when", "where", "which", "who", "with",
-            "you",
-        ]
-        .into_iter()
-        .collect()
+        // Systematic: run the same English stemmer the Stemmed token path
+        // uses over the canonical English list, so every stemmed stopword
+        // is exactly what the tokenizer would emit for that word.
+        let stemmer = Stemmer::create(Algorithm::English);
+        crate::stopwords_data::STOPWORDS_EN
+            .iter()
+            .map(|w| stemmer.stem(w).into_owned())
+            .collect()
     })
 }
 
@@ -339,11 +296,13 @@ fn stemmed_stopwords() -> &'static HashSet<&'static str> {
 /// with the ASCII stopword lists, so this set is unioned into both modes'
 /// checks. Interrogatives are included for term statistics; question
 /// focus deliberately does not filter stopwords, so they still work there.
+/// Union of the hand-built list and the vendored spaCy `ko` list
+/// (`crate::stopwords_data::STOPWORDS_KO`, MIT).
 /// Shared with the tier-1 term ranker (`crate::tier1`).
 pub(crate) fn korean_stopwords() -> &'static HashSet<&'static str> {
     static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
     STOP.get_or_init(|| {
-        [
+        let mut set: HashSet<&'static str> = [
             // Particles / case markers.
             "은", "는", "이", "가", "을", "를", "에", "의", "와", "과", "도", "만", "로", "으로",
             "에서", "에게", "한테", "부터", "까지", "처럼", "이랑", "랑", "하고", "나", "야", "아",
@@ -360,7 +319,9 @@ pub(crate) fn korean_stopwords() -> &'static HashSet<&'static str> {
             "이렇게", "그렇게", "저렇게", "이런", "그런", "저런", "모든",
         ]
         .into_iter()
-        .collect()
+        .collect();
+        set.extend(crate::stopwords_data::STOPWORDS_KO.iter().copied());
+        set
     })
 }
 
@@ -369,11 +330,14 @@ pub(crate) fn korean_stopwords() -> &'static HashSet<&'static str> {
 /// single characters (for lone-character tokens) and common function
 /// bigrams. Interrogatives are deliberately excluded — they are detected
 /// separately by `crate::question_focus`.
+/// Union of the hand-built list and the vendored spaCy `zh` list
+/// (`crate::stopwords_data::STOPWORDS_ZH`, MIT; Han-only words, so the
+/// two-character entries match bigram tokens directly).
 /// Shared with the tier-1 term ranker (`crate::tier1`).
 pub(crate) fn chinese_stopwords() -> &'static HashSet<&'static str> {
     static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
     STOP.get_or_init(|| {
-        [
+        let mut set: HashSet<&'static str> = [
             // Single-character function words.
             "的", "了", "着", "过", "在", "是", "有", "和", "与", "或", "但", "而", "就", "都",
             "也", "很", "不", "没", "非", "未", "别", "我", "你", "他", "她", "它", "这", "那",
@@ -397,7 +361,58 @@ pub(crate) fn chinese_stopwords() -> &'static HashSet<&'static str> {
             "以前", "以后", "之前", "之后", "正在", "已经", "曾经",
         ]
         .into_iter()
+        .collect();
+        set.extend(crate::stopwords_data::STOPWORDS_ZH.iter().copied());
+        // Current-state deictics are signal for this system, not noise:
+        // they anchor the presently-true fact ("现在每天开着上下班").
+        // spaCy lists them as stopwords (right for parsing, wrong for
+        // current-state retrieval), so they are carved back out. This set
+        // is defined by the test suite — the executable spec of measured
+        // retrieval — not by hand: every word here is required as a ranked
+        // term by a passing test.
+        set.retain(|w| !CHINESE_CURRENT_STATE_KEEP.contains(w));
+        set
+    })
+}
+
+/// Words carved out of [`chinese_stopwords`]: deictic markers of current
+/// state that spaCy lists as stopwords but this system retrieves on.
+/// Required as ranked terms by
+/// `tier1::cjk_term_tests::chinese_generous_budget_keeps_late_payload_terms`.
+const CHINESE_CURRENT_STATE_KEEP: &[&str] = &["现在"];
+
+/// Strip diacritics via NFD decomposition + combining-mark removal.
+/// `niño` -> `nino`, `está` -> `esta`; `ß`/`ø`/`ł` keep their identity
+/// (no transliteration). Used to derive the folded twins of Spanish
+/// stopwords for accent-insensitive matching.
+pub(crate) fn fold_diacritics(s: &str) -> String {
+    s.nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
         .collect()
+}
+
+/// Spanish function words: the vendored spaCy `es` list
+/// (`crate::stopwords_data::STOPWORDS_ES`, MIT) plus mechanical
+/// diacritic-folded twins (`está`/`esta`), because dual emission means
+/// ranker/query tokens carry both forms. Spanish words can collide with
+/// English ones (`no`, `son`, `era`), so unlike the CJK lists this set is
+/// NOT unioned into the default `is_stopword` — callers must gate on
+/// `Lang::Es`. Shared with the tier-1 term ranker (`crate::tier1`).
+pub(crate) fn spanish_stopwords() -> &'static HashSet<String> {
+    static STOP: OnceLock<HashSet<String>> = OnceLock::new();
+    STOP.get_or_init(|| {
+        let mut set: HashSet<String> = crate::stopwords_data::STOPWORDS_ES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Folded twins: re-inserting an unchanged (pure-ASCII) word is a
+        // harmless no-op.
+        set.extend(
+            crate::stopwords_data::STOPWORDS_ES
+                .iter()
+                .map(|w| fold_diacritics(w)),
+        );
+        set
     })
 }
 
@@ -471,8 +486,12 @@ mod tests {
     }
 
     #[test]
-    fn unstemmed_stopword_matches_original_list() {
-        for word in ["how", "many", "does", "was", "the", "and"] {
+    fn unstemmed_stopwords_use_spacy_english() {
+        // Canonical spaCy en list (vendored): the old hand-built words
+        // still stop, plus spaCy-only function words.
+        for word in [
+            "how", "many", "does", "was", "the", "and", "however", "therefore", "among",
+        ] {
             assert!(
                 is_stopword(word, TokenizerMode::Unstemmed),
                 "{word} should be a stopword"
@@ -488,7 +507,11 @@ mod tests {
 
     #[test]
     fn stemmed_stopword_matches_segment_router_list() {
-        for word in ["doe", "mani", "thi", "wa", "what"] {
+        // Stemmed with the SAME Snowball stemmer the Stemmed token path
+        // uses, so every entry is exactly what the tokenizer emits.
+        // (The old hand-built list carried dead "thi"/"wa" entries from a
+        // mismatched Porter stemmer — the runtime stemmer emits "this"/"was".)
+        for word in ["doe", "mani", "this", "was", "what", "howev", "therefor"] {
             assert!(
                 is_stopword(word, TokenizerMode::Stemmed),
                 "{word} should be a stopword"
@@ -544,6 +567,100 @@ mod tests {
     }
 
     #[test]
+    fn vendored_stopword_lists_are_sorted_and_deduped() {
+        use crate::stopwords_data::*;
+        for (name, list) in [
+            ("en", STOPWORDS_EN),
+            ("es", STOPWORDS_ES),
+            ("zh", STOPWORDS_ZH),
+            ("ko", STOPWORDS_KO),
+        ] {
+            assert!(!list.is_empty(), "{name} list must be non-empty");
+            let mut sorted = list.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                list,
+                sorted.as_slice(),
+                "{name} list must be sorted and deduped"
+            );
+        }
+    }
+
+    #[test]
+    fn fold_diacritics_strips_marks_without_transliteration() {
+        assert_eq!(fold_diacritics("niño"), "nino");
+        assert_eq!(fold_diacritics("está"), "esta");
+        assert_eq!(fold_diacritics("sí"), "si");
+        // Not transliterated: identity preserved.
+        assert_eq!(fold_diacritics("ß"), "ß");
+        assert_eq!(fold_diacritics("ø"), "ø");
+        assert_eq!(fold_diacritics("hello"), "hello");
+    }
+
+    #[test]
+    fn spanish_folded_twins_are_stopped() {
+        let stop = spanish_stopwords();
+        for word in ["está", "esta", "sí", "si", "están", "estan", "también", "tambien"] {
+            assert!(stop.contains(word), "{word} should be a Spanish stopword");
+        }
+        // Content words are not stopwords, folded or not.
+        assert!(!stop.contains("niño"));
+        assert!(!stop.contains("nino"));
+        // Spanish-only: must not leak into the default (English) path.
+        assert!(!is_stopword("está", TokenizerMode::Unstemmed));
+        assert!(!is_stopword("esta", TokenizerMode::Unstemmed));
+    }
+
+    #[test]
+    fn spanish_known_spacy_entries_present() {
+        let stop = spanish_stopwords();
+        for word in ["donde", "cuando", "porque", "también", "tambien", "además", "ademas"] {
+            assert!(stop.contains(word), "{word} should be a Spanish stopword");
+        }
+    }
+
+    #[test]
+    fn chinese_spacy_entries_union_with_handbuilt() {
+        // spaCy-only words (not in the hand-built list) ...
+        for word in ["将要", "需要", "进行", "为了"] {
+            assert!(
+                is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should be a stopword"
+            );
+            assert!(
+                is_stopword(word, TokenizerMode::Stemmed),
+                "{word} should be a stopword"
+            );
+        }
+        // ... and the hand-built words still stop.
+        for word in ["的", "我们", "因为", "可以"] {
+            assert!(is_stopword(word, TokenizerMode::Unstemmed));
+        }
+    }
+
+    #[test]
+    fn korean_spacy_entries_union_with_handbuilt() {
+        // spaCy-only word ...
+        assert!(is_stopword("그러나", TokenizerMode::Unstemmed));
+        assert!(is_stopword("그러나", TokenizerMode::Stemmed));
+        // ... and hand-built words still stop.
+        for word in ["은", "는", "것"] {
+            assert!(is_stopword(word, TokenizerMode::Unstemmed));
+        }
+    }
+
+    #[test]
+    fn english_spacy_entries_present() {
+        for word in ["however", "therefore", "among", "whom", "whose"] {
+            assert!(
+                english_stopwords().contains(word),
+                "{word} should be an English stopword"
+            );
+        }
+    }
+
+    #[test]
     fn unstemmed_tokenizes_korean_eojeol_with_stem() {
         // 학교에 -> eojeol + stripped stem 학교. 갔다 has no particle
         // suffix (다 is a verb ending, not stripped) -> eojeol only.
@@ -593,3 +710,4 @@ mod tests {
         assert!(toks.iter().any(|t| t.chars().all(crate::lang::is_han)));
     }
 }
+

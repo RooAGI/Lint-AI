@@ -101,7 +101,18 @@ Lint-AI's fractional recall is 85.6% at 5, 92.0% at 10, and 93.1% at 20.
 | Embeddings | Disabled |
 | Cutoffs | 5, 10, and 20 |
 | Average query latency | 13.0 ms |
-| Reproduction command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20 --ner-provider heuristic` |
+| Reproduction command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20 --ner-provider heuristic --parse-provider spacy` |
+
+The published numbers above used heuristic Tier1 NER. Note: this benchmark's
+query loop (`analyze_query` → lexical search → aggregation) never invokes
+behood's descriptor parser, so the parse backend cannot affect these numbers;
+`--parse-provider` is accepted for uniformity but is a no-op here. The parse
+backend matters on paths that actually judge questions with behood: the
+production `MemoryService::search` structured-fact path and semantic tags.
+A 500-question parse→judge A/B (spaCy parse vs heuristic parse, same bekind
+binary) gave identical scope verdicts on all 500 questions; entity verdicts
+matched on 228/500, the gap being spaCy-NER teacher votes the heuristic
+backend deliberately does not invent.
 
 ### Segmented-index comparison
 

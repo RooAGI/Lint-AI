@@ -1,4 +1,4 @@
-//! Query-time behood: parse (Python/spaCy) + judge (bekind daemon).
+//! Query-time behood: parse + judge (bekind daemon).
 //!
 //! Luyi's design: "the behood provide people as the source, then we have
 //! place and thing." At query time, behood judges the question's entities
@@ -7,9 +7,13 @@
 //!
 //! Two long-lived children, each doing one job:
 //!
-//! - `scripts/behood_query.py --serve` (parse daemon): pure spaCy parsing,
-//!   one pass per text over the already-loaded model. It emits bekind-ready
-//!   descriptors (`mentions`, `np_mentions`) and never spawns a subprocess.
+//! - Parse backend (selectable via [`BehoodParseProvider`]): the default
+//!   `scripts/behood_query.py --serve` (parse daemon) is pure spaCy parsing,
+//!   one pass per text over the already-loaded model; the
+//!   [`BehoodParseProvider::Heuristic`] backend is the pure-Rust
+//!   [`crate::heuristic_parse`] chunker — no Python, no spaCy. Both emit
+//!   bekind-ready descriptors (`mentions`, `np_mentions`) and never spawn
+//!   a subprocess.
 //! - `bekind --serve` (judge daemon): pure judgment over descriptors, no
 //!   parsing, no spaCy. Owned directly by this module — Rust passes the
 //!   payload straight to the binary instead of routing through Python.
@@ -460,6 +464,67 @@ impl BekindDaemon {
 // Query composition: parse, then judge.
 // ---------------------------------------------------------------------------
 
+/// Which backend parses raw text into bekind descriptors.
+///
+/// - [`BehoodParseProvider::Spacy`]: `scripts/behood_query.py --serve`
+///   (spaCy). Default; matches the published benchmark numbers.
+/// - [`BehoodParseProvider::Heuristic`]: the pure-Rust
+///   [`crate::heuristic_parse::heuristic_parse_texts`] chunker. No Python
+///   process, no spaCy model — the query path is fully spaCy-free.
+///
+/// The judge backend is always the bekind daemon; only the parse step is
+/// selectable. Set once per process at startup via
+/// [`set_behood_parse_provider`]; later calls are ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, serde::Serialize)]
+pub enum BehoodParseProvider {
+    #[default]
+    Spacy,
+    Heuristic,
+}
+
+static PARSE_PROVIDER: OnceLock<BehoodParseProvider> = OnceLock::new();
+
+/// Select the behood parse backend for this process. Call once at startup
+/// (server, benchmark); subsequent calls are ignored. Defaults to
+/// [`BehoodParseProvider::Spacy`].
+pub fn set_behood_parse_provider(provider: BehoodParseProvider) {
+    let _ = PARSE_PROVIDER.set(provider);
+}
+
+/// Resolve the effective parse backend: an explicit `--parse-provider`
+/// wins; otherwise the backend follows the NER provider (heuristic NER ⇒
+/// heuristic parse, fully spaCy-free on the query path).
+pub fn resolve_parse_provider(
+    explicit: Option<BehoodParseProvider>,
+    heuristic_ner: bool,
+) -> BehoodParseProvider {
+    explicit.unwrap_or(if heuristic_ner {
+        BehoodParseProvider::Heuristic
+    } else {
+        BehoodParseProvider::Spacy
+    })
+}
+
+fn behood_parse_provider() -> BehoodParseProvider {
+    PARSE_PROVIDER.get().copied().unwrap_or_default()
+}
+
+/// Parse texts into descriptors via the selected backend: the spaCy parse
+/// daemon, or the pure-Rust heuristic builder (no subprocess, no model).
+fn parse_texts_via_provider(
+    provider: BehoodParseProvider,
+    parse: &BehoodQueryDaemon,
+    texts: &[&str],
+    timeout: Duration,
+) -> Option<Vec<ParsedText>> {
+    match provider {
+        BehoodParseProvider::Heuristic => {
+            Some(crate::heuristic_parse::heuristic_parse_texts(texts))
+        }
+        BehoodParseProvider::Spacy => parse.parse_texts(texts, timeout),
+    }
+}
+
 /// Parse + judge one question through the daemon pair: the parse daemon
 /// turns the text into descriptors (one spaCy pass), the judge daemon
 /// judges them (one bekind call, no subprocess spawn anywhere).
@@ -473,7 +538,8 @@ fn query_judge(
     question: &str,
     with_scope: bool,
 ) -> Option<(Vec<ScopeVerdict>, Vec<QueryEntity>)> {
-    let parsed = parse.parse_texts(&[question], DAEMON_TIMEOUT)?;
+    let parsed =
+        parse_texts_via_provider(behood_parse_provider(), parse, &[question], DAEMON_TIMEOUT)?;
     let first = parsed.iter().find(|p| p.id == "p:0");
     let (mentions, np_mentions) = match first {
         Some(p) => (p.mentions.clone(), p.np_mentions.clone()),
@@ -496,12 +562,36 @@ fn query_judge(
     ))
 }
 
-/// One-shot fallback: `behood_query.py --parse` piped into one-shot
-/// `bekind`. Used only when the daemon pair cannot serve.
+/// One-shot fallback: descriptors (spaCy one-shot, or the pure-Rust
+/// heuristic builder when the heuristic parse backend is selected) piped
+/// into one-shot `bekind`. Used only when the daemon pair cannot serve.
 fn oneshot_query_judge(
     question: &str,
     with_scope: bool,
 ) -> Option<(Vec<ScopeVerdict>, Vec<QueryEntity>)> {
+    // Heuristic parse backend: no Python at all — descriptors come from
+    // the Rust builder, only the judge is a one-shot subprocess.
+    if behood_parse_provider() == BehoodParseProvider::Heuristic {
+        let binary = bekind_bin()?;
+        let parsed = crate::heuristic_parse::heuristic_parse_texts(&[question]);
+        let first = parsed.iter().find(|p| p.id == "p:0");
+        let (mentions, np_mentions) = match first {
+            Some(p) => (p.mentions.clone(), p.np_mentions.clone()),
+            None => (json!([]), json!([])),
+        };
+        if !with_scope && descriptors_empty(&mentions, &np_mentions) {
+            return Some((Vec::new(), Vec::new()));
+        }
+        let request = discourse_request(&mentions, &np_mentions, with_scope.then_some(question));
+        let response = oneshot_judge(&binary, &request)?;
+        return Some(scope_and_entities(
+            &response,
+            &mentions,
+            &np_mentions,
+            question,
+            with_scope,
+        ));
+    }
     let script = script_path()?;
     let binary = bekind_bin()?;
     let parse_out = Command::new(python_executable())
@@ -772,7 +862,12 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
     if texts.is_empty() {
         return Vec::new();
     }
-    let parsed = match BehoodQueryDaemon::global().parse_texts(texts, DAEMON_TIMEOUT) {
+    let parsed = match parse_texts_via_provider(
+        behood_parse_provider(),
+        BehoodQueryDaemon::global(),
+        texts,
+        DAEMON_TIMEOUT,
+    ) {
         Some(parsed) => parsed,
         None => return Vec::new(),
     };
@@ -1135,6 +1230,50 @@ for line in sys.stdin:
             query_judge(&parse, &judge, "anything", true).is_none(),
             "missing parse daemon must fail open"
         );
+    }
+
+    #[test]
+    fn heuristic_provider_bypasses_parse_daemon() {
+        // The heuristic backend must not touch the parse daemon at all:
+        // point it at a nonexistent script and the descriptors still come
+        // from the Rust builder.
+        let parse = test_parse_daemon(std::path::PathBuf::from("/nonexistent/behood_query.py"));
+        let parsed = parse_texts_via_provider(
+            BehoodParseProvider::Heuristic,
+            &parse,
+            &["When did Jean visit Paris"],
+            Duration::from_secs(30),
+        )
+        .expect("heuristic parse needs no daemon");
+        assert_eq!(parsed.len(), 1);
+        let heads: Vec<&str> = parsed[0]
+            .np_mentions
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["head_lemma"].as_str().unwrap())
+            .collect();
+        assert!(heads.contains(&"jean"), "heads: {heads:?}");
+        assert!(heads.contains(&"paris"), "heads: {heads:?}");
+        assert!(
+            !heads.contains(&"visit"),
+            "verb must not be a chunk head: {heads:?}"
+        );
+    }
+
+    #[test]
+    fn spacy_provider_uses_parse_daemon() {
+        let dir = unique_temp_dir("spacy_provider");
+        let parse = test_parse_daemon(write_fake_parse_script(&dir));
+        let parsed = parse_texts_via_provider(
+            BehoodParseProvider::Spacy,
+            &parse,
+            &["hello"],
+            Duration::from_secs(30),
+        )
+        .expect("spacy provider delegates to the daemon");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(request_count(&dir, "parse_count.txt"), "1");
     }
 
     #[test]

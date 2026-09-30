@@ -9,6 +9,7 @@ use lint_ai::{
     AggregateOutput, ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimeHint, QueryTimings,
     SearchResult, SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
+use lint_ai::behood_query::{resolve_parse_provider, set_behood_parse_provider, BehoodParseProvider};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -63,6 +64,13 @@ struct Args {
     /// docs/benchmark.md numbers; `spacy` is the current default.
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
+
+    /// Behood parse backend. When omitted it follows `--ner-provider`
+    /// (`heuristic` NER ⇒ heuristic parse, fully spaCy-free); pass
+    /// explicitly to mix backends. The published docs/benchmark.md numbers
+    /// used `--ner-provider heuristic --parse-provider spacy`.
+    #[arg(long, value_enum)]
+    parse_provider: Option<BehoodParseProvider>,
 }
 
 
@@ -211,6 +219,7 @@ struct TypeMetrics {
 #[derive(Debug, Clone, Serialize)]
 struct BenchmarkReport {
     ner_provider: Tier1NerProvider,
+    parse_provider: BehoodParseProvider,
     aggregate: AggregateMetrics,
     by_question_type: HashMap<String, TypeMetrics>,
     per_query: Vec<QueryMetrics>,
@@ -218,6 +227,13 @@ struct BenchmarkReport {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    // The parse backend follows the NER provider unless explicitly
+    // overridden: heuristic NER ⇒ heuristic parse (fully spaCy-free).
+    let parse_provider = resolve_parse_provider(
+        args.parse_provider,
+        matches!(args.ner_provider, Tier1NerProvider::Heuristic),
+    );
+    set_behood_parse_provider(parse_provider);
     let mut ks = args
         .ks
         .into_iter()
@@ -246,6 +262,7 @@ fn main() -> Result<()> {
         args.segment_top_n,
         args.segment_router.into(),
         args.ner_provider.clone(),
+        parse_provider,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -272,6 +289,7 @@ fn run_scoped_benchmark(
     segment_top_n: usize,
     segment_router: SegmentRoutingStrategy,
     ner_provider: Tier1NerProvider,
+    parse_provider: BehoodParseProvider,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -454,6 +472,7 @@ fn run_scoped_benchmark(
 
     Ok(BenchmarkReport {
         ner_provider,
+        parse_provider,
         aggregate: aggregate_metrics(&per_query, ks),
         by_question_type: aggregate_by_question_type(&per_query, ks),
         per_query,

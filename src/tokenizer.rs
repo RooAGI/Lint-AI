@@ -313,7 +313,8 @@ fn stemmed_stopwords() -> &'static HashSet<&'static str> {
 /// with the ASCII stopword lists, so this set is unioned into both modes'
 /// checks. Interrogatives are included for term statistics; question
 /// focus deliberately does not filter stopwords, so they still work there.
-fn korean_stopwords() -> &'static HashSet<&'static str> {
+/// Shared with the tier-1 term ranker (`crate::tier1`).
+pub(crate) fn korean_stopwords() -> &'static HashSet<&'static str> {
     static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
     STOP.get_or_init(|| {
         [

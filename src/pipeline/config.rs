@@ -101,7 +101,12 @@ pub struct PipelineOptions {
 impl Default for PipelineOptions {
     fn default() -> Self {
         Self {
-            ner_provider: Tier1NerProvider::Spacy,
+            // Heuristic is the default: the package is Python-free unless
+            // the caller explicitly opts into Tier1NerProvider::Spacy.
+            // ner_provider is the master switch — when Heuristic, no
+            // spaCy/Python subprocess is spawned anywhere (key-phrase
+            // enrichment and relation extraction are skipped).
+            ner_provider: Tier1NerProvider::Heuristic,
             spacy_model: "en_core_web_sm".to_string(),
             term_ranker: Tier1TermRankerKind::Yake,
             chunk_strategy: ChunkStrategy::Heading,
@@ -121,6 +126,16 @@ impl Default for PipelineOptions {
             key_phrase_enrichment: true,
             extractor_script: None,
         }
+    }
+}
+
+impl PipelineOptions {
+    /// True when the pipeline must not spawn any Python/spaCy subprocess.
+    /// `ner_provider` is the master switch: Heuristic means the pure-Rust
+    /// path everywhere (key-phrase enrichment and relation extraction are
+    /// skipped, not just failed-open).
+    pub fn python_free(&self) -> bool {
+        matches!(self.ner_provider, Tier1NerProvider::Heuristic)
     }
 }
 

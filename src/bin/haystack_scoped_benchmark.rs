@@ -317,10 +317,11 @@ fn run_scoped_benchmark(
     // PipelineOptions mirror the old direct-index benchmark so the
     // --ner-provider / --text-rerank-* flags keep their meaning. The
     // MemoryService applies them on both the add() and search() paths.
-    // structured_fact_retrieval is disabled: the spaCy dependency-parse
-    // extractor is too slow/brittle for a 500-question benchmark run
-    // (120s timeout killed the first attempt). The lexical + behood
-    // semantic-tag path is what we measure here.
+    // ner_provider is the master Python-free switch: Heuristic (the
+    // default) skips all spaCy subprocesses via PipelineOptions::python_free().
+    // structured_fact_retrieval stays off for the benchmark: the spaCy
+    // dependency-parse extractor is too slow/brittle for 500 questions
+    // (120s timeout killed the first attempt) when ner_provider=spacy.
     let options = PipelineOptions {
         ner_provider: ner_provider.clone(),
         spacy_model: "en_core_web_sm".to_string(),

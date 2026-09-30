@@ -451,7 +451,13 @@ fn structured_fact_results(
     superseded_ids: &HashSet<(String, String)>,
     request: &SearchRequest,
 ) -> Vec<crate::SearchResult> {
-    if !options.structured_fact_retrieval || request.query.trim().is_empty() {
+    // Skip when python_free(): the relation extractor is spaCy-only, no
+    // pure-Rust replacement exists yet. Fail-closed (not fail-open) here
+    // because python_free is an explicit opt-out of all Python.
+    if !options.structured_fact_retrieval
+        || options.python_free()
+        || request.query.trim().is_empty()
+    {
         return Vec::new();
     }
     // Classify before building: only structured fact questions pay for the
@@ -767,8 +773,12 @@ impl MemoryService {
     /// Queue freshly written documents for background key-phrase
     /// enrichment. No-op when `key_phrase_enrichment` is off. The write
     /// itself already finished; this only schedules the async work.
+    /// Also a no-op when `python_free()` — the extractor is spaCy-only.
     fn queue_key_phrase_enrichment(&mut self, docs: &[SourceDocument]) {
-        if !self.store.options().key_phrase_enrichment || docs.is_empty() {
+        if !self.store.options().key_phrase_enrichment
+            || self.store.options().python_free()
+            || docs.is_empty()
+        {
             return;
         }
         let refs: Vec<&SourceDocument> = docs.iter().collect();
@@ -909,9 +919,10 @@ impl MemoryService {
     /// Whether any document still needs key-phrase extraction. Cheap scan
     /// with early exit: read-only callers (the server search handler) use it
     /// to decide whether a write-lock backfill is worthwhile, keeping the
-    /// steady state at zero extra cost.
+    /// steady state at zero extra cost. False when `python_free()` — the
+    /// extractor is spaCy-only.
     pub fn key_phrase_backfill_needed(&self) -> bool {
-        if !self.store.options().key_phrase_enrichment {
+        if !self.store.options().key_phrase_enrichment || self.store.options().python_free() {
             return false;
         }
         if !self
@@ -946,11 +957,11 @@ impl MemoryService {
     /// the subprocess via [`extract_key_phrases_for_docs`] without holding
     /// any service lock, then applies the result with
     /// [`apply_key_phrase_backfill`]. Returns no documents when enrichment
-    /// is disabled.
+    /// is disabled or when `python_free()` — the extractor is spaCy-only.
     pub fn key_phrase_backfill_snapshot(
         &self,
     ) -> (Vec<SourceDocument>, Option<std::path::PathBuf>) {
-        if !self.store.options().key_phrase_enrichment {
+        if !self.store.options().key_phrase_enrichment || self.store.options().python_free() {
             return (Vec::new(), None);
         }
         // Deterministic order so repeated calls converge instead of

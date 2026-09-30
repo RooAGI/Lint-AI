@@ -44,6 +44,36 @@ pub enum TokenizerMode {
 /// not "ni"). Pure-ASCII input matches byte-identically to `[A-Za-z]`.
 pub(crate) const LATIN_LETTER: &str = r"A-Za-zÀ-ÿĀ-ſ";
 
+/// Strip diacritics from a (lowercased) Latin token: NFD decomposition
+/// followed by removal of combining marks. `niño` -> `nino`,
+/// `dónde` -> `donde`. Pure-ASCII input is returned unchanged
+/// (byte-identical, via the fast path below).
+///
+/// Used for dual emission (see [`unstemmed_tokens`] and
+/// `crate::index::latin_tokenizer`): both the original and the folded
+/// form are indexed and queried, so unaccented queries match accented
+/// text while exact matches still rank higher. Only combining marks are
+/// removed — `ß`, `ø`, `ł` keep their identity (this is not full
+/// ASCII-folding).
+pub fn fold_diacritics(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_string();
+    }
+    s.nfd().filter(|c| !is_combining_mark(*c)).collect()
+}
+
+/// True for Unicode combining marks (diacritics) — the marks that NFD
+/// decomposition separates from their base letters.
+fn is_combining_mark(c: char) -> bool {
+    matches!(c,
+        '\u{300}'..='\u{36F}'   // Combining Diacritical Marks
+        | '\u{1AB0}'..='\u{1AFF}' // Combining Diacritical Marks Extended
+        | '\u{1DC0}'..='\u{1DFF}' // Combining Diacritical Marks Supplement
+        | '\u{20D0}'..='\u{20FF}' // Combining Diacritical Marks for Symbols
+        | '\u{FE20}'..='\u{FE2F}' // Combining Half Marks
+    )
+}
+
 /// Tokenizes `input` according to `mode`. Order matches input order and
 /// duplicates are preserved; callers that need a set should collect into
 /// one (as `crate::segments::query_tokens` does).
@@ -88,6 +118,8 @@ fn unstemmed_tokens(input: &str) -> Vec<String> {
     // behavior (no regex match can span a Han/Hangul char, so segmenting at
     // script boundaries is byte-identical for Latin); Han runs emit
     // bigrams; Hangul runs emit the eojeol plus a particle-stripped stem.
+    // Latin runs dual-emit the original and the diacritic-folded form
+    // (see `push_unstemmed_run`).
     let mut out = Vec::new();
     let mut seg = String::new();
     let mut seg_script = Script::Latin;
@@ -158,7 +190,21 @@ fn push_unstemmed_run(
 ) {
     match script {
         Script::Latin => {
-            out.extend(token_re.find_iter(seg).map(|m| m.as_str().to_lowercase()));
+            for m in token_re.find_iter(seg) {
+                let lowered = m.as_str().to_lowercase();
+                // Dual emission for accent-insensitive matching: the
+                // original form plus the diacritic-folded form (when
+                // different). Index and query both emit both, so `nino`
+                // matches a doc containing `niño`, while a query for `niño`
+                // matches two terms in an exact doc vs one in a folded-only
+                // doc — exact matches rank higher with no boost machinery.
+                // Pure-ASCII tokens emit once (byte-identical to before).
+                let folded = fold_diacritics(&lowered);
+                out.push(lowered);
+                if folded != *out.last().unwrap() {
+                    out.push(folded);
+                }
+            }
         }
         Script::Han => push_han_bigrams(out, &seg.chars().collect::<Vec<_>>()),
         Script::Hangul => out.extend(hangul_eojeol_tokens(seg)),
@@ -541,14 +587,38 @@ mod tests {
     #[test]
     fn unstemmed_keeps_spanish_accents() {
         // Accented words must tokenize as units (previously "niño" yielded
-        // zero tokens and "está" was truncated to "est").
+        // zero tokens and "está" was truncated to "est"). Dual emission:
+        // the original form plus the folded form.
         assert_eq!(
             tokenize("¿Dónde está la biblioteca?", TokenizerMode::Unstemmed),
-            vec!["dónde", "está", "biblioteca"]
+            vec!["dónde", "donde", "está", "esta", "biblioteca"]
         );
         assert_eq!(
             tokenize("El niño juega", TokenizerMode::Unstemmed),
-            vec!["niño", "juega"]
+            vec!["niño", "nino", "juega"]
+        );
+    }
+
+    #[test]
+    fn fold_diacritics_strips_marks() {
+        assert_eq!(fold_diacritics("niño"), "nino");
+        assert_eq!(fold_diacritics("dónde"), "donde");
+        assert_eq!(fold_diacritics("sí"), "si");
+        assert_eq!(fold_diacritics("año"), "ano");
+        assert_eq!(fold_diacritics("Ñoño"), "Nono"); // case preserved, marks stripped
+        // Pure ASCII is byte-identical (fast path).
+        assert_eq!(fold_diacritics("siesta"), "siesta");
+        // Not full ASCII-folding: ß/ø/ł keep their identity.
+        assert_eq!(fold_diacritics("straße"), "straße");
+        assert_eq!(fold_diacritics("søren"), "søren");
+    }
+
+    #[test]
+    fn unstemmed_ascii_unchanged() {
+        // Pure-ASCII input emits exactly one token per word, as before.
+        assert_eq!(
+            tokenize("The quick brown fox", TokenizerMode::Unstemmed),
+            vec!["the", "quick", "brown", "fox"]
         );
     }
 

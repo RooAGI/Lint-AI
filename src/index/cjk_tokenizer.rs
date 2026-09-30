@@ -17,12 +17,13 @@
 //!   inflected forms match their stems. See
 //!   [`crate::tokenizer::hangul_eojeol_tokens`].
 //! - Every other run replicates tantivy's default tokenizer
-//!   (split on non-alphanumeric, drop tokens >= 40 bytes, lowercase).
-//!   Accented Latin characters are PRESERVED, not folded: "niño" indexes
-//!   as "niño", not "nino" (script agreement — like Hangul, which is never
-//!   romanized; lossy folding would conflate distinct words like sí/si
-//!   irreversibly). Pure-ASCII text indexes byte-identically to before
-//!   this change.
+//!   (split on non-alphanumeric, drop tokens >= 40 bytes, lowercase) with
+//!   dual emission for accented Latin: "niño" indexes as both "niño" and
+//!   "nino" (same position). Script agreement — like Hangul, which is never
+//!   romanized, the exact form is always kept (lossy fold-only would
+//!   conflate distinct words like sí/si irreversibly) — plus
+//!   accent-insensitive matching for unaccented queries. Pure-ASCII text
+//!   emits once per token, byte-identical to before this change.
 
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 
@@ -51,22 +52,40 @@ fn push_default_token(
     offset_to: usize,
 ) {
     // Replicates SimpleTokenizer + RemoveLongFilter(40) + LowerCaser.
-    // Lowercase only — NO deunicode: accented Latin is indexed in its
-    // original script (script agreement, like Hangul which is never
-    // romanized). Lossy folding would conflate distinct words (sí/si)
-    // irreversibly. Latin-path only: never applied to Han bigrams or
-    // Hangul tokens.
+    // Lowercase only — NO deunicode. The original (accented) form is
+    // always emitted so index and query meet in the same script
+    // ("niño" == "niño"); lossy folding would conflate distinct words
+    // (sí/si) irreversibly. Latin-path only: never applied to Han
+    // bigrams or Hangul tokens.
     let lowered = word.to_lowercase();
     if lowered.len() >= MAX_TOKEN_BYTES || lowered.is_empty() {
         return;
     }
+    let pos = *position;
     tokens.push(Token {
-        text: lowered,
+        text: lowered.clone(),
         offset_from,
         offset_to,
-        position: *position,
+        position: pos,
         position_length: 1,
     });
+    // Dual emission: the diacritic-folded form at the SAME position
+    // (like a synonym). An unaccented query (`nino`) is a single term
+    // that matches the folded emission; an accented query (`niño`) emits
+    // both terms and matches two in an exact doc vs one in a folded-only
+    // doc — exact matches rank higher with no boost machinery.
+    // Pure-ASCII words are unaffected (folded == lowered, single
+    // emission, byte-identical to before).
+    let folded = crate::tokenizer::fold_diacritics(&lowered);
+    if folded != lowered {
+        tokens.push(Token {
+            text: folded,
+            offset_from,
+            offset_to,
+            position: pos,
+            position_length: 1,
+        });
+    }
     *position += 1;
 }
 
@@ -269,11 +288,40 @@ mod tests {
     }
 
     #[test]
-    fn latin_path_preserves_accents() {
-        // Script agreement: accented Latin is indexed in its original
-        // script, like Hangul (never romanized). No lossy folding.
-        assert_eq!(token_texts("El niño juega"), vec!["el", "niño", "juega"]);
-        assert_eq!(token_texts("¿Dónde está?"), vec!["dónde", "está"]);
+    fn latin_path_dual_emission() {
+        // Script agreement + accent-insensitivity: the accented form is
+        // always emitted (index and query meet in the same script), and
+        // the folded form is emitted alongside it at the same position.
+        assert_eq!(
+            token_texts("El niño juega"),
+            vec!["el", "niño", "nino", "juega"]
+        );
+        assert_eq!(
+            token_texts("¿Dónde está?"),
+            vec!["dónde", "donde", "está", "esta"]
+        );
+        // "sí" (yes) and "si" (if) stay distinct as indexed terms — the
+        // exact form is never destroyed.
+        assert_eq!(token_texts("sí si"), vec!["sí", "si", "si"]);
+        // Pure ASCII: single emission, byte-identical to before.
+        assert_eq!(
+            token_texts("The quick brown fox"),
+            vec!["the", "quick", "brown", "fox"]
+        );
+    }
+
+    #[test]
+    fn dual_emission_shares_position() {
+        let mut tok = CjkTokenizer;
+        let mut stream = tok.token_stream("niño");
+        assert!(stream.advance());
+        let first = stream.token().clone();
+        assert!(stream.advance());
+        let second = stream.token().clone();
+        assert_eq!(first.text, "niño");
+        assert_eq!(second.text, "nino");
+        assert_eq!(first.position, second.position);
+        assert!(!stream.advance());
     }
 
     #[test]

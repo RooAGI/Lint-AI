@@ -95,6 +95,31 @@ fn run_smoke(lang: Lang, label: &str) {
         "[{label}] accented query missed niño fact"
     );
 
+    // Accent-insensitive: unaccented query "nino" finds the accented "niño"
+    // fact (dual emission: the doc carries both "niño" and "nino").
+    let r_fold = search(&mut service, &user_id, "¿Dónde juega el nino?");
+    assert!(
+        r_fold.iter().any(|hit| hit.doc_id == id_nino),
+        "[{label}] unaccented query missed niño fact"
+    );
+
+    // Exact matches rank at least as high: the accented query emits both
+    // terms, so the exact doc matches two terms vs one for a folded-only
+    // doc. Here the same doc must rank no worse under the exact query.
+    let pos_exact = r
+        .iter()
+        .position(|hit| hit.doc_id == id_nino)
+        .expect("[{label}] exact query lost niño fact");
+    let pos_fold = r_fold
+        .iter()
+        .position(|hit| hit.doc_id == id_nino)
+        .expect("[{label}] folded query lost niño fact");
+    eprintln!("[{label}] nino rank: exact query at {pos_exact}, unaccented at {pos_fold}");
+    assert!(
+        pos_exact <= pos_fold,
+        "[{label}] exact query ranked worse than unaccented query"
+    );
+
     // Unaccented terms match unaccented docs.
     let r = search(&mut service, &user_id, "biblioteca Madrid");
     assert!(

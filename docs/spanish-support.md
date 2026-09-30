@@ -28,27 +28,32 @@ chosen in Rust (`src/lang.rs::default_spacy_model_for_lang`).
 
 ## Tokenization and indexing
 
-**Script agreement (no lossy deunicode).** Like Hangul, which is never
-romanized, accented Latin is indexed in its original script. The tantivy
-`"default"` tokenizer (`src/index/cjk_tokenizer.rs`) lowercases but
-never folds: `niño` indexes as `niño`, not `nino`. Queries are tokenized
-the same way, so index and query meet in the same script.
+**Script agreement (no lossy deunicode) + accent-insensitive matching via
+dual emission.** Like Hangul, which is never romanized, accented Latin is
+indexed in its original script. The tantivy `"default"` tokenizer
+(`src/index/cjk_tokenizer.rs`) lowercases and emits *both* the original
+and the diacritic-folded form at the same position: `niño` indexes as
+`niño` + `nino`. Queries are tokenized the same way, so index and query
+meet in the same script.
 
-This is deliberately lossy-free: ASCII-folding would conflate distinct
-words (`sí` = yes vs `si` = if) irreversibly.
+This keeps the exact form (never destroyed, only supplemented): an
+accented query matches two terms in an exact doc vs one in a folded-only
+doc, so exact matches rank higher with no boost machinery — while an
+unaccented query (`nino`) still finds accented text (`niño`). Full
+ASCII-folding would conflate distinct words (`sí` = yes vs `si` = if)
+irreversibly; dual emission does not.
 
 The boosted `entities` and `important_terms` fields use
 `normalize_for_index` (which deunicodes + stems) — a *separate* field with
 its own consistent normalization. Query terms for boosted fields go
 through the same normalization, so index and query agree *within* each
-field: content agrees on the original script, boosted fields agree on the
-normalized form.
+field: content agrees on the original script plus the folded form, boosted
+fields agree on the normalized form.
 
-**Limitation:** accent-insensitive search is not supported. Query `nino`
-will not match document `niño` (and vice versa). Users must match accents.
-
-The unstemmed Rust tokenizer (`src/tokenizer.rs`) also preserves accents
-(`niño`, `dónde`, `está` stay intact pre-index).
+The unstemmed Rust tokenizer (`src/tokenizer.rs`) mirrors the dual
+emission (`niño` -> `niño` + `nino`), so the in-house postings path and
+query analysis agree with the tantivy index. Pure-ASCII text is
+byte-identical to before (single emission).
 
 ## spaCy NER (`es_core_news_sm`)
 

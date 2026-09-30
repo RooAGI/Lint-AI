@@ -87,6 +87,8 @@ nav:
       - Codex performance: codex-performance-tests.md
       - Claude Code performance: claude-code-performance-tests.md
       - Antigravity (AGY) performance: agy-performance-tests.md
+  - Languages:
+      - Korean: korean.md
   - Releases:
       - 0.2.1: releases/0.2.1.md
       - 0.2.0: releases/0.2.0.md

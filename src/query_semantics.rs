@@ -1420,12 +1420,18 @@ fn heuristic_noun_phrases(query: &str) -> Vec<NounPhrase> {
         "do", "does", "did", "the", "a", "an", "of", "to", "for", "on", "in", "at", "with", "from",
         "by", "about", "and",
     ];
+    // Korean stopwords: without these, heuristic noun phrases for Korean
+    // queries would include particles and function words as phrase content.
+    let ko_stop_words = crate::tokenizer::korean_stopwords();
     let mut phrases = Vec::new();
     let mut current = Vec::new();
     let mut start = 0usize;
     for (idx, word) in words.iter().enumerate() {
         let token = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
-        if token.is_empty() || stop_words.contains(&token.to_lowercase().as_str()) {
+        if token.is_empty()
+            || stop_words.contains(&token.to_lowercase().as_str())
+            || ko_stop_words.contains(token)
+        {
             if !current.is_empty() {
                 phrases.push(NounPhrase {
                     text: current.join(" "),

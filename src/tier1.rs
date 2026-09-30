@@ -286,9 +286,26 @@ fn acronym_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,8})\b").expect("valid regex"))
 }
 
+fn content_word_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"[{L}][{L}0-9_\-]{{2,}}",
+            L = crate::tokenizer::LATIN_LETTER
+        ))
+        .expect("valid regex")
+    })
+}
+
 fn rake_token_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{1,}").expect("valid regex"))
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"[{L}][{L}0-9_\-]{{1,}}",
+            L = crate::tokenizer::LATIN_LETTER
+        ))
+        .expect("valid regex")
+    })
 }
 
 /// Sentence-boundary characters: ASCII plus CJK fullwidth forms.

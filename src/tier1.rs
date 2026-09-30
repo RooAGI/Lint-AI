@@ -1064,3 +1064,47 @@ mod stopword_tests {
         assert!(!stop_en.contains("era"), "English 'era' must survive");
     }
 }
+
+#[cfg(test)]
+mod stopword_tests {
+    use super::*;
+
+    #[test]
+    fn spanish_folded_twins_are_stopped() {
+        // Dual emission means ranker tokens carry both "está" and "esta";
+        // the folded twins of Spanish stopwords must not leak through as
+        // content terms.
+        let stop = default_stopwords_for_lang(Lang::Es);
+        for w in ["sí", "está", "están", "más", "también", "dónde", "qué"] {
+            assert!(stop.contains(w), "{w} (raw) not stopped");
+            let folded = crate::tokenizer::fold_diacritics(w);
+            assert!(
+                stop.contains(folded.as_str()),
+                "{folded} (folded twin of {w}) not stopped"
+            );
+        }
+        // Every dual-emitted token of a Spanish stopword is covered:
+        // tokenize each stopword and check all emissions are stopped.
+        for w in ["niño", "está", "dónde"] {
+            for t in crate::tokenizer::tokenize(w, crate::tokenizer::TokenizerMode::Unstemmed) {
+                // "niño" is content (not a stopword) — only its forms must
+                // agree; skip the content word itself.
+                if w == "niño" {
+                    continue;
+                }
+                assert!(stop.contains(t.as_str()), "emission {t} of {w} not stopped");
+            }
+        }
+    }
+
+    #[test]
+    fn english_stopwords_unchanged() {
+        // The English base is untouched by the per-language extension.
+        let stop = default_stopwords_for_lang(Lang::En);
+        for w in ["the", "and", "of", "is"] {
+            assert!(stop.contains(w));
+        }
+        assert!(!stop.contains("está"));
+        assert!(!stop.contains("sí"));
+    }
+}

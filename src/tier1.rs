@@ -70,6 +70,162 @@ pub trait ImportantTermRanker {
     fn rank_terms(&self, doc: &Tier1DocInput) -> Vec<RankedTerm>;
 }
 
+pub struct HeuristicKeyEntityRanker;
+
+impl HeuristicKeyEntityRanker {
+    fn rank_one(doc: &Tier1DocInput) -> Vec<Tier1Entity> {
+        #[derive(Clone, Copy)]
+        struct Cand {
+            start: usize,
+            end: usize,
+            mentions: usize,
+            heading_hits: usize,
+            section_hits: usize,
+            first_pos: usize,
+            label: &'static str,
+        }
+
+        let mut candidates: HashMap<String, Cand> = HashMap::new();
+        let mut section_bounds = Vec::new();
+        let mut last = 0usize;
+        for h in &doc.headings {
+            if let Some(pos) = doc.content.find(h) {
+                if pos > last {
+                    section_bounds.push((last, pos));
+                }
+                last = pos;
+            }
+        }
+        section_bounds.push((last, doc.content.len()));
+        if section_bounds.is_empty() {
+            section_bounds.push((0, doc.content.len()));
+        }
+
+        let concept = doc.concept.trim().to_string();
+        if !concept.is_empty() {
+            candidates.insert(
+                concept.clone(),
+                Cand {
+                    start: 0,
+                    end: concept.len(),
+                    mentions: 1,
+                    heading_hits: 0,
+                    section_hits: 1,
+                    first_pos: 0,
+                    label: "CONCEPT",
+                },
+            );
+        }
+
+        for cap in title_case_regex().captures_iter(&doc.content).take(80) {
+            let m = cap.get(1).expect("capture exists");
+            let text = m.as_str().trim();
+            if text.len() < 3 {
+                continue;
+            }
+            let key = text.to_string();
+            let section_hits = section_bounds
+                .iter()
+                .filter(|(s, e)| m.start() >= *s && m.start() < *e)
+                .count()
+                .max(1);
+            let entry = candidates.entry(key).or_insert(Cand {
+                start: m.start(),
+                end: m.end(),
+                mentions: 0,
+                heading_hits: 0,
+                section_hits: 0,
+                first_pos: m.start(),
+                label: "PROPN",
+            });
+            entry.mentions += 1;
+            entry.section_hits = entry.section_hits.max(section_hits);
+            entry.first_pos = entry.first_pos.min(m.start());
+        }
+
+        for m in acronym_regex().find_iter(&doc.content).take(50) {
+            let text = m.as_str();
+            let key = text.to_string();
+            let entry = candidates.entry(key).or_insert(Cand {
+                start: m.start(),
+                end: m.end(),
+                mentions: 0,
+                heading_hits: 0,
+                section_hits: 1,
+                first_pos: m.start(),
+                label: "ACRONYM",
+            });
+            entry.mentions += 1;
+            entry.first_pos = entry.first_pos.min(m.start());
+        }
+
+        for heading in &doc.headings {
+            let heading_l = heading.to_lowercase();
+            for (term, cand) in &mut candidates {
+                if heading_l.contains(&term.to_lowercase()) {
+                    cand.heading_hits += 1;
+                }
+            }
+        }
+
+        let len = doc.content.len().max(1) as f32;
+        let mut out: Vec<Tier1Entity> = candidates
+            .into_iter()
+            .filter_map(|(text, cand)| {
+                if text.len() < 3 {
+                    return None;
+                }
+                let pos_bonus = 1.0 + (1.0 - (cand.first_pos as f32 / len));
+                let freq_score = (cand.mentions as f32).ln_1p();
+                let section_score = cand.section_hits as f32;
+                let heading_score = (cand.heading_hits as f32) * 1.5;
+                let score =
+                    0.8 * freq_score + 0.7 * section_score + 1.2 * heading_score + 0.6 * pos_bonus;
+                Some(Tier1Entity {
+                    text,
+                    label: cand.label.to_string(),
+                    start: cand.start,
+                    end: cand.end,
+                    score: Some(score),
+                    source: "heuristic-scored".to_string(),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            b.score
+                .unwrap_or(0.0)
+                .partial_cmp(&a.score.unwrap_or(0.0))
+                .unwrap_or(Ordering::Equal)
+        });
+        out.truncate(12);
+        if out.is_empty() {
+            out.push(Tier1Entity {
+                text: doc.source.clone(),
+                label: "DOC".to_string(),
+                start: 0,
+                end: doc.source.len(),
+                score: Some(0.3),
+                source: "heuristic-scored".to_string(),
+            });
+        }
+        out
+    }
+}
+
+impl KeyEntityRanker for HeuristicKeyEntityRanker {
+    fn rank_docs(&self, docs: &[Tier1DocInput]) -> Result<HashMap<String, Vec<Tier1Entity>>> {
+        let mut out = HashMap::new();
+        for doc in docs {
+            out.insert(doc.id.clone(), Self::rank_one(doc));
+        }
+        Ok(out)
+    }
+
+    fn name(&self) -> &'static str {
+        "heuristic"
+    }
+}
+
 pub struct SpacyKeyEntityRanker {
     pub model: String,
     pub script_path: String,
@@ -128,6 +284,16 @@ pub fn detect_python_executable() -> String {
     }
 
     "python3".to_string()
+}
+
+fn title_case_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b").expect("valid regex"))
+}
+
+fn acronym_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,8})\b").expect("valid regex"))
 }
 
 fn content_word_regex() -> &'static Regex {

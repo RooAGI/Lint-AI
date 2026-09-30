@@ -7,9 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{
-    Bm25StatisticsProvider, BooleanQuery, BoostQuery, Occur, Query, QueryParser, TermQuery,
-};
+use tantivy::query::{Bm25StatisticsProvider, BooleanQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::{Field, IndexRecordOption, Schema, STORED, STRING, TEXT};
 use tantivy::{doc, Index, Term};
@@ -843,12 +841,11 @@ impl MemoryIndex {
     ///
     /// `tags` are closed-set definitional tags derived from the ORIGINAL
     /// user query (temporal words, "habitual", admitted kind tags). Each
-    /// tag becomes a SHOULD TermQuery on the `semantic_tags` field with a
-    /// [`TAG_BOOST`] multiplier — inside the scorer, weighted by BM25
-    /// (IDF, length norm, saturation) like every other term. Tags are
-    /// never added to the multi-field QueryParser (avoids cross-field
-    /// tokenization noise) and never filter: an empty `tags` runs the
-    /// lexical query exactly as before.
+    /// tag becomes a SHOULD TermQuery on the `semantic_tags` field, scored
+    /// by plain BM25 (IDF, length norm, saturation) like every other term —
+    /// no fixed multiplier. Tags are never added to the multi-field
+    /// QueryParser (avoids cross-field tokenization noise) and never
+    /// filter: an empty `tags` runs the lexical query exactly as before.
     pub(crate) fn lexical_bm25(
         &self,
         query: &str,
@@ -917,8 +914,7 @@ impl MemoryIndex {
                         Term::from_field_text(lex.tags_f, tag),
                         IndexRecordOption::Basic,
                     );
-                    let boosted = BoostQuery::new(Box::new(term_query), TAG_BOOST);
-                    subqueries.push((Occur::Should, Box::new(boosted)));
+                    subqueries.push((Occur::Should, Box::new(term_query)));
                 }
                 Arc::new(BooleanQuery::new(subqueries))
             };

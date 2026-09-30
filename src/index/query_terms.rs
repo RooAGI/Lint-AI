@@ -26,24 +26,10 @@ pub(crate) const QUERY_TERM_CACHE_CAPACITY: usize = 256;
 /// this only scales that in-scorer weight.
 ///
 /// Tuning (2026-09-28, BEHOOD_BIN binary):
-/// mem-05 (weekend/Saturday vs Monday): 2.0/1.5/1.25/1.1/1.05 pass;
-///   1.0 is the minimum where the tag itself (tantivy lexical) ranks the
-///   Saturday fact above the Monday distractor (A.lex 4.32 > B.lex 4.26).
-/// mem-08 (herb/cilantro vs coffee): 1.0 FAILS (A 11.97 < B 28.58),
-///   2.0 fails (12.58), 10.0 fails (17.46), 28.0 fails (28.44 < 28.58),
-///   29.0 PASSES (A 29.05 > B 28.58), 30.0 passes (29.66).
-/// Shared minimum fixing both: 29.0.
-///
-/// TOY-CORPUS IDF CAVEAT: in these 2-doc corpora the tag IDF is ~ln2
-/// (≈0.69), so one tag match is worth ≈0.6 raw BM25 points and the
-/// multiplier must be large to close mem-08's 12.7-point lexical gap
-/// (the coffee distractor shares rare word "avoids" with the question).
-/// In a real corpus a rare tag like "herb" carries far higher IDF and
-/// the same multiplier would be much stronger — 29.0 is conservative
-/// for production but required to flip the toy pair. Re-tune on a
-/// realistic corpus before treating 29.0 as final.
-pub(crate) const TAG_BOOST: f32 = 29.0;
-
+/// Luyi 2026-09-29: no fixed tag multiplier. Tags join the lexical query as
+/// plain SHOULD TermQueries, scored by BM25 like every other term. (The old
+/// TAG_BOOST = 29.0 was calibrated only on the 19-fact toy set and was never
+/// validated retrieval-wide.)
 #[derive(Clone)]
 pub(crate) struct PreparedQueryTerms {
     pub(crate) normalized: String,

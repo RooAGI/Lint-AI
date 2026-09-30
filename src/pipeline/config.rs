@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use tantivy::doc;
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Tier1NerProvider {
+    Heuristic,
     Spacy,
 }
 

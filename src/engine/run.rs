@@ -831,7 +831,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return Ok(());
     }
     if args.show_tier1_entities {
-        show_tier1_entities(&graph, &args.spacy_model)?;
+        show_tier1_entities(&graph, &args.tier1_ner_provider, &args.spacy_model)?;
         return Ok(());
     }
     if args.show_tier1_terms {

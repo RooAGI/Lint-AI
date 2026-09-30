@@ -10,9 +10,10 @@ use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
 use crate::tier1::{
-    default_spacy_script_path, CValueStyleTermRanker, ImportantTermRanker, KeyEntityRanker,
-    RakeStyleTermRanker, SpacyKeyEntityRanker, TextRankStyleTermRanker, Tier1DocInput, Tier1Entity,
-    YakeStyleTermRanker, BEHOOD_NP_ENTITY_SOURCE,
+    default_spacy_script_path, CValueStyleTermRanker, HeuristicKeyEntityRanker,
+    ImportantTermRanker, KeyEntityRanker, RakeStyleTermRanker, SpacyKeyEntityRanker,
+    TextRankStyleTermRanker, Tier1DocInput, Tier1Entity, YakeStyleTermRanker,
+    BEHOOD_NP_ENTITY_SOURCE,
 };
 use anyhow::Result;
 use sha2::{Digest, Sha256};
@@ -108,7 +109,23 @@ impl LexicalState {
         }
     }
 
-    pub(crate) fn upsert_record(&mut self, record: &DocRecord) -> Result<()> {
+    /// Upserts a batch of records, computing definitional semantic tags for
+    /// all of them in ONE batched daemon round-trip per tag layer (scope +
+    /// kind) instead of two daemon calls per record. Luyi 2026-09-29: the
+    /// refresh loop's per-record tag calls were the bulk-build slowness;
+    /// the mutable side batches them before the immutable snapshot is
+    /// published.
+    pub(crate) fn upsert_records(&mut self, records: &[&DocRecord]) -> Result<()> {
+        let contents: Vec<String> = records.iter().map(|r| record_content_text(r)).collect();
+        let content_refs: Vec<&str> = contents.iter().map(String::as_str).collect();
+        let tags_per_doc = crate::semantic_tags::batch_doc_semantic_tags(&content_refs);
+        for (record, tags) in records.iter().zip(tags_per_doc.iter()) {
+            self.upsert_record_with_tags(record, tags)?;
+        }
+        Ok(())
+    }
+
+    fn upsert_record_with_tags(&mut self, record: &DocRecord, tags: &[String]) -> Result<()> {
         let headings_text = record
             .section_chunks
             .iter()
@@ -127,12 +144,7 @@ impl LexicalState {
             .flat_map(|c| c.key_entities.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" ");
-        let content_text = record
-            .section_chunks
-            .iter()
-            .map(|c| c.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let content_text = record_content_text(record);
 
         // Field handles are Copy, so they are taken before the writer borrow.
         let (doc_id_f, content_f, headings_f, terms_f, entities_f, tags_f) = (
@@ -152,11 +164,11 @@ impl LexicalState {
         document.add_text(headings_f, &headings_text);
         document.add_text(terms_f, &terms_text);
         document.add_text(entities_f, &entities_text);
-        // Definitional semantic tags for this record (one daemon round-trip,
+        // Definitional semantic tags for this record (batched by the caller
+        // via upsert_records, or computed per-record by upsert_record;
         // fail-open). Skipped entirely on pre-tags on-disk indexes.
         if let Some(tags_f) = tags_f {
-            let tags = crate::semantic_tags::batch_doc_semantic_tags(&[content_text.as_str()]);
-            let tags_text = tags.into_iter().next().unwrap_or_default().join(" ");
+            let tags_text = tags.join(" ");
             document.add_text(tags_f, tags_text);
         }
         writer.add_document(document)?;
@@ -246,6 +258,17 @@ impl LexicalState {
     }
 }
 
+/// Joined section-chunk content for a record: the text the definitional
+/// semantic-tag layers judge.
+fn record_content_text(record: &DocRecord) -> String {
+    record
+        .section_chunks
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn select_term_ranker(ranker_kind: &Tier1TermRankerKind) -> Box<dyn ImportantTermRanker> {
     match ranker_kind {
         Tier1TermRankerKind::Yake => Box::new(YakeStyleTermRanker),
@@ -280,12 +303,48 @@ fn guess_doc_type(headings: &[String], content: &str) -> Option<String> {
 /// [`doc_record_content_hash`]) are the only `PipelineOptions` inputs that can
 /// change a built [`DocRecord`].
 fn extraction_identity(options: &PipelineOptions) -> (String, String) {
-    // Luyi 2026-09-29: spaCy NER is the only Tier1 provider. The heuristic
-    // ranker admitted junk entities ("The", "user", "memory") into the
-    // 2.4x-weighted entities field, so it was removed outright.
-    let ner_provider_name = format!("spacy:{}", options.spacy_model);
+    // Luyi 2026-09-29: heuristic ranker restored alongside spaCy (spaCy stays
+    // the default). The provider is part of the extraction identity so a
+    // provider switch invalidates cached records.
+    let ner_provider_name = match &options.ner_provider {
+        Tier1NerProvider::Heuristic => "heuristic".to_string(),
+        Tier1NerProvider::Spacy => format!("spacy:{}", options.spacy_model),
+    };
     let term_ranker_name = select_term_ranker(&options.term_ranker).name().to_string();
     (ner_provider_name, term_ranker_name)
+}
+
+/// Rank Tier1 key entities for a batch of documents per `options.ner_provider`.
+///
+/// Luyi 2026-09-29: keep the heuristic ranker; spaCy stays the default. When
+/// the provider is spaCy and it is unavailable, fall back to the heuristic
+/// ranker (loud warning) so a missing spaCy never silently degrades NER to
+/// zero entities for users who configured heuristic explicitly.
+pub(crate) fn rank_key_entities_batched(
+    docs: &[Tier1DocInput],
+    options: &PipelineOptions,
+) -> Result<HashMap<String, Vec<Tier1Entity>>> {
+    let heuristic = HeuristicKeyEntityRanker;
+    match &options.ner_provider {
+        Tier1NerProvider::Heuristic => heuristic.rank_docs(docs),
+        Tier1NerProvider::Spacy => {
+            let spacy = SpacyKeyEntityRanker {
+                model: options.spacy_model.clone(),
+                script_path: default_spacy_script_path().display().to_string(),
+            };
+            match spacy.rank_docs(docs) {
+                Ok(out) => Ok(out),
+                Err(err) => {
+                    eprintln!(
+                        "warning: {} ranker unavailable ({}), falling back to heuristic",
+                        spacy.name(),
+                        err
+                    );
+                    Ok(heuristic.rank_docs(docs).unwrap_or_default())
+                }
+            }
+        }
+    }
 }
 
 fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
@@ -436,24 +495,9 @@ pub fn build_doc_records(
 ) -> Result<Vec<DocRecord>> {
     let docs = source_documents_to_tier1_inputs(source_docs);
 
-    // Luyi 2026-09-29: always NER from spaCy. Fail OPEN with zero NER key
-    // entities when the spaCy subprocess is unavailable (loud warning) —
-    // bekind-np key phrases still flow and lexical retrieval is unaffected.
-    let spacy = SpacyKeyEntityRanker {
-        model: options.spacy_model.clone(),
-        script_path: default_spacy_script_path().display().to_string(),
-    };
-    let entities_by_doc = match spacy.rank_docs(&docs) {
-        Ok(out) => out,
-        Err(err) => {
-            eprintln!(
-                "warning: {} ranker unavailable ({}); NER key entities disabled, lexical retrieval unaffected",
-                spacy.name(),
-                err
-            );
-            HashMap::new()
-        }
-    };
+    // Luyi 2026-09-29: provider-selected NER; spaCy failures fall back to the
+    // heuristic ranker (never silently to zero entities).
+    let entities_by_doc = rank_key_entities_batched(&docs, options)?;
 
     let term_ranker = select_term_ranker(&options.term_ranker);
     let (ner_provider_name, term_ranker_name) = extraction_identity(options);
@@ -485,42 +529,22 @@ pub fn build_doc_records(
     Ok(records)
 }
 
-pub(crate) fn build_doc_record(
+/// Record assembly from precomputed NER key entities. Lets the refresh loop
+/// batch NER across dirty docs (one daemon call) instead of one call per
+/// document, while the per-doc bookkeeping stays per-doc.
+pub(crate) fn build_doc_record_with_entities(
     source_doc: &SourceDocument,
+    doc: &Tier1DocInput,
+    key_entities: Vec<Tier1Entity>,
     options: &PipelineOptions,
 ) -> Result<DocRecord> {
-    let docs = source_documents_to_tier1_inputs(std::slice::from_ref(source_doc));
-    let doc = docs
-        .into_iter()
-        .next()
-        .expect("single source document should yield one tier1 input");
-
-    // Luyi 2026-09-29: always NER from spaCy. Fail OPEN with zero NER key
-    // entities when the spaCy subprocess is unavailable (loud warning) —
-    // bekind-np key phrases still flow and lexical retrieval is unaffected.
-    let spacy = SpacyKeyEntityRanker {
-        model: options.spacy_model.clone(),
-        script_path: default_spacy_script_path().display().to_string(),
-    };
-    let key_entities = match spacy.rank_docs(std::slice::from_ref(&doc)) {
-        Ok(mut out) => out.remove(&doc.id).unwrap_or_default(),
-        Err(err) => {
-            eprintln!(
-                "warning: {} ranker unavailable ({}); NER key entities disabled, lexical retrieval unaffected",
-                spacy.name(),
-                err
-            );
-            Vec::new()
-        }
-    };
-
     let term_ranker = select_term_ranker(&options.term_ranker);
-    let important_terms = term_ranker.rank_terms(&doc);
+    let important_terms = term_ranker.rank_terms(doc);
     let (ner_provider_name, term_ranker_name) = extraction_identity(options);
 
     Ok(assemble_doc_record(
         source_doc,
-        &doc,
+        doc,
         key_entities,
         important_terms,
         &ner_provider_name,

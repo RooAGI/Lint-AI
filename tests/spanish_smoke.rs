@@ -2,8 +2,9 @@
 //
 // Adds three Spanish memories and verifies Spanish queries retrieve the
 // right ones, both with --lang es (explicit) and --lang auto (detection).
-// Exercises the full pipeline: accent-preserving tokenization, tantivy
-// Latin folding, Spanish stopwords, interrogative focus, and temporal.
+// Exercises the full pipeline: accent-preserving tokenization, script
+// agreement (no deunicode), Spanish stopwords, interrogative focus,
+// and temporal.
 use lint_ai::lang::Lang;
 use lint_ai::memory_api::{AddRequest, MemoryService, Message};
 use lint_ai::PipelineOptions;
@@ -12,6 +13,7 @@ use std::collections::BTreeMap;
 const FACT_LIBRO: &str = "El usuario compró un libro sobre la historia de Madrid ayer.";
 const FACT_BIBLIOTECA: &str = "La biblioteca de Madrid está en la calle de Alcalá.";
 const FACT_PAELLA: &str = "A María le gusta cocinar paella los domingos.";
+const FACT_NINO: &str = "El niño juega en el parque con su pelota roja.";
 
 fn options_for(lang: Lang) -> PipelineOptions {
     let mut opts = PipelineOptions::default();
@@ -56,10 +58,12 @@ fn run_smoke(lang: Lang, label: &str) {
     add_fact(&mut service, &user_id, "req-libro", FACT_LIBRO);
     add_fact(&mut service, &user_id, "req-biblio", FACT_BIBLIOTECA);
     add_fact(&mut service, &user_id, "req-paella", FACT_PAELLA);
+    add_fact(&mut service, &user_id, "req-nino", FACT_NINO);
 
     let id_libro = doc_id(&user_id, "req-libro");
     let id_biblio = doc_id(&user_id, "req-biblio");
     let id_paella = doc_id(&user_id, "req-paella");
+    let id_nino = doc_id(&user_id, "req-nino");
 
     // "Where is the Madrid library?" -> the biblioteca fact.
     let r = search(&mut service, &user_id, "¿Dónde está la biblioteca de Madrid?");
@@ -83,12 +87,19 @@ fn run_smoke(lang: Lang, label: &str) {
         .expect("[{label}] quien: paella fact not retrieved");
     eprintln!("[{label}] quien: paella at position {pos}");
 
-    // Accent-insensitive: unaccented "biblioteca" query still matches the
-    // accented indexed form via the tantivy Latin folding.
+    // Script agreement: accented query "niño" matches accented doc "niño"
+    // (no deunicode folding — index and query in the same script).
+    let r = search(&mut service, &user_id, "¿Dónde juega el niño?");
+    assert!(
+        r.iter().any(|hit| hit.doc_id == id_nino),
+        "[{label}] accented query missed niño fact"
+    );
+
+    // Unaccented terms match unaccented docs.
     let r = search(&mut service, &user_id, "biblioteca Madrid");
     assert!(
         r.iter().any(|hit| hit.doc_id == id_biblio),
-        "[{label}] unaccented query missed biblioteca fact"
+        "[{label}] biblioteca query missed biblioteca fact"
     );
 }
 

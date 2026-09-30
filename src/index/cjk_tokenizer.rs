@@ -17,14 +17,13 @@
 //!   inflected forms match their stems. See
 //!   [`crate::tokenizer::hangul_eojeol_tokens`].
 //! - Every other run replicates tantivy's default tokenizer
-//!   (split on non-alphanumeric, drop tokens >= 40 bytes, lowercase) plus
-//!   deunicode folding of Latin-script tokens ("niño" -> "nino"), so the
-//!   index agrees with the deunicoded boosted fields on every term.
-//!   Pure-ASCII text indexes byte-identically to before this change
-//!   (deunicode is the identity on ASCII). Folding is Latin-path only —
-//!   Han bigrams and Hangul tokens are never transliterated.
+//!   (split on non-alphanumeric, drop tokens >= 40 bytes, lowercase).
+//!   Accented Latin characters are PRESERVED, not folded: "niño" indexes
+//!   as "niño", not "nino" (script agreement — like Hangul, which is never
+//!   romanized; lossy folding would conflate distinct words like sí/si
+//!   irreversibly). Pure-ASCII text indexes byte-identically to before
+//!   this change.
 
-use deunicode::deunicode;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 
 /// Drop tokens whose UTF-8 byte length reaches this limit — the same limit
@@ -51,18 +50,18 @@ fn push_default_token(
     offset_from: usize,
     offset_to: usize,
 ) {
-    // Replicates SimpleTokenizer + RemoveLongFilter(40) + LowerCaser, plus
-    // deunicode folding ("niño" -> "nino") so accented Latin terms agree
-    // with the deunicoded boosted fields. Latin-path only: never applied
-    // to Han bigrams or Hangul tokens (it would transliterate them). The
-    // length check runs on the folded form (deunicode can lengthen a
-    // token, e.g. "æ" -> "ae").
-    let folded = deunicode(word).to_lowercase();
-    if folded.len() >= MAX_TOKEN_BYTES || folded.is_empty() {
+    // Replicates SimpleTokenizer + RemoveLongFilter(40) + LowerCaser.
+    // Lowercase only — NO deunicode: accented Latin is indexed in its
+    // original script (script agreement, like Hangul which is never
+    // romanized). Lossy folding would conflate distinct words (sí/si)
+    // irreversibly. Latin-path only: never applied to Han bigrams or
+    // Hangul tokens.
+    let lowered = word.to_lowercase();
+    if lowered.len() >= MAX_TOKEN_BYTES || lowered.is_empty() {
         return;
     }
     tokens.push(Token {
-        text: folded,
+        text: lowered,
         offset_from,
         offset_to,
         position: *position,
@@ -270,11 +269,11 @@ mod tests {
     }
 
     #[test]
-    fn latin_path_folds_accents() {
-        // Folded on the Latin path only, so accented terms agree with the
-        // deunicoded boosted fields; Han/Hangul paths are untouched.
-        assert_eq!(token_texts("El niño juega"), vec!["el", "nino", "juega"]);
-        assert_eq!(token_texts("¿Dónde está?"), vec!["donde", "esta"]);
+    fn latin_path_preserves_accents() {
+        // Script agreement: accented Latin is indexed in its original
+        // script, like Hangul (never romanized). No lossy folding.
+        assert_eq!(token_texts("El niño juega"), vec!["el", "niño", "juega"]);
+        assert_eq!(token_texts("¿Dónde está?"), vec!["dónde", "está"]);
     }
 
     #[test]

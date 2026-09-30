@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use crate::query_expansion::normalize_for_index;
 use crate::query_semantics::QueryRoutingIntent;
 use crate::temporal::parse_temporal_date;
@@ -204,12 +205,13 @@ pub(crate) fn seed_routing_candidates(
     q_terms: &[String],
     query_entities: &HashSet<String>,
     intent: QueryRoutingIntent,
+    lang: Lang,
 ) {
     if candidate_doc_ids.is_empty() {
         return;
     }
 
-    let content_terms = routing_content_terms(q_terms);
+    let content_terms = routing_content_terms(q_terms, lang);
     let unit_terms = routing_unit_terms(q_terms);
 
     for doc_u32 in candidate_doc_ids.iter().copied() {
@@ -324,12 +326,12 @@ pub(crate) fn group_evidence_boost(
     (boost - evidence_penalty.min(1.5)).max(0.0)
 }
 
-pub(crate) fn routing_content_terms(q_terms: &[String]) -> Vec<String> {
+pub(crate) fn routing_content_terms(q_terms: &[String], lang: Lang) -> Vec<String> {
     let mut seen = HashSet::new();
     q_terms
         .iter()
         .filter(|term| term.len() >= 3)
-        .filter(|term| !tokenizer::is_stopword(term, TokenizerMode::Unstemmed))
+        .filter(|term| !tokenizer::is_stopword_for_lang(term, TokenizerMode::Unstemmed, lang))
         .filter(|term| seen.insert((*term).clone()))
         .take(16)
         .cloned()
@@ -365,6 +367,23 @@ pub(crate) fn routing_unit_terms(query: &[String]) -> Vec<String> {
         "kilograms",
         "screen",
         "time",
+        // Spanish units, stemmed/deunicoded forms (query terms arrive via
+        // `normalize_for_index`: "días" -> "dia", "meses" -> "mese").
+        "kilometro",
+        "metro",
+        "hora",
+        "minuto",
+        "segundo",
+        "dia",
+        "semana",
+        "mese",
+        "ano",
+        "dolar",
+        "euro",
+        "peso",
+        "libra",
+        "gramo",
+        "kilo",
     ];
     let unit_set: HashSet<&str> = units.into_iter().collect();
     query
@@ -378,7 +397,7 @@ pub(crate) fn contains_number_like(text: &str) -> bool {
     static NUMBER_RE: OnceLock<Regex> = OnceLock::new();
     let re = NUMBER_RE.get_or_init(|| {
         Regex::new(
-            r"\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b",
+            r"\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|veinte|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|mil|millón|millon)\b",
         )
         .expect("valid number regex")
     });

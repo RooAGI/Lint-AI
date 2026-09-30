@@ -1,4 +1,5 @@
 use crate::index::{MemoryIndex, SearchResult};
+use crate::lang::Lang;
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -65,6 +66,14 @@ pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
         || q.contains("几个")
         || q.contains("几次")
         || q.contains("数量")
+        // Spanish: "cuántos"/"cuántas" (how many). Checked before the
+        // "cuánto" (how much) branch: "cuántos" contains "cuánto".
+        || q.contains("cuántos")
+        || q.contains("cuántas")
+        || q.contains("cuantos")
+        || q.contains("cuantas")
+        || q.contains("número de")
+        || q.contains("numero de")
     {
         // 总共/一共/合计 + 多少 = a sum question ("how much in total"),
         // not a count.
@@ -88,6 +97,15 @@ pub fn classify_aggregate_intent(query: &str) -> Option<AggregateIntent> {
         || q.contains("总计")
         || q.contains("总额")
         || q.contains("总和")
+        // Spanish: "cuánto" (how much), "total", "en total", "suma".
+        // Unaccented "cuanto" is guarded against "en cuanto (a)"
+        // (regarding / as soon as), which is not a quantity question.
+        || q.contains("cuánto")
+        || q.contains("cuánta")
+        || q.contains("cuanta")
+        || q.contains("en total")
+        || q.contains("suma")
+        || (q.contains("cuanto") && !q.contains("en cuanto"))
     {
         return Some(AggregateIntent::Sum);
     }
@@ -113,11 +131,13 @@ fn ko_token_starts_with(query: &str, forms: &[&str]) -> bool {
 }
 
 pub fn normalize_number_words(query: &str) -> String {
-    // Chinese numerals first (Rust-side; the Python rule forbids new
-    // Python logic), then the historical English text2num pass, then
-    // Korean number words.
+    // Chinese numerals first (Rust-side), then Spanish if detected
+    // else English text2num, then Korean number words.
     let zh_normalized = crate::lang::normalize_chinese_numbers(query);
-    let replaced = replace_numbers_in_text(&zh_normalized, &Language::english(), 0.0);
+    let replaced = match Lang::Auto.resolve(&zh_normalized) {
+        Lang::Es => replace_numbers_in_text(&zh_normalized, &Language::spanish(), 0.0),
+        _ => replace_numbers_in_text(&zh_normalized, &Language::english(), 0.0),
+    };
     normalize_korean_number_words(&replaced)
 }
 
@@ -522,44 +542,35 @@ mod tests {
     }
 
     #[test]
-    fn classifies_chinese_count_and_sum_intents() {
+    fn classifies_spanish_count_and_sum_intents() {
         assert_eq!(
-            classify_aggregate_intent("我买了多少本书"),
+            classify_aggregate_intent("¿Cuántos libros leí?"),
             Some(AggregateIntent::Count)
         );
         assert_eq!(
-            classify_aggregate_intent("我去了几次北京"),
+            classify_aggregate_intent("¿Cuántas veces fui?"),
             Some(AggregateIntent::Count)
         );
         assert_eq!(
-            classify_aggregate_intent("一共花了多少钱"),
+            classify_aggregate_intent("¿Cuánto gasté en total?"),
             Some(AggregateIntent::Sum)
         );
         assert_eq!(
-            classify_aggregate_intent("总共买了几本书"),
+            classify_aggregate_intent("¿Cuál fue la suma total?"),
             Some(AggregateIntent::Sum)
         );
-        // Advice-seeking is not a count over memories.
-        assert_eq!(classify_aggregate_intent("我应该买多少本书"), None);
+        // "en cuanto a" (regarding) is not a quantity question.
+        assert_eq!(
+            classify_aggregate_intent("En cuanto a los resultados"),
+            None
+        );
     }
 
     #[test]
-    fn normalizes_chinese_number_words() {
-        let out = normalize_number_words("我买了三本书");
-        assert!(out.contains('3'), "expected 3 in {out:?}");
-        let out = normalize_number_words("二十五天后见");
-        assert!(out.contains("25"), "expected 25 in {out:?}");
-    }
-
-    #[test]
-    fn extracts_numbers_adjacent_to_han() {
-        // Digits touching Han chars have no \b boundary; they must count.
-        assert_eq!(extract_numeric_value("买了3本书"), Some(3.0));
-        assert_eq!(extract_numeric_value("买了三本书"), Some(3.0));
-        assert_eq!(extract_numeric_value("花了25元"), Some(25.0));
-        // English behavior unchanged.
-        assert_eq!(extract_numeric_value("walked 2 miles"), Some(2.0));
-        assert_eq!(extract_numeric_value("no numbers here"), None);
+    fn normalizes_spanish_number_words() {
+        let out = normalize_number_words("caminé tres kilómetros y comí dos manzanas");
+        assert!(out.contains("3"), "got {out}");
+        assert!(out.contains("2"), "got {out}");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -82,7 +83,7 @@ pub(crate) fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
         terms.push(normalized.clone());
     }
     let prepared = PreparedQueryTerms {
-        expanded_terms: expand_query_terms(&terms).expanded_terms,
+        expanded_terms: expand_query_terms(&terms, Lang::Auto.resolve(truncated)).expanded_terms,
         normalized: normalized.clone(),
         terms,
     };

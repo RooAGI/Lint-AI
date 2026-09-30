@@ -14,6 +14,8 @@
 
 use std::collections::HashSet;
 
+use crate::lang::Lang;
+
 #[derive(Debug, Clone)]
 pub struct QuestionFocus {
     /// The interrogative word (what, who, where, when, which, etc.), if any.
@@ -34,19 +36,29 @@ pub fn identify_focus(query: &str) -> QuestionFocus {
     // We still stem each token internally to check against the stemmed
     // exclusion lists (question words, stopwords, expandable concepts).
     let tokens = tokenize_unstemmed(query);
+    let lang = Lang::Auto.resolve(query);
 
+    // Spanish interrogatives are checked on the RAW token (accents intact):
+    // stemming deunicodes "qué" to "que", which is indistinguishable from
+    // the relative pronoun "que" — the accent is the disambiguator.
     let question_word = tokens
         .iter()
-        .map(|t| stem_token(t))
-        .find(|s| is_question_word(s))
-        .and_then(|s| {
-            // Return the original unstemmed form
-            tokens.iter().find(|t| stem_token(t) == s).cloned()
-        })
-        // Chinese interrogatives are matched as substrings (tokens are
-        // bigrams, so single characters like 谁/哪 would never match a
-        // token).
-        .or_else(|| chinese_question_word(query));
+        .find(|t| is_spanish_question_word(t))
+        .cloned()
+        .or_else(|| {
+            tokens
+                .iter()
+                .map(|t| stem_token(t))
+                .find(|s| is_question_word(s))
+                .and_then(|s| {
+                    // Return the original unstemmed form
+                    tokens.iter().find(|t| stem_token(t) == s).cloned()
+                })
+                // Chinese interrogatives are matched as substrings (tokens are
+                // bigrams, so single characters like 谁/哪 would never match a
+                // token).
+                .or_else(|| chinese_question_word(query))
+        });
 
     let mut focus_terms = Vec::new();
     let mut constraint_terms = Vec::new();
@@ -57,10 +69,14 @@ pub fn identify_focus(query: &str) -> QuestionFocus {
             continue;
         }
         // Skip stopwords (they're structure, not focus or constraints)
-        if crate::tokenizer::is_stopword(&stemmed, crate::tokenizer::TokenizerMode::Stemmed) {
+        if crate::tokenizer::is_stopword_for_lang(
+            &stemmed,
+            crate::tokenizer::TokenizerMode::Stemmed,
+            lang,
+        ) {
             continue;
         }
-        if crate::query_expansion::is_expandable_concept(&stemmed) {
+        if crate::query_expansion::is_expandable_concept(&stemmed, lang) {
             focus_terms.push(token);
         } else {
             constraint_terms.push(token);
@@ -150,6 +166,27 @@ pub(crate) fn chinese_question_word(query: &str) -> Option<String> {
 fn is_chinese_interrogative_token(token: &str) -> bool {
     const SINGLE: &[char] = &['谁', '哪', '几', '啥', '吗', '呢', '何'];
     CHINESE_QUESTION_WORDS.iter().any(|w| token == *w) || token.chars().any(|c| SINGLE.contains(&c))
+
+/// Spanish interrogatives, checked against the RAW (accented) token —
+/// never the stemmed form, where "qué" and the relative pronoun "que"
+/// are indistinguishable. Unaccented "que" is deliberately excluded:
+/// without the accent it cannot be told apart from the relative pronoun.
+fn is_spanish_question_word(token: &str) -> bool {
+    matches!(
+        token,
+        "qué"
+            | "quién"
+            | "quiénes"
+            | "cuál"
+            | "cuáles"
+            | "dónde"
+            | "cuándo"
+            | "cuánto"
+            | "cuánta"
+            | "cuántos"
+            | "cuántas"
+            | "cómo"
+    )
 }
 
 fn dedup(terms: Vec<String>) -> Vec<String> {
@@ -233,6 +270,21 @@ mod tests {
         assert!(
             !focus.focus_terms.iter().any(|t| t.contains('哪')),
             "interrogative should not be focus, got {:?}",
+
+    fn spanish_where_question_focus_is_biblioteca() {
+        // Accented interrogative detected on the raw token (stemming would
+        // conflate "qué" with the relative pronoun "que").
+        let focus = identify_focus("¿Dónde está la biblioteca?");
+        assert_eq!(focus.question_word, Some("dónde".to_string()));
+        assert!(
+            focus.focus_terms.contains(&"biblioteca".to_string()),
+            "focus should contain 'biblioteca', got {:?}",
+            focus.focus_terms
+        );
+        // "está"/"la" are Spanish stopwords: neither focus nor constraint.
+        assert!(
+            !focus.focus_terms.iter().any(|t| t == "está" || t == "la"),
+            "stopwords leaked into focus: {:?}",
             focus.focus_terms
         );
     }
@@ -252,6 +304,10 @@ mod tests {
     #[test]
     fn chinese_non_question_has_no_question_word() {
         let focus = identify_focus("我毕业于清华大学。");
+
+    fn spanish_relative_que_is_not_a_question_word() {
+        // No accent, no interrogative: "que" here is a relative pronoun.
+        let focus = identify_focus("El libro que compré ayer");
         assert_eq!(focus.question_word, None);
     }
 }

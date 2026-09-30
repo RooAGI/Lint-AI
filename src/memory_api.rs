@@ -2805,6 +2805,63 @@ mod tests {
     }
 
     #[test]
+    fn korean_question_retrieves_answer_memory() {
+        // End-to-end: a natural Korean question (with interrogative 어디)
+        // retrieves the memory holding its answer and ranks it above a
+        // distractor that shares no content words.
+        let mut service = service();
+        service
+            .add(AddRequest {
+                request_id: "ko-q-target".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "박영희는 부산에서 태어났다. 지금은 서울에 산다.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-ko".into(),
+                session_id: "session-ko".into(),
+            })
+            .unwrap();
+        service
+            .add(AddRequest {
+                request_id: "ko-q-d1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "김철수는 주말에 공원에서 조깅을 즐긴다.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-ko".into(),
+                session_id: "session-ko".into(),
+            })
+            .unwrap();
+        let response = service
+            .search(SearchRequest {
+                query: "박영희는 어디에서 태어났나?".into(),
+                options: None,
+                user_id: "user-ko".into(),
+                top_k: 100,
+                session_id: None,
+                scope: None,
+                filters: None,
+                lang: None,
+            })
+            .unwrap();
+        assert!(
+            !response.data.is_empty(),
+            "Korean question should retrieve the answer memory"
+        );
+        assert!(
+            response.data[0].content.contains("부산에서"),
+            "target should rank first, got {:?}",
+            response.data.iter().map(|r| &r.content).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn search_cannot_cross_user_boundaries() {
         let mut service = service();
         for (request_id, user_id, content) in [

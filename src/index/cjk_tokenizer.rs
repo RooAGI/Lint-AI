@@ -327,10 +327,11 @@ mod tests {
     #[test]
     fn english_matches_default_tokenizer() {
         // Byte-identical contract with SimpleTokenizer + RemoveLongFilter(40)
-        // + LowerCaser for Han/Hangul-free text.
+        // + LowerCaser for Han/Hangul-free, accent-free text. Accented Latin
+        // intentionally diverges: dual emission (e.g. "café" + "cafe") for
+        // accent-insensitive Spanish retrieval.
         let cases = [
             "Hello, happy tax payer!",
-            "Virtual-Machine! Café running",
             "a b cd",
             "supercalifragilisticexpialidocioussupercalifragilistic", // >= 40 bytes: dropped
         ];
@@ -346,5 +347,11 @@ mod tests {
             }
             assert_eq!(token_texts(text), expected, "mismatch for {text:?}");
         }
+        // Accented Latin: raw form plus diacritic-folded twin at the same
+        // position (accent-insensitive search); pure ASCII is unaffected.
+        assert_eq!(
+            token_texts("Virtual-Machine! Café running"),
+            vec!["virtual", "machine", "café", "cafe", "running"]
+        );
     }
 }

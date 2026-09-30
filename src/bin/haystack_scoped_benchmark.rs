@@ -3,7 +3,8 @@ use clap::{ArgAction, Parser, ValueEnum};
 use lint_ai::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
 use lint_ai::{
     parse_reference_date, segments::SegmentRoutingStrategy, AggregateOutput, ChunkStrategy,
-    PipelineOptions, QueryDiagnostics, QueryTimings, Tier1NerProvider, Tier1TermRankerKind,
+    MemoryIndexLayout, PipelineOptions, QueryDiagnostics, QueryTimings, Tier1NerProvider,
+    Tier1TermRankerKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -70,6 +71,20 @@ struct Args {
     /// docs/benchmark.md numbers; `spacy` is the current default.
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
+
+    /// Index layout mode: `single` uses one global tantivy index;
+    /// `segmented` routes across per-session segments;
+    /// `adaptive` starts routed and expands when evidence is thin.
+    #[arg(long, value_enum, default_value_t = IndexModeArg::Single)]
+    index_mode: IndexModeArg,
+}
+
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum IndexModeArg {
+    Single,
+    Segmented,
+    Adaptive,
 }
 
 
@@ -256,6 +271,7 @@ fn main() -> Result<()> {
         args.segment_top_n,
         args.segment_router.into(),
         args.ner_provider.clone(),
+        args.index_mode,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -279,9 +295,10 @@ fn run_scoped_benchmark(
     text_rerank_ngram: bool,
     text_rerank_lcs: bool,
     _segment_compare: bool,
-    _segment_top_n: usize,
-    _segment_router: SegmentRoutingStrategy,
+    segment_top_n: usize,
+    segment_router: SegmentRoutingStrategy,
     ner_provider: Tier1NerProvider,
+    index_mode: IndexModeArg,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -327,6 +344,18 @@ fn run_scoped_benchmark(
     let mut per_query = Vec::with_capacity(entries.len());
 
     for (idx, entry) in entries.into_iter().enumerate() {
+        let memory_index_layout = match index_mode {
+            IndexModeArg::Single => MemoryIndexLayout::Single,
+            IndexModeArg::Segmented => MemoryIndexLayout::Segmented {
+                query_top_n: segment_top_n,
+                routing_strategy: segment_router.clone(),
+            },
+            IndexModeArg::Adaptive => MemoryIndexLayout::AdaptiveSegmented {
+                query_top_n: segment_top_n,
+                max_query_n: segment_top_n.max(1) * 2,
+                routing_strategy: segment_router.clone(),
+            },
+        };
         let options = PipelineOptions {
             ner_provider: ner_provider.clone(),
             spacy_model: "en_core_web_sm".to_string(),
@@ -339,6 +368,7 @@ fn run_scoped_benchmark(
             text_rerank_ngram,
             text_rerank_lcs,
             structured_fact_retrieval: false,
+            memory_index_layout,
             ..PipelineOptions::default()
         };
         let mut service = MemoryService::in_memory(options);

@@ -339,7 +339,11 @@ fn run_scoped_benchmark(
 
         // Index each haystack session as its own add() call so session_id
         // ownership matches what search() returns per hit.
+        // Deduplicate: the dataset can list the same session twice in one
+        // haystack; MemoryService rejects a repeated request_id with
+        // different content, so we index each session once.
         let candidate_session_ids = entry.haystack_session_ids.clone();
+        let mut seen_sessions = std::collections::HashSet::new();
         for (sess_idx, (session_id, turns)) in entry
             .haystack_session_ids
             .iter()
@@ -347,6 +351,9 @@ fn run_scoped_benchmark(
             .enumerate()
         {
             if turns.is_empty() {
+                continue;
+            }
+            if !seen_sessions.insert(session_id.clone()) {
                 continue;
             }
             let session_date = entry

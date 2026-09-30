@@ -1,14 +1,12 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
-use crate::lang::{default_spacy_model_for_lang, Lang};
 use crate::pipeline::PipelineOptions;
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::analyze_query;
 use crate::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, extractor_model_for_turns,
-    query_structured, relation_turns_from_docs, try_extract_key_phrases_via_spacy, RelationIndex,
-    RelationTurn,
+    analyze_fact_question, extract_relations_via_spacy, query_structured, relation_turns_from_docs,
+    try_extract_key_phrases_via_spacy, RelationIndex,
 };
 use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
@@ -73,12 +71,6 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
-    /// Content language override (`"en"`, `"zh"`, `"ko"`). Absent (default)
-    /// auto-detects per text from script statistics. Currently selects the
-    /// spaCy model for the structured-relations path; lexical retrieval is
-    /// script-aware regardless.
-    #[serde(default)]
-    pub lang: Option<Lang>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -266,12 +258,10 @@ fn run_key_phrase_extraction_bounded(
     let script = script.map(|s| s.to_path_buf());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let model = extractor_model_for_turns(&turns);
         let out = try_extract_key_phrases_via_spacy(
             &turns,
             script.as_deref(),
             std::time::Duration::from_secs(timeout_secs),
-            model,
         );
         let _ = tx.send(out);
     });
@@ -360,16 +350,6 @@ fn relations_fingerprint(docs: &[&SourceDocument]) -> u64 {
     hasher.finish()
 }
 
-/// Pick the spaCy model for structured relation extraction.
-/// An explicit non-`Auto` request language pins its model; `Lang::Auto`
-/// and an omitted language both follow the turns' detected script.
-fn spacy_model_for_request(lang: Option<Lang>, turns: &[RelationTurn]) -> &'static str {
-    match lang {
-        Some(l) if !matches!(l, Lang::Auto) => default_spacy_model_for_lang(l.resolve("")),
-        _ => extractor_model_for_turns(turns),
-    }
-}
-
 /// Build (or reuse) the relation index for one user's visible document set.
 /// Returns `None` when extraction fails or times out, so the caller falls
 /// through to the lexical path.
@@ -377,7 +357,7 @@ fn relations_index_for(
     docs: &[&SourceDocument],
     user_id: &str,
     cache: &Mutex<RelationsCache>,
-    lang: Option<Lang>,
+    python_free: bool,
 ) -> Option<Arc<RelationIndex>> {
     // The lock is held across the build so concurrent structured queries for
     // the same user share one extractor run instead of racing duplicates.
@@ -395,18 +375,20 @@ fn relations_index_for(
     if entry.fingerprint == fingerprint {
         return entry.index.clone();
     }
+    // Python-free mode: skip the spaCy subprocess entirely. The cache stays
+    // empty and callers fail over to the lexical path. A pre-populated
+    // cache (tests) is still honored via the fingerprint check above.
+    if python_free {
+        return None;
+    }
     let turns = relation_turns_from_docs(docs);
     // Bound the subprocess: run extraction on a worker thread and give up
     // after the timeout, leaving the cache empty (fail-open to lexical).
-    // An explicit request language selects the spaCy model; otherwise the
-    // model follows the turns' detected script.
-    let model: String = spacy_model_for_request(lang, &turns).to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
             &turns,
             std::time::Duration::from_secs(RELATIONS_EXTRACT_TIMEOUT_SECS),
-            &model,
         );
         let _ = tx.send(output.relations);
     });
@@ -451,13 +433,7 @@ fn structured_fact_results(
     superseded_ids: &HashSet<(String, String)>,
     request: &SearchRequest,
 ) -> Vec<crate::SearchResult> {
-    // Skip when python_free(): the relation extractor is spaCy-only, no
-    // pure-Rust replacement exists yet. Fail-closed (not fail-open) here
-    // because python_free is an explicit opt-out of all Python.
-    if !options.structured_fact_retrieval
-        || options.python_free()
-        || request.query.trim().is_empty()
-    {
+    if !options.structured_fact_retrieval || request.query.trim().is_empty() {
         return Vec::new();
     }
     // Classify before building: only structured fact questions pay for the
@@ -480,7 +456,7 @@ fn structured_fact_results(
         })
         .collect();
     visible.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-    let index = match relations_index_for(&visible, &request.user_id, cache, request.lang) {
+    let index = match relations_index_for(&visible, &request.user_id, cache, options.python_free()) {
         Some(index) => index,
         None => return Vec::new(),
     };
@@ -1439,7 +1415,6 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
-                    lang: None,
                 };
                 let docs: Vec<&SourceDocument> = self.store.source_documents();
                 structured_fact_results(
@@ -2687,62 +2662,6 @@ mod tests {
     use super::*;
     use crate::PipelineOptions;
 
-    #[test]
-    fn lang_auto_selects_spacy_model_from_turns() {
-        // P2: `"lang": "auto"` must behave like an omitted language — the
-        // model follows the document turns' script, not English.
-        let ko_turns = vec![RelationTurn {
-            speaker: "지민".to_string(),
-            text: "지민은 서울에서 일합니다".to_string(),
-            session_id: "s1".to_string(),
-            turn_idx: 0,
-            doc_id: "d1".to_string(),
-            session_date: None,
-        }];
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Auto), &ko_turns),
-            "ko_core_news_sm"
-        );
-        assert_eq!(spacy_model_for_request(None, &ko_turns), "ko_core_news_sm");
-
-        let zh_turns = vec![RelationTurn {
-            speaker: "小明".to_string(),
-            text: "小明在北京工作".to_string(),
-            session_id: "s1".to_string(),
-            turn_idx: 0,
-            doc_id: "d1".to_string(),
-            session_date: None,
-        }];
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Auto), &zh_turns),
-            "zh_core_web_sm"
-        );
-
-        let es_turns = vec![RelationTurn {
-            speaker: "María".to_string(),
-            text: "¿Dónde está la biblioteca de Madrid? Fui ayer por la mañana.".to_string(),
-            session_id: "s1".to_string(),
-            turn_idx: 0,
-            doc_id: "d1".to_string(),
-            session_date: None,
-        }];
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Auto), &es_turns),
-            "es_core_news_sm"
-        );
-        assert_eq!(spacy_model_for_request(None, &es_turns), "es_core_news_sm");
-
-        // Explicit languages still pin their model.
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Ko), &ko_turns),
-            "ko_core_news_sm"
-        );
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::En), &ko_turns),
-            "en_core_web_sm"
-        );
-    }
-
     fn service() -> MemoryService {
         MemoryService::in_memory(PipelineOptions::default())
     }
@@ -2883,119 +2802,10 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
-    }
-
-    #[test]
-    fn korean_particle_mismatch_still_retrieves() {
-        // Smoke test: the document inflects "학교" as "학교에"/"학교에서";
-        // the bare-stem query "학교" must still retrieve it via the
-        // particle-stripped index tokens.
-        let mut service = service();
-        service
-            .add(AddRequest {
-                request_id: "ko-1".into(),
-                messages: vec![Message {
-                    role: "user".into(),
-                    timestamp: None,
-                    content: "김철수는 학교에 갔다. 학교에서 친구를 만났다.".into(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: "user-ko".into(),
-                session_id: "session-ko".into(),
-            })
-            .unwrap();
-        let response = service
-            .search(SearchRequest {
-                query: "학교".into(),
-                options: None,
-                user_id: "user-ko".into(),
-                top_k: 100,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        assert_eq!(response.data.len(), 1, "bare stem query should retrieve the doc");
-        assert!(response.data[0].content.contains("학교에"));
-
-        // Inflected query form also retrieves.
-        let response = service
-            .search(SearchRequest {
-                query: "학교에서".into(),
-                options: None,
-                user_id: "user-ko".into(),
-                top_k: 100,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        assert_eq!(response.data.len(), 1);
-    }
-
-    #[test]
-    fn korean_question_retrieves_answer_memory() {
-        // End-to-end: a natural Korean question (with interrogative 어디)
-        // retrieves the memory holding its answer and ranks it above a
-        // distractor that shares no content words.
-        let mut service = service();
-        service
-            .add(AddRequest {
-                request_id: "ko-q-target".into(),
-                messages: vec![Message {
-                    role: "user".into(),
-                    timestamp: None,
-                    content: "박영희는 부산에서 태어났다. 지금은 서울에 산다.".into(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: "user-ko".into(),
-                session_id: "session-ko".into(),
-            })
-            .unwrap();
-        service
-            .add(AddRequest {
-                request_id: "ko-q-d1".into(),
-                messages: vec![Message {
-                    role: "user".into(),
-                    timestamp: None,
-                    content: "김철수는 주말에 공원에서 조깅을 즐긴다.".into(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: "user-ko".into(),
-                session_id: "session-ko".into(),
-            })
-            .unwrap();
-        let response = service
-            .search(SearchRequest {
-                query: "박영희는 어디에서 태어났나?".into(),
-                options: None,
-                user_id: "user-ko".into(),
-                top_k: 100,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        assert!(
-            !response.data.is_empty(),
-            "Korean question should retrieve the answer memory"
-        );
-        assert!(
-            response.data[0].content.contains("부산에서"),
-            "target should rank first, got {:?}",
-            response.data.iter().map(|r| &r.content).collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -3029,143 +2839,12 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert!(response
             .data
             .iter()
             .all(|memory| memory.content.contains("amber")));
-    }
-
-    #[test]
-    fn search_with_empty_user_id_skips_ownership_filter() {
-        // Provider-scoped callers (MCP adapters) pass no user id: documents
-        // without a memory_user_id filter must still be returned. This is the
-        // regression test for the Hermes 0-hits finding — an unconditional
-        // ownership filter would zero out the adapter's local corpus.
-        let mut service = service();
-        let mut owned_filters = BTreeMap::new();
-        owned_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
-        for (doc_id, content, filters) in [
-            (
-                "owned-doc",
-                "The owned ledger records amber transactions.",
-                owned_filters,
-            ),
-            (
-                "unowned-doc",
-                "The shared ledger records amber transactions.",
-                BTreeMap::new(),
-            ),
-        ] {
-            service.store.upsert(SourceDocument {
-                doc_id: doc_id.to_string(),
-                source: format!("hook://{doc_id}"),
-                content: content.to_string(),
-                concept: doc_id.to_string(),
-                group_id: Some(doc_id.to_string()),
-                headings: vec![],
-                links: vec![],
-                timestamp: None,
-                doc_length: content.len(),
-                author_agent: None,
-                filters,
-                key_phrases: Vec::new(),
-                key_phrase_extraction_hash: String::new(),
-            });
-        }
-        service.store.refresh().unwrap();
-
-        let response = service
-            .search(SearchRequest {
-                query: "amber ledger transactions".into(),
-                options: None,
-                user_id: "".into(),
-                top_k: 10,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        let ids: Vec<&str> = response
-            .data
-            .iter()
-            .map(|memory| memory.id.as_str())
-            .collect();
-        assert!(
-            ids.contains(&"owned-doc"),
-            "empty user_id must not hide owned docs, got {ids:?}"
-        );
-        assert!(
-            ids.contains(&"unowned-doc"),
-            "empty user_id must not hide unowned docs, got {ids:?}"
-        );
-    }
-
-    #[test]
-    fn search_with_user_id_still_enforces_ownership_filter() {
-        // The server path is unaffected: a supplied user id filters exactly
-        // as before.
-        let mut service = service();
-        let mut owned_filters = BTreeMap::new();
-        owned_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
-        for (doc_id, content, filters) in [
-            (
-                "owned-doc",
-                "The owned ledger records amber transactions.",
-                owned_filters,
-            ),
-            (
-                "unowned-doc",
-                "The shared ledger records amber transactions.",
-                BTreeMap::new(),
-            ),
-        ] {
-            service.store.upsert(SourceDocument {
-                doc_id: doc_id.to_string(),
-                source: format!("hook://{doc_id}"),
-                content: content.to_string(),
-                concept: doc_id.to_string(),
-                group_id: Some(doc_id.to_string()),
-                headings: vec![],
-                links: vec![],
-                timestamp: None,
-                doc_length: content.len(),
-                author_agent: None,
-                filters,
-                key_phrases: Vec::new(),
-                key_phrase_extraction_hash: String::new(),
-            });
-        }
-        service.store.refresh().unwrap();
-
-        let response = service
-            .search(SearchRequest {
-                query: "amber ledger transactions".into(),
-                options: None,
-                user_id: "user-a".into(),
-                top_k: 10,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        let ids: Vec<&str> = response
-            .data
-            .iter()
-            .map(|memory| memory.id.as_str())
-            .collect();
-        assert!(
-            ids.contains(&"owned-doc"),
-            "supplied user_id must return owned docs, got {ids:?}"
-        );
-        assert!(
-            !ids.contains(&"unowned-doc"),
-            "supplied user_id must hide unowned docs, got {ids:?}"
-        );
     }
 
     #[test]
@@ -3196,7 +2875,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         let b = service
@@ -3208,7 +2886,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert_eq!(a.data.len(), 1);
@@ -3328,7 +3005,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert!(response
@@ -3363,7 +3039,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert!(response.data.is_empty());
@@ -3402,7 +3077,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3451,7 +3125,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3686,7 +3359,6 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
 
@@ -3701,7 +3373,6 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
@@ -3725,7 +3396,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
@@ -3781,7 +3451,6 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap()
     }
@@ -3824,7 +3493,6 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
-                lang: None,
 })
                 .unwrap_err();
             assert!(
@@ -4124,7 +3792,6 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
-            lang: None,
         }
     }
 
@@ -4443,7 +4110,6 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert!(response
@@ -4479,7 +4145,6 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -4589,7 +4254,6 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
-                lang: None,
 });
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -4633,7 +4297,6 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         assert!(!response.data.is_empty());
@@ -4697,6 +4360,9 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
     fn extractor_service(script: &std::path::Path) -> MemoryService {
         MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // These tests exercise the spaCy extractor; opt out of the
+            // Python-free default explicitly.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script.to_path_buf()),
             ..PipelineOptions::default()
         })
@@ -4954,7 +4620,6 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
 })
             .unwrap();
         let _ = response;

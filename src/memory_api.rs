@@ -2636,11 +2636,16 @@ mod tests {
             spacy_model_for_request(Some(Lang::Auto), &zh_turns),
             "zh_core_web_sm"
         );
+        assert_eq!(spacy_model_for_request(None, &zh_turns), "zh_core_web_sm");
 
         // Explicit languages still pin their model.
         assert_eq!(
             spacy_model_for_request(Some(Lang::Ko), &ko_turns),
             "ko_core_news_sm"
+        );
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Zh), &zh_turns),
+            "zh_core_web_sm"
         );
         assert_eq!(
             spacy_model_for_request(Some(Lang::En), &ko_turns),

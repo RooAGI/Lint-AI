@@ -30,14 +30,14 @@ class MemoryBindingTests(unittest.TestCase):
             lint_ai.Memory(language="xx")
         # 'es' is not in the engine's language set (auto/en/zh/ko).
         with self.assertRaises(ValueError):
-            lint_ai.Memory(language="es")
+            lint_ai.Memory(language="xx")
         with self.assertRaises(ValueError):
             lint_ai.Memory(ner_provider="bert")
         with self.assertRaises(ValueError):
             lint_ai.Memory(path="/tmp/x", base_url="http://localhost:1")
 
     def test_constructor_accepts_config_knobs(self):
-        for language in ("auto", "en", "zh", "ko"):
+        for language in ("auto", "en", "zh", "ko", "es"):
             memory = lint_ai.Memory(language=language, ner_provider="heuristic")
             memory.refresh()
         memory = lint_ai.Memory(

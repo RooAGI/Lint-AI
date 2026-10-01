@@ -52,7 +52,7 @@ the 0.2.x line.
 ```python
 memory = lint_ai.Memory(
     path="./memory-index",
-    language="auto",        # 'auto' (default) | 'en' | 'zh' | 'ko'
+    language="auto",        # 'auto' (default) | 'en' | 'zh' | 'ko' | 'es'
     ner_provider="heuristic",  # 'heuristic' (default, Python-free) | 'spacy'
     spacy_model=None,       # explicit override; default follows language
 )
@@ -61,12 +61,13 @@ memory = lint_ai.Memory(
 **Language behavior (limited, by design).** `language` sets the content
 language for the local backend. It drives per-language defaults — notably
 which spaCy model is selected (`zh` → `zh_core_web_sm`,
-`ko` → `ko_core_news_sm`) — and an explicit `spacy_model` always wins.
-Lexical retrieval is script-aware regardless of this setting, and per-query
-language detection still applies automatically on the structured path.
+`ko` → `ko_core_news_sm`, `es` → `es_core_news_sm`) — and an explicit
+`spacy_model` always wins.
+Lexical retrieval is script-aware regardless of this setting; a per-query
+`lang` argument to `search` overrides the constructor default for the
+structured-fact path (absent means auto-detect per text).
 It does not change tokenization or enable languages the engine does not
-support; `'es'` is rejected because the engine's language set is
-`auto/en/zh/ko`.
+support; the engine's language set is `auto/en/zh/ko/es`.
 
 **Remote backends ignore these knobs.** The options are validated
 client-side (bad values still raise `ValueError`), but the server owns its
@@ -83,6 +84,7 @@ memory.search(
     session_id="session-1",   # enables follow-up resolution + rerank
     scope="team-a",           # conversation-state scope (not a doc filter)
     filters={"request_id": "req-42"},  # document filters, see below
+    lang="es",              # per-query language override for structured path
 )
 ```
 

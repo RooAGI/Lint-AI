@@ -142,7 +142,7 @@ pub fn parse_chinese_numeral(s: &str) -> Option<i64> {
     for ch in s.chars() {
         if let Some(d) = chinese_digit_value(ch) {
             saw_value = true;
-            pending = pending * 10 + d;
+            pending = pending.checked_mul(10)?.checked_add(d)?;
             has_pending = true;
             continue;
         }
@@ -155,17 +155,19 @@ pub fn parse_chinese_numeral(s: &str) -> Option<i64> {
                 let v = if has_pending { pending } else { 1 };
                 pending = 0;
                 has_pending = false;
-                match ch {
-                    '十' => current += v * 10,
-                    '百' => current += v * 100,
-                    _ => current += v * 1000,
-                }
+                let unit = match ch {
+                    '十' => 10,
+                    '百' => 100,
+                    _ => 1000,
+                };
+                current = current.checked_add(v.checked_mul(unit)?)?;
             }
             '万' | '亿' => {
-                let section = current + if has_pending { pending } else { 0 };
+                let section = current.checked_add(if has_pending { pending } else { 0 })?;
                 pending = 0;
                 has_pending = false;
-                total += section * if ch == '万' { 10_000 } else { 100_000_000 };
+                let multiplier = if ch == '万' { 10_000 } else { 100_000_000 };
+                total = total.checked_add(section.checked_mul(multiplier)?)?;
                 current = 0;
             }
             _ => return None, // unreachable: input pre-validated
@@ -175,8 +177,7 @@ pub fn parse_chinese_numeral(s: &str) -> Option<i64> {
         // Bare 万/亿 (or empty, already excluded) carry no value.
         return None;
     }
-    total += current + if has_pending { pending } else { 0 };
-    Some(total)
+    total.checked_add(current.checked_add(if has_pending { pending } else { 0 })?)
 }
 
 /// Common Chinese measure words / units. A single-character numeral is

@@ -10,7 +10,7 @@
 //! outcome, not over-suppression) and every expected-superseded write's
 //! document *is* Superseded (true-positive controls keep the harness honest).
 
-use crate::memory_api::{AddRequest, MemoryService, Message};
+use crate::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
 use crate::semantic_relations::SemanticStatus;
 use crate::stable_doc_id_from_source;
 
@@ -32,10 +32,16 @@ pub struct AuditCase {
     /// True-positive controls: if the harness cannot detect real
     /// supersession, it is vacuous.
     pub must_be_superseded: Vec<usize>,
+    /// Query exercising search visibility, not just document state.
+    pub query: &'static str,
+    /// Indices whose content must appear in search results.
+    pub must_be_visible: Vec<usize>,
+    /// Indices whose content must NOT appear in search results.
+    pub must_be_hidden: Vec<usize>,
 }
 
 pub struct AuditResult {
-    pub name: &'static str,
+    pub name: String,
     pub passed: bool,
     pub failures: Vec<String>,
 }
@@ -55,6 +61,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
+            query: "what does Rossi own",
+            must_be_visible: vec![0, 1],
+            must_be_hidden: vec![],
         },
         AuditCase {
             name: "dateless_conflict_preserved",
@@ -65,6 +74,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
+            query: "who owns the bicycle",
+            must_be_visible: vec![0, 1],
+            must_be_hidden: vec![],
         },
         AuditCase {
             name: "cross_session_config_independent",
@@ -75,6 +87,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
+            query: "what is the timeout",
+            must_be_visible: vec![0, 1],
+            must_be_hidden: vec![],
         },
         AuditCase {
             name: "reaffirmation_keeps_both_current",
@@ -85,6 +100,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
+            query: "who owns the bicycle",
+            must_be_visible: vec![0, 1],
+            must_be_hidden: vec![],
         },
         AuditCase {
             name: "backfill_preserves_newer",
@@ -95,6 +113,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![0],
             must_be_superseded: vec![1],
+            query: "what version is deployed",
+            must_be_visible: vec![0],
+            must_be_hidden: vec![1],
         },
         AuditCase {
             name: "unrelated_predicate_untouched",
@@ -105,6 +126,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
+            query: "bicycle",
+            must_be_visible: vec![0, 1],
+            must_be_hidden: vec![],
         },
         AuditCase {
             name: "chronological_supersession_fires",
@@ -115,6 +139,9 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![1],
             must_be_superseded: vec![0],
+            query: "who owns the bicycle",
+            must_be_visible: vec![1],
+            must_be_hidden: vec![0],
         },
         AuditCase {
             name: "correction_cue_supersedes",
@@ -125,20 +152,31 @@ pub fn all_cases() -> Vec<AuditCase> {
             ],
             must_stay_current: vec![1],
             must_be_superseded: vec![0],
+            query: "which database is used for analytics",
+            must_be_visible: vec![1],
+            must_be_hidden: vec![0],
         },
     ]
 }
 
 /// Runs one audit case against a fresh in-memory service.
-pub fn run_case(case: &AuditCase, case_idx: usize) -> AuditResult {
+/// When `batched` is true, writes go through `add_batch` instead of
+/// sequential `add` calls.
+pub fn run_case(case: &AuditCase, case_idx: usize, batched: bool) -> AuditResult {
     let mut service =
         MemoryService::in_memory(crate::default_production_pipeline_options());
     let mut doc_ids = Vec::with_capacity(case.writes.len());
-    for (write_idx, write) in case.writes.iter().enumerate() {
-        let request_id = format!("audit-{case_idx}-{write_idx}");
-        service
-            .add(AddRequest {
-                request_id: request_id.clone(),
+    let requests: Vec<AddRequest> = case
+        .writes
+        .iter()
+        .enumerate()
+        .map(|(write_idx, write)| {
+            let request_id = format!("audit-{case_idx}-{write_idx}");
+            doc_ids.push(stable_doc_id_from_source(&format!(
+                "audit-user:{request_id}:0"
+            )));
+            AddRequest {
+                request_id,
                 messages: vec![Message {
                     role: "user".into(),
                     timestamp: write.timestamp_ms,
@@ -148,11 +186,15 @@ pub fn run_case(case: &AuditCase, case_idx: usize) -> AuditResult {
                 }],
                 user_id: "audit-user".into(),
                 session_id: write.session.into(),
-            })
-            .expect("audit add failed");
-        doc_ids.push(stable_doc_id_from_source(&format!(
-            "audit-user:{request_id}:0"
-        )));
+            }
+        })
+        .collect();
+    if batched {
+        service.add_batch(requests).expect("audit add_batch failed");
+    } else {
+        for request in requests {
+            service.add(request).expect("audit add failed");
+        }
     }
 
     let mut failures = Vec::new();
@@ -174,20 +216,58 @@ pub fn run_case(case: &AuditCase, case_idx: usize) -> AuditResult {
             ));
         }
     }
+    // Retrieval assertions: status must agree with search visibility.
+    let response = service
+        .search(SearchRequest {
+            query: case.query.into(),
+            options: None,
+            user_id: "audit-user".into(),
+            top_k: 10,
+            session_id: None,
+            scope: None,
+            filters: None,
+            lang: None,
+        })
+        .expect("audit search failed");
+    let visible: Vec<&str> = response
+        .data
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect();
+    for &idx in &case.must_be_visible {
+        let needle = case.writes[idx].content;
+        if !visible.iter().any(|c| c.contains(needle)) {
+            failures.push(format!(
+                "write {idx} ('{needle}') should be visible in search results but is not",
+            ));
+        }
+    }
+    for &idx in &case.must_be_hidden {
+        let needle = case.writes[idx].content;
+        if visible.iter().any(|c| c.contains(needle)) {
+            failures.push(format!(
+                "write {idx} ('{needle}') should be hidden from search results but appears",
+            ));
+        }
+    }
     AuditResult {
-        name: case.name,
+        name: case.name.to_string(),
         passed: failures.is_empty(),
         failures,
     }
 }
 
 /// Runs all audit cases, each against a fresh in-memory service.
+/// Each case runs both sequentially and batched.
 pub fn run_all() -> Vec<AuditResult> {
-    all_cases()
-        .iter()
-        .enumerate()
-        .map(|(idx, case)| run_case(case, idx))
-        .collect()
+    let mut results = Vec::new();
+    for (idx, case) in all_cases().iter().enumerate() {
+        results.push(run_case(case, idx, false));
+        let mut batched = run_case(case, idx, true);
+        batched.name = format!("{}(batch)", case.name);
+        results.push(batched);
+    }
+    results
 }
 
 #[cfg(test)]

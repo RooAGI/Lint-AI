@@ -39,6 +39,14 @@ pub struct Message {
     pub supersedes_id: Option<String>,
 }
 
+/// Response to a successful `add`.
+///
+/// Compatibility note: the `adjudication` field was added after the initial
+/// release. It is `#[serde(default)]`, so JSON produced by older versions
+/// (without the field) still deserializes. Rust callers constructing
+/// `AddResponse` with a struct literal must add the field; prefer
+/// `..Default::default()`-style construction if available, or update
+/// literals when upgrading.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddResponse {
     pub success: bool,
@@ -88,7 +96,9 @@ pub struct WriteAdjudicationReceipt {
     pub claims: Vec<AdjudicatedClaim>,
     /// Clash decisions involving this write's documents.
     pub decisions: Vec<AdjudicationDecision>,
-    /// Pre-existing documents this write retired (superseded).
+    /// Pre-existing documents this write actually retired (their semantic
+    /// state is Superseded with superseded_by pointing at this write's
+    /// document). Documents from the same request are never listed here.
     pub retired_doc_ids: Vec<String>,
 }
 
@@ -215,6 +225,8 @@ pub struct MemoryService {
     /// Cached write-adjudication receipts by (user_id, request_id), so an
     /// idempotent retry returns the identical response including the receipt.
     request_receipts: HashMap<(String, String), WriteAdjudicationReceipt>,
+    /// Where receipts persist across restarts. None for in-memory services.
+    receipts_path: Option<std::path::PathBuf>,
     conversation_states:
         std::sync::Arc<std::sync::Mutex<crate::conversation_state::ConversationStateStore>>,
     /// Lazily-built dependency-parse relation index for the structured-fact
@@ -742,7 +754,52 @@ impl MemoryService {
         service.conversation_states = std::sync::Arc::new(std::sync::Mutex::new(
             crate::conversation_state::ConversationStateStore::open_under(index_root),
         ));
+        // Receipts persist alongside the index so idempotent retries after a
+        // restart return the identical response, including the adjudication.
+        service.receipts_path = Some(index_root.join("receipts.json"));
+        service.load_receipts();
         Ok(service)
+    }
+
+    /// Loads persisted write-adjudication receipts. A missing or corrupt file
+    /// is not fatal: the cache simply starts empty and retries rebuild from
+    /// the persisted documents.
+    fn load_receipts(&mut self) {
+        let Some(path) = self.receipts_path.as_ref() else {
+            return;
+        };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(entries): Result<Vec<((String, String), WriteAdjudicationReceipt)>, _> =
+            serde_json::from_str(&content)
+        else {
+            return;
+        };
+        self.request_receipts = entries.into_iter().collect();
+    }
+
+    /// Persists the receipt cache. Failure is logged but never fails the
+    /// write: the in-memory cache still serves retries for this lifetime.
+    fn persist_receipts(&self) {
+        let Some(path) = self.receipts_path.as_ref() else {
+            return;
+        };
+        let entries: Vec<((String, String), WriteAdjudicationReceipt)> = self
+            .request_receipts
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        match serde_json::to_string(&entries) {
+            Ok(json) => {
+                if let Err(e) =
+                    crate::pipeline::persistence::write_text_file_atomic(path, &json)
+                {
+                    eprintln!("failed to persist adjudication receipts: {e:#}");
+                }
+            }
+            Err(e) => eprintln!("failed to serialize adjudication receipts: {e:#}"),
+        }
     }
 
     pub(crate) fn new(store: IndexStore) -> Self {
@@ -786,6 +843,7 @@ impl MemoryService {
             superseded_ids,
             request_fingerprints,
             request_receipts: HashMap::new(),
+            receipts_path: None,
             conversation_states: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::conversation_state::ConversationStateStore::new(None),
             )),
@@ -1110,15 +1168,8 @@ impl MemoryService {
         let request_key = (request.user_id.clone(), request.request_id.clone());
         let (mut response, doc_ids) = self.add_unpublished(request)?;
         self.store.refresh()?;
-        // Fresh write: build the receipt and cache it for idempotent retries.
-        // Retry path (empty doc_ids): add_unpublished already attached the
-        // cached receipt; leave it untouched.
-        if !doc_ids.is_empty() {
-            let receipt =
-                self.build_adjudication_receipt(response.request_id.clone(), &doc_ids);
-            self.request_receipts.insert(request_key, receipt.clone());
-            response.adjudication = Some(receipt);
-        }
+        self.attach_receipt(&mut response, request_key, &doc_ids);
+        self.persist_receipts();
         Ok(response)
     }
 
@@ -1137,22 +1188,48 @@ impl MemoryService {
         for request in requests {
             let request_key = (request.user_id.clone(), request.request_id.clone());
             let (response, doc_ids) = self.add_unpublished(request)?;
-            receipt_inputs.push((request_key, response.request_id.clone(), doc_ids));
+            receipt_inputs.push((request_key, doc_ids));
             responses.push(response);
         }
         self.store.refresh()?;
-        for (response, (request_key, request_id, doc_ids)) in
+        for (response, (request_key, doc_ids)) in
             responses.iter_mut().zip(receipt_inputs.into_iter())
         {
-            // Fresh write: build and cache the receipt. Retry path (empty
-            // doc_ids): the cached receipt is already attached.
-            if !doc_ids.is_empty() {
-                let receipt = self.build_adjudication_receipt(request_id, &doc_ids);
-                self.request_receipts.insert(request_key, receipt.clone());
-                response.adjudication = Some(receipt);
-            }
+            self.attach_receipt(response, request_key, &doc_ids);
         }
+        self.persist_receipts();
         Ok(responses)
+    }
+
+    /// Attaches the adjudication receipt to a response after refresh.
+    /// Fresh writes build, cache, and persist it. Retries resolve from the
+    /// cache, which is populated at open from disk, by earlier writes in
+    /// this lifetime, or by earlier requests in the same batch — so a
+    /// duplicate request inside one batch gets the identical receipt.
+    fn attach_receipt(
+        &mut self,
+        response: &mut AddResponse,
+        request_key: (String, String),
+        doc_ids: &[String],
+    ) {
+        if !doc_ids.is_empty() {
+            let receipt =
+                self.build_adjudication_receipt(response.request_id.clone(), doc_ids);
+            self.request_receipts
+                .insert(request_key, receipt.clone());
+            response.adjudication = Some(receipt);
+        } else {
+            response.adjudication = self
+                .request_receipts
+                .get(&request_key)
+                .cloned()
+                .or_else(|| {
+                    let receipt = self.rebuild_receipt(&request_key)?;
+                    self.request_receipts
+                        .insert(request_key.clone(), receipt.clone());
+                    Some(receipt)
+                });
+        }
     }
 
     /// Returns the semantic state (Current / Superseded / Conflicted) of one
@@ -1244,9 +1321,23 @@ impl MemoryService {
             });
             if is_source
                 && kind == "supersedes"
+                && !doc_set.contains(r.target_doc_id.as_str())
                 && !retired_doc_ids.contains(&r.target_doc_id)
             {
-                retired_doc_ids.push(r.target_doc_id.clone());
+                // Report actual retirement, not merely a supersession
+                // relation: the target must really be Superseded (not
+                // Conflicted via confidence thresholds or the multi-claim
+                // protection) and by this write's document.
+                let state = self.store.semantic_document_state(&r.target_doc_id);
+                let retired_by_this_write = state.status
+                    == Some(crate::semantic_relations::SemanticStatus::Superseded)
+                    && state
+                        .superseded_by
+                        .as_deref()
+                        .is_some_and(|id| doc_set.contains(id));
+                if retired_by_this_write {
+                    retired_doc_ids.push(r.target_doc_id.clone());
+                }
             }
         }
         WriteAdjudicationReceipt {
@@ -1286,21 +1377,9 @@ impl MemoryService {
                     request_id: request.request_id,
                     user_id: request.user_id,
                     session_id: request.session_id,
-                    // Idempotent retry: return the original write's receipt so
-                    // the response is identical to the first call. After a
-                    // service restart the in-memory cache is empty; rebuild
-                    // the receipt from the persisted documents instead of
-                    // returning None.
-                    adjudication: self
-                        .request_receipts
-                        .get(&request_key)
-                        .cloned()
-                        .or_else(|| {
-                            let receipt = self.rebuild_receipt(&request_key)?;
-                            self.request_receipts
-                                .insert(request_key.clone(), receipt.clone());
-                            Some(receipt)
-                        }),
+                    // The receipt is attached post-refresh by attach_receipt,
+                    // which resolves retries from the cache (or rebuilds).
+                    adjudication: None,
                 },
                 Vec::new(),
             ));
@@ -3492,18 +3571,109 @@ mod tests {
     }
 
 #[test]
-    fn retry_after_restart_returns_rebuilt_receipt() {
-        // The receipt cache is in-memory only; after reopening the service a
-        // retry of the same request_id must still return the adjudication,
-        // rebuilt from the persisted documents.
+    fn add_response_serde_round_trip_and_backward_compat() {
+        // Old JSON without the adjudication field must still deserialize.
+        let old_json = r#"{"success":true,"request_id":"r1","user_id":"u","session_id":"s"}"#;
+        let parsed: AddResponse = serde_json::from_str(old_json).unwrap();
+        assert!(parsed.adjudication.is_none());
+
+        // New responses round-trip, including the receipt.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let response = service
+            .add(AddRequest {
+                request_id: "r1".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: Some(1_699_939_200_000i64),
+                    content: "The bicycle is owned by Rossi.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "s1".into(),
+            })
+            .unwrap();
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(json.get("adjudication").is_some());
+        let back: AddResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.adjudication.unwrap().claims.len(),
+            response.adjudication.unwrap().claims.len()
+        );
+    }
+
+#[test]
+    fn retry_after_restart_returns_identical_response() {
+        // The identical-retry contract must survive restarts, intervening
+        // writes, and multi-message requests: the persisted receipt is the
+        // original, not a reconstruction from current state.
         let dir = std::env::temp_dir().join(format!(
             "lint-ai-receipt-restart-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let options = crate::default_production_pipeline_options();
+        let args_a = || AddRequest {
+            request_id: "rr-a".into(),
+            messages: vec![
+                Message {
+                    role: "user".into(),
+                    timestamp: Some(1_699_939_200_000i64),
+                    content: "The bicycle is owned by Rossi.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                },
+                Message {
+                    role: "user".into(),
+                    timestamp: Some(1_699_939_200_000i64),
+                    content: "The bicycle is red.".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                },
+            ],
+            user_id: "user-a".into(),
+            session_id: "s1".into(),
+        };
+        let args_b = || AddRequest {
+            request_id: "rr-b".into(),
+            messages: vec![Message {
+                role: "user".into(),
+                timestamp: Some(1_700_025_600_000i64),
+                content: "The bicycle is owned by Bianchi.".into(),
+                expires_at_ms: None,
+                supersedes_id: None,
+            }],
+            user_id: "user-a".into(),
+            session_id: "s2".into(),
+        };
+        let first_json = {
+            let mut service =
+                MemoryService::at_path(&dir, options.clone()).expect("open failed");
+            service.add(args_a()).expect("add A failed");
+            // Intervening write supersedes A's ownership claim.
+            service.add(args_b()).expect("add B failed");
+            let retry_a = service.add(args_a()).expect("retry A failed");
+            serde_json::to_value(&retry_a).expect("serialize failed")
+        };
+        // Reopen: the in-memory receipt cache is empty; the persisted
+        // receipt must produce the identical serialized response.
+        let mut service =
+            MemoryService::at_path(&dir, options).expect("reopen failed");
+        let retry_after_restart = service.add(args_a()).expect("retry failed");
+        let second_json = serde_json::to_value(&retry_after_restart).expect("serialize failed");
+        assert_eq!(first_json, second_json);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+#[test]
+    fn batch_duplicate_requests_get_identical_receipts() {
+        // [A, A] in one batch: the duplicate must resolve to the same
+        // receipt as the original once the batch's refresh completes.
+        let mut service =
+            MemoryService::in_memory(crate::default_production_pipeline_options());
         let args = || AddRequest {
-            request_id: "rr-1".into(),
+            request_id: "dup".into(),
             messages: vec![Message {
                 role: "user".into(),
                 timestamp: Some(1_699_939_200_000i64),
@@ -3514,21 +3684,12 @@ mod tests {
             user_id: "user-a".into(),
             session_id: "s1".into(),
         };
-        let first_receipt = {
-            let mut service =
-                MemoryService::at_path(&dir, options.clone()).expect("open failed");
-            let response = service.add(args()).expect("add failed");
-            response.adjudication.expect("receipt missing")
-        };
-        // Reopen: the in-memory receipt cache is empty.
-        let mut service =
-            MemoryService::at_path(&dir, options).expect("reopen failed");
-        let retry = service.add(args()).expect("retry failed");
-        let retry_receipt = retry.adjudication.expect("retry receipt missing");
-        assert_eq!(retry_receipt.request_id, first_receipt.request_id);
-        assert_eq!(retry_receipt.doc_ids, first_receipt.doc_ids);
-        assert_eq!(retry_receipt.claims.len(), first_receipt.claims.len());
-        let _ = std::fs::remove_dir_all(&dir);
+        let responses = service.add_batch(vec![args(), args()]).unwrap();
+        assert_eq!(responses.len(), 2);
+        let first = serde_json::to_value(&responses[0]).unwrap();
+        let second = serde_json::to_value(&responses[1]).unwrap();
+        assert_eq!(first, second);
+        assert!(responses[0].adjudication.is_some());
     }
 
 #[test]

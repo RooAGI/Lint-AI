@@ -706,7 +706,7 @@ fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
     )
 }
 
-fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+pub(crate) fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
     ensure_safe_output_path(path)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {

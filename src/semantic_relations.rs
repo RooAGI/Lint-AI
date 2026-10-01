@@ -735,6 +735,13 @@ fn build_chain_relations(
     let mut relations = Vec::new();
     let mut seen = HashSet::new();
     let mut latest: Option<&SemanticClaim> = None;
+    // History of claims in this chain, for cue-directed lookback. A
+    // correction cue naming a specific old value ("instead of Postgres")
+    // directs the correction at the claim with that value, even when it
+    // isn't the immediate predecessor (e.g. Postgres → SQLite →
+    // "instead of Postgres": the new claim must still reach the Postgres
+    // claim it names).
+    let mut history: Vec<&SemanticClaim> = Vec::new();
     for claim_id in chain {
         let Some(claim) = claim_by_id.get(claim_id) else {
             continue;
@@ -744,6 +751,24 @@ fn build_chain_relations(
                 push_chain_pair_relation(&mut relations, &mut seen, claim, previous, docs_by_id);
             }
         }
+        // Cue-directed lookback: if this claim's cue names a specific value,
+        // pair it with the most recent previous claim bearing that value.
+        // The `seen` set dedupes the case where it matches the immediate
+        // predecessor (already paired above).
+        if let Some(source_doc) = docs_by_id.get(claim.source_doc_id.as_str()) {
+            if let CueReference::Named(named) = cue_reference(&source_doc.content) {
+                let named_norm = normalize(&named);
+                for prev in history.iter().rev() {
+                    if prev.source_doc_id != claim.source_doc_id
+                        && normalize(&prev.object) == named_norm
+                    {
+                        push_chain_pair_relation(&mut relations, &mut seen, claim, prev, docs_by_id);
+                        break;
+                    }
+                }
+            }
+        }
+        history.push(claim);
         latest = Some(claim);
     }
     relations
@@ -1447,6 +1472,7 @@ enum CueReference {
 fn cue_reference(content: &str) -> CueReference {
     let lower = content.to_lowercase();
     for pattern in [
+        "supersedes",
         "instead of",
         "replaces",
         "replaced by",
@@ -2320,6 +2346,11 @@ mod scalar_configuration_supersession_tests {
             cue_reference("This replaces the legacy router, effective now."),
             CueReference::Named(v) if v == "the legacy router"
         ));
+        // "supersedes" names its value too.
+        assert!(matches!(
+            cue_reference("This supersedes Postgres."),
+            CueReference::Named(v) if v == "postgres"
+        ));
         // Quoted values are unquoted before comparison.
         assert!(matches!(
             cue_reference("We use MongoDB instead of \"Postgres\"."),
@@ -2339,6 +2370,95 @@ mod scalar_configuration_supersession_tests {
             cue_reference("This replaces the previous decision."),
             CueReference::General
         ));
+    }
+
+
+    #[test]
+    fn supersedes_cue_names_value_not_general() {
+        // "This supersedes Postgres." must NOT retire a SQLite doc.
+        let mut old_lite = scalar_doc("d1", "user: We use SQLite for analytics.", "2023-11-14");
+        old_lite.group_id = Some("s1".to_string());
+        old_lite.concept = "note".to_string();
+        let mut new = scalar_doc(
+            "d2",
+            "user: We use MongoDB for analytics. This supersedes Postgres.",
+            "2023-11-14",
+        );
+        new.group_id = Some("s2".to_string());
+        new.concept = "note".to_string();
+        let store = SemanticRelationStore::from_documents(
+            [&old_lite, &new],
+            SupersessionOptions::default(),
+        );
+        assert_ne!(
+            store.document_state("d1").status,
+            Some(SemanticStatus::Superseded),
+            "supersedes Postgres must not retire SQLite"
+        );
+        let mismatch = store
+            .relations()
+            .iter()
+            .any(|r| r.method == "correction_cue_mismatch");
+        assert!(mismatch, "expected a correction_cue_mismatch relation");
+
+        // But it MUST retire the Postgres doc it names.
+        let mut old_pg = scalar_doc("d1", "user: We use Postgres for analytics.", "2023-11-14");
+        old_pg.group_id = Some("s1".to_string());
+        old_pg.concept = "note".to_string();
+        let store = SemanticRelationStore::from_documents(
+            [&old_pg, &new],
+            SupersessionOptions::default(),
+        );
+        assert_eq!(
+            store.document_state("d1").status,
+            Some(SemanticStatus::Superseded),
+            "supersedes Postgres must retire the Postgres doc"
+        );
+    }
+
+    #[test]
+    fn cue_directed_lookback_reaches_nonadjacent_claim() {
+        // 3-doc chain: the "instead of Postgres" cue must reach past the
+        // intermediate SQLite claim to supersede the Postgres claim it names.
+        let mut d1 = scalar_doc("d1", "user: We use Postgres for analytics.", "2023-11-14");
+        d1.group_id = Some("s1".to_string());
+        d1.concept = "note".to_string();
+        let mut d2 = scalar_doc("d2", "user: We use SQLite for analytics.", "2023-11-14");
+        d2.group_id = Some("s2".to_string());
+        d2.concept = "note".to_string();
+        let mut d3 = scalar_doc(
+            "d3",
+            "user: We use MongoDB for analytics instead of Postgres.",
+            "2023-11-14",
+        );
+        d3.group_id = Some("s3".to_string());
+        d3.concept = "note".to_string();
+        let store = SemanticRelationStore::from_documents(
+            [&d1, &d2, &d3],
+            SupersessionOptions::default(),
+        );
+        // d3 supersedes d1 via lookback (cue names Postgres).
+        assert_eq!(
+            store.document_state("d1").status,
+            Some(SemanticStatus::Superseded),
+            "d1 (Postgres) must be superseded via cue-directed lookback"
+        );
+        // d3 conflicts with d2 (cue names a different value).
+        let d3_d2_mismatch = store.relations().iter().any(|r| {
+            r.source_doc_id == "d3"
+                && r.target_doc_id == "d2"
+                && r.method == "correction_cue_mismatch"
+        });
+        assert!(
+            d3_d2_mismatch,
+            "d3 must conflict (not supersede) d2 via correction_cue_mismatch"
+        );
+        // d2 must NOT be superseded.
+        assert_ne!(
+            store.document_state("d2").status,
+            Some(SemanticStatus::Superseded),
+            "d2 (SQLite) must not be retired by a cue naming Postgres"
+        );
     }
 
 

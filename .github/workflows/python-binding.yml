@@ -48,6 +48,8 @@ jobs:
         # [tool.maturin] features in pyproject.toml (python + pyo3/abi3-py38).
         run: maturin develop
       - name: Run the Python suite
-        run: python -m unittest discover -s tests/python -v
+        # Scope to the binding tests: test_docs_site.py needs a prior
+        # `mkdocs build` and is owned by the docs workflow.
+        run: python -m unittest tests.python.test_memory tests.python.test_behood_query -v
       - name: Assert package version is self-consistent
         run: python -c "import lint_ai, importlib.metadata as m; v=lint_ai.version(); assert v == m.version('lint-ai'), (v, m.version('lint-ai')); print('lint_ai', v)"

@@ -561,7 +561,6 @@ pub(crate) fn build_memory_index(
     let options = crate::pipeline::PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
-        lang: *lang,
         term_ranker: ranker_kind.clone(),
         chunk_strategy: chunk_strategy.clone(),
         chunk_lines,

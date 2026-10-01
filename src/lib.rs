@@ -90,6 +90,7 @@ mod graph;
 mod ownership;
 mod query_expansion;
 pub use query_expansion::preload_lexical_store;
+pub mod semantic_tags;
 mod query_semantics;
 pub mod question_focus;
 mod report;

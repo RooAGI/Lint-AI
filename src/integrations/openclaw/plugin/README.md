@@ -23,7 +23,7 @@ observed on a live OpenClaw host (verified against 2026.9.6 payloads).
 ## Requirements
 
 - OpenClaw with plugin support.
-- The `lint-ai` binary, version 0.2.1 or later, resolvable at runtime —
+- The `lint-ai` binary, version 0.3.0 or later, resolvable at runtime —
   see "Binary resolution" below. Release binaries are published at
   https://github.com/RooAGI/Lint-AI/releases.
 

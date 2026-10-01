@@ -13,7 +13,7 @@ ClawHub credentials and is a public release act.
 - [ ] `src/integrations/openclaw/plugin/` is static: no `__PLACEHOLDER__`
       strings remain in `index.js` (`grep -r __LINT_AI plugin/` must be empty).
 - [ ] `openclaw.plugin.json` and `package.json` versions match the
-      `lint-ai` binary release being published alongside (currently 0.2.1).
+      `lint-ai` binary release being published alongside (currently 0.3.0).
 - [ ] `node --check src/integrations/openclaw/plugin/index.js` passes.
 - [ ] `cargo test --all-targets --features agent-integrations` is green
       (covers the `--openclaw-install` path that ships these same files).

@@ -61,9 +61,11 @@ pub fn expand_query_terms(input_terms: &[String], lang: Lang) -> ExpandedQuery {
     // The expansion store is English WordNet/ConceptNet. For non-English
     // queries, accidental cross-language matches (Spanish "pan" = bread vs
     // English "pan" = cooking vessel) are harmful, and Spanish lexical
-    // resources are out of scope. No-op: return the terms unexpanded.
+    // resources are out of scope. No-op: return the terms unexpanded,
+    // explicitly listed as unexpanded.
     if !matches!(lang, Lang::En | Lang::Auto) {
         return ExpandedQuery {
+            unexpanded_non_english_terms: original_terms.clone(),
             original_terms,
             expanded_terms: Vec::new(),
         };

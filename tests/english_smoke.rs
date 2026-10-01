@@ -70,9 +70,10 @@ fn english_add_search_regression() {
         "English what-yesterday question missed the book fact"
     );
 
-    // Spanish-looking words must not leak: "no", "son", "era" stay live
-    // in English (not stopwords).
-    for w in ["no", "son", "era"] {
+    // Spanish-only words must not leak: they stay live in English
+    // (not stopwords). (Words like "no"/"son"/"era" are also English
+    // stopwords, so they can't test the gate — use Spanish-only forms.)
+    for w in ["también", "dónde", "está"] {
         assert!(
             !lint_ai::tokenizer::is_stopword(w, lint_ai::tokenizer::TokenizerMode::Unstemmed),
             "{w} must not be an English stopword"

@@ -166,6 +166,7 @@ pub(crate) fn chinese_question_word(query: &str) -> Option<String> {
 fn is_chinese_interrogative_token(token: &str) -> bool {
     const SINGLE: &[char] = &['谁', '哪', '几', '啥', '吗', '呢', '何'];
     CHINESE_QUESTION_WORDS.iter().any(|w| token == *w) || token.chars().any(|c| SINGLE.contains(&c))
+}
 
 /// Spanish interrogatives, checked against the RAW (accented) token —
 /// never the stemmed form, where "qué" and the relative pronoun "que"
@@ -270,7 +271,11 @@ mod tests {
         assert!(
             !focus.focus_terms.iter().any(|t| t.contains('哪')),
             "interrogative should not be focus, got {:?}",
+            focus.focus_terms
+        );
+    }
 
+    #[test]
     fn spanish_where_question_focus_is_biblioteca() {
         // Accented interrogative detected on the raw token (stemming would
         // conflate "qué" with the relative pronoun "que").
@@ -304,7 +309,10 @@ mod tests {
     #[test]
     fn chinese_non_question_has_no_question_word() {
         let focus = identify_focus("我毕业于清华大学。");
+        assert_eq!(focus.question_word, None);
+    }
 
+    #[test]
     fn spanish_relative_que_is_not_a_question_word() {
         // No accent, no interrogative: "que" here is a relative pronoun.
         let focus = identify_focus("El libro que compré ayer");

@@ -1035,11 +1035,9 @@ mod stopword_tests {
     }
 
     #[test]
-    fn auto_detect_is_script_based_so_spanish_needs_explicit_lang() {
-        // Script-based detection cannot tell Spanish from English (both
-        // Latin), so a Spanish doc via Auto gets the English set — the
-        // Spanish set applies only when callers pass Lang::Es explicitly
-        // (e.g. --lang es plumbing, owned by the es track).
+    fn auto_detect_includes_spanish_signals() {
+        // Auto-detection uses Spanish signals (accents, ñ, ¿¡) for Latin
+        // text, so a Spanish doc via Auto gets the Spanish stop set.
         let es_doc = Tier1DocInput {
             id: "1".into(),
             source: "t".into(),
@@ -1048,7 +1046,7 @@ mod stopword_tests {
             headings: vec![],
         };
         let stop = default_stopwords_for_lang(Lang::Auto.resolve(&es_doc.content));
-        assert!(!stop.contains("está"));
+        assert!(stop.contains("está"));
         let stop_es = default_stopwords_for_lang(Lang::Es);
         assert!(stop_es.contains("está"));
         // English content words that collide with Spanish stopwords survive.
@@ -1063,10 +1061,6 @@ mod stopword_tests {
         assert!(!stop_en.contains("son"), "English 'son' must survive");
         assert!(!stop_en.contains("era"), "English 'era' must survive");
     }
-}
-
-#[cfg(test)]
-mod stopword_tests {
     use super::*;
 
     #[test]

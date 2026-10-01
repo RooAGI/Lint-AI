@@ -435,16 +435,6 @@ pub(crate) fn chinese_stopwords() -> &'static HashSet<&'static str> {
 /// `tier1::cjk_term_tests::chinese_generous_budget_keeps_late_payload_terms`.
 const CHINESE_CURRENT_STATE_KEEP: &[&str] = &["现在"];
 
-/// Strip diacritics via NFD decomposition + combining-mark removal.
-/// `niño` -> `nino`, `está` -> `esta`; `ß`/`ø`/`ł` keep their identity
-/// (no transliteration). Used to derive the folded twins of Spanish
-/// stopwords for accent-insensitive matching.
-pub(crate) fn fold_diacritics(s: &str) -> String {
-    s.nfd()
-        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
-        .collect()
-}
-
 /// Spanish function words: the vendored spaCy `es` list
 /// (`crate::stopwords_data::STOPWORDS_ES`, MIT) plus mechanical
 /// diacritic-folded twins (`está`/`esta`), because dual emission means
@@ -466,67 +456,26 @@ pub(crate) fn spanish_stopwords() -> &'static HashSet<String> {
                 .iter()
                 .map(|w| fold_diacritics(w)),
         );
+        // Stemmed forms: query-term paths run through the English Porter
+        // stemmer (via normalize_for_index), so the set must be closed
+        // under stemming. Stemming is not idempotent ("adelante" ->
+        // "adelant" -> "adel"), so iterate to a fixed point.
+        let stemmer = Stemmer::create(Algorithm::English);
+        loop {
+            let stemmed: Vec<String> = set
+                .iter()
+                .map(|w| stemmer.stem(w).to_string())
+                .filter(|s| !set.contains(s))
+                .collect();
+            if stemmed.is_empty() {
+                break;
+            }
+            set.extend(stemmed);
+        }
         set
     })
 }
 
-/// Spanish stopwords. Listed in BOTH surface forms they are checked
-/// against, because callers normalize differently:
-/// - raw-lowercased with accents ("dónde", "está") — `literal_query_tokens`
-///   tokenizes the raw query;
-/// - deunicoded + English-Porter-stemmed ("donde", "esta") — query-term
-///   paths that run through `normalize_for_index` first
-///   (`routing_content_terms`, `identify_focus`, `expand_query_terms`).
-/// Membership is a set lookup, so carrying both forms is harmless.
-/// Only consulted when the caller passes `Lang::Es` — English text never
-/// sees these (surface forms like "no"/"son"/"era" would otherwise
-/// collide with English words).
-fn spanish_stopwords() -> &'static HashSet<&'static str> {
-    static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    STOP.get_or_init(|| {
-        [
-            // Raw (accented) forms.
-            "el", "la", "los", "las", "lo", "un", "una", "unos", "unas", "del", "al", "de", "en",
-            "a", "por", "para", "con", "sin", "sobre", "entre", "hasta", "desde", "hacia",
-            "durante", "mediante", "según", "tras", "ante", "bajo", "contra", "y", "e", "ni", "o",
-            "u", "pero", "porque", "aunque", "sino", "pues", "que", "yo", "tú", "él", "ella",
-            "ello", "nosotros", "nosotras", "vosotros", "vosotras", "ellos", "ellas", "me", "te",
-            "se", "nos", "les", "mi", "mis", "tus", "su", "sus", "nuestro", "nuestra", "vuestra",
-            "este", "esta", "estos", "estas", "ese", "esa", "esos", "esas", "aquel", "aquella",
-            "aquellos", "aquellas", "esto", "eso", "aquello", "no", "sí", "también", "tampoco",
-            "muy", "tan", "más", "menos", "mucho", "mucha", "muchos", "muchas", "poco", "poca",
-            "bastante", "además", "así", "aquí", "ahí", "allí", "ahora", "hoy", "ayer", "mañana",
-            "siempre", "nunca", "jamás", "ya", "todavía", "aún", "entonces", "luego", "después",
-            "antes", "es", "son", "era", "eran", "fue", "fueron", "sea", "sean", "está", "están",
-            "estaba", "estaban", "estoy", "hay", "ha", "han", "he", "hemos", "tiene", "tienen",
-            "hace", "hacen", "puede", "pueden", "debe", "deben", "qué", "quién", "quiénes", "cuál",
-            "cuáles", "dónde", "cuándo", "cuánto", "cuánta", "cuántos", "cuántas", "cómo", "donde",
-            "cuando", "cual", "cuales", "quien", "quienes", "como", "cuanto", "cuanta", "cuantos",
-            "cuantas",
-            // Deunicoded + English-stemmed forms: exactly what
-            // `normalize_for_index` produces for the raw words above
-            // (verified by `spanish_stopwords_cover_normalized_forms`).
-            // Note the Porter stemmer is aggressive on Spanish
-            // ("dónde" -> "dond", "este" -> "est"); these are the empirical
-            // outputs, not hand derivations.
-            "adema", "ahi", "ahora", "al", "alli", "ant", "aquel", "aquella", "aquello", "aqui",
-            "asi", "aun", "aunqu", "ayer", "bajo", "bastant", "como", "con", "contra", "cual",
-            "cuando", "cuanta", "cuanto", "de", "debe", "deben", "del", "desd", "despu", "dond",
-            "durant", "el", "ella", "ello", "en", "entonc", "entr", "era", "eran", "es", "esa",
-            "ese", "eso", "est", "esta", "estaba", "estaban", "estan", "esto", "estoy", "fue",
-            "fueron", "ha", "hace", "hacen", "hacia", "han", "hasta", "hay", "he", "hemo", "hoy",
-            "jama", "la", "las", "le", "les", "lo", "los", "luego", "manana", "mas", "me",
-            "mediant", "meno", "mi", "mis", "mucha", "mucho", "muy", "ni", "no", "nos", "nosotra",
-            "nosotro", "nuestra", "nuestro", "nunca", "para", "pero", "poca", "poco", "por",
-            "porqu", "pu", "pue", "pued", "pueden", "que", "quien", "se", "sea", "sean", "segun",
-            "si", "siempr", "sin", "sino", "sobr", "son", "su", "sus", "tambien", "tampoco", "tan",
-            "te", "tien", "tienen", "todavia", "tra", "tras", "tu", "tus", "un", "una", "uno",
-            "vosotra", "vosotro", "vuestra", "ya", "yo",
-        ]
-        .into_iter()
-        .collect()
-    })
-}
 
 /// True if `token` is a stopword for `lang` under `mode`. English behavior
 /// is unchanged (`is_stopword`); Spanish adds its function words on top.
@@ -584,6 +533,9 @@ mod tests {
                 .into_iter()
                 .map(String::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn unstemmed_keeps_spanish_accents() {
         // Accented words must tokenize as units (previously "niño" yielded
@@ -652,6 +604,19 @@ mod tests {
         for word in [
             "how", "many", "does", "was", "the", "and", "however", "therefore", "among",
         ] {
+            assert!(
+                is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should be a stopword"
+            );
+        }
+        for word in ["degree", "graduate", "miles", "pasta"] {
+            assert!(
+                !is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should not be a stopword"
+            );
+        }
+    }
+
     #[test]
     fn spanish_stopwords_cover_normalized_forms() {
         // Fixed-point check: every Spanish stopword, once run through the
@@ -671,17 +636,24 @@ mod tests {
     #[test]
     fn spanish_stopwords_do_not_leak_into_english() {
         // The per-language gate: English text never consults the Spanish
-        // list, so colliding surface forms ("no", "son", "era") stay live
-        // in English.
-        for word in ["no", "son", "era", "tan", "la", "el"] {
+        // list, so Spanish-only surface forms stay live in English.
+        // (Words like "no"/"son"/"era" are also English stopwords, so they
+        // can't test the gate — use Spanish-only forms here.)
+        for word in ["también", "dónde", "está", "niño", "biblioteca"] {
             assert!(
                 !is_stopword(word, TokenizerMode::Unstemmed),
                 "{word} must not be an English stopword"
             );
+        }
+        // But they ARE Spanish stopwords when Lang::Es is passed.
+        for word in ["no", "son", "era", "tan", "la", "el"] {
             assert!(
                 is_stopword_for_lang(word, TokenizerMode::Unstemmed, Lang::Es),
                 "{word} should be a Spanish stopword"
             );
+        }
+        // Spanish-only forms are not filtered for English.
+        for word in ["también", "dónde", "está"] {
             assert!(
                 !is_stopword_for_lang(word, TokenizerMode::Unstemmed, Lang::En),
                 "{word} must not be filtered for English"

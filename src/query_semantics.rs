@@ -593,12 +593,12 @@ fn classify_query_kind(query: &str) -> QueryKind {
         return QueryKind::Why;
     }
     // Korean interrogative prefixes. Korean is head-final, so the
-    // question word can appear anywhere; match at start (common) and as
-    // a whitespace-delimited token anywhere in the query.
+    // question word can appear anywhere; particles attach to the word, so
+    // match token prefixes as well as query prefixes.
     let tokens: Vec<&str> = lower.split_whitespace().collect();
     let ko_kind = |forms: &[&str], kind: QueryKind| -> Option<QueryKind> {
         for form in forms {
-            if lower.starts_with(form) || tokens.iter().any(|t| *t == *form) {
+            if lower.starts_with(form) || tokens.iter().any(|t| t.starts_with(form)) {
                 return Some(kind);
             }
         }
@@ -1737,6 +1737,14 @@ mod tests {
         assert_eq!(classify_query_kind("어제 누가 왔어?"), QueryKind::Who);
         // Non-question stays a statement.
         assert_eq!(classify_query_kind("학교에 갔다"), QueryKind::Statement);
+    }
+
+    #[test]
+    fn korean_particle_attached_question_word_mid_query_is_classified() {
+        assert_eq!(
+            classify_query_kind("박영희는 어디에서 태어났나?"),
+            QueryKind::Where
+        );
     }
 
     #[test]

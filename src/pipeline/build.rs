@@ -17,7 +17,7 @@ use crate::tier1::{
 };
 use anyhow::Result;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -308,7 +308,7 @@ fn extraction_identity(options: &PipelineOptions) -> (String, String) {
     // provider switch invalidates cached records.
     let ner_provider_name = match &options.ner_provider {
         Tier1NerProvider::Heuristic => "heuristic".to_string(),
-        Tier1NerProvider::Spacy => format!("spacy:{}", options.spacy_model),
+        Tier1NerProvider::Spacy => format!("spacy:{}:{:?}", options.spacy_model, options.lang),
     };
     let term_ranker_name = select_term_ranker(&options.term_ranker).name().to_string();
     (ner_provider_name, term_ranker_name)
@@ -316,10 +316,9 @@ fn extraction_identity(options: &PipelineOptions) -> (String, String) {
 
 /// Rank Tier1 key entities for a batch of documents per `options.ner_provider`.
 ///
-/// Luyi 2026-09-29: keep the heuristic ranker; spaCy stays the default. When
-/// the provider is spaCy and it is unavailable, fall back to the heuristic
-/// ranker (loud warning) so a missing spaCy never silently degrades NER to
-/// zero entities for users who configured heuristic explicitly.
+/// SpaCy documents are grouped by their selected language model so a mixed
+/// corpus uses the right model for each document. A failed model group falls
+/// back to the heuristic ranker for that group.
 pub(crate) fn rank_key_entities_batched(
     docs: &[Tier1DocInput],
     options: &PipelineOptions,
@@ -328,21 +327,31 @@ pub(crate) fn rank_key_entities_batched(
     match &options.ner_provider {
         Tier1NerProvider::Heuristic => heuristic.rank_docs(docs),
         Tier1NerProvider::Spacy => {
-            let spacy = SpacyKeyEntityRanker {
-                model: options.spacy_model.clone(),
-                script_path: default_spacy_script_path().display().to_string(),
-            };
-            match spacy.rank_docs(docs) {
-                Ok(out) => Ok(out),
-                Err(err) => {
-                    eprintln!(
-                        "warning: {} ranker unavailable ({}), falling back to heuristic",
-                        spacy.name(),
-                        err
-                    );
-                    Ok(heuristic.rank_docs(docs).unwrap_or_default())
+            let mut by_model: BTreeMap<String, Vec<Tier1DocInput>> = BTreeMap::new();
+            for doc in docs {
+                by_model
+                    .entry(options.spacy_model_for_text(&doc.content))
+                    .or_default()
+                    .push(doc.clone());
+            }
+            let mut out = HashMap::new();
+            for (model, group_docs) in by_model {
+                let spacy = SpacyKeyEntityRanker {
+                    model: model.clone(),
+                    script_path: default_spacy_script_path().display().to_string(),
+                };
+                match spacy.rank_docs(&group_docs) {
+                    Ok(entities) => out.extend(entities),
+                    Err(err) => {
+                        eprintln!(
+                            "warning: {} ranker unavailable for model {model} ({err}), falling back to heuristic",
+                            spacy.name(),
+                        );
+                        out.extend(heuristic.rank_docs(&group_docs).unwrap_or_default());
+                    }
                 }
             }
+            Ok(out)
         }
     }
 }
@@ -763,6 +772,7 @@ pub fn build_query_snapshot_from_source_documents(
     let options = PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
+        lang: crate::lang::Lang::Auto,
         term_ranker: ranker_kind.clone(),
         chunk_strategy: chunk_strategy.clone(),
         chunk_lines,

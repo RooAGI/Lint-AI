@@ -50,8 +50,11 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
         // Build the routing scope from the per-segment bitmap postings. This
         // preserves filter-aware segment selection without scanning records.
         // A one-segment snapshot has no routing decision to make; the local
-        // bitmap is sufficient and avoids materializing 23k string IDs.
-        if segmented.segment_count() == 1 {
+        // bitmap is sufficient and avoids materializing 23k string IDs --
+        // unless semantic relations exist, in which case the ID set is needed
+        // to intersect the field filters with the semantic supersession
+        // allow-list (a bitmap cannot express supersession).
+        if segmented.segment_count() == 1 && semantic_relations.is_empty() {
             None
         } else {
             segmented.doc_ids_matching_filters(filters)
@@ -156,8 +159,17 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                     .as_ref()
                     .and_then(|maps| maps.values().next());
                 let mut local_context = context;
-                local_context.allowed_doc_ids = None;
-                local_context.allowed_doc_bitmap = local_bitmap;
+                if allowed_doc_ids.is_some() {
+                    // The ID allow-list is materialized (field filters,
+                    // possibly intersected with the semantic supersession
+                    // allow-list): it is authoritative. Drop the bitmap --
+                    // downstream prefers the bitmap over the ID set, and the
+                    // bitmap cannot express supersession.
+                    local_context.allowed_doc_bitmap = None;
+                } else {
+                    local_context.allowed_doc_ids = None;
+                    local_context.allowed_doc_bitmap = local_bitmap;
+                }
                 let (results, _) = segmented
                     .query_single_segment(
                         prepared.search_query(),
@@ -694,7 +706,7 @@ fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
     )
 }
 
-fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+pub(crate) fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
     ensure_safe_output_path(path)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {

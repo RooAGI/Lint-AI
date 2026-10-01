@@ -93,7 +93,11 @@ fn strip_role_prefix<'a>(text: &'a str, speaker: Option<&str>) -> &'a str {
 /// Heuristic turn-role check: interrogative turns rarely contain answers.
 fn is_interrogative(text: &str) -> bool {
     let t = text.trim();
-    if t.ends_with('?') {
+    if t.ends_with('?') || t.ends_with('？') {
+        return true;
+    }
+    // Chinese: sentence-final 吗/呢 or any interrogative marks a question.
+    if crate::question_focus::chinese_question_word(t).is_some() {
         return true;
     }
     t.split_whitespace()
@@ -105,11 +109,17 @@ fn is_interrogative(text: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// True when the query opens with a wh-word.
+/// True when the query opens with a wh-word (English), or contains any
+/// Chinese interrogative (Chinese marks questions with particles like
+/// 吗/呢 or words like 为什么 anywhere in the sentence, not with a
+/// leading wh-word).
 pub fn is_wh_question(query: &str) -> bool {
-    query
-        .trim()
-        .split_whitespace()
+    let t = query.trim();
+    // Chinese has no leading-wh-word structure; any interrogative counts.
+    if t.chars().any(|c| crate::lang::is_han(c)) {
+        return crate::question_focus::chinese_question_word(t).is_some();
+    }
+    t.split_whitespace()
         .next()
         .map(|w| {
             let lw = w
@@ -496,6 +506,15 @@ mod tests {
         assert!(is_wh_question("What about the budget"));
         assert!(!is_wh_question("tell me more"));
         assert!(!is_wh_question(""));
+    }
+
+    #[test]
+    fn detects_chinese_questions() {
+        assert!(is_wh_question("你为什么学习中文？"));
+        assert!(is_wh_question("我毕业于哪所大学"));
+        assert!(is_wh_question("你好吗"));
+        assert!(!is_wh_question("我毕业于清华大学。"));
+        assert!(!is_wh_question("今天天气很好"));
     }
 
     #[test]

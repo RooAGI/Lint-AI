@@ -144,8 +144,32 @@ pub fn chunk_document_lines(
 }
 
 fn estimate_tokens(text: &str) -> usize {
-    let words = text.split_whitespace().count();
-    ((words as f32) * 1.3).ceil() as usize
+    // CJK-aware estimate: the old split_whitespace()*1.3 counted a whole
+    // Chinese paragraph as one "word" (~1 token), grossly undercounting.
+    // Latin words keep the historical 1.3 factor; each Han/Hangul char
+    // counts ~0.6 tokens (empirically 1-2 chars per token); other chars
+    // (digits, punctuation) count 0.3.
+    let mut latin_words = 0usize;
+    let mut cjk = 0usize;
+    let mut other = 0usize;
+    let mut in_latin_word = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            in_latin_word = false;
+        } else if crate::lang::is_han(ch) || crate::lang::is_hangul(ch) {
+            cjk += 1;
+            in_latin_word = false;
+        } else if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            if !in_latin_word {
+                latin_words += 1;
+                in_latin_word = true;
+            }
+        } else {
+            other += 1;
+            in_latin_word = false;
+        }
+    }
+    ((latin_words as f32) * 1.3 + (cjk as f32) * 0.6 + (other as f32) * 0.3).ceil() as usize
 }
 
 pub fn chunk_document_hybrid(
@@ -270,4 +294,32 @@ pub fn enrich_section_chunks(
         chunk.important_terms.dedup();
     }
     chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn english_estimate_unchanged() {
+        // Historical behavior: words * 1.3.
+        assert_eq!(estimate_tokens("hello world"), 3);
+        assert_eq!(estimate_tokens("one two three four"), 6);
+    }
+
+    #[test]
+    fn chinese_estimate_counts_characters() {
+        // 8 Han chars -> ~5 tokens, not 2 (the old split_whitespace count).
+        let est = estimate_tokens("我毕业于清华大学");
+        assert!(
+            (4..=8).contains(&est),
+            "expected a realistic CJK estimate, got {est}"
+        );
+        // Mixed text: Latin words plus CJK chars.
+        let mixed = estimate_tokens("hello 清华大学 world");
+        assert!(
+            mixed >= 5,
+            "mixed text should count both scripts, got {mixed}"
+        );
+    }
 }

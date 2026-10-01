@@ -676,6 +676,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             ner_provider: &args.tier1_ner_provider,
             term_ranker: &args.tier1_term_ranker,
             spacy_model: &args.spacy_model,
+            lang: &args.lang,
             chunk_strategy: &args.chunk_strategy,
             chunk_lines: args.chunk_lines,
             chunk_overlap: args.chunk_overlap,
@@ -732,6 +733,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 args.chunk_overlap,
                 args.chunk_target_tokens,
                 args.chunk_max_tokens,
+                &args.lang,
                 Some(&lexical_dir),
             )?;
             if let Err(err) = save_cached_query_index(&cache_settings, &corpus_fingerprint, &built)
@@ -842,6 +844,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             ner_provider: &args.tier1_ner_provider,
             term_ranker: &args.tier1_term_ranker,
             spacy_model: &args.spacy_model,
+            lang: &args.lang,
             chunk_strategy: &args.chunk_strategy,
             chunk_lines: args.chunk_lines,
             chunk_overlap: args.chunk_overlap,
@@ -865,6 +868,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             args.chunk_overlap,
             args.chunk_target_tokens,
             args.chunk_max_tokens,
+            &args.lang,
             Some(&lexical_dir),
         )?;
         if let Err(err) = save_cached_query_index(&cache_settings, &corpus_fingerprint, &index) {
@@ -1040,6 +1044,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             args.chunk_overlap,
             args.chunk_target_tokens,
             args.chunk_max_tokens,
+            &args.lang,
             None,
         )?;
         let written = export_ontology_json(&index, &args.ontology_out, &args.path)?;
@@ -1060,6 +1065,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         ner_provider: &args.tier1_ner_provider,
         term_ranker: &args.tier1_term_ranker,
         spacy_model: &args.spacy_model,
+        lang: &args.lang,
         chunk_strategy: &args.chunk_strategy,
         chunk_lines: args.chunk_lines,
         chunk_overlap: args.chunk_overlap,
@@ -1088,6 +1094,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             args.chunk_overlap,
             args.chunk_target_tokens,
             args.chunk_max_tokens,
+            &args.lang,
             Some(&lexical_dir),
         )?;
         if let Err(err) = save_cached_query_index(&cache_settings, &corpus_fingerprint, &built) {

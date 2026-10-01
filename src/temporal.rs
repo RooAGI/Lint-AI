@@ -41,6 +41,12 @@ pub fn augment_query_with_temporal_context(query: &str, question_date: Option<&s
     let mut tokens = Vec::new();
     let mut seen = HashSet::new();
 
+    // Chinese pre-layer: each hit contributes its label plus resolved
+    // date tokens, mirroring the English markers below.
+    for hit in chinese_temporal_hits(query, base_date) {
+        push_date_tokens(&mut tokens, &hit.label, hit.date);
+    }
+
     for marker in temporal_markers(&lower) {
         push_unique(&mut tokens, &mut seen, marker);
     }
@@ -138,6 +144,16 @@ pub fn parse_temporal_date(input: Option<&str>) -> Option<NaiveDate> {
 pub fn resolve_temporal_target(query: &str, anchor_date: Option<&str>) -> Option<TemporalTarget> {
     let base_date = parse_date(anchor_date)
         .unwrap_or_else(|| DateTime::<Utc>::from(SystemTime::now()).date_naive());
+    // Chinese pre-layer: relative words, explicit 年月日 dates, numeric
+    // offsets (三天前), and weekday mentions resolve before the English
+    // patterns below.
+    if let Some(hit) = chinese_temporal_hits(query, base_date).into_iter().next() {
+        return Some(TemporalTarget {
+            target_date: hit.date,
+            window_days: hit.window_days,
+        });
+    }
+
     // Korean pre-layer: native relative-date expressions and explicit
     // `2026년 9월 29일`-style dates, checked before the English patterns
     // (the scripts are disjoint, so order is just convention).
@@ -469,6 +485,14 @@ pub fn extract_temporal_terms(
         for marker in temporal_markers(&lower) {
             push_unique(&mut terms, &mut seen, marker);
         }
+        // Chinese pre-layer: explicit dates, weekday mentions, numeric
+        // offsets, and relative words. The anchor here is "today" (index
+        // time), matching how English relative markers are treated.
+        let index_today = DateTime::<Utc>::from(SystemTime::now()).date_naive();
+        for hit in chinese_temporal_hits(text, index_today) {
+            push_unique(&mut terms, &mut seen, format!("temporal {}", hit.label));
+            push_date_tokens(&mut terms, &hit.label, hit.date);
+        }
     }
 
     terms.sort();
@@ -790,6 +814,13 @@ fn resolve_weekend(base: NaiveDate, offset_weeks: i64) -> (NaiveDate, NaiveDate)
 }
 
 fn shift_months(base: NaiveDate, months: i32) -> NaiveDate {
+    // Bound the magnitude first: input numerals are unbounded (\d+), and
+    // without this `base.month() as i32 + months` can overflow i32 while
+    // the normalization loops below spin ~2^31/12 iterations on
+    // adversarial input. 3.1M months (~258k years) still resolves inside
+    // chrono's range; truly out-of-range results fall back to `base`.
+    const MAX_MONTHS: i32 = 3_100_000; // ~258k years
+    let months = months.clamp(-MAX_MONTHS, MAX_MONTHS);
     let mut year = base.year();
     let mut month = base.month() as i32 + months;
     while month <= 0 {
@@ -801,23 +832,45 @@ fn shift_months(base: NaiveDate, months: i32) -> NaiveDate {
         month -= 12;
     }
     let month_u32 = month as u32;
-    let last_day = last_day_of_month(year, month_u32);
+    let last_day = match last_day_of_month(year, month_u32) {
+        Some(d) => d,
+        None => return base,
+    };
     let day = base.day().min(last_day);
     NaiveDate::from_ymd_opt(year, month_u32, day).unwrap_or(base)
 }
 
 fn shift_years(base: NaiveDate, years: i32) -> NaiveDate {
-    let year = base.year() + years;
-    let last_day = last_day_of_month(year, base.month());
+    // saturating_add: input numerals are unbounded, so `base.year() + years`
+    // could overflow i32 (panic in debug). Out-of-range years resolve to
+    // `base` below instead of panicking.
+    let year = base.year().saturating_add(years);
+    let last_day = match last_day_of_month(year, base.month()) {
+        Some(d) => d,
+        None => return base,
+    };
     let day = base.day().min(last_day);
     NaiveDate::from_ymd_opt(year, base.month(), day).unwrap_or(base)
 }
 
-fn last_day_of_month(year: i32, month: u32) -> u32 {
+/// Add `days` (possibly huge — input numerals are unbounded) to `base`
+/// without panicking. The magnitude is clamped to just inside chrono's
+/// representable range (~260k years); the result stays directionally
+/// correct (far past / far future) instead of killing the process.
+fn shift_days(base: NaiveDate, days: i64) -> NaiveDate {
+    const MAX_DAYS: i64 = 95_000_000; // ~260k years, just inside chrono's ±262143-year range
+    let days = days.clamp(-MAX_DAYS, MAX_DAYS);
+    base.checked_add_signed(Duration::days(days)).unwrap_or(base)
+}
+
+fn last_day_of_month(year: i32, month: u32) -> Option<u32> {
     let next_month = if month == 12 { 1 } else { month + 1 };
     let next_year = if month == 12 { year + 1 } else { year };
-    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1).unwrap();
-    (first_next - Duration::days(1)).day()
+    // Fallible: `from_ymd_opt` returns None outside chrono's year range
+    // (e.g. "百万年前" -> year -997974). Callers fall back to `base`;
+    // this must never panic on input text.
+    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1)?;
+    Some((first_next - Duration::days(1)).day())
 }
 
 fn word_to_num(input: &str) -> u32 {
@@ -837,9 +890,454 @@ fn word_to_num(input: &str) -> u32 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Chinese temporal expressions.
+//
+// Pre-layer checked before the English patterns in `resolve_temporal_target`,
+// `augment_query_with_temporal_context`, and `extract_temporal_terms`.
+// Queries pass through `crate::lang::normalize_chinese_numbers` first, so
+// 三天前 and 二〇二六年九月二十九日 reach the regexes as digit forms.
+// ---------------------------------------------------------------------------
+
+/// One Chinese temporal expression resolved against the anchor date.
+struct ChineseTemporalHit {
+    label: String,
+    date: NaiveDate,
+    window_days: i64,
+}
+
+/// Relative day/week/month/year words, checked longest-first.
+/// Each push records (label, resolved date, window_days).
+fn chinese_relative_hits(query: &str, base: NaiveDate) -> Vec<ChineseTemporalHit> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |label: &str, date: NaiveDate, window_days: i64| {
+        if seen.insert(label.to_string()) {
+            out.push(ChineseTemporalHit {
+                label: label.to_string(),
+                date,
+                window_days,
+            });
+        }
+    };
+
+    // Day scale. Longest-match-first: "大前天" contains "前天" (and
+    // "大后天" contains "后天") as a substring, so the doubled form must
+    // be checked — and stripped — before the base form to avoid
+    // mistagging it (e.g. memory "上上周去杭州" tagged as "上周").
+    let q_day = query.replace("大前天", "").replace("大后天", "");
+    if query.contains("大前天") {
+        push("大前天", base - Duration::days(3), 2);
+    }
+    if query.contains("大后天") {
+        push("大后天", base + Duration::days(3), 2);
+    }
+    if q_day.contains("前天") {
+        push("前天", base - Duration::days(2), 2);
+    }
+    if q_day.contains("昨天") {
+        push("昨天", base - Duration::days(1), 2);
+    }
+    if q_day.contains("今天") {
+        push("今天", base, 2);
+    }
+    if q_day.contains("明天") {
+        push("明天", base + Duration::days(1), 2);
+    }
+    if q_day.contains("后天") {
+        push("后天", base + Duration::days(2), 2);
+    }
+    // Week scale. Longest-match-first: "上上周" contains "上周".
+    let q_week = query.replace("上上周", "").replace("下下周", "");
+    if query.contains("上上周") {
+        push("上上周", base - Duration::weeks(2), 7);
+    }
+    if query.contains("下下周") {
+        push("下下周", base + Duration::weeks(2), 7);
+    }
+    if q_week.contains("上周") {
+        push("上周", base - Duration::weeks(1), 7);
+    }
+    if q_week.contains("本周") || q_week.contains("这周") {
+        push("本周", base, 7);
+    }
+    if q_week.contains("下周") {
+        push("下周", base + Duration::weeks(1), 7);
+    }
+    // Month scale. Longest-match-first: "上上个月" contains "上个月".
+    let q_month = query.replace("上上个月", "").replace("下下个月", "");
+    if query.contains("上上个月") {
+        push("上上月", shift_months(base, -2), 14);
+    }
+    if query.contains("下下个月") {
+        push("下下月", shift_months(base, 2), 14);
+    }
+    if q_month.contains("上个月") || q_month.contains("上月") {
+        push("上月", shift_months(base, -1), 14);
+    }
+    if q_month.contains("这个月") || q_month.contains("本月") {
+        push("本月", base, 14);
+    }
+    if q_month.contains("下个月") || q_month.contains("下月") {
+        push("下月", shift_months(base, 1), 14);
+    }
+    // Year scale.
+    if query.contains("去年") {
+        push("去年", shift_years(base, -1), 30);
+    }
+    if query.contains("今年") {
+        push("今年", base, 30);
+    }
+    if query.contains("明年") {
+        push("明年", shift_years(base, 1), 30);
+    }
+    out
+}
+
+/// Explicit dates: 2026年9月29日 / 2026年9月 / 9月29日 (anchor year).
+/// `normalized` must already have Chinese numerals converted to digits.
+fn chinese_explicit_date_hits(normalized: &str, base: NaiveDate) -> Vec<ChineseTemporalHit> {
+    static YMD_RE: OnceLock<Regex> = OnceLock::new();
+    static YM_RE: OnceLock<Regex> = OnceLock::new();
+    static MD_RE: OnceLock<Regex> = OnceLock::new();
+    let ymd_re =
+        YMD_RE.get_or_init(|| Regex::new(r"(\d{4})年(\d{1,2})月(\d{1,2})[日号]?").unwrap());
+    let ym_re = YM_RE.get_or_init(|| Regex::new(r"(\d{4})年(\d{1,2})月").unwrap());
+    let md_re = MD_RE.get_or_init(|| Regex::new(r"(\d{1,2})月(\d{1,2})[日号]").unwrap());
+
+    let mut out = Vec::new();
+    let mut ymd_spans: Vec<(usize, usize)> = Vec::new();
+    for cap in ymd_re.captures_iter(normalized) {
+        let (Some(y), Some(m), Some(d)) = (
+            cap.get(1).and_then(|x| x.as_str().parse::<i32>().ok()),
+            cap.get(2).and_then(|x| x.as_str().parse::<u32>().ok()),
+            cap.get(3).and_then(|x| x.as_str().parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        if let Some(date) = NaiveDate::from_ymd_opt(y, m, d) {
+            let m0 = cap.get(0).unwrap();
+            ymd_spans.push((m0.start(), m0.end()));
+            out.push(ChineseTemporalHit {
+                label: m0.as_str().to_string(),
+                date,
+                window_days: 2,
+            });
+        }
+    }
+    for cap in ym_re.captures_iter(normalized) {
+        let m0 = cap.get(0).unwrap();
+        // Skip the 年月 prefix of an already-matched 年月日.
+        if ymd_spans
+            .iter()
+            .any(|(s, e)| *s <= m0.start() && m0.end() <= *e)
+        {
+            continue;
+        }
+        let (Some(y), Some(m)) = (
+            cap.get(1).and_then(|x| x.as_str().parse::<i32>().ok()),
+            cap.get(2).and_then(|x| x.as_str().parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        if let Some(date) = NaiveDate::from_ymd_opt(y, m, 1) {
+            out.push(ChineseTemporalHit {
+                label: m0.as_str().to_string(),
+                date,
+                window_days: 14,
+            });
+        }
+    }
+    for cap in md_re.captures_iter(normalized) {
+        let m0 = cap.get(0).unwrap();
+        // Skip a 月日 inside an already-matched 年月日.
+        if ymd_spans
+            .iter()
+            .any(|(s, e)| *s <= m0.start() && m0.end() <= *e)
+        {
+            continue;
+        }
+        let (Some(m), Some(d)) = (
+            cap.get(1).and_then(|x| x.as_str().parse::<u32>().ok()),
+            cap.get(2).and_then(|x| x.as_str().parse::<u32>().ok()),
+        ) else {
+            continue;
+        };
+        if let Some(date) = NaiveDate::from_ymd_opt(base.year(), m, d) {
+            out.push(ChineseTemporalHit {
+                label: m0.as_str().to_string(),
+                date,
+                window_days: 2,
+            });
+        }
+    }
+    out
+}
+
+/// Numeric relative offsets: 三天前 / 两周后 / 3个月前 / 5年后.
+/// `normalized` must already have Chinese numerals converted to digits.
+fn chinese_offset_hits(normalized: &str, base: NaiveDate) -> Vec<ChineseTemporalHit> {
+    static OFFSET_RE: OnceLock<Regex> = OnceLock::new();
+    let re = OFFSET_RE
+        .get_or_init(|| Regex::new(r"(\d+)(天|日|个星期|星期|周|个月|月|年)(前|后)").unwrap());
+    let mut out = Vec::new();
+    for cap in re.captures_iter(normalized) {
+        let n: i64 = cap
+            .get(1)
+            .and_then(|x| x.as_str().parse().ok())
+            .unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        // Input numerals are unbounded (\d+): clamp once, up front, to a
+        // magnitude date arithmetic can represent. This bounds every
+        // downstream multiplication and cast (days, weeks, months, years).
+        // Unrepresentable offsets resolve to `base` in the shift helpers.
+        let n = n.min(95_000_000);
+        let unit = cap.get(2).map(|x| x.as_str()).unwrap_or("");
+        let future = cap.get(3).map(|x| x.as_str() == "后").unwrap_or(false);
+        let sign = if future { 1 } else { -1 };
+        let (date, window_days) = match unit {
+            "天" | "日" => (shift_days(base, sign * n), 2),
+            "星期" | "个星期" | "周" => (shift_days(base, sign * n * 7), 7),
+            "个月" | "月" => (shift_months(base, (sign * n) as i32), 14),
+            "年" => (shift_years(base, (sign * n) as i32), 30),
+            _ => continue,
+        };
+        out.push(ChineseTemporalHit {
+            label: cap.get(0).unwrap().as_str().to_string(),
+            date,
+            window_days,
+        });
+    }
+    out
+}
+
+/// Chinese weekday mentions: 上/这/下 + 星期|周|礼拜 + 一..日.
+/// Bare 星期三 resolves to the coming one (matching "this" semantics).
+fn chinese_weekday_hits(query: &str, base: NaiveDate) -> Vec<ChineseTemporalHit> {
+    static WD_RE: OnceLock<Regex> = OnceLock::new();
+    let re =
+        WD_RE.get_or_init(|| Regex::new(r"(上|这|下)?(星期|周|礼拜)([一二三四五六日天])").unwrap());
+    let mut out = Vec::new();
+    for cap in re.captures_iter(query) {
+        let day_char = cap.get(3).map(|x| x.as_str()).unwrap_or("");
+        let weekday = match day_char {
+            "一" => Weekday::Mon,
+            "二" => Weekday::Tue,
+            "三" => Weekday::Wed,
+            "四" => Weekday::Thu,
+            "五" => Weekday::Fri,
+            "六" => Weekday::Sat,
+            "日" | "天" => Weekday::Sun,
+            _ => continue,
+        };
+        let prefix = match cap.get(1).map(|x| x.as_str()) {
+            Some("上") => "last",
+            Some("下") => "next",
+            _ => "this",
+        };
+        out.push(ChineseTemporalHit {
+            label: cap.get(0).unwrap().as_str().to_string(),
+            date: resolve_weekday(base, prefix, weekday),
+            window_days: 2,
+        });
+    }
+    out
+}
+
+/// All Chinese temporal hits for `query` against `base`, in priority order:
+/// explicit dates, weekday mentions, numeric offsets, relative words.
+fn chinese_temporal_hits(query: &str, base: NaiveDate) -> Vec<ChineseTemporalHit> {
+    let normalized = crate::lang::normalize_chinese_numbers(query);
+    let mut out = Vec::new();
+    out.extend(chinese_explicit_date_hits(&normalized, base));
+    out.extend(chinese_weekday_hits(query, base));
+    out.extend(chinese_offset_hits(&normalized, base));
+    out.extend(chinese_relative_hits(query, base));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn anchor() -> &'static str {
+        // A fixed Tuesday: 2026-09-29.
+        "2026-09-29"
+    }
+
+    #[test]
+    fn chinese_relative_day_words_resolve() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = |q: &str| {
+            resolve_temporal_target(q, Some(anchor()))
+                .unwrap()
+                .target_date
+        };
+        assert_eq!(t("我昨天见了王老师"), base - Duration::days(1));
+        assert_eq!(t("我明天要去北京"), base + Duration::days(1));
+        assert_eq!(t("今天天气很好"), base);
+        assert_eq!(t("前天买的菜"), base - Duration::days(2));
+        assert_eq!(t("后天出发"), base + Duration::days(2));
+    }
+
+    #[test]
+    fn chinese_relative_week_month_year_resolve() {
+        let t = |q: &str| resolve_temporal_target(q, Some(anchor())).unwrap();
+        let hit = t("上周我们开会了");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 22).unwrap()
+        );
+        assert_eq!(hit.window_days, 7);
+        let hit = t("下周要交报告");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 10, 6).unwrap()
+        );
+        let hit = t("上个月去了上海");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 8, 29).unwrap()
+        );
+        assert_eq!(hit.window_days, 14);
+        let hit = t("去年毕业的");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2025, 9, 29).unwrap()
+        );
+        assert_eq!(hit.window_days, 30);
+        let hit = t("今年的目标");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 29).unwrap()
+        );
+    }
+
+    #[test]
+    fn chinese_doubled_temporal_forms_longest_match_first() {
+        // Regression: "上上周" contains "上周" as a substring and was
+        // mistagged as last week. Doubled forms must resolve to their own
+        // offset, never the base form's.
+        let t = |q: &str| resolve_temporal_target(q, Some(anchor())).unwrap();
+        let hit = t("上上周去杭州出差");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 15).unwrap()
+        );
+        assert_eq!(hit.window_days, 7);
+        let hit = t("下下周要去北京");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 10, 13).unwrap()
+        );
+        let hit = t("大前天买的菜");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 26).unwrap()
+        );
+        let hit = t("大后天出发");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 10, 2).unwrap()
+        );
+        let hit = t("上上个月去了南京");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 7, 29).unwrap()
+        );
+        assert_eq!(hit.window_days, 14);
+        let hit = t("下下个月交房");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 11, 29).unwrap()
+        );
+        // Base forms still resolve when the doubled form is absent.
+        let hit = t("上周我们开会了");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 22).unwrap()
+        );
+        let hit = t("前天买的菜");
+        assert_eq!(
+            hit.target_date,
+            NaiveDate::from_ymd_opt(2026, 9, 27).unwrap()
+        );
+    }
+
+    #[test]
+    fn chinese_explicit_dates_parse() {
+        let t = |q: &str| {
+            resolve_temporal_target(q, Some(anchor()))
+                .unwrap()
+                .target_date
+        };
+        assert_eq!(
+            t("会议在2026年9月29日举行"),
+            NaiveDate::from_ymd_opt(2026, 9, 29).unwrap()
+        );
+        // Chinese numerals are normalized before matching.
+        assert_eq!(
+            t("会议在二〇二六年九月二十九日举行"),
+            NaiveDate::from_ymd_opt(2026, 9, 29).unwrap()
+        );
+        // Month-day without year uses the anchor year.
+        assert_eq!(
+            t("10月1日放假"),
+            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn chinese_numeric_offsets_resolve() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = |q: &str| {
+            resolve_temporal_target(q, Some(anchor()))
+                .unwrap()
+                .target_date
+        };
+        assert_eq!(t("三天前买的书"), base - Duration::days(3));
+        assert_eq!(t("两周后考试"), base + Duration::weeks(2));
+        assert_eq!(t("三个月前入职"), shift_months(base, -3));
+    }
+
+    #[test]
+    fn chinese_weekday_mentions_resolve() {
+        // Anchor 2026-09-29 is a Tuesday.
+        let t = |q: &str| {
+            resolve_temporal_target(q, Some(anchor()))
+                .unwrap()
+                .target_date
+        };
+        assert_eq!(
+            t("上星期一开会"),
+            NaiveDate::from_ymd_opt(2026, 9, 28).unwrap()
+        );
+        assert_eq!(
+            t("下周三交报告"),
+            NaiveDate::from_ymd_opt(2026, 10, 7).unwrap()
+        );
+    }
+
+    #[test]
+    fn chinese_augment_adds_date_tokens() {
+        let out = augment_query_with_temporal_context("我昨天见了谁", Some(anchor()));
+        assert!(out.contains("昨天"), "expected Chinese label, got {out:?}");
+        assert!(
+            out.contains("monday"),
+            "expected resolved weekday, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn chinese_extract_temporal_terms_finds_dates() {
+        let terms = extract_temporal_terms(None, "会议在2026年9月29日举行", &[]);
+        assert!(
+            terms.iter().any(|t| t.contains("2026年9月29日")),
+            "expected the explicit date, got {terms:?}"
+        );
+    }
 
     #[test]
     fn korean_relative_dates() {
@@ -983,6 +1481,49 @@ mod tests {
         )
         .expect("timestamp should receive a recency boost");
         assert!((boost - 0.125).abs() < 0.001, "boost={boost}");
+    }
+
+    #[test]
+    fn extreme_temporal_offsets_never_panic() {
+        // Regression: "百万年前" (a million years ago, from MIRACL corpus
+        // docs 6769570#0 / 2736869#0) panicked `last_day_of_month` via
+        // `NaiveDate::from_ymd_opt(...).unwrap()` on year -997974, killing
+        // the whole indexing run. Out-of-range offsets now resolve to
+        // `base` instead of panicking.
+        let base = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        // Out-of-chrono-range magnitudes resolve to base, never panic.
+        assert_eq!(shift_years(base, -1_000_000), base);
+        assert_eq!(shift_years(base, 1_000_000), base);
+        assert_eq!(shift_years(base, i32::MAX), base);
+        assert_eq!(shift_years(base, i32::MIN), base);
+        assert!(shift_days(base, i64::MAX) > base);
+        assert!(shift_days(base, i64::MIN) < base);
+        assert_eq!(last_day_of_month(-997_974, 9), None);
+        assert_eq!(last_day_of_month(2026, 9), Some(30));
+        assert_eq!(last_day_of_month(2026, 2), Some(28));
+        // Clamped magnitudes stay representable: no panic, and the
+        // direction is preserved (far past / far future).
+        assert!(shift_months(base, -1_000_000_000) < base);
+        assert!(shift_months(base, 1_000_000_000) > base);
+        assert!(shift_months(base, i32::MIN) < base);
+    }
+
+    #[test]
+    fn chinese_geological_time_does_not_panic() {
+        // The exact trigger from the MIRACL zh corpus:
+        // "290.1–283.5百万年前" (Artinskian stage, doc 6769570#0).
+        // Must be recognized as a temporal hit without panicking.
+        let base = NaiveDate::from_ymd_opt(2026, 9, 30).unwrap();
+        let hits = chinese_temporal_hits("亚丁斯克期290.1–283.5百万年前", base);
+        assert!(
+            !hits.is_empty(),
+            "expected the offset to be recognized as a temporal hit"
+        );
+        // Absurd magnitudes from raw digit strings must not panic either.
+        let hits = chinese_temporal_hits("99999999999999999999天前发生了大事", base);
+        let _ = hits;
+        let hits = chinese_temporal_hits("99999999999999999999年前发生了大事", base);
+        let _ = hits;
     }
 }
 

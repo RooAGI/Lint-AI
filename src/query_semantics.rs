@@ -563,6 +563,43 @@ fn classify_query_kind(query: &str) -> QueryKind {
     if let Some(k) = ko_kind(&["얼마나", "얼마"], QueryKind::HowMuch) {
         return k;
     }
+
+    // Chinese interrogatives. Longer/more specific forms first: "为什么"
+    // contains "什么", "哪里" contains "哪", "什么时候" contains "什么".
+    // Bare "几"/"哪" are deliberately unmatched (ambiguous: 几乎 "almost",
+    // 哪里 vs 哪个). Sentence-final 吗/呢 marks a yes/no question and wins
+    // over content words ("你还是学生吗？" is yes/no, not which). This only
+    // feeds API metadata today — retrieval keys off the augmented query —
+    // but a Chinese question must not report as Statement.
+    let trimmed = query.trim_end_matches(['?', '？', ' ', '\t', '\n']);
+    if trimmed.ends_with('吗') || trimmed.ends_with('呢') {
+        return QueryKind::Other;
+    }
+    if query.contains("为什么") || query.contains("为何") {
+        return QueryKind::Why;
+    }
+    if query.contains("哪里") || query.contains("哪儿") {
+        return QueryKind::Where;
+    }
+    if query.contains("什么时候") || query.contains("何时") {
+        return QueryKind::When;
+    }
+    if query.contains("什么") {
+        return QueryKind::What;
+    }
+    if query.contains("谁") {
+        return QueryKind::Who;
+    }
+    if query.contains("多少") {
+        return QueryKind::HowMany;
+    }
+    if query.contains("哪个") || query.contains("哪些") {
+        return QueryKind::Which;
+    }
+    // Alternative question: "A还是B？" asks which of the two.
+    if query.contains("还是") {
+        return QueryKind::Which;
+    }
     QueryKind::Statement
 }
 
@@ -1571,6 +1608,32 @@ mod tests {
             classify_query_kind("박영희는 어디에서 태어났나?"),
             QueryKind::Where
         );
+    }
+
+    #[test]
+    fn chinese_questions_classify_by_interrogative() {
+        // Regression: every Chinese question fell through to Statement
+        // because the classifier only knew English prefixes.
+        assert_eq!(classify_query_kind("我儿子叫什么，今年几岁？"), QueryKind::What);
+        assert_eq!(classify_query_kind("谁家养了金毛？"), QueryKind::Who);
+        assert_eq!(classify_query_kind("我妈现在住在哪儿？"), QueryKind::Where);
+        assert_eq!(
+            classify_query_kind("我为什么最后选了比亚迪而不是特斯拉？"),
+            QueryKind::Why
+        );
+        assert_eq!(classify_query_kind("你什么时候回来？"), QueryKind::When);
+        assert_eq!(classify_query_kind("我今年计划读多少本书？"), QueryKind::HowMany);
+        assert_eq!(
+            classify_query_kind("乐乐最后上的是公立学校还是国际学校？"),
+            QueryKind::Which
+        );
+        // 为什么 contains 什么 — the longer form must win.
+        assert_eq!(classify_query_kind("你为什么迟到？"), QueryKind::Why);
+        // Sentence-final particles: a question, kind unclear.
+        assert_eq!(classify_query_kind("我上周去杭州见客户了吗？"), QueryKind::Other);
+        // English behavior unchanged.
+        assert_eq!(classify_query_kind("Who is my manager?"), QueryKind::Who);
+        assert_eq!(classify_query_kind("The cat is black."), QueryKind::Statement);
     }
 
     #[test]

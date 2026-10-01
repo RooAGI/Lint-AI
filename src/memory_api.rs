@@ -73,10 +73,10 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
-    /// Content language override (`"en"`, `"zh"`, `"ko"`). Absent (default)
-    /// auto-detects per text from script statistics. Currently selects the
-    /// spaCy model for the structured-relations path; lexical retrieval is
-    /// script-aware regardless.
+    /// Content language override (`"en"`, `"zh"`, `"ko"`, `"es"`). Absent
+    /// (default) auto-detects per text from script statistics. Currently
+    /// selects the spaCy model for the structured-relations path; lexical
+    /// retrieval is script-aware regardless.
     #[serde(default)]
     pub lang: Option<Lang>,
 }
@@ -1320,7 +1320,8 @@ impl MemoryService {
         // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
         let analysis = analyze_query(query);
         let query_text = analysis.augmented_query.as_str();
-        let prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        let prepared =
+            prepare_session_query(&self.conversation_states, scope, session_id, query_text);
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,
@@ -1365,6 +1366,7 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
+
                     lang: None,
                 };
                 let docs: Vec<&SourceDocument> = self.store.source_documents();
@@ -1535,7 +1537,8 @@ impl MemoryService {
                         )
                     })?;
                 if ensure_default {
-                    let board = self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
+                    let board =
+                        self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
                     Ok(board.board_id)
                 } else {
                     Ok(default_board_id(owner, workspace, sid))
@@ -1734,15 +1737,16 @@ impl MemoryService {
                     return Ok(None);
                 }
                 if d.filters.get(BOARD_OWNER_FILTER).map(String::as_str) != Some(owner)
-                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str)
-                        != Some(workspace)
+                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str) != Some(workspace)
                 {
                     return Ok(None);
                 }
                 let Some(board) = board_from_doc_content(&d.content) else {
                     return Ok(None);
                 };
-                if board.owner != owner || board.workspace != workspace || board.board_id != board_id
+                if board.owner != owner
+                    || board.workspace != workspace
+                    || board.board_id != board_id
                 {
                     return Ok(None);
                 }
@@ -1785,7 +1789,10 @@ impl MemoryService {
         let board_id = self.resolve_board_id(board_id, owner, workspace, session_id, true)?;
         // The board must exist; posting never creates one implicitly
         // (the session board is ensured by resolve_board_id above).
-        if self.board_info(&board_id, owner, workspace, session_id)?.is_none() {
+        if self
+            .board_info(&board_id, owner, workspace, session_id)?
+            .is_none()
+        {
             anyhow::bail!("unknown board_id: {board_id}");
         }
         // Idempotency: a retried request_id returns the original post.
@@ -1806,10 +1813,9 @@ impl MemoryService {
             if let Some(post_id) = self.board_find_request_id(&board_id, request_id)? {
                 // Repopulate the map so later retries stay cheap.
                 let mut state = self.board_state.lock().expect("board state lock poisoned");
-                state.request_ids.insert(
-                    (board_id.clone(), request_id.to_string()),
-                    post_id.clone(),
-                );
+                state
+                    .request_ids
+                    .insert((board_id.clone(), request_id.to_string()), post_id.clone());
                 drop(state);
                 return self
                     .board_get(Some(&board_id), owner, workspace, session_id, &post_id)?
@@ -1949,10 +1955,7 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: doc.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f
-                    .get(BOARD_AUTHOR_FILTER)
-                    .cloned()
-                    .unwrap_or_default(),
+                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: doc.content.clone(),
                 sequence,
@@ -2000,10 +2003,7 @@ impl MemoryService {
                 Ok(Some(BoardPost {
                     post_id: d.doc_id.clone(),
                     board_id: board_id.clone(),
-                    author_agent_id: f
-                        .get(BOARD_AUTHOR_FILTER)
-                        .cloned()
-                        .unwrap_or_default(),
+                    author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
                     provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                     content: d.content.clone(),
                     sequence,
@@ -2048,12 +2048,9 @@ impl MemoryService {
         for r in results {
             // search_with_filters already applied the board_id filter, but
             // verify again: never leak across boards.
-            let doc = self
-                .store
-                .source_document_by_id(&r.doc_id)
-                .filter(|d| {
-                    d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
-                });
+            let doc = self.store.source_document_by_id(&r.doc_id).filter(|d| {
+                d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
+            });
             let Some(d) = doc else { continue };
             let f = &d.filters;
             let sequence: u64 = f
@@ -2063,10 +2060,7 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: d.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f
-                    .get(BOARD_AUTHOR_FILTER)
-                    .cloned()
-                    .unwrap_or_default(),
+                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: d.content.clone(),
                 sequence,
@@ -2642,11 +2636,16 @@ mod tests {
             spacy_model_for_request(Some(Lang::Auto), &zh_turns),
             "zh_core_web_sm"
         );
+        assert_eq!(spacy_model_for_request(None, &zh_turns), "zh_core_web_sm");
 
         // Explicit languages still pin their model.
         assert_eq!(
             spacy_model_for_request(Some(Lang::Ko), &ko_turns),
             "ko_core_news_sm"
+        );
+        assert_eq!(
+            spacy_model_for_request(Some(Lang::Zh), &zh_turns),
+            "zh_core_web_sm"
         );
         assert_eq!(
             spacy_model_for_request(Some(Lang::En), &ko_turns),
@@ -2668,10 +2667,7 @@ mod tests {
         base.join(format!("lint-ai-{name}-{}", std::process::id()))
     }
 
-    fn scope_verdict(
-        temporal_words: &[&str],
-        habitual: bool,
-    ) -> crate::behood_query::ScopeVerdict {
+    fn scope_verdict(temporal_words: &[&str], habitual: bool) -> crate::behood_query::ScopeVerdict {
         crate::behood_query::ScopeVerdict {
             id: "s:0".to_string(),
             activity_phrase: "test activity".to_string(),
@@ -2760,10 +2756,7 @@ mod tests {
 
     #[test]
     fn scope_boost_no_match_is_identity() {
-        let mut results = vec![
-            bare_search_result("b", 10.0),
-            bare_search_result("a", 9.0),
-        ];
+        let mut results = vec![bare_search_result("b", 10.0), bare_search_result("a", 9.0)];
         let n = boost_result_indices(&mut results, &[]);
         assert_eq!(n, 0);
         assert_eq!(results[0].doc_id, "b");
@@ -2796,8 +2789,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
@@ -2942,8 +2936,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert!(response
             .data
@@ -2999,6 +2994,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
             })
             .unwrap();
@@ -3063,6 +3059,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
             })
             .unwrap();
@@ -3109,8 +3106,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         let b = service
             .search(SearchRequest {
@@ -3121,8 +3119,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert_eq!(a.data.len(), 1);
         assert_eq!(b.data.len(), 1);
@@ -3241,8 +3240,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert!(response
             .data
@@ -3276,8 +3276,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert!(response.data.is_empty());
         assert!(!service.delete("user-a", "missing").unwrap());
@@ -3315,8 +3316,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("new deployment"));
@@ -3364,8 +3366,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("shared deployment"));
@@ -3599,8 +3602,9 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
 
         // Turn 2 is a follow-up: the carried anchor must restrict retrieval
@@ -3614,8 +3618,9 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
         assert!(
@@ -3638,8 +3643,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
             .data
@@ -3684,7 +3690,11 @@ mod tests {
         service.store.refresh().unwrap();
     }
 
-    fn search(service: &mut MemoryService, query: &str, session_id: Option<&str>) -> SearchResponse {
+    fn search(
+        service: &mut MemoryService,
+        query: &str,
+        session_id: Option<&str>,
+    ) -> SearchResponse {
         service
             .search(SearchRequest {
                 query: query.into(),
@@ -3694,8 +3704,9 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap()
     }
 
@@ -3705,7 +3716,11 @@ mod tests {
         add_quartz_fixture(&mut service);
 
         // Turn 1 establishes the session's entities.
-        let first = search(&mut service, "Tell me about the Quartz database", Some("s1"));
+        let first = search(
+            &mut service,
+            "Tell me about the Quartz database",
+            Some("s1"),
+        );
         assert!(first.data.iter().any(|m| m.content.contains("Quartz")));
 
         // A follow-up with no standalone meaning resolves against the session.
@@ -3737,8 +3752,9 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
-                lang: None,
-})
+
+                    lang: None,
+                })
                 .unwrap_err();
             assert!(
                 error.to_string().contains("session_id must not be empty"),
@@ -4356,8 +4372,9 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert!(response
             .data
@@ -4392,8 +4409,9 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("jazz festival"));
@@ -4502,8 +4520,9 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
-                lang: None,
-});
+
+                            lang: None,
+                        });
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
                     }
@@ -4546,8 +4565,9 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert!(!response.data.is_empty());
     }
@@ -4865,8 +4885,9 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         let _ = response;
     }
@@ -5087,7 +5108,9 @@ mod board_integration_tests {
     fn board_open_is_idempotent() {
         let mut service = svc();
         let a = service.board_open(OWNER, WS, "task-a", "Task A").unwrap();
-        let b = service.board_open(OWNER, WS, "task-a", "Different title").unwrap();
+        let b = service
+            .board_open(OWNER, WS, "task-a", "Different title")
+            .unwrap();
         assert_eq!(a.board_id, b.board_id);
         assert_eq!(a.title, "Task A");
     }
@@ -5223,8 +5246,20 @@ mod board_integration_tests {
     #[test]
     fn board_search_finds_posts() {
         let mut service = svc();
-        post(&mut service, None, Some(S1), "the parser failure comes from empty input", "r1");
-        post(&mut service, None, Some(S1), "unrelated status update", "r2");
+        post(
+            &mut service,
+            None,
+            Some(S1),
+            "the parser failure comes from empty input",
+            "r1",
+        );
+        post(
+            &mut service,
+            None,
+            Some(S1),
+            "unrelated status update",
+            "r2",
+        );
         let hits = service
             .board_search(None, OWNER, WS, Some(S1), "parser failure", 10)
             .unwrap();

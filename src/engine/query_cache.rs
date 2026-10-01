@@ -37,6 +37,7 @@ pub(crate) struct CacheSettings<'a> {
     pub(crate) ner_provider: &'a Tier1NerProvider,
     pub(crate) term_ranker: &'a Tier1TermRankerKind,
     pub(crate) spacy_model: &'a str,
+    pub(crate) lang: &'a crate::lang::Lang,
     pub(crate) chunk_strategy: &'a ChunkStrategy,
     pub(crate) chunk_lines: usize,
     pub(crate) chunk_overlap: usize,
@@ -54,6 +55,7 @@ fn query_cache_key(s: &CacheSettings<'_>) -> String {
         .to_lowercase()
         .hash(&mut hasher);
     s.spacy_model.hash(&mut hasher);
+    format!("{:?}", s.lang).to_lowercase().hash(&mut hasher);
     format!("{:?}", s.chunk_strategy)
         .to_lowercase()
         .hash(&mut hasher);

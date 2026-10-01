@@ -67,6 +67,9 @@ struct Args {
     #[arg(long, value_enum, default_value_t = SegmentRoutingArg::GatedCoverageLocal)]
     segment_routing: SegmentRoutingArg,
     /// Content language. `auto` (default) detects per text from script
+    /// statistics (plus Spanish signals for Latin text); pass `zh`/`ko`/`es`/`en` to force it.
+    #[arg(long, value_enum, default_value = "auto")]
+    lang: Lang,
     /// Project root containing provider hook telemetry under `.lint-ai`.
     #[arg(long)]
     project_root: Option<PathBuf>,
@@ -223,7 +226,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let jwt_secret = normalize_secret(std::env::var("JWT_SECRET").ok());
     ensure_loopback_bind(&args.bind)?;
-    let options = memory_pipeline_options(
+    let mut options = memory_pipeline_options(
         args.adaptive_segment_max_n,
         args.single_index,
         args.global_index,
@@ -231,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
         !args.no_conversational_rerank,
         args.segment_routing.strategy(),
     );
+    options.lang = args.lang;
     let project_root = args
         .project_root
         .or_else(|| std::env::var_os("LINT_AI_PROJECT_ROOT").map(PathBuf::from))
@@ -833,7 +837,7 @@ fn dashboard_provider_indexes(
                     false,
                     false,
                     true,
-                    SegmentRoutingStrategy::TypedEvidenceMultiplicative
+                    SegmentRoutingStrategy::TypedEvidenceMultiplicative,
                 ),
             )
             .ok()?
@@ -1454,7 +1458,6 @@ mod tests {
                     false,
                     true,
                     SegmentRoutingStrategy::TypedEvidenceMultiplicative
-
                 )
                 .memory_index_layout,
                 MemoryIndexLayout::Segmented { .. }
@@ -1518,7 +1521,7 @@ mod tests {
             ),
             (
                 SegmentRoutingArg::GatedCoverageLocal,
-                SegmentRoutingStrategy::TypedEvidenceMultiplicative
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative,
             ),
             (
                 SegmentRoutingArg::GatedCoverageTeam,
@@ -1550,7 +1553,7 @@ mod tests {
             false,
             false,
             true,
-            SegmentRoutingStrategy::TypedEvidenceMultiplicative
+            SegmentRoutingStrategy::TypedEvidenceMultiplicative,
         ));
         service
             .add(AddRequest {
@@ -1588,7 +1591,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert!(response.data.iter().any(|m| m.content.contains("zephyr")));
     }

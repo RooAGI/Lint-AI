@@ -664,11 +664,15 @@ fn push_chain_pair_relation(
     // A cue that names a specific old value only corrects the claim with
     // that value ("instead of Postgres" retires Postgres, not SQLite).
     // A cue naming a different value is a genuine clash, not a directed
-    // correction. Cues that name no value ("no longer", "previously")
-    // remain general corrections.
-    let cue_directed = match source_doc.and_then(|doc| cue_referenced_value(&doc.content)) {
-        Some(referenced) => normalize(&referenced) == normalize(&previous.object),
-        None => true,
+    // correction. Cues that name no value ("no longer", "previously") or
+    // only a generic anaphor remain general corrections. A cue whose value
+    // cannot be extracted never authorizes supersession.
+    let cue_directed = match source_doc.map(|doc| cue_reference(&doc.content)) {
+        Some(CueReference::Named(referenced)) => {
+            normalize(&referenced) == normalize(&previous.object)
+        }
+        Some(CueReference::General) => true,
+        Some(CueReference::Unparseable) | None => false,
     };
     let chronological = claim_date(claim)
         .zip(claim_date(previous))
@@ -1422,12 +1426,25 @@ fn is_generic_anaphor(value: &str) -> bool {
         || v.starts_with("the former ")
 }
 
-/// If a correction cue names the old value ("instead of Postgres",
-/// "replaces the legacy router"), extract it. Returns None for cues that
-/// don't name a value ("no longer", "previously", bare "correction:") and
-/// for generic anaphors ("replaces the previous decision"), which are
-/// general corrections.
-fn cue_referenced_value(content: &str) -> Option<String> {
+/// What a correction cue says about the old value.
+#[derive(Debug)]
+enum CueReference {
+    /// The cue names no concrete value ("no longer", "previously") or only
+    /// a generic anaphor ("replaces the previous decision"): a general
+    /// correction.
+    General,
+    /// The cue names a specific old value ("instead of Postgres").
+    Named(String),
+    /// A value-naming cue pattern matched but no value could be extracted
+    /// (e.g. truncated text). Supersession must not be authorized on a
+    /// failed extraction.
+    Unparseable,
+}
+
+/// Classify what a correction cue says about the old value. Quoted values
+/// (`instead of "Postgres"`) are unquoted before comparison so they still
+/// direct the correction.
+fn cue_reference(content: &str) -> CueReference {
     let lower = content.to_lowercase();
     for pattern in [
         "instead of",
@@ -1437,17 +1454,28 @@ fn cue_referenced_value(content: &str) -> Option<String> {
         "moved from",
     ] {
         if let Some(pos) = find_cue_word(&lower, pattern) {
-            let rest = lower[pos + pattern.len()..].trim_start();
+            let mut rest = lower[pos + pattern.len()..].trim_start();
+            // Skip an opening quote: `instead of "Postgres"` names Postgres.
+            if let Some(stripped) = rest
+                .strip_prefix('"')
+                .or_else(|| rest.strip_prefix('\''))
+            {
+                rest = stripped.trim_start();
+            }
             let end = rest
                 .find(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\''))
                 .unwrap_or(rest.len());
             let value = rest[..end].trim();
-            if !value.is_empty() && !is_generic_anaphor(value) {
-                return Some(value.to_string());
+            if value.is_empty() {
+                return CueReference::Unparseable;
             }
+            if is_generic_anaphor(value) {
+                return CueReference::General;
+            }
+            return CueReference::Named(value.to_string());
         }
     }
-    None
+    CueReference::General
 }
 
 /// Truncate a claim subject/object at the first correction cue: in
@@ -2284,20 +2312,78 @@ mod scalar_configuration_supersession_tests {
 
     #[test]
     fn cue_referenced_value_extraction() {
-        assert_eq!(
-            cue_referenced_value("We use MongoDB instead of Postgres."),
-            Some("postgres".to_string())
+        assert!(matches!(
+            cue_reference("We use MongoDB instead of Postgres."),
+            CueReference::Named(v) if v == "postgres"
+        ));
+        assert!(matches!(
+            cue_reference("This replaces the legacy router, effective now."),
+            CueReference::Named(v) if v == "the legacy router"
+        ));
+        // Quoted values are unquoted before comparison.
+        assert!(matches!(
+            cue_reference("We use MongoDB instead of \"Postgres\"."),
+            CueReference::Named(v) if v == "postgres"
+        ));
+        // Cues naming no value are general corrections.
+        assert!(matches!(
+            cue_reference("We no longer use Postgres."),
+            CueReference::General
+        ));
+        assert!(matches!(
+            cue_reference("Previously we used Postgres."),
+            CueReference::General
+        ));
+        // Generic anaphors are general corrections, not named values.
+        assert!(matches!(
+            cue_reference("This replaces the previous decision."),
+            CueReference::General
+        ));
+    }
+
+
+    #[test]
+    fn quoted_cue_value_still_directs_correction() {
+        // `instead of "Postgres"` must retire the Postgres doc...
+        let mut old_pg = scalar_doc("d1", "user: We use Postgres for analytics.", "2023-11-14");
+        old_pg.group_id = Some("s1".to_string());
+        old_pg.concept = "note".to_string();
+        let mut new = scalar_doc(
+            "d3",
+            "user: We use MongoDB for analytics instead of \"Postgres\".",
+            "2023-11-14",
+        );
+        new.group_id = Some("s3".to_string());
+        new.concept = "note".to_string();
+        let store = SemanticRelationStore::from_documents(
+            [&old_pg, &new],
+            SupersessionOptions::default(),
         );
         assert_eq!(
-            cue_referenced_value("This replaces the legacy router, effective now."),
-            Some("the legacy router".to_string())
+            store.document_state("d1").status,
+            Some(SemanticStatus::Superseded),
+            "quoted cue still directs the correction at Postgres"
         );
-        // Cues naming no value return None.
-        assert_eq!(cue_referenced_value("We no longer use Postgres."), None);
-        assert_eq!(
-            cue_referenced_value("Previously we used Postgres."),
-            None
+
+        // ...but must NOT retire an unrelated SQLite doc (the reviewer's case).
+        let mut old_lite = scalar_doc("d2", "user: We use SQLite for analytics.", "2023-11-14");
+        old_lite.group_id = Some("s2".to_string());
+        old_lite.concept = "note".to_string();
+        let store = SemanticRelationStore::from_documents(
+            [&old_lite, &new],
+            SupersessionOptions::default(),
         );
+        assert_ne!(
+            store.document_state("d2").status,
+            Some(SemanticStatus::Superseded),
+            "SQLite doc must not be retired by a cue naming Postgres"
+        );
+        // And the relation must be a mismatch conflict, not a supersession.
+        let mismatch = store
+            .relations()
+            .iter()
+            .any(|r| r.method == "correction_cue_mismatch");
+        assert!(mismatch, "expected a correction_cue_mismatch relation");
     }
 }
 

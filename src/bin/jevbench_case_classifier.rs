@@ -17,8 +17,8 @@ use anyhow::Context;
 use clap::Parser;
 use serde::Deserialize;
 
-use lint_ai::default_production_pipeline_options;
 use lint_ai::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
+use lint_ai::default_production_pipeline_options;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -140,7 +140,8 @@ impl Decision {
 }
 
 fn load_jsonl(path: &str) -> anyhow::Result<Vec<Decision>> {
-    let data = fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
+    let data = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {path}"))?;
     data.lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
@@ -221,7 +222,8 @@ fn main() -> anyhow::Result<()> {
     let test = load_jsonl(args.test.to_str().unwrap())?;
     eprintln!("test {}: {} items", args.test.display(), test.len());
 
-    let bank_labels: HashMap<String, &Decision> = bank.iter().map(|d| (d.id.clone(), d)).collect();
+    let bank_labels: HashMap<String, &Decision> =
+        bank.iter().map(|d| (d.id.clone(), d)).collect();
 
     let mut service = MemoryService::in_memory(default_production_pipeline_options());
     let requests: Vec<AddRequest> = bank
@@ -256,8 +258,6 @@ fn main() -> anyhow::Result<()> {
             session_id: None,
             scope: None,
             filters: None,
-
-            lang: None,
         })?;
 
         // Dedup hits by session, keep max score, map to bank decisions.
@@ -317,10 +317,13 @@ fn main() -> anyhow::Result<()> {
             predicted.as_ref().map(|(l, c, p)| (l.as_str(), *c, p)),
             &t.expected,
         );
-        by_type.entry(t.qtype.clone()).or_default().record(
-            predicted.as_ref().map(|(l, c, p)| (l.as_str(), *c, p)),
-            &t.expected,
-        );
+        by_type
+            .entry(t.qtype.clone())
+            .or_default()
+            .record(
+                predicted.as_ref().map(|(l, c, p)| (l.as_str(), *c, p)),
+                &t.expected,
+            );
 
         let (pred_json, conf_json, probs_json) = match &predicted {
             Some((l, c, p)) => (

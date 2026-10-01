@@ -256,12 +256,17 @@ fn run_key_phrase_extraction_bounded(
 ) -> Option<Vec<crate::segments::relations::RawKeyPhrase>> {
     let turns: Vec<crate::segments::relations::RelationTurn> = turns.to_vec();
     let script = script.map(|s| s.to_path_buf());
+    // Detect language from the combined turn text for model selection.
+    let combined_text: String = turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+    let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text));
+    let model = model.to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let out = try_extract_key_phrases_via_spacy(
             &turns,
             script.as_deref(),
             std::time::Duration::from_secs(timeout_secs),
+            &model,
         );
         let _ = tx.send(out);
     });
@@ -384,11 +389,15 @@ fn relations_index_for(
     let turns = relation_turns_from_docs(docs);
     // Bound the subprocess: run extraction on a worker thread and give up
     // after the timeout, leaving the cache empty (fail-open to lexical).
+    // Detect language for model selection (language PRs added model param).
+    let combined_text: String = turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+    let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text)).to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
             &turns,
             std::time::Duration::from_secs(RELATIONS_EXTRACT_TIMEOUT_SECS),
+            &model,
         );
         let _ = tx.send(output.relations);
     });

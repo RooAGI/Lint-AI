@@ -129,7 +129,7 @@ pub use crate::source::SourceDocument;
 pub use crate::temporal_fact::{TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair};
 // Re-exported so the public `index::DocRecord` struct can be constructed by
 // downstream users (`key_entities` / `important_terms` fields).
-pub use crate::tier1::{RankedTerm, Tier1Entity};
+pub use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
 // Re-exported so binaries (the server, benchmarks) can prewarm the
 // long-lived spaCy NER daemon, mirroring the extractor/behood daemons.
 pub use crate::tier1_ner_daemon::NerDaemon;

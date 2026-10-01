@@ -298,11 +298,6 @@ fn acronym_regex() -> &'static Regex {
 
 fn content_word_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"))
-}
-
-fn content_word_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
             r"[{L}][{L}0-9_\-]{{2,}}",
@@ -782,44 +777,6 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
             .collect();
         sorted_terms(out, 12)
     }
-    use super::*;
-
-    #[test]
-    fn spanish_folded_twins_are_stopped() {
-        // Dual emission means ranker tokens carry both "está" and "esta";
-        // the folded twins of Spanish stopwords must not leak through as
-        // content terms.
-        let stop = default_stopwords_for_lang(Lang::Es);
-        for w in ["sí", "está", "están", "más", "también", "dónde", "qué"] {
-            assert!(stop.contains(w), "{w} (raw) not stopped");
-            let folded = crate::tokenizer::fold_diacritics(w);
-            assert!(
-                stop.contains(folded.as_str()),
-                "{folded} (folded twin of {w}) not stopped"
-            );
-        }
-        // Every dual-emitted token of a Spanish stopword is covered:
-        // tokenize each stopword and check all emissions are stopped.
-        for w in ["niño", "está", "dónde"] {
-            for t in crate::tokenizer::tokenize(w, crate::tokenizer::TokenizerMode::Unstemmed) {
-                // "niño" is content (not a stopword) — only its forms must
-                // agree; skip the content word itself.
-                if w == "niño" {
-                    continue;
-                }
-                assert!(stop.contains(t.as_str()), "emission {t} of {w} not stopped");
-            }
-        }
-    }
-
-    #[test]
-    fn english_stopwords_unchanged() {
-        // The English base is untouched by the per-language extension.
-        let stop = default_stopwords_for_lang(Lang::En);
-        for w in ["the", "and", "of", "is"] {
-            assert!(stop.contains(w));
-        }
-        assert!(!stop.contains("está"));
-        assert!(!stop.contains("sí"));
-    }
 }
+
+

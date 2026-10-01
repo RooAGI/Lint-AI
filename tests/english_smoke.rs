@@ -1,13 +1,11 @@
 // English regression check: mirrors the Spanish smoke test to confirm
 // English add -> search behavior is unchanged by the Spanish work.
-use lint_ai::lang::Lang;
 use lint_ai::memory_api::{AddRequest, MemoryService, Message};
 use lint_ai::PipelineOptions;
 use std::collections::BTreeMap;
 
-fn options_for(lang: Lang) -> PipelineOptions {
+fn options_for() -> PipelineOptions {
     let mut opts = PipelineOptions::default();
-    opts.lang = lang;
     opts.ner_provider = lint_ai::pipeline::Tier1NerProvider::Heuristic;
     opts
 }
@@ -32,7 +30,7 @@ fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, conten
 #[test]
 fn english_add_search_regression() {
     let user_id = "en-regress-user";
-    let mut opts = options_for(Lang::En);
+    let mut opts = options_for();
     let mut service = MemoryService::in_memory(opts);
     add_fact(
         &mut service,

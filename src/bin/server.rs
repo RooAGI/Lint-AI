@@ -22,7 +22,6 @@ use lint_ai::{
     default_production_pipeline_options, lang::Lang, IndexStoreInspection, MemoryIndexLayout,
     PipelineOptions, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
-use lint_ai::lang::Lang;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;

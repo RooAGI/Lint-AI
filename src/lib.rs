@@ -154,6 +154,8 @@ use reqwest::blocking::Client;
 #[cfg(feature = "python")]
 use serde::de::DeserializeOwned;
 #[cfg(feature = "python")]
+use std::collections::BTreeMap;
+#[cfg(feature = "python")]
 use std::path::Path;
 
 #[cfg(feature = "python")]
@@ -310,6 +312,40 @@ enum MemoryBackend {
     Remote(RemoteMemoryClient),
 }
 
+/// Validated constructor options for [`PyMemory`].
+///
+/// `ner_provider` is the master switch for entity recognition: `'heuristic'`
+/// (default, Python-free) or `'spacy'`. An explicit `spacy_model` overrides
+/// the default model. Language is auto-detected per text by the engine;
+/// there is no language knob.
+#[cfg(feature = "python")]
+struct MemoryConfig {
+    options: PipelineOptions,
+}
+
+#[cfg(feature = "python")]
+impl MemoryConfig {
+    fn new(ner_provider: &str, spacy_model: Option<String>) -> PyResult<Self> {
+        let ner_provider = match ner_provider {
+            "heuristic" => Tier1NerProvider::Heuristic,
+            "spacy" => Tier1NerProvider::Spacy,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "ner_provider must be 'heuristic' or 'spacy' (got '{other}')"
+                )));
+            }
+        };
+        let mut options = PipelineOptions::default();
+        options.ner_provider = ner_provider;
+        // Leave `spacy_model` at its default unless explicitly overridden so
+        // per-language model selection keeps working.
+        if let Some(model) = spacy_model {
+            options.spacy_model = model;
+        }
+        Ok(Self { options })
+    }
+}
+
 #[cfg(feature = "python")]
 struct PyMemoryCore {
     backend: MemoryBackend,
@@ -317,13 +353,11 @@ struct PyMemoryCore {
 
 #[cfg(feature = "python")]
 impl PyMemoryCore {
-    fn local(path: Option<String>) -> PyResult<Self> {
+    fn local(path: Option<String>, options: PipelineOptions) -> PyResult<Self> {
         let store = match path {
-            Some(path) => {
-                memory_api::MemoryService::at_path(Path::new(&path), PipelineOptions::default())
-                    .map_err(runtime_error)?
-            }
-            None => memory_api::MemoryService::in_memory(PipelineOptions::default()),
+            Some(path) => memory_api::MemoryService::at_path(Path::new(&path), options)
+                .map_err(runtime_error)?,
+            None => memory_api::MemoryService::in_memory(options),
         };
         Ok(Self {
             backend: MemoryBackend::Local(store),
@@ -338,24 +372,11 @@ impl PyMemoryCore {
         })
     }
 
-    fn add(
-        &mut self,
-        py: Python<'_>,
-        request_id: String,
-        user_id: String,
-        session_id: String,
-        messages: &Bound<'_, PyAny>,
-    ) -> PyResult<Py<PyAny>> {
-        let messages = python_value_to_json(py, messages)?;
-        let messages = serde_json::from_value(messages).map_err(json_error)?;
-        let request = memory_api::AddRequest {
-            request_id,
-            messages,
-            user_id,
-            session_id,
-        };
+    fn add(&mut self, py: Python<'_>, request: memory_api::AddRequest) -> PyResult<Py<PyAny>> {
         let response = match &mut self.backend {
-            MemoryBackend::Local(service) => service.add(request).map_err(runtime_error)?,
+            MemoryBackend::Local(service) => {
+                py.detach(|| service.add(request)).map_err(runtime_error)?
+            }
             MemoryBackend::Remote(client) => {
                 py.detach(|| client.add(&request)).map_err(runtime_error)?
             }
@@ -363,24 +384,53 @@ impl PyMemoryCore {
         json_to_python(py, &response)
     }
 
+    fn add_many(
+        &mut self,
+        py: Python<'_>,
+        requests: Vec<memory_api::AddRequest>,
+    ) -> PyResult<Py<PyAny>> {
+        let responses = match &mut self.backend {
+            MemoryBackend::Local(service) => py
+                .detach(|| service.add_batch(requests))
+                .map_err(runtime_error)?,
+            // The server exposes no /v1 batch endpoint, so the remote
+            // backend falls back to sequential adds.
+            MemoryBackend::Remote(client) => py
+                .detach(|| {
+                    requests
+                        .iter()
+                        .map(|request| client.add(request))
+                        .collect::<anyhow::Result<Vec<_>>>()
+                })
+                .map_err(runtime_error)?,
+        };
+        json_to_python(py, &responses)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn search(
         &mut self,
         py: Python<'_>,
         query: String,
         user_id: String,
         top_k: usize,
+        session_id: Option<String>,
+        filters: Option<BTreeMap<String, String>>,
+        scope: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         let request = memory_api::SearchRequest {
             query,
             options: None,
             user_id,
             top_k,
-            session_id: None,
-            scope: None,
-            filters: None,
+            session_id,
+            scope,
+            filters,
         };
         let response = match &mut self.backend {
-            MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,
+            MemoryBackend::Local(service) => py
+                .detach(|| service.search(request))
+                .map_err(runtime_error)?,
             MemoryBackend::Remote(client) => py
                 .detach(|| client.search(&request))
                 .map_err(runtime_error)?,
@@ -401,7 +451,9 @@ impl PyMemoryCore {
             include_inactive,
         };
         let response = match &self.backend {
-            MemoryBackend::Local(service) => service.get(request).map_err(runtime_error)?,
+            MemoryBackend::Local(service) => {
+                py.detach(|| service.get(request)).map_err(runtime_error)?
+            }
             MemoryBackend::Remote(client) => {
                 py.detach(|| client.get(&request)).map_err(runtime_error)?
             }
@@ -426,7 +478,9 @@ impl PyMemoryCore {
             include_inactive,
         };
         let response = match &self.backend {
-            MemoryBackend::Local(service) => service.list(request).map_err(runtime_error)?,
+            MemoryBackend::Local(service) => {
+                py.detach(|| service.list(request)).map_err(runtime_error)?
+            }
             MemoryBackend::Remote(client) => {
                 py.detach(|| client.list(&request)).map_err(runtime_error)?
             }
@@ -453,7 +507,9 @@ impl PyMemoryCore {
             expires_at_ms,
         };
         let response = match &mut self.backend {
-            MemoryBackend::Local(service) => service.update(request).map_err(runtime_error)?,
+            MemoryBackend::Local(service) => py
+                .detach(|| service.update(request))
+                .map_err(runtime_error)?,
             MemoryBackend::Remote(client) => py
                 .detach(|| client.update(&request))
                 .map_err(runtime_error)?,
@@ -463,9 +519,9 @@ impl PyMemoryCore {
 
     fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
         match &mut self.backend {
-            MemoryBackend::Local(service) => {
-                service.delete(&user_id, &memory_id).map_err(runtime_error)
-            }
+            MemoryBackend::Local(service) => py
+                .detach(|| service.delete(&user_id, &memory_id))
+                .map_err(runtime_error),
             MemoryBackend::Remote(client) => py
                 .detach(|| client.delete(&user_id, &memory_id))
                 .map_err(runtime_error),
@@ -474,12 +530,31 @@ impl PyMemoryCore {
 
     fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
         match &mut self.backend {
-            MemoryBackend::Local(service) => service.refresh().map_err(runtime_error),
-            MemoryBackend::Remote(client) => py.detach(|| client.refresh()).map_err(runtime_error),
-        }
+            MemoryBackend::Local(service) => {
+                py.detach(|| service.refresh()).map_err(runtime_error)?
+            }
+            MemoryBackend::Remote(client) => {
+                py.detach(|| client.refresh()).map_err(runtime_error)?
+            }
+        };
+        Ok(())
     }
 }
 
+/// Agent memory backed by lint-ai's `MemoryService`.
+///
+/// Local mode keeps the index in-process (`path` selects a persistent
+/// directory, otherwise in-memory). Remote mode talks to a lint-ai server
+/// over HTTP (`base_url`, optional `api_key`).
+///
+/// `ner_provider` is `'heuristic'` (default, Python-free) or `'spacy'`,
+/// with an optional explicit `spacy_model`. These apply to the local backend
+/// only; the remote backend is configured server-side and these knobs are
+/// ignored there. Language is auto-detected per text by the engine.
+///
+/// The instance is `unsendable`: it must not be shared across Python
+/// threads. Releasing the GIL during calls does not make concurrent use
+/// safe.
 #[cfg(feature = "python")]
 #[pyclass(name = "Memory", unsendable)]
 struct PyMemory {
@@ -490,20 +565,23 @@ struct PyMemory {
 #[pymethods]
 impl PyMemory {
     #[new]
-    #[pyo3(signature = (path=None, base_url=None, api_key=None))]
+    #[pyo3(signature = (path=None, base_url=None, api_key=None, ner_provider="heuristic", spacy_model=None))]
     fn new(
         path: Option<String>,
         base_url: Option<String>,
         api_key: Option<String>,
+        ner_provider: &str,
+        spacy_model: Option<String>,
     ) -> PyResult<Self> {
         if path.is_some() && base_url.is_some() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "path and base_url cannot both be set",
             ));
         }
+        let config = MemoryConfig::new(ner_provider, spacy_model)?;
         let inner = match base_url {
             Some(base_url) => PyMemoryCore::remote(base_url, api_key)?,
-            None => PyMemoryCore::local(path)?,
+            None => PyMemoryCore::local(path, config.options)?,
         };
         Ok(Self { inner })
     }
@@ -517,114 +595,52 @@ impl PyMemory {
         session_id: String,
         messages: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        self.inner
-            .add(py, request_id, user_id, session_id, messages)
-    }
-
-    fn search(
-        &mut self,
-        py: Python<'_>,
-        query: String,
-        user_id: String,
-        top_k: usize,
-    ) -> PyResult<Py<PyAny>> {
-        self.inner.search(py, query, user_id, top_k)
-    }
-
-    #[pyo3(signature = (memory_id, user_id, include_inactive=false))]
-    fn get(
-        &self,
-        py: Python<'_>,
-        memory_id: String,
-        user_id: String,
-        include_inactive: bool,
-    ) -> PyResult<Py<PyAny>> {
-        self.inner.get(py, memory_id, user_id, include_inactive)
-    }
-
-    #[pyo3(signature = (user_id, session_id=None, limit=100, cursor=None, include_inactive=false))]
-    fn list(
-        &self,
-        py: Python<'_>,
-        user_id: String,
-        session_id: Option<String>,
-        limit: usize,
-        cursor: Option<String>,
-        include_inactive: bool,
-    ) -> PyResult<Py<PyAny>> {
-        self.inner
-            .list(py, user_id, session_id, limit, cursor, include_inactive)
-    }
-
-    #[pyo3(signature = (memory_id, user_id, content, role=None, timestamp=None, expires_at_ms=None))]
-    fn update(
-        &mut self,
-        py: Python<'_>,
-        memory_id: String,
-        user_id: String,
-        content: String,
-        role: Option<String>,
-        timestamp: Option<i64>,
-        expires_at_ms: Option<u64>,
-    ) -> PyResult<Py<PyAny>> {
-        self.inner.update(
-            py,
-            memory_id,
+        let messages = python_value_to_json(py, messages)?;
+        let messages: Vec<memory_api::Message> =
+            serde_json::from_value(messages).map_err(json_error)?;
+        let request = memory_api::AddRequest {
+            request_id,
+            messages,
             user_id,
-            content,
-            role,
-            timestamp,
-            expires_at_ms,
-        )
+            session_id,
+        };
+        self.inner.add(py, request)
     }
 
-    fn delete(&mut self, py: Python<'_>, user_id: String, memory_id: String) -> PyResult<bool> {
-        self.inner.delete(py, user_id, memory_id)
+    /// Add several memories in one call. Each entry is a dict with
+    /// `request_id`, `user_id`, `session_id`, and `messages`.
+    #[pyo3(signature = (requests))]
+    fn add_batch(&mut self, py: Python<'_>, requests: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        let json = python_value_to_json(py, requests)?;
+        let parsed: Vec<memory_api::AddRequest> =
+            serde_json::from_value(json).map_err(json_error)?;
+        if parsed.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "requests must not be empty",
+            ));
+        }
+        if parsed.len() > 128 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "requests must contain at most 128 entries",
+            ));
+        }
+        self.inner.add_many(py, parsed)
     }
 
-    fn refresh(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.inner.refresh(py)
-    }
-}
-
-#[cfg(feature = "python")]
-#[pyclass(name = "RemoteMemory", unsendable)]
-struct PyRemoteMemory {
-    inner: PyMemoryCore,
-}
-
-#[cfg(feature = "python")]
-#[pymethods]
-impl PyRemoteMemory {
-    #[new]
-    #[pyo3(signature = (base_url, api_key=None))]
-    fn new(base_url: String, api_key: Option<String>) -> PyResult<Self> {
-        Ok(Self {
-            inner: PyMemoryCore::remote(base_url, api_key)?,
-        })
-    }
-
-    #[pyo3(signature = (request_id, user_id, session_id, messages))]
-    fn add(
-        &mut self,
-        py: Python<'_>,
-        request_id: String,
-        user_id: String,
-        session_id: String,
-        messages: &Bound<'_, PyAny>,
-    ) -> PyResult<Py<PyAny>> {
-        self.inner
-            .add(py, request_id, user_id, session_id, messages)
-    }
-
+    #[pyo3(signature = (query, user_id, top_k=10, session_id=None, filters=None, scope=None))]
     fn search(
         &mut self,
         py: Python<'_>,
         query: String,
         user_id: String,
         top_k: usize,
+        session_id: Option<String>,
+        filters: Option<std::collections::HashMap<String, String>>,
+        scope: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        self.inner.search(py, query, user_id, top_k)
+        let filters = filters.map(|map| map.into_iter().collect::<BTreeMap<_, _>>());
+        self.inner
+            .search(py, query, user_id, top_k, session_id, filters, scope)
     }
 
     #[pyo3(signature = (memory_id, user_id, include_inactive=false))]
@@ -725,6 +741,5 @@ fn json_error(error: impl std::fmt::Display) -> pyo3::PyErr {
 fn lint_ai(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_class::<PyMemory>()?;
-    m.add_class::<PyRemoteMemory>()?;
     Ok(())
 }

@@ -312,33 +312,12 @@ enum MemoryBackend {
     Remote(RemoteMemoryClient),
 }
 
-#[cfg(feature = "python")]
-use crate::lang::Lang;
-
-/// Parse a user-supplied language tag into [`Lang`].
-#[cfg(feature = "python")]
-fn parse_lang(language: &str) -> PyResult<Lang> {
-    match language {
-        "auto" => Ok(Lang::Auto),
-        "en" => Ok(Lang::En),
-        "zh" => Ok(Lang::Zh),
-        "ko" => Ok(Lang::Ko),
-        "es" => Ok(Lang::Es),
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "language must be one of 'auto', 'en', 'zh', 'ko', 'es' (got '{other}')"
-        ))),
-    }
-}
-
 /// Validated constructor options for [`PyMemory`].
 ///
-/// `language` selects the content language for the local backend: it sets
-/// `PipelineOptions.lang`, which drives per-language defaults (notably the
-/// spaCy model via `spacy_model_for_text`; an explicit `spacy_model` always
-/// wins). Lexical retrieval is script-aware regardless of this setting.
-/// A per-query `lang` argument to `search` overrides this default for the
-/// structured-fact path. Accepted values are `'auto'` (default: detect per
-/// text), `'en'`, `'zh'`, `'ko'`, `'es'`.
+/// `ner_provider` is the master switch for entity recognition: `'heuristic'`
+/// (default, Python-free) or `'spacy'`. An explicit `spacy_model` overrides
+/// the default model. Language is auto-detected per text by the engine;
+/// there is no language knob.
 #[cfg(feature = "python")]
 struct MemoryConfig {
     options: PipelineOptions,
@@ -346,8 +325,7 @@ struct MemoryConfig {
 
 #[cfg(feature = "python")]
 impl MemoryConfig {
-    fn new(language: &str, ner_provider: &str, spacy_model: Option<String>) -> PyResult<Self> {
-        let lang = parse_lang(language)?;
+    fn new(ner_provider: &str, spacy_model: Option<String>) -> PyResult<Self> {
         let ner_provider = match ner_provider {
             "heuristic" => Tier1NerProvider::Heuristic,
             "spacy" => Tier1NerProvider::Spacy,
@@ -358,7 +336,6 @@ impl MemoryConfig {
             }
         };
         let mut options = PipelineOptions::default();
-        options.lang = lang;
         options.ner_provider = ner_provider;
         // Leave `spacy_model` at its default unless explicitly overridden so
         // per-language model selection keeps working.
@@ -440,12 +417,7 @@ impl PyMemoryCore {
         session_id: Option<String>,
         filters: Option<BTreeMap<String, String>>,
         scope: Option<String>,
-        lang: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        let lang = match lang {
-            None => None,
-            Some(l) => Some(parse_lang(&l)?),
-        };
         let request = memory_api::SearchRequest {
             query,
             options: None,
@@ -575,10 +547,10 @@ impl PyMemoryCore {
 /// directory, otherwise in-memory). Remote mode talks to a lint-ai server
 /// over HTTP (`base_url`, optional `api_key`).
 ///
-/// `language` is `'auto'` (default: detect per text), `'en'`, `'zh'`,
-/// `'ko'`, or `'es'`; `ner_provider` is `'heuristic'` (default, Python-free) or
-/// `'spacy'`. Both apply to the local backend only; the remote backend is
-/// configured server-side and these knobs are ignored there.
+/// `ner_provider` is `'heuristic'` (default, Python-free) or `'spacy'`,
+/// with an optional explicit `spacy_model`. These apply to the local backend
+/// only; the remote backend is configured server-side and these knobs are
+/// ignored there. Language is auto-detected per text by the engine.
 ///
 /// The instance is `unsendable`: it must not be shared across Python
 /// threads. Releasing the GIL during calls does not make concurrent use
@@ -593,12 +565,11 @@ struct PyMemory {
 #[pymethods]
 impl PyMemory {
     #[new]
-    #[pyo3(signature = (path=None, base_url=None, api_key=None, language="auto", ner_provider="heuristic", spacy_model=None))]
+    #[pyo3(signature = (path=None, base_url=None, api_key=None, ner_provider="heuristic", spacy_model=None))]
     fn new(
         path: Option<String>,
         base_url: Option<String>,
         api_key: Option<String>,
-        language: &str,
         ner_provider: &str,
         spacy_model: Option<String>,
     ) -> PyResult<Self> {
@@ -607,7 +578,7 @@ impl PyMemory {
                 "path and base_url cannot both be set",
             ));
         }
-        let config = MemoryConfig::new(language, ner_provider, spacy_model)?;
+        let config = MemoryConfig::new(ner_provider, spacy_model)?;
         let inner = match base_url {
             Some(base_url) => PyMemoryCore::remote(base_url, api_key)?,
             None => PyMemoryCore::local(path, config.options)?,
@@ -656,7 +627,7 @@ impl PyMemory {
         self.inner.add_many(py, parsed)
     }
 
-    #[pyo3(signature = (query, user_id, top_k=10, session_id=None, filters=None, scope=None, lang=None))]
+    #[pyo3(signature = (query, user_id, top_k=10, session_id=None, filters=None, scope=None))]
     fn search(
         &mut self,
         py: Python<'_>,
@@ -666,11 +637,10 @@ impl PyMemory {
         session_id: Option<String>,
         filters: Option<std::collections::HashMap<String, String>>,
         scope: Option<String>,
-        lang: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         let filters = filters.map(|map| map.into_iter().collect::<BTreeMap<_, _>>());
         self.inner
-            .search(py, query, user_id, top_k, session_id, filters, scope, lang)
+            .search(py, query, user_id, top_k, session_id, filters, scope)
     }
 
     #[pyo3(signature = (memory_id, user_id, include_inactive=false))]

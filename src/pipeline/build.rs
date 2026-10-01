@@ -60,12 +60,14 @@ impl LexicalState {
             Some(dir) => Self::open_or_create_on_disk(dir, &schema)?,
             None => Index::create_in_ram(schema),
         };
-        // CJK-aware tokenization for all TEXT fields (see
-        // crate::index::cjk_tokenizer): Han runs index as character
-        // bigrams, Hangul runs as eojeol + particle-stripped stem;
-        // pure-English text is unaffected. Applies to existing
-        // on-disk indexes too — the tokenizer name resolves through the
-        // manager at index/query time.
+        // Unified script-aware tokenization for all TEXT fields (overrides
+        // the built-in "default"; see crate::index::cjk_tokenizer): Han runs
+        // index as character bigrams, Hangul runs as eojeol +
+        // particle-stripped stem, and Latin runs replicate tantivy's default
+        // tokenizer plus deunicode folding ("niño" -> "nino") so accented
+        // terms agree with the deunicoded boosted fields. Pure-ASCII text is
+        // unaffected. Applies to existing on-disk indexes too — the
+        // tokenizer name resolves through the manager at index/query time.
         crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
         let writer = None;
         let reader = index
@@ -414,18 +416,13 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
-/// Extracts [`DocRecord`]s from source documents (NER + term ranking +
-/// chunking). This is the expensive per-document pipeline phase; the
-/// benchmark harness calls it once per question and builds both the
-/// single-layout snapshot and the segmented index from the same records
-/// instead of extracting twice.
 /// Run spaCy NER with per-language model selection: docs are grouped by
 /// the model [`PipelineOptions::spacy_model_for_text`] picks for their
-/// content, so Chinese docs get `zh_core_web_sm` and Korean docs get
-/// `ko_core_news_sm` with no flags while an
-/// explicit `--spacy-model` still applies to everything. Fail-open per
-/// group: a group whose model is unavailable falls back to the heuristic
-/// ranker for just those docs.
+/// content, so Spanish docs get `es_core_news_sm`, Chinese docs get
+/// `zh_core_web_sm`, and Korean docs get `ko_core_news_sm` with no flags
+/// while an explicit `--spacy-model` still applies to everything.
+/// Fail-open per group: a group whose model is unavailable falls back to
+/// the heuristic ranker for just those docs.
 fn spacy_key_entities_by_lang(
     docs: &[Tier1DocInput],
     options: &PipelineOptions,
@@ -461,6 +458,11 @@ fn spacy_key_entities_by_lang(
     Ok(out)
 }
 
+/// Extracts [`DocRecord`]s from source documents (NER + term ranking +
+/// chunking). This is the expensive per-document pipeline phase; the
+/// benchmark harness calls it once per question and builds both the
+/// single-layout snapshot and the segmented index from the same records
+/// instead of extracting twice.
 pub fn build_doc_records(
     source_docs: &[SourceDocument],
     options: &PipelineOptions,

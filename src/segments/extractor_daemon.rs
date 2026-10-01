@@ -51,11 +51,10 @@ impl ExtractorDaemon {
     /// Extract over `turns` via the daemon. Returns `None` on any failure
     /// (including lock contention — the daemon is a fast path, never a
     /// queue); the caller falls back to a one-shot subprocess.
-    ///
     /// `model` is the spaCy model name sent to the script (e.g.
     /// `ko_core_news_sm` for Korean turns, `zh_core_web_sm` for Chinese
-    /// turns); the script caches models by
-    /// name, so mixed-language processes are fine.
+    /// turns, `es_core_news_sm` for Spanish turns); the script caches models
+    /// by name, so mixed-language processes are fine.
     pub fn extract(
         &self,
         turns: &[RelationTurn],

@@ -502,12 +502,77 @@ struct NounPhrase {
 }
 
 fn classify_query_kind(query: &str) -> QueryKind {
-    let lower = query.trim().to_lowercase();
+    // Strip leading inverted punctuation (¿/¡) and quotes so Spanish
+    // questions classify like English ones.
+    let lower = query
+        .trim()
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
     if lower.starts_with("how many") {
         return QueryKind::HowMany;
     }
     if lower.starts_with("how much") {
         return QueryKind::HowMuch;
+    }
+    // Spanish interrogatives. Accented forms are unambiguous; unaccented
+    // "que" is deliberately NOT mapped (relative pronoun). "cuántos" does
+    // not prefix-collide with "cuánto" ("cuántos " vs "cuánto " differ at
+    // index 6), so order between them is safe.
+    if lower.starts_with("cuántos ")
+        || lower.starts_with("cuántas ")
+        || lower.starts_with("cuantos ")
+        || lower.starts_with("cuantas ")
+        || lower == "cuántos"
+        || lower == "cuántas"
+    {
+        return QueryKind::HowMany;
+    }
+    if lower.starts_with("cuánto ")
+        || lower.starts_with("cuánta ")
+        || lower.starts_with("cuanto ")
+        || lower.starts_with("cuanta ")
+        || lower == "cuánto"
+        || lower == "cuánta"
+    {
+        return QueryKind::HowMuch;
+    }
+    if lower.starts_with("quién ")
+        || lower.starts_with("quiénes ")
+        || lower.starts_with("quien ")
+        || lower.starts_with("quienes ")
+        || lower == "quién"
+        || lower == "quien"
+    {
+        return QueryKind::Who;
+    }
+    if lower.starts_with("qué ") || lower == "qué" {
+        return QueryKind::What;
+    }
+    if lower.starts_with("cuál ")
+        || lower.starts_with("cuáles ")
+        || lower.starts_with("cual ")
+        || lower.starts_with("cuales ")
+        || lower == "cuál"
+        || lower == "cual"
+    {
+        return QueryKind::Which;
+    }
+    if lower.starts_with("dónde ")
+        || lower.starts_with("donde ")
+        || lower == "dónde"
+        || lower == "donde"
+    {
+        return QueryKind::Where;
+    }
+    if lower.starts_with("cuándo ")
+        || lower.starts_with("cuando ")
+        || lower == "cuándo"
+        || lower == "cuando"
+    {
+        return QueryKind::When;
+    }
+    if lower.starts_with("por qué") || lower.starts_with("por que") {
+        return QueryKind::Why;
     }
     if lower.starts_with("who ") || lower == "who" {
         return QueryKind::Who;
@@ -1521,8 +1586,11 @@ fn build_augmented_query(
         // Skip question words and temporal markers: they're filters, not content.
         // Check both kind and text: "when" appears as Entity/Subject/QuestionWord.
         let text_lower = entity.text.to_lowercase();
-        if matches!(entity.kind, QuerySpanKind::QuestionWord | QuerySpanKind::Temporal)
-            || crate::question_focus::is_question_word(&text_lower) {
+        if matches!(
+            entity.kind,
+            QuerySpanKind::QuestionWord | QuerySpanKind::Temporal
+        ) || crate::question_focus::is_question_word(&text_lower)
+        {
             continue;
         }
         push_term(&entity.text);
@@ -1535,7 +1603,23 @@ fn build_augmented_query(
         // "will" in "will start" is not the focus; "start" is.
         // "do"/"does"/"did" in "what does X do" are not the focus either.
         let stemmed = crate::tokenizer::tokenize(phrase, crate::tokenizer::TokenizerMode::Stemmed);
-        if stemmed.iter().any(|t| matches!(t.as_str(), "will" | "shall" | "should" | "can" | "could" | "may" | "might" | "must" | "do" | "doe" | "did" | "done")) {
+        if stemmed.iter().any(|t| {
+            matches!(
+                t.as_str(),
+                "will"
+                    | "shall"
+                    | "should"
+                    | "can"
+                    | "could"
+                    | "may"
+                    | "might"
+                    | "must"
+                    | "do"
+                    | "doe"
+                    | "did"
+                    | "done"
+            )
+        }) {
             continue;
         }
         push_term(phrase);

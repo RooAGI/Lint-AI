@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use crate::query_expansion::normalize_for_index;
 use crate::query_semantics::QueryRoutingIntent;
 use crate::temporal::{
@@ -502,6 +503,10 @@ impl MemoryIndex {
         let q = prepared.normalized;
         let q_terms = prepared.terms;
         let mut expanded_terms = prepared.expanded_terms;
+        // Per-text language for stopword filtering on the routing paths.
+        // Resolved from the raw query (accents intact); cached prepared
+        // terms are already normalized.
+        let query_lang = Lang::Auto.resolve(query);
         for term in local_terms {
             if !q_terms.contains(term) && !expanded_terms.contains(term) {
                 expanded_terms.push(term.clone());
@@ -760,6 +765,7 @@ impl MemoryIndex {
                 &q_terms,
                 &query_entities,
                 intent,
+                query_lang,
             );
         }
         let routing_seed_ms = routing_seed_start.elapsed().as_secs_f64() * 1000.0;
@@ -1170,7 +1176,7 @@ impl MemoryIndex {
         group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
         let evidence_start = Instant::now();
         if let Some(intent) = query_routing_intent {
-            let evidence_terms = routing_content_terms(&q_terms);
+            let evidence_terms = routing_content_terms(&q_terms, query_lang);
             let unit_terms = routing_unit_terms(&q_terms);
             for (_group_key, score, items) in ranked_groups.iter_mut() {
                 let mut evidence_supporting_docs = 0usize;

@@ -785,12 +785,14 @@ impl MemoryIndex {
             writer.commit()?;
             ram
         };
-        // CJK-aware tokenization for all TEXT fields (overrides the
-        // built-in "default"): Han runs index as character bigrams and
-        // Hangul runs as eojeol + particle-stripped stem, so Chinese and
-        // Korean content is retrievable; pure-English text is unaffected.
-        // QueryParser resolves the field tokenizer through this manager,
-        // so index-time and query-time segmentation agree.
+        // Unified script-aware tokenization for all TEXT fields (overrides
+        // the built-in "default"): Han runs index as character bigrams,
+        // Hangul runs as eojeol + particle-stripped stem, and Latin runs
+        // replicate tantivy's default tokenizer plus deunicode folding
+        // ("niño" -> "nino") so accented terms agree with the deunicoded
+        // boosted fields. Pure-ASCII text is unaffected. QueryParser
+        // resolves the field tokenizer through this manager, so index-time
+        // and query-time segmentation agree.
         crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
         let reader = index.reader()?;
         let schema_ref = index.schema();

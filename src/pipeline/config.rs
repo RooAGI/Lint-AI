@@ -57,9 +57,10 @@ pub struct PipelineOptions {
     pub ner_provider: Tier1NerProvider,
     pub spacy_model: String,
     /// Content language. `Auto` (default) detects per text from script
-    /// statistics; an explicit value forces it. Selects per-language
-    /// defaults — e.g. the spaCy model — when the corresponding explicit
-    /// option (like `--spacy-model`) was not given.
+    /// statistics (plus Spanish signals for Latin text); an explicit value
+    /// forces it. Selects per-language defaults — e.g. the spaCy model —
+    /// when the corresponding explicit option (like `--spacy-model`) was
+    /// not given.
     pub lang: Lang,
     pub term_ranker: Tier1TermRankerKind,
     pub chunk_strategy: ChunkStrategy,
@@ -136,7 +137,8 @@ impl PipelineOptions {
     /// The spaCy model to use for `text`. An explicit `--spacy-model` (any
     /// value other than the default) always wins; otherwise the model
     /// follows the language — `zh` content gets `zh_core_web_sm`, `ko`
-    /// content gets `ko_core_news_sm` — with `lang` forcing the language
+    /// content gets `ko_core_news_sm`, `es` content gets `es_core_news_sm`
+    /// — with `lang` forcing the language
     /// instead of per-text detection.
     pub fn spacy_model_for_text(&self, text: &str) -> String {
         if self.spacy_model != DEFAULT_SPACY_MODEL {

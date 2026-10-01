@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use deunicode::deunicode;
 use regex::Regex;
 use rust_stemmers::{Algorithm, Stemmer};
@@ -48,13 +49,27 @@ const CONCEPTNET_MIN_CONFIDENCE: f32 = 0.82;
 /// English WordNet/ConceptNet subsets; non-English terms are never
 /// expanded. This is an explicit, documented limitation — see
 /// `ExpandedQuery::unexpanded_non_english_terms`, which lists every term
-/// that could not be expanded because it is not English.
-pub fn expand_query_terms(input_terms: &[String]) -> ExpandedQuery {
+/// that could not be expanded because it is not English. Spanish queries
+/// (`Lang::Es`) skip expansion entirely.
+pub fn expand_query_terms(input_terms: &[String], lang: Lang) -> ExpandedQuery {
     let original_terms = input_terms
         .iter()
         .map(|t| normalize_for_index(t))
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>();
+
+    // The expansion store is English WordNet/ConceptNet. For non-English
+    // queries, accidental cross-language matches (Spanish "pan" = bread vs
+    // English "pan" = cooking vessel) are harmful, and Spanish lexical
+    // resources are out of scope. No-op: return the terms unexpanded,
+    // explicitly listed as unexpanded.
+    if !matches!(lang, Lang::En | Lang::Auto) {
+        return ExpandedQuery {
+            unexpanded_non_english_terms: original_terms.clone(),
+            original_terms,
+            expanded_terms: Vec::new(),
+        };
+    }
 
     let Some(store) = STORE.get_or_init(load_store).as_ref() else {
         return ExpandedQuery {
@@ -71,7 +86,13 @@ pub fn expand_query_terms(input_terms: &[String]) -> ExpandedQuery {
     for term in &original_terms {
         // Never expand stopwords: their lexical neighborhoods ("and" -> "end",
         // "not") are noise that would pollute both routing and scoring.
-        if crate::tokenizer::is_stopword(term, crate::tokenizer::TokenizerMode::Stemmed) {
+        // Language-aware: Spanish stopwords ("no", "son") must be filtered
+        // for Spanish queries, not just English ones.
+        if crate::tokenizer::is_stopword_for_lang(
+            term,
+            crate::tokenizer::TokenizerMode::Stemmed,
+            lang,
+        ) {
             continue;
         }
         // Only expand focus-worthy concepts. Expanding names ("john" ->
@@ -79,7 +100,7 @@ pub fn expand_query_terms(input_terms: &[String]) -> ExpandedQuery {
         // noise that drowns the useful concept bridges (certificate ->
         // degree). The same judgment that identifies the question's focus
         // gates which terms earn expansions.
-        if !is_expandable_concept(term) {
+        if !is_expandable_concept(term, lang) {
             continue;
         }
         let mut count = 0usize;
@@ -264,7 +285,7 @@ mod tests {
     #[test]
     fn chinese_terms_are_reported_as_unexpanded_not_silently_dropped() {
         let terms = vec!["清华".to_string(), "大学".to_string()];
-        let expanded = expand_query_terms(&terms);
+        let expanded = expand_query_terms(&terms, Lang::Zh);
         assert!(
             expanded.expanded_terms.is_empty(),
             "English-only store cannot expand Chinese terms"
@@ -279,17 +300,17 @@ mod tests {
     fn chinese_stopwords_are_not_expandable_concepts() {
         for word in ["的", "了", "我们", "因为", "可以"] {
             assert!(
-                !is_expandable_concept(word),
+                !is_expandable_concept(word, Lang::Zh),
                 "{word} should not be an expandable concept"
             );
         }
-        assert!(is_expandable_concept("清华"));
+        assert!(is_expandable_concept("清华", Lang::Zh));
     }
 
     #[test]
     fn expansion_caps_and_dedups() {
         let terms = vec!["install".to_string(), "setup".to_string()];
-        let out = expand_query_terms(&terms);
+        let out = expand_query_terms(&terms, Lang::En);
         assert!(out.expanded_terms.len() <= terms.len() * MAX_EXPANSIONS_PER_TERM);
         for t in &out.expanded_terms {
             assert!(!out.original_terms.contains(t));
@@ -298,14 +319,28 @@ mod tests {
 
     #[test]
     fn install_expands_from_generated_subset() {
-        let out = expand_query_terms(&["install".to_string()]);
+        let out = expand_query_terms(&["install".to_string()], Lang::En);
         assert!(!out.expanded_terms.is_empty());
         assert!(out.expanded_terms.iter().all(|t| !t.is_empty()));
     }
 
     #[test]
+    fn spanish_expansion_is_noop() {
+        // The expansion store is English-only. Spanish queries must not
+        // receive English WordNet expansions ("pan" = bread must not expand
+        // via English "pan" = cooking vessel).
+        let out = expand_query_terms(&["biblioteca".to_string(), "pan".to_string()], Lang::Es);
+        assert!(
+            out.expanded_terms.is_empty(),
+            "Spanish expansion must be a no-op, got {:?}",
+            out.expanded_terms
+        );
+        assert_eq!(out.original_terms, vec!["biblioteca".to_string(), "pan".to_string()]);
+    }
+
+    #[test]
     fn symmetric_relations_expand_back_to_source_terms() {
-        let out = expand_query_terms(&["occupation".to_string()]);
+        let out = expand_query_terms(&["occupation".to_string()], Lang::En);
         assert!(
             out.expanded_terms.iter().any(|t| t == "job"),
             "expected job expansion, got {:?}",
@@ -315,7 +350,7 @@ mod tests {
 
     #[test]
     fn expanded_lexical_subset_covers_common_search_terms() {
-        let out = expand_query_terms(&["job".to_string(), "bug".to_string()]);
+        let out = expand_query_terms(&["job".to_string(), "bug".to_string()], Lang::En);
         assert!(!out.expanded_terms.is_empty());
         for term in &out.expanded_terms {
             assert!(!out.original_terms.contains(term));
@@ -327,7 +362,7 @@ mod tests {
         // Regression test for a LoCoMo miss: the question asked about a
         // "certificate" while the dialogue turn said "degree". The bridge is
         // associative (ConceptNet RelatedTo), not a WordNet synonym.
-        let out = expand_query_terms(&["certificate".to_string()]);
+        let out = expand_query_terms(&["certificate".to_string()], Lang::En);
         let degree = normalize_for_index("degree");
         assert!(
             out.expanded_terms.iter().any(|t| t == &degree),
@@ -342,7 +377,7 @@ mod tests {
         // to john"), question words, and generic verbs must not pollute the
         // expansion with noise that drowns the useful concept bridges.
         for noise in ["john", "what", "did", "receiv"] {
-            let out = expand_query_terms(&[noise.to_string()]);
+            let out = expand_query_terms(&[noise.to_string()], Lang::En);
             assert!(
                 out.expanded_terms.is_empty(),
                 "noise term {:?} should not expand, got {:?}",
@@ -361,7 +396,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let out = expand_query_terms(&terms);
+        let out = expand_query_terms(&terms, Lang::En);
         let degree = normalize_for_index("degree");
         assert!(
             out.expanded_terms.iter().any(|t| t == &degree),
@@ -387,7 +422,7 @@ mod tests {
 /// implementation would use behood/entity recognition instead of the
 /// hardcoded name list, but the classification logic (focus vs constraint)
 /// is systematic and applies uniformly.
-pub(crate) fn is_expandable_concept(term: &str) -> bool {
+pub(crate) fn is_expandable_concept(term: &str, lang: Lang) -> bool {
     // Chinese function words are never concepts. (Interrogatives are
     // handled separately by crate::question_focus; they never reach here
     // as expandable terms, but excluding them here too is harmless.)
@@ -424,6 +459,38 @@ pub(crate) fn is_expandable_concept(term: &str) -> bool {
     ];
     if AUXILIARIES.contains(&term) {
         return false;
+    }
+    if matches!(lang, Lang::Es) {
+        // Spanish: same categories, stemmed/deunicoded forms (callers pass
+        // `normalize_for_index` output, so "qué" arrives as "que").
+        // Only consulted for Lang::Es — surface forms like "no"/"son"
+        // would otherwise collide with English words.
+        const QUESTION_WORDS_ES: &[&str] = &[
+            "que", "quien", "cual", "donde", "cuando", "cuanto", "cuanta", "como", "porque",
+        ];
+        if QUESTION_WORDS_ES.contains(&term) {
+            return false;
+        }
+        const PRONOUNS_ES: &[&str] = &[
+            "yo", "tu", "el", "ella", "ello", "nosotro", "nosotra", "vosotro", "vosotra", "me",
+            "te", "se", "no", "le", "mi", "su", "nuestro", "nuestra", "vuestra",
+        ];
+        if PRONOUNS_ES.contains(&term) {
+            return false;
+        }
+        const GENERIC_VERBS_ES: &[&str] = &[
+            "ser", "estar", "haber", "tener", "hacer", "poder", "decir", "ir", "dar", "ver",
+            "saber", "querer", "es", "son", "era", "eran", "fue", "fueron", "sea", "sean", "esta",
+            "estan", "estaba", "estaban", "estoy", "hay", "tiene", "tienen", "hace", "hacen",
+            "puede", "pueden", "debe", "deben",
+        ];
+        if GENERIC_VERBS_ES.contains(&term) {
+            return false;
+        }
+        const AUXILIARIES_ES: &[&str] = &["he", "ha", "hemo", "han", "haya", "hayan"];
+        if AUXILIARIES_ES.contains(&term) {
+            return false;
+        }
     }
     // Common person names (stemmed forms) - expanding these gives biblical/
     // historical noise ("john" -> "gospel accord to john")

@@ -286,9 +286,26 @@ fn acronym_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,8})\b").expect("valid regex"))
 }
 
+fn content_word_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"[{L}][{L}0-9_\-]{{2,}}",
+            L = crate::tokenizer::LATIN_LETTER
+        ))
+        .expect("valid regex")
+    })
+}
+
 fn rake_token_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{1,}").expect("valid regex"))
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"[{L}][{L}0-9_\-]{{1,}}",
+            L = crate::tokenizer::LATIN_LETTER
+        ))
+        .expect("valid regex")
+    })
 }
 
 /// Sentence-boundary characters: ASCII plus CJK fullwidth forms.
@@ -1018,11 +1035,9 @@ mod stopword_tests {
     }
 
     #[test]
-    fn auto_detect_is_script_based_so_spanish_needs_explicit_lang() {
-        // Script-based detection cannot tell Spanish from English (both
-        // Latin), so a Spanish doc via Auto gets the English set — the
-        // Spanish set applies only when callers pass Lang::Es explicitly
-        // (e.g. --lang es plumbing, owned by the es track).
+    fn auto_detect_includes_spanish_signals() {
+        // Auto-detection uses Spanish signals (accents, ñ, ¿¡) for Latin
+        // text, so a Spanish doc via Auto gets the Spanish stop set.
         let es_doc = Tier1DocInput {
             id: "1".into(),
             source: "t".into(),
@@ -1031,7 +1046,7 @@ mod stopword_tests {
             headings: vec![],
         };
         let stop = default_stopwords_for_lang(Lang::Auto.resolve(&es_doc.content));
-        assert!(!stop.contains("está"));
+        assert!(stop.contains("está"));
         let stop_es = default_stopwords_for_lang(Lang::Es);
         assert!(stop_es.contains("está"));
         // English content words that collide with Spanish stopwords survive.
@@ -1045,5 +1060,45 @@ mod stopword_tests {
         let stop_en = default_stopwords_for_lang(Lang::Auto.resolve(&en_doc.content));
         assert!(!stop_en.contains("son"), "English 'son' must survive");
         assert!(!stop_en.contains("era"), "English 'era' must survive");
+    }
+    use super::*;
+
+    #[test]
+    fn spanish_folded_twins_are_stopped() {
+        // Dual emission means ranker tokens carry both "está" and "esta";
+        // the folded twins of Spanish stopwords must not leak through as
+        // content terms.
+        let stop = default_stopwords_for_lang(Lang::Es);
+        for w in ["sí", "está", "están", "más", "también", "dónde", "qué"] {
+            assert!(stop.contains(w), "{w} (raw) not stopped");
+            let folded = crate::tokenizer::fold_diacritics(w);
+            assert!(
+                stop.contains(folded.as_str()),
+                "{folded} (folded twin of {w}) not stopped"
+            );
+        }
+        // Every dual-emitted token of a Spanish stopword is covered:
+        // tokenize each stopword and check all emissions are stopped.
+        for w in ["niño", "está", "dónde"] {
+            for t in crate::tokenizer::tokenize(w, crate::tokenizer::TokenizerMode::Unstemmed) {
+                // "niño" is content (not a stopword) — only its forms must
+                // agree; skip the content word itself.
+                if w == "niño" {
+                    continue;
+                }
+                assert!(stop.contains(t.as_str()), "emission {t} of {w} not stopped");
+            }
+        }
+    }
+
+    #[test]
+    fn english_stopwords_unchanged() {
+        // The English base is untouched by the per-language extension.
+        let stop = default_stopwords_for_lang(Lang::En);
+        for w in ["the", "and", "of", "is"] {
+            assert!(stop.contains(w));
+        }
+        assert!(!stop.contains("está"));
+        assert!(!stop.contains("sí"));
     }
 }

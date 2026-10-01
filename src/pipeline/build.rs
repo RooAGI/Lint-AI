@@ -26,7 +26,7 @@ use tantivy::query::QueryParser;
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::Value;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term};
 /// How long to wait for another session to finish writing before giving up.
 const WRITER_LOCK_WAIT: Duration = Duration::from_secs(10);
 const WRITER_LOCK_RETRY: Duration = Duration::from_millis(150);
@@ -44,6 +44,10 @@ pub(crate) struct LexicalState {
     headings_f: Field,
     terms_f: Field,
     entities_f: Field,
+    /// Definitional semantic tags field. `None` for on-disk indexes created
+    /// before the tags field existed: those documents simply carry no tags
+    /// (fail-open; a rebuild adds them).
+    tags_f: Option<Field>,
 }
 
 impl LexicalState {
@@ -54,21 +58,15 @@ impl LexicalState {
         schema_builder.add_text_field("headings", TEXT);
         schema_builder.add_text_field("important_terms", TEXT);
         schema_builder.add_text_field("entities", TEXT);
+        // Definitional semantic tags (Luyi 2026-09-28): same vocabulary as
+        // the MemoryIndex lexical shard's `semantic_tags` field.
+        schema_builder.add_text_field("semantic_tags", TEXT);
         let schema = schema_builder.build();
 
         let index = match index_dir.as_deref() {
             Some(dir) => Self::open_or_create_on_disk(dir, &schema)?,
             None => Index::create_in_ram(schema),
         };
-        // Unified script-aware tokenization for all TEXT fields (overrides
-        // the built-in "default"; see crate::index::cjk_tokenizer): Han runs
-        // index as character bigrams, Hangul runs as eojeol +
-        // particle-stripped stem, and Latin runs replicate tantivy's default
-        // tokenizer plus deunicode folding ("niño" -> "nino") so accented
-        // terms agree with the deunicoded boosted fields. Pure-ASCII text is
-        // unaffected. Applies to existing on-disk indexes too — the
-        // tokenizer name resolves through the manager at index/query time.
-        crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
         let writer = None;
         let reader = index
             .reader_builder()
@@ -80,6 +78,9 @@ impl LexicalState {
         let headings_f = schema_ref.get_field("headings")?;
         let terms_f = schema_ref.get_field("important_terms")?;
         let entities_f = schema_ref.get_field("entities")?;
+        // Old on-disk indexes predate the tags field: None there, and
+        // upserts skip tags (fail-open) instead of erroring.
+        let tags_f = schema_ref.get_field("semantic_tags").ok();
         Ok(Self {
             index,
             writer,
@@ -89,6 +90,7 @@ impl LexicalState {
             headings_f,
             terms_f,
             entities_f,
+            tags_f,
         })
     }
 
@@ -107,7 +109,23 @@ impl LexicalState {
         }
     }
 
-    pub(crate) fn upsert_record(&mut self, record: &DocRecord) -> Result<()> {
+    /// Upserts a batch of records, computing definitional semantic tags for
+    /// all of them in ONE batched daemon round-trip per tag layer (scope +
+    /// kind) instead of two daemon calls per record. Luyi 2026-09-29: the
+    /// refresh loop's per-record tag calls were the bulk-build slowness;
+    /// the mutable side batches them before the immutable snapshot is
+    /// published.
+    pub(crate) fn upsert_records(&mut self, records: &[&DocRecord]) -> Result<()> {
+        let contents: Vec<String> = records.iter().map(|r| record_content_text(r)).collect();
+        let content_refs: Vec<&str> = contents.iter().map(String::as_str).collect();
+        let tags_per_doc = crate::semantic_tags::batch_doc_semantic_tags(&content_refs);
+        for (record, tags) in records.iter().zip(tags_per_doc.iter()) {
+            self.upsert_record_with_tags(record, tags)?;
+        }
+        Ok(())
+    }
+
+    fn upsert_record_with_tags(&mut self, record: &DocRecord, tags: &[String]) -> Result<()> {
         let headings_text = record
             .section_chunks
             .iter()
@@ -126,31 +144,34 @@ impl LexicalState {
             .flat_map(|c| c.key_entities.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" ");
-        let content_text = record
-            .section_chunks
-            .iter()
-            .map(|c| c.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let content_text = record_content_text(record);
 
         // Field handles are Copy, so they are taken before the writer borrow.
-        let (doc_id_f, content_f, headings_f, terms_f, entities_f) = (
+        let (doc_id_f, content_f, headings_f, terms_f, entities_f, tags_f) = (
             self.doc_id_f,
             self.content_f,
             self.headings_f,
             self.terms_f,
             self.entities_f,
+            self.tags_f,
         );
         let doc_id = record.doc_id.clone();
         let writer = self.writer()?;
         writer.delete_term(Term::from_field_text(doc_id_f, &doc_id));
-        writer.add_document(doc!(
-            doc_id_f => doc_id,
-            content_f => content_text,
-            headings_f => headings_text,
-            terms_f => terms_text,
-            entities_f => entities_text
-        ))?;
+        let mut document = TantivyDocument::new();
+        document.add_text(doc_id_f, &doc_id);
+        document.add_text(content_f, &content_text);
+        document.add_text(headings_f, &headings_text);
+        document.add_text(terms_f, &terms_text);
+        document.add_text(entities_f, &entities_text);
+        // Definitional semantic tags for this record (batched by the caller
+        // via upsert_records, or computed per-record by upsert_record;
+        // fail-open). Skipped entirely on pre-tags on-disk indexes.
+        if let Some(tags_f) = tags_f {
+            let tags_text = tags.join(" ");
+            document.add_text(tags_f, tags_text);
+        }
+        writer.add_document(document)?;
         Ok(())
     }
 
@@ -237,6 +258,17 @@ impl LexicalState {
     }
 }
 
+/// Joined section-chunk content for a record: the text the definitional
+/// semantic-tag layers judge.
+fn record_content_text(record: &DocRecord) -> String {
+    record
+        .section_chunks
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn select_term_ranker(ranker_kind: &Tier1TermRankerKind) -> Box<dyn ImportantTermRanker> {
     match ranker_kind {
         Tier1TermRankerKind::Yake => Box::new(YakeStyleTermRanker),
@@ -271,12 +303,48 @@ fn guess_doc_type(headings: &[String], content: &str) -> Option<String> {
 /// [`doc_record_content_hash`]) are the only `PipelineOptions` inputs that can
 /// change a built [`DocRecord`].
 fn extraction_identity(options: &PipelineOptions) -> (String, String) {
+    // Luyi 2026-09-29: heuristic ranker restored alongside spaCy (spaCy stays
+    // the default). The provider is part of the extraction identity so a
+    // provider switch invalidates cached records.
     let ner_provider_name = match &options.ner_provider {
         Tier1NerProvider::Heuristic => "heuristic".to_string(),
         Tier1NerProvider::Spacy => format!("spacy:{}", options.spacy_model),
     };
     let term_ranker_name = select_term_ranker(&options.term_ranker).name().to_string();
     (ner_provider_name, term_ranker_name)
+}
+
+/// Rank Tier1 key entities for a batch of documents per `options.ner_provider`.
+///
+/// Luyi 2026-09-29: keep the heuristic ranker; spaCy stays the default. When
+/// the provider is spaCy and it is unavailable, fall back to the heuristic
+/// ranker (loud warning) so a missing spaCy never silently degrades NER to
+/// zero entities for users who configured heuristic explicitly.
+pub(crate) fn rank_key_entities_batched(
+    docs: &[Tier1DocInput],
+    options: &PipelineOptions,
+) -> Result<HashMap<String, Vec<Tier1Entity>>> {
+    let heuristic = HeuristicKeyEntityRanker;
+    match &options.ner_provider {
+        Tier1NerProvider::Heuristic => heuristic.rank_docs(docs),
+        Tier1NerProvider::Spacy => {
+            let spacy = SpacyKeyEntityRanker {
+                model: options.spacy_model.clone(),
+                script_path: default_spacy_script_path().display().to_string(),
+            };
+            match spacy.rank_docs(docs) {
+                Ok(out) => Ok(out),
+                Err(err) => {
+                    eprintln!(
+                        "warning: {} ranker unavailable ({}), falling back to heuristic",
+                        spacy.name(),
+                        err
+                    );
+                    Ok(heuristic.rank_docs(docs).unwrap_or_default())
+                }
+            }
+        }
+    }
 }
 
 fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
@@ -308,7 +376,7 @@ fn hash_opt_str(hasher: &mut Sha256, value: &Option<String>) {
 /// rebuild on the next refresh, after which the new hashes are stamped),
 /// so no separate version field on [`DocRecord`] is needed. Downgrades fail
 /// safe in the same direction (mismatch → rebuild).
-pub const DOC_RECORD_BUILD_VERSION: u32 = 1;
+pub const DOC_RECORD_BUILD_VERSION: u32 = 2;
 
 /// Content hash gating the doc-record rebuild short-circuit in
 /// `IndexStore::prepare_pending_changes`.
@@ -416,48 +484,6 @@ pub fn source_documents_to_tier1_inputs(docs: &[SourceDocument]) -> Vec<Tier1Doc
         .collect()
 }
 
-/// Run spaCy NER with per-language model selection: docs are grouped by
-/// the model [`PipelineOptions::spacy_model_for_text`] picks for their
-/// content, so Spanish docs get `es_core_news_sm`, Chinese docs get
-/// `zh_core_web_sm`, and Korean docs get `ko_core_news_sm` with no flags
-/// while an explicit `--spacy-model` still applies to everything.
-/// Fail-open per group: a group whose model is unavailable falls back to
-/// the heuristic ranker for just those docs.
-fn spacy_key_entities_by_lang(
-    docs: &[Tier1DocInput],
-    options: &PipelineOptions,
-    heuristic: &HeuristicKeyEntityRanker,
-) -> Result<HashMap<String, Vec<Tier1Entity>>> {
-    let mut by_model: HashMap<String, Vec<Tier1DocInput>> = HashMap::new();
-    for doc in docs {
-        by_model
-            .entry(options.spacy_model_for_text(&doc.content))
-            .or_default()
-            .push(doc.clone());
-    }
-    let script_path = default_spacy_script_path().display().to_string();
-    let mut out: HashMap<String, Vec<Tier1Entity>> = HashMap::new();
-    // BTreeMap for deterministic model order across runs.
-    let by_model: std::collections::BTreeMap<_, _> = by_model.into_iter().collect();
-    for (model, group_docs) in by_model {
-        let spacy = SpacyKeyEntityRanker {
-            model: model.clone(),
-            script_path: script_path.clone(),
-        };
-        match spacy.rank_docs(&group_docs) {
-            Ok(entities) => out.extend(entities),
-            Err(err) => {
-                eprintln!(
-                    "warning: {} ranker unavailable for model {model} ({err}), falling back to heuristic",
-                    spacy.name(),
-                );
-                out.extend(heuristic.rank_docs(&group_docs).unwrap_or_default());
-            }
-        }
-    }
-    Ok(out)
-}
-
 /// Extracts [`DocRecord`]s from source documents (NER + term ranking +
 /// chunking). This is the expensive per-document pipeline phase; the
 /// benchmark harness calls it once per question and builds both the
@@ -469,11 +495,9 @@ pub fn build_doc_records(
 ) -> Result<Vec<DocRecord>> {
     let docs = source_documents_to_tier1_inputs(source_docs);
 
-    let heuristic = HeuristicKeyEntityRanker;
-    let entities_by_doc = match &options.ner_provider {
-        Tier1NerProvider::Heuristic => heuristic.rank_docs(&docs)?,
-        Tier1NerProvider::Spacy => spacy_key_entities_by_lang(&docs, options, &heuristic)?,
-    };
+    // Luyi 2026-09-29: provider-selected NER; spaCy failures fall back to the
+    // heuristic ranker (never silently to zero entities).
+    let entities_by_doc = rank_key_entities_batched(&docs, options)?;
 
     let term_ranker = select_term_ranker(&options.term_ranker);
     let (ner_provider_name, term_ranker_name) = extraction_identity(options);
@@ -505,59 +529,95 @@ pub fn build_doc_records(
     Ok(records)
 }
 
-pub(crate) fn build_doc_record(
+/// Record assembly from precomputed NER key entities. Lets the refresh loop
+/// batch NER across dirty docs (one daemon call) instead of one call per
+/// document, while the per-doc bookkeeping stays per-doc.
+pub(crate) fn build_doc_record_with_entities(
     source_doc: &SourceDocument,
+    doc: &Tier1DocInput,
+    key_entities: Vec<Tier1Entity>,
     options: &PipelineOptions,
 ) -> Result<DocRecord> {
-    let docs = source_documents_to_tier1_inputs(std::slice::from_ref(source_doc));
-    let doc = docs
-        .into_iter()
-        .next()
-        .expect("single source document should yield one tier1 input");
-
-    let heuristic = HeuristicKeyEntityRanker;
-    let key_entities = match &options.ner_provider {
-        Tier1NerProvider::Heuristic => heuristic
-            .rank_docs(std::slice::from_ref(&doc))?
-            .remove(&doc.id)
-            .unwrap_or_default(),
-        Tier1NerProvider::Spacy => {
-            let model = options.spacy_model_for_text(&doc.content);
-            let spacy = SpacyKeyEntityRanker {
-                model: model.clone(),
-                script_path: default_spacy_script_path().display().to_string(),
-            };
-            match spacy.rank_docs(std::slice::from_ref(&doc)) {
-                Ok(mut out) => out.remove(&doc.id).unwrap_or_default(),
-                Err(err) => {
-                    eprintln!(
-                        "warning: {} ranker unavailable for model {model} ({}), falling back to heuristic",
-                        spacy.name(),
-                        err
-                    );
-                    heuristic
-                        .rank_docs(std::slice::from_ref(&doc))
-                        .unwrap_or_default()
-                        .remove(&doc.id)
-                        .unwrap_or_default()
-                }
-            }
-        }
-    };
-
     let term_ranker = select_term_ranker(&options.term_ranker);
-    let important_terms = term_ranker.rank_terms(&doc);
+    let important_terms = term_ranker.rank_terms(doc);
     let (ner_provider_name, term_ranker_name) = extraction_identity(options);
 
     Ok(assemble_doc_record(
         source_doc,
-        &doc,
+        doc,
         key_entities,
         important_terms,
         &ner_provider_name,
         &term_ranker_name,
         options,
     ))
+}
+
+/// Reduce a grammar-accepted key phrase to its referring core: the head noun
+/// plus proper-noun modifiers. Possessors ("user's", "my"), determiners
+/// ("the") and descriptive modifiers ("favorite") are not the thing the
+/// phrase denotes, so they must not enter the entity channel: a generic
+/// token like "user" is rare in the entities field, and its high per-field
+/// IDF at 2.4x weight inflated near-miss documents (mem-04: the restaurant
+/// fact outscored the peanut-allergy fact on "user" alone).
+///
+/// Rule (systematic, applies to every key phrase):
+/// - drop possessive-marked tokens ("user's", "dogs'") and possessive
+///   determiners (my/your/his/her/its/our/their);
+/// - drop leading articles (the/a/an);
+/// - keep capitalized tokens (proper-noun modifiers are part of naming:
+///   "Harry Potter" in "Harry Potter conference") and the final token
+///   (the head; English NPs are head-final);
+/// - drop remaining lowercase non-final tokens (descriptive modifiers).
+/// Fail-open: if nothing survives, the original text is kept.
+///
+/// Limitations (documented, not fixed here): capitalization is a heuristic
+/// proxy for proper-nounhood (misses lowercase proper nouns); multi-word
+/// common-noun compounds reduce to the final token ("ice cream" -> "cream");
+/// interior glue ("of" in "University of Washington") is dropped. The full
+/// phrase text stays in the content/terms fields, so nothing becomes
+/// unretrievable -- only the 2.4x entity-channel precision changes.
+fn head_noun_phrase(text: &str) -> String {
+    const POSSESSIVE_DETS: [&str; 7] = ["my", "your", "his", "her", "its", "our", "their"];
+    const ARTICLES: [&str; 3] = ["the", "a", "an"];
+
+    fn is_possessive(tok: &str) -> bool {
+        let lower = tok.to_lowercase();
+        lower.ends_with("'s")
+            || lower.ends_with("\u{2019}s")
+            || lower.ends_with("s'")
+            || lower.ends_with("s\u{2019}")
+            || POSSESSIVE_DETS.contains(&lower.as_str())
+    }
+
+    // Word tokens with original case; apostrophes stay inside the token so
+    // possessives ("user's") are detectable.
+    let mut tokens: Vec<&str> = text
+        .split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '\u{2019}'))
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    tokens.retain(|t| !is_possessive(t));
+    while tokens
+        .first()
+        .is_some_and(|t| ARTICLES.contains(&t.to_lowercase().as_str()))
+    {
+        tokens.remove(0);
+    }
+
+    let n = tokens.len();
+    let kept: Vec<&str> = tokens
+        .into_iter()
+        .enumerate()
+        .filter(|(i, t)| *i == n - 1 || t.chars().next().is_some_and(|c| c.is_uppercase()))
+        .map(|(_, t)| t)
+        .collect();
+
+    if kept.is_empty() {
+        text.to_string()
+    } else {
+        kept.join(" ")
+    }
 }
 
 fn assemble_doc_record(
@@ -579,7 +639,10 @@ fn assemble_doc_record(
     // retrieval signals in both routing and per-document entity scoring.
     let mut key_entities = key_entities;
     key_entities.extend(source_doc.key_phrases.iter().map(|kp| Tier1Entity {
-        text: kp.text.clone(),
+        // Luyi 2026-09-28: admit the head noun, not the whole possessive
+        // phrase -- possessors and descriptive modifiers are not the thing
+        // the phrase denotes ("user's favorite restaurant" -> "restaurant").
+        text: head_noun_phrase(&kp.text),
         label: kp.kind.clone(),
         start: 0,
         end: 0,
@@ -700,7 +763,6 @@ pub fn build_query_snapshot_from_source_documents(
     let options = PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
-        lang: crate::lang::Lang::Auto,
         term_ranker: ranker_kind.clone(),
         chunk_strategy: chunk_strategy.clone(),
         chunk_lines,
@@ -729,4 +791,42 @@ pub fn build_index_store(
     let mut index = IndexStore::with_documents(options.clone(), source_docs.to_vec());
     index.refresh()?;
     Ok(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::head_noun_phrase;
+
+    #[test]
+    fn possessive_phrase_reduces_to_head_noun() {
+        assert_eq!(head_noun_phrase("user's favorite restaurant"), "restaurant");
+    }
+
+    #[test]
+    fn proper_noun_modifiers_are_kept() {
+        assert_eq!(
+            head_noun_phrase("Harry Potter conference"),
+            "Harry Potter conference"
+        );
+    }
+
+    #[test]
+    fn leading_article_is_dropped() {
+        assert_eq!(head_noun_phrase("the Eiffel Tower"), "Eiffel Tower");
+    }
+
+    #[test]
+    fn possessive_determiner_is_dropped() {
+        assert_eq!(head_noun_phrase("my mom"), "mom");
+    }
+
+    #[test]
+    fn single_token_phrase_survives() {
+        assert_eq!(head_noun_phrase("EpiPen"), "EpiPen");
+    }
+
+    #[test]
+    fn empty_after_strip_falls_back_to_original() {
+        assert_eq!(head_noun_phrase("John's"), "John's");
+    }
 }

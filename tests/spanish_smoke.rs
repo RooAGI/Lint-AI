@@ -5,7 +5,6 @@
 // Exercises the full pipeline: accent-preserving tokenization, script
 // agreement (no deunicode), Spanish stopwords, interrogative focus,
 // and temporal.
-use lint_ai::lang::Lang;
 use lint_ai::memory_api::{AddRequest, MemoryService, Message};
 use lint_ai::PipelineOptions;
 use std::collections::BTreeMap;
@@ -15,9 +14,8 @@ const FACT_BIBLIOTECA: &str = "La biblioteca de Madrid está en la calle de Alca
 const FACT_PAELLA: &str = "A María le gusta cocinar paella los domingos.";
 const FACT_NINO: &str = "El niño juega en el parque con su pelota roja.";
 
-fn options_for(lang: Lang) -> PipelineOptions {
+fn options_for() -> PipelineOptions {
     let mut opts = PipelineOptions::default();
-    opts.lang = lang;
     // Keep the smoke test hermetic: no spaCy, no bekind, no network.
     opts.ner_provider = lint_ai::pipeline::Tier1NerProvider::Heuristic;
     opts
@@ -52,9 +50,9 @@ fn doc_id(user_id: &str, request_id: &str) -> String {
     lint_ai::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
 }
 
-fn run_smoke(lang: Lang, label: &str) {
+fn run_smoke(label: &str) {
     let user_id = format!("es-smoke-{label}");
-    let mut service = MemoryService::in_memory(options_for(lang));
+    let mut service = MemoryService::in_memory(options_for());
     add_fact(&mut service, &user_id, "req-libro", FACT_LIBRO);
     add_fact(&mut service, &user_id, "req-biblio", FACT_BIBLIOTECA);
     add_fact(&mut service, &user_id, "req-paella", FACT_PAELLA);
@@ -130,10 +128,10 @@ fn run_smoke(lang: Lang, label: &str) {
 
 #[test]
 fn spanish_smoke_explicit_lang() {
-    run_smoke(Lang::Es, "es");
+    run_smoke("es");
 }
 
 #[test]
 fn spanish_smoke_auto_detect() {
-    run_smoke(Lang::Auto, "auto");
+    run_smoke("auto");
 }

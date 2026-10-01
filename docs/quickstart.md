@@ -44,7 +44,10 @@ cargo install --path .
 lint-ai --help
 ```
 
-Query semantics use the heuristic backend in this release.
+Tier-1 entity extraction uses spaCy (`en_core_web_sm`) by default when it is
+available, and falls back to the built-in heuristic ranker otherwise (for
+example, when the spaCy model is not installed). Pass
+`--tier1-ner-provider heuristic` to use the heuristic ranker explicitly.
 The rust-bert POS/NER path is experimental and not part of the audited release dependency graph.
 
 ## 2. Lint or index a corpus
@@ -79,11 +82,11 @@ cargo run --release -- /path/to/repo --show-tier1-entities
 cargo run --release -- /path/to/repo --show-tier1-terms --tier1-term-ranker yake
 ```
 
-If you want spaCy-based entity extraction:
+If you want heuristic entity extraction instead of the spaCy default:
 
 ```bash
 cargo run --release -- /path/to/repo --show-tier1-entities \
-  --tier1-ner-provider spacy --spacy-model en_core_web_sm
+  --tier1-ner-provider heuristic
 ```
 
 ## 4. Query the corpus

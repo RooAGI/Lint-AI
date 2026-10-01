@@ -65,7 +65,13 @@ struct Args {
     /// Segment routing strategy to use for segmented comparison modes.
     #[arg(long, value_enum, default_value_t = SegmentRouterArg::Sparse)]
     segment_router: SegmentRouterArg,
+
+    /// Tier1 NER backend. `heuristic` reproduces the published
+    /// docs/benchmark.md numbers; `spacy` is the current default.
+    #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
+    ner_provider: Tier1NerProvider,
 }
+
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SegmentRouterArg {
@@ -284,6 +290,7 @@ struct TypeMetrics {
 
 #[derive(Debug, Clone, Serialize)]
 struct BenchmarkReport {
+    ner_provider: Tier1NerProvider,
     aggregate: AggregateMetrics,
     segment_aggregate: Option<SegmentComparisonAggregate>,
     router_miss_failures: Vec<RouterMissFailureReport>,
@@ -340,6 +347,11 @@ fn main() -> Result<()> {
         anyhow::bail!("at least one positive --k value is required");
     }
 
+    // Warm the long-lived spaCy NER daemon so the index build pays the
+    // interpreter + model load once, up front, instead of inside the
+    // first ranking call. Mirrors src/bin/server.rs.
+    lint_ai::NerDaemon::global().prewarm();
+
     eprintln!("loading raw LongMemEval data...");
     let data = fs::read_to_string(&args.longmemeval)
         .with_context(|| format!("failed to read {}", args.longmemeval.display()))?;
@@ -357,6 +369,7 @@ fn main() -> Result<()> {
         args.segment_top_n,
         args.adaptive_segment_max_n,
         args.segment_router.into(),
+        args.ner_provider.clone(),
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -383,6 +396,7 @@ fn run_scoped_benchmark(
     segment_top_n: usize,
     adaptive_segment_max_n: usize,
     segment_router: SegmentRoutingStrategy,
+    ner_provider: Tier1NerProvider,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -424,7 +438,7 @@ fn run_scoped_benchmark(
         let candidate_session_ids = entry.haystack_session_ids.clone();
         let source_docs = build_scoped_source_docs(&entry);
         let options = PipelineOptions {
-            ner_provider: Tier1NerProvider::Heuristic,
+            ner_provider: ner_provider.clone(),
             spacy_model: "en_core_web_sm".to_string(),
             term_ranker: Tier1TermRankerKind::Yake,
             chunk_strategy: ChunkStrategy::Heading,
@@ -488,6 +502,7 @@ fn run_scoped_benchmark(
             allowed_segment_doc_bitmaps: None,
             query_routing_intent: analysis.query_routing_intent,
             has_explicit_temporal: analysis.temporal.is_some(),
+            semantic_tags: &[],
         };
         let (results, timings, diagnostics) =
             index.query_with_temporal_context(&query_text, max_k, temporal);
@@ -584,6 +599,7 @@ fn run_scoped_benchmark(
     let router_miss_failures = router_miss_failure_reports(&per_query);
 
     Ok(BenchmarkReport {
+        ner_provider,
         aggregate: aggregate_metrics(&per_query, ks),
         segment_aggregate: aggregate_segment_comparison(&per_query, ks),
         router_miss_aggregate: aggregate_router_miss_failures(&router_miss_failures),

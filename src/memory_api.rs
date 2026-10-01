@@ -1,14 +1,12 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
-use crate::lang::{default_spacy_model_for_lang, Lang};
-use crate::pipeline::PipelineOptions;
+use crate::pipeline::{PipelineOptions, Tier1NerProvider};
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::analyze_query;
 use crate::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, extractor_model_for_turns,
-    query_structured, relation_turns_from_docs, try_extract_key_phrases_via_spacy, RelationIndex,
-    RelationTurn,
+    analyze_fact_question, extract_relations_via_spacy, query_structured, relation_turns_from_docs,
+    try_extract_key_phrases_via_spacy, RelationIndex,
 };
 use crate::session_prepare::is_follow_up;
 use crate::{IndexStore, SourceDocument};
@@ -73,12 +71,6 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
-    /// Content language override (`"en"`, `"zh"`, `"ko"`, `"es"`). Absent
-    /// (default) auto-detects per text from script statistics. Currently
-    /// selects the spaCy model for the structured-relations path; lexical
-    /// retrieval is script-aware regardless.
-    #[serde(default)]
-    pub lang: Option<Lang>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,14 +256,17 @@ fn run_key_phrase_extraction_bounded(
 ) -> Option<Vec<crate::segments::relations::RawKeyPhrase>> {
     let turns: Vec<crate::segments::relations::RelationTurn> = turns.to_vec();
     let script = script.map(|s| s.to_path_buf());
+    // Detect language from the combined turn text for model selection.
+    let combined_text: String = turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+    let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text));
+    let model = model.to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let model = extractor_model_for_turns(&turns);
         let out = try_extract_key_phrases_via_spacy(
             &turns,
             script.as_deref(),
             std::time::Duration::from_secs(timeout_secs),
-            model,
+            &model,
         );
         let _ = tx.send(out);
     });
@@ -360,16 +355,6 @@ fn relations_fingerprint(docs: &[&SourceDocument]) -> u64 {
     hasher.finish()
 }
 
-/// Pick the spaCy model for structured relation extraction.
-/// An explicit non-`Auto` request language pins its model; `Lang::Auto`
-/// and an omitted language both follow the turns' detected script.
-fn spacy_model_for_request(lang: Option<Lang>, turns: &[RelationTurn]) -> &'static str {
-    match lang {
-        Some(l) if !matches!(l, Lang::Auto) => default_spacy_model_for_lang(l.resolve("")),
-        _ => extractor_model_for_turns(turns),
-    }
-}
-
 /// Build (or reuse) the relation index for one user's visible document set.
 /// Returns `None` when extraction fails or times out, so the caller falls
 /// through to the lexical path.
@@ -377,7 +362,7 @@ fn relations_index_for(
     docs: &[&SourceDocument],
     user_id: &str,
     cache: &Mutex<RelationsCache>,
-    lang: Option<Lang>,
+    python_free: bool,
 ) -> Option<Arc<RelationIndex>> {
     // The lock is held across the build so concurrent structured queries for
     // the same user share one extractor run instead of racing duplicates.
@@ -395,12 +380,18 @@ fn relations_index_for(
     if entry.fingerprint == fingerprint {
         return entry.index.clone();
     }
+    // Python-free mode: skip the spaCy subprocess entirely. The cache stays
+    // empty and callers fail over to the lexical path. A pre-populated
+    // cache (tests) is still honored via the fingerprint check above.
+    if python_free {
+        return None;
+    }
     let turns = relation_turns_from_docs(docs);
     // Bound the subprocess: run extraction on a worker thread and give up
     // after the timeout, leaving the cache empty (fail-open to lexical).
-    // An explicit request language selects the spaCy model; otherwise the
-    // model follows the turns' detected script.
-    let model: String = spacy_model_for_request(lang, &turns).to_string();
+    // Detect language for model selection (language PRs added model param).
+    let combined_text: String = turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+    let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text)).to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
@@ -474,7 +465,7 @@ fn structured_fact_results(
         })
         .collect();
     visible.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-    let index = match relations_index_for(&visible, &request.user_id, cache, request.lang) {
+    let index = match relations_index_for(&visible, &request.user_id, cache, options.python_free()) {
         Some(index) => index,
         None => return Vec::new(),
     };
@@ -530,50 +521,23 @@ fn blend_structured_first(
     blended
 }
 
-/// Fixed additive boost for temporal-scope matches (Luyi 2026-09-28).
-///
-/// bekind's scope verdicts are a RANK BOOST ONLY — never a filter. A fact
-/// whose scope verdict matches the question's gets this added to its score;
-/// every other fact is untouched, whatever its verdict. The amount is
-/// recorded per hit in `score_breakdown.scope_boost` so the boost is
-/// measurable in serialized responses. Activity compatibility
-/// (running ⊂ exercise) is deliberately out of scope: that stays
-/// caller-side knowledge work.
-const SCOPE_BOOST: f32 = 25.0;
-
-/// Pure scope-match predicate, unit-testable without the daemon.
-///
-/// Temporal: the canonicalized temporal-word sets must intersect
-/// (e.g. question ["weekend"] vs fact ["weekend"] — bekind emits canonical
-/// lowercase, so this is an exact comparison). Habitual: a habitual
-/// question wants habitual facts; a non-habitual question accepts any fact.
-/// A `false` here only withholds the boost — it never removes or demotes.
-fn scope_verdicts_match(
-    question: &crate::behood_query::ScopeVerdict,
-    fact: &crate::behood_query::ScopeVerdict,
-) -> bool {
-    let temporal_match = question
-        .temporal_words
-        .iter()
-        .any(|qw| fact.temporal_words.iter().any(|fw| qw == fw));
-    if !temporal_match {
-        return false;
-    }
-    !question.habitual || fact.habitual
-}
-
-/// Apply the fixed boost to the given result indices and re-sort by score
+/// Apply a fixed boost to the given result indices and re-sort by score
 /// (stable sort, so unboosted relative order is preserved). Records the
-/// amount in each hit's `score_breakdown.scope_boost`. Returns the number
+/// amount in each hit's score breakdown via `record`. Returns the number
 /// boosted. Pure: no daemon, no I/O. Boost only — results are never
 /// removed, demoted, or filtered here.
-fn boost_result_indices(results: &mut [crate::SearchResult], indices: &[usize]) -> usize {
+fn boost_result_indices(
+    results: &mut [crate::SearchResult],
+    indices: &[usize],
+    amount: f32,
+    record: impl Fn(&mut crate::index::ScoreBreakdown, f32),
+) -> usize {
     let mut seen = std::collections::HashSet::new();
     let mut n = 0usize;
     for &ri in indices {
         if ri < results.len() && seen.insert(ri) {
-            results[ri].score += SCOPE_BOOST;
-            results[ri].score_breakdown.scope_boost += SCOPE_BOOST;
+            results[ri].score += amount;
+            record(&mut results[ri].score_breakdown, amount);
             n += 1;
         }
     }
@@ -587,28 +551,102 @@ fn boost_result_indices(results: &mut [crate::SearchResult], indices: &[usize]) 
     n
 }
 
-/// Temporal-scope rank boost over blended search results.
+/// Fixed additive boost for activity↔venue matches (Luyi 2026-09-28).
 ///
-/// Query-time only, no reindexing: the question's scope verdict comes from
-/// the behood daemon, then all candidate fact texts go through the daemon
-/// in ONE batched request (milliseconds). Fail-open throughout: no daemon,
-/// no binary, no scope support, or no temporal words in the question
-/// verdict → results returned unchanged.
-fn apply_scope_boost(
+/// The activity→venue relation is WORLD KNOWLEDGE — it lives here in
+/// lint-ai, not in bekind (Luyi's ruling, mem-14: "Where does the user
+/// like to eat out?" / "The user's favorite restaurant is Din Tai
+/// Fung"). bekind's share is purely linguistic: the scope verdict's
+/// `activity_phrase` (the extracted verb phrase, e.g. "eat out") and
+/// the kind verdicts ("restaurant" is kind=place). This table maps the
+/// former to the latter. Boost only — never a filter. Recorded per hit in
+/// `score_breakdown.activity_venue_boost` so the boost is measurable in
+/// serialized responses.
+const ACTIVITY_VENUE_BOOST: f32 = 25.0;
+
+/// Admitted 2026-09-28 (Luyi): activity → typical venue words. Fixed
+/// enumeration, fail-open (an activity not listed here yields no boost).
+/// Each new activity needs its own explicit admission — the table does
+/// not grow by fuzzy matching, and bekind never sees it.
+const ACTIVITY_VENUES: &[(&str, &[&str])] = &[
+    ("eat out", &["restaurant", "cafe", "diner", "eatery"]),
+    ("dine", &["restaurant", "cafe", "diner", "eatery"]),
+    ("eat", &["restaurant", "cafe", "diner", "eatery"]),
+    ("swim", &["pool"]),
+    ("run", &["park", "track"]),
+    ("jog", &["park", "track"]),
+    ("watch movie", &["cinema", "theater", "theatre"]),
+    ("drink coffee", &["cafe", "coffee shop"]),
+    ("shop", &["mall", "store"]),
+    ("work out", &["gym"]),
+    ("hike", &["trail", "park", "mountain"]),
+    ("play golf", &["golf course", "country club"]),
+];
+
+/// Whether a descriptor's text names one of the venue words: whole-word
+/// (for multi-word venues, whole-phrase) match on normalized tokens, so
+/// "The user's favorite restaurant" matches "restaurant" and "the local
+/// coffee shop" matches "coffee shop", but "parked" never matches "park".
+fn venue_text_matches(descriptor_text: &str, venues: &[&str]) -> bool {
+    let norm = format!(
+        " {} ",
+        descriptor_text
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    venues
+        .iter()
+        .any(|v| norm.contains(&format!(" {v} ")))
+}
+
+/// Pure activity↔venue match predicate, unit-testable without the daemon.
+///
+/// The question's activity is bekind's extracted `activity_phrase`
+/// (lowercased); it looks up the venue set in the admitted table. A fact
+/// matches when any of its PLACE-kind descriptors names a venue word.
+/// Only place-kind descriptors count — a venue is a place, and the kind
+/// restriction is the precision control. A `false` here only withholds
+/// the boost — it never removes or demotes.
+fn activity_venue_match(activity: &str, fact: &crate::behood_query::KindVerdict) -> bool {
+    let activity = activity.trim().to_lowercase();
+    let venues = match ACTIVITY_VENUES.iter().find(|(a, _)| *a == activity) {
+        Some((_, v)) => *v,
+        None => return false,
+    };
+    fact.kinds
+        .iter()
+        .filter(|hit| hit.kind == "place")
+        .any(|hit| venue_text_matches(&hit.text, venues))
+}
+
+/// Activity↔venue rank boost over blended search results.
+///
+/// Query-time only, no reindexing: the question's activity phrase comes
+/// from the scope verdict already fetched for the query's semantic tags
+/// (one daemon round-trip per query — no second request here), then all
+/// candidate fact texts go through the daemon in ONE batched kind request
+/// (milliseconds), reusing the same verdict shape the kind boost needs.
+/// Fail-open throughout: no daemon, no binary, no scope/kind support,
+/// empty activity phrase, or an activity not in the admitted table →
+/// results returned unchanged.
+fn apply_activity_venue_boost(
     store: &IndexStore,
-    query: &str,
+    scope_verdicts: &[crate::behood_query::ScopeVerdict],
     mut results: Vec<crate::SearchResult>,
 ) -> Vec<crate::SearchResult> {
     if results.is_empty() {
         return results;
     }
-    let q_verdict = match crate::behood_query::analyze_scope_verdicts(&[query])
-        .into_iter()
-        .next()
-    {
-        Some(v) if !v.temporal_words.is_empty() => v,
-        _ => return results,
+    let activity = match scope_verdicts.first() {
+        Some(v) => v.activity_phrase.trim().to_lowercase(),
+        None => return results,
     };
+    if !ACTIVITY_VENUES.iter().any(|(a, _)| *a == activity) {
+        return results;
+    }
     // Map each blended result to its document text; results whose documents
     // are missing are skipped (their verdict slot is simply absent).
     let mut text_to_result: Vec<usize> = Vec::new();
@@ -623,16 +661,18 @@ fn apply_scope_boost(
         return results;
     }
     let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    let verdicts = crate::behood_query::analyze_scope_verdicts(&text_refs);
+    let verdicts = crate::behood_query::analyze_kind_verdicts(&text_refs);
     let matched: Vec<usize> = verdicts
         .iter()
         .filter_map(|v| {
-            let ti: usize = v.id.strip_prefix("s:")?.parse().ok()?;
+            let ti: usize = v.id.strip_prefix("k:")?.parse().ok()?;
             let ri = *text_to_result.get(ti)?;
-            scope_verdicts_match(&q_verdict, v).then_some(ri)
+            activity_venue_match(&activity, v).then_some(ri)
         })
         .collect();
-    boost_result_indices(&mut results, &matched);
+    boost_result_indices(&mut results, &matched, ACTIVITY_VENUE_BOOST, |b, a| {
+        b.activity_venue_boost += a
+    });
     results
 }
 
@@ -658,6 +698,11 @@ impl MemoryService {
     }
 
     pub(crate) fn new(store: IndexStore) -> Self {
+        // Eagerly load the WordNet/ConceptNet lexical expansion store at
+        // service creation, not on the first query. The store is a
+        // process-wide OnceLock; lazy init costs ~2s (decompress + parse
+        // 2.3MB gzipped JSON) on the first query's hot path.
+        crate::preload_lexical_store();
         let superseded_ids = store
             .source_documents()
             .into_iter()
@@ -718,8 +763,12 @@ impl MemoryService {
     /// Queue freshly written documents for background key-phrase
     /// enrichment. No-op when `key_phrase_enrichment` is off. The write
     /// itself already finished; this only schedules the async work.
+    /// Also a no-op when `python_free()` — the extractor is spaCy-only.
     fn queue_key_phrase_enrichment(&mut self, docs: &[SourceDocument]) {
-        if !self.store.options().key_phrase_enrichment || docs.is_empty() {
+        if !self.store.options().key_phrase_enrichment
+            || self.store.options().python_free()
+            || docs.is_empty()
+        {
             return;
         }
         let refs: Vec<&SourceDocument> = docs.iter().collect();
@@ -860,9 +909,10 @@ impl MemoryService {
     /// Whether any document still needs key-phrase extraction. Cheap scan
     /// with early exit: read-only callers (the server search handler) use it
     /// to decide whether a write-lock backfill is worthwhile, keeping the
-    /// steady state at zero extra cost.
+    /// steady state at zero extra cost. False when `python_free()` — the
+    /// extractor is spaCy-only.
     pub fn key_phrase_backfill_needed(&self) -> bool {
-        if !self.store.options().key_phrase_enrichment {
+        if !self.store.options().key_phrase_enrichment || self.store.options().python_free() {
             return false;
         }
         if !self
@@ -897,11 +947,11 @@ impl MemoryService {
     /// the subprocess via [`extract_key_phrases_for_docs`] without holding
     /// any service lock, then applies the result with
     /// [`apply_key_phrase_backfill`]. Returns no documents when enrichment
-    /// is disabled.
+    /// is disabled or when `python_free()` — the extractor is spaCy-only.
     pub fn key_phrase_backfill_snapshot(
         &self,
     ) -> (Vec<SourceDocument>, Option<std::path::PathBuf>) {
-        if !self.store.options().key_phrase_enrichment {
+        if !self.store.options().key_phrase_enrichment || self.store.options().python_free() {
             return (Vec::new(), None);
         }
         // Deterministic order so repeated calls converge instead of
@@ -1320,8 +1370,21 @@ impl MemoryService {
         // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
         let analysis = analyze_query(query);
         let query_text = analysis.augmented_query.as_str();
-        let prepared =
-            prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        let mut prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        // Definitional semantic tags (Luyi 2026-09-28): computed from the
+        // ORIGINAL user query, not the augmented text. Closed-set temporal
+        // words ("weekend"/"weekday"), "habitual", and admitted kind tags
+        // ("herb") become SHOULD TermQueries on the index's `semantic_tags`
+        // field, scored by BM25 inside tantivy — a match, not a bonus.
+        // Fail-open: no tags when the daemon is unavailable or the question
+        // carries no definitional content.
+        //
+        // One behood daemon round-trip for the query's whole semantics
+        // (scope verdict + tags); the scope verdict is reused below by the
+        // activity↔venue boost instead of a second daemon request.
+        let (query_scope_verdicts, query_tags) =
+            crate::semantic_tags::query_semantics(query);
+        prepared.set_semantic_tags(query_tags);
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,
@@ -1366,8 +1429,6 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
-
-                    lang: None,
                 };
                 let docs: Vec<&SourceDocument> = self.store.source_documents();
                 structured_fact_results(
@@ -1380,10 +1441,11 @@ impl MemoryService {
             }
         };
         let results = blend_structured_first(structured, lexical, top_k);
-        // Temporal-scope rank boost (Luyi 2026-09-28): additive only, never
-        // a filter. No-op when the behood daemon is unavailable or the
-        // question carries no temporal scope.
-        let results = apply_scope_boost(&self.store, query, results);
+        // Activity↔venue rank boost (Luyi 2026-09-28): additive only,
+        // never a filter. No-op when the behood daemon is unavailable,
+        // the question names no admitted activity, or no fact names one
+        // of its venues.
+        let results = apply_activity_venue_boost(&self.store, &query_scope_verdicts, results);
         observe_session_search(
             &self.conversation_states,
             scope,
@@ -1537,8 +1599,7 @@ impl MemoryService {
                         )
                     })?;
                 if ensure_default {
-                    let board =
-                        self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
+                    let board = self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
                     Ok(board.board_id)
                 } else {
                     Ok(default_board_id(owner, workspace, sid))
@@ -1737,16 +1798,15 @@ impl MemoryService {
                     return Ok(None);
                 }
                 if d.filters.get(BOARD_OWNER_FILTER).map(String::as_str) != Some(owner)
-                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str) != Some(workspace)
+                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str)
+                        != Some(workspace)
                 {
                     return Ok(None);
                 }
                 let Some(board) = board_from_doc_content(&d.content) else {
                     return Ok(None);
                 };
-                if board.owner != owner
-                    || board.workspace != workspace
-                    || board.board_id != board_id
+                if board.owner != owner || board.workspace != workspace || board.board_id != board_id
                 {
                     return Ok(None);
                 }
@@ -1789,10 +1849,7 @@ impl MemoryService {
         let board_id = self.resolve_board_id(board_id, owner, workspace, session_id, true)?;
         // The board must exist; posting never creates one implicitly
         // (the session board is ensured by resolve_board_id above).
-        if self
-            .board_info(&board_id, owner, workspace, session_id)?
-            .is_none()
-        {
+        if self.board_info(&board_id, owner, workspace, session_id)?.is_none() {
             anyhow::bail!("unknown board_id: {board_id}");
         }
         // Idempotency: a retried request_id returns the original post.
@@ -1813,9 +1870,10 @@ impl MemoryService {
             if let Some(post_id) = self.board_find_request_id(&board_id, request_id)? {
                 // Repopulate the map so later retries stay cheap.
                 let mut state = self.board_state.lock().expect("board state lock poisoned");
-                state
-                    .request_ids
-                    .insert((board_id.clone(), request_id.to_string()), post_id.clone());
+                state.request_ids.insert(
+                    (board_id.clone(), request_id.to_string()),
+                    post_id.clone(),
+                );
                 drop(state);
                 return self
                     .board_get(Some(&board_id), owner, workspace, session_id, &post_id)?
@@ -1955,7 +2013,10 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: doc.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
+                author_agent_id: f
+                    .get(BOARD_AUTHOR_FILTER)
+                    .cloned()
+                    .unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: doc.content.clone(),
                 sequence,
@@ -2003,7 +2064,10 @@ impl MemoryService {
                 Ok(Some(BoardPost {
                     post_id: d.doc_id.clone(),
                     board_id: board_id.clone(),
-                    author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
+                    author_agent_id: f
+                        .get(BOARD_AUTHOR_FILTER)
+                        .cloned()
+                        .unwrap_or_default(),
                     provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                     content: d.content.clone(),
                     sequence,
@@ -2048,9 +2112,12 @@ impl MemoryService {
         for r in results {
             // search_with_filters already applied the board_id filter, but
             // verify again: never leak across boards.
-            let doc = self.store.source_document_by_id(&r.doc_id).filter(|d| {
-                d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
-            });
+            let doc = self
+                .store
+                .source_document_by_id(&r.doc_id)
+                .filter(|d| {
+                    d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
+                });
             let Some(d) = doc else { continue };
             let f = &d.filters;
             let sequence: u64 = f
@@ -2060,7 +2127,10 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: d.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
+                author_agent_id: f
+                    .get(BOARD_AUTHOR_FILTER)
+                    .cloned()
+                    .unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: d.content.clone(),
                 sequence,
@@ -2606,67 +2676,6 @@ mod tests {
     use super::*;
     use crate::PipelineOptions;
 
-    #[test]
-    fn lang_auto_selects_spacy_model_from_turns() {
-        // P2: `"lang": "auto"` must behave like an omitted language — the
-        // model follows the document turns' script, not English.
-        let ko_turns = vec![RelationTurn {
-            speaker: "지민".to_string(),
-            text: "지민은 서울에서 일합니다".to_string(),
-            session_id: "s1".to_string(),
-            turn_idx: 0,
-            doc_id: "d1".to_string(),
-            session_date: None,
-        }];
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Auto), &ko_turns),
-            "ko_core_news_sm"
-        );
-        assert_eq!(spacy_model_for_request(None, &ko_turns), "ko_core_news_sm");
-
-        let zh_turns = vec![RelationTurn {
-            speaker: "小明".to_string(),
-            text: "小明在北京工作".to_string(),
-            session_id: "s1".to_string(),
-            turn_idx: 0,
-            doc_id: "d1".to_string(),
-            session_date: None,
-        }];
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Auto), &zh_turns),
-            "zh_core_web_sm"
-        );
-        assert_eq!(spacy_model_for_request(None, &zh_turns), "zh_core_web_sm");
-
-        let es_turns = vec![RelationTurn {
-            speaker: "María".to_string(),
-            text: "¿Dónde está la biblioteca de Madrid? Fui ayer por la mañana.".to_string(),
-            session_id: "s1".to_string(),
-            turn_idx: 0,
-            doc_id: "d1".to_string(),
-            session_date: None,
-        }];
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Auto), &es_turns),
-            "es_core_news_sm"
-        );
-        assert_eq!(spacy_model_for_request(None, &es_turns), "es_core_news_sm");
-
-        // Explicit languages still pin their model.
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Ko), &ko_turns),
-            "ko_core_news_sm"
-        );
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::Zh), &zh_turns),
-            "zh_core_web_sm"
-        );
-        assert_eq!(
-            spacy_model_for_request(Some(Lang::En), &ko_turns),
-            "en_core_web_sm"
-        );
-    }
-
     fn service() -> MemoryService {
         MemoryService::in_memory(PipelineOptions::default())
     }
@@ -2681,12 +2690,16 @@ mod tests {
         base.join(format!("lint-ai-{name}-{}", std::process::id()))
     }
 
-    fn scope_verdict(temporal_words: &[&str], habitual: bool) -> crate::behood_query::ScopeVerdict {
-        crate::behood_query::ScopeVerdict {
-            id: "s:0".to_string(),
-            activity_phrase: "test activity".to_string(),
-            temporal_words: temporal_words.iter().map(|s| s.to_string()).collect(),
-            habitual,
+    fn kind_verdict(kinds: &[(&str, &str)]) -> crate::behood_query::KindVerdict {
+        crate::behood_query::KindVerdict {
+            id: "k:0".to_string(),
+            kinds: kinds
+                .iter()
+                .map(|(text, kind)| crate::behood_query::KindHit {
+                    text: text.to_string(),
+                    kind: kind.to_string(),
+                })
+                .collect(),
         }
     }
 
@@ -2709,72 +2722,72 @@ mod tests {
     }
 
     #[test]
-    fn scope_match_weekend_pair_and_weekday_reject() {
-        let q = scope_verdict(&["weekend"], true);
-        assert!(scope_verdicts_match(&q, &scope_verdict(&["weekend"], true)));
-        assert!(!scope_verdicts_match(
-            &q,
-            &scope_verdict(&["weekday"], true)
+    fn activity_venue_match_predicate() {
+        // mem-14: "eat out" + place-kind "restaurant" -> match.
+        assert!(activity_venue_match(
+            "eat out",
+            &kind_verdict(&[("The user's favorite restaurant", "place")]),
+        ));
+        // Case/whitespace-insensitive on the activity side.
+        assert!(activity_venue_match(
+            "  Eat Out ",
+            &kind_verdict(&[("a cafe", "place")]),
+        ));
+        // "park" is a run venue, not an eat-out venue -> no match.
+        assert!(!activity_venue_match(
+            "eat out",
+            &kind_verdict(&[("Golden Gate Park", "place")]),
+        ));
+        // Multi-word venue: "coffee shop" matches as a phrase.
+        assert!(activity_venue_match(
+            "drink coffee",
+            &kind_verdict(&[("the local coffee shop", "place")]),
+        ));
+        // Whole-word control: "parked" must not match "park".
+        assert!(!activity_venue_match(
+            "run",
+            &kind_verdict(&[("parked cars", "place")]),
+        ));
+        // Only place-kind descriptors count: a venue word under any
+        // other kind is not a venue.
+        assert!(!activity_venue_match(
+            "eat out",
+            &kind_verdict(&[("restaurant", "thing")]),
+        ));
+        // Activity not in the admitted table -> no match, never a guess.
+        assert!(!activity_venue_match(
+            "skydive",
+            &kind_verdict(&[("the airport", "place")]),
+        ));
+        // Empty activity phrase -> no match.
+        assert!(!activity_venue_match(
+            "",
+            &kind_verdict(&[("a restaurant", "place")]),
         ));
     }
 
     #[test]
-    fn scope_match_requires_temporal_intersection() {
-        let q = scope_verdict(&["weekend"], true);
-        assert!(!scope_verdicts_match(&q, &scope_verdict(&[], true)));
-        assert!(!scope_verdicts_match(&scope_verdict(&[], true), &q));
-    }
-
-    #[test]
-    fn scope_match_habitual_alignment() {
-        // Habitual question wants habitual facts.
-        let q_habitual = scope_verdict(&["weekend"], true);
-        assert!(!scope_verdicts_match(
-            &q_habitual,
-            &scope_verdict(&["weekend"], false)
-        ));
-        // Non-habitual question accepts any fact.
-        let q_plain = scope_verdict(&["weekend"], false);
-        assert!(scope_verdicts_match(
-            &q_plain,
-            &scope_verdict(&["weekend"], false)
-        ));
-        assert!(scope_verdicts_match(
-            &q_plain,
-            &scope_verdict(&["weekend"], true)
-        ));
-    }
-
-    #[test]
-    fn scope_boost_adds_resorts_and_never_removes() {
-        // Lexical order: b (10) > a (9) > c (1). Boost a and c.
+    fn activity_venue_boost_adds_resorts_and_never_removes() {
+        // Lexical order: park-run (10) > restaurant (9). Boost restaurant.
         let mut results = vec![
-            bare_search_result("b", 10.0),
-            bare_search_result("a", 9.0),
-            bare_search_result("c", 1.0),
+            bare_search_result("parkrun", 10.0),
+            bare_search_result("restaurant", 9.0),
         ];
-        let n = boost_result_indices(&mut results, &[1, 2]);
-        assert_eq!(n, 2);
-        assert_eq!(results.len(), 3, "boost must never remove results");
-        // a: 9 + 25 = 34, c: 1 + 25 = 26 — both float above b's 10.
-        assert_eq!(results[0].doc_id, "a");
-        assert_eq!(results[1].doc_id, "c");
-        assert_eq!(results[2].doc_id, "b");
-        assert_eq!(results[0].score, 9.0 + SCOPE_BOOST);
-        assert_eq!(results[0].score_breakdown.scope_boost, SCOPE_BOOST);
-        assert_eq!(results[1].score_breakdown.scope_boost, SCOPE_BOOST);
-        // Untouched hits carry no boost and keep their score.
-        assert_eq!(results[2].score_breakdown.scope_boost, 0.0);
-        assert_eq!(results[2].score, 10.0);
-    }
-
-    #[test]
-    fn scope_boost_no_match_is_identity() {
-        let mut results = vec![bare_search_result("b", 10.0), bare_search_result("a", 9.0)];
-        let n = boost_result_indices(&mut results, &[]);
-        assert_eq!(n, 0);
-        assert_eq!(results[0].doc_id, "b");
-        assert_eq!(results[1].doc_id, "a");
+        let n = boost_result_indices(&mut results, &[1], ACTIVITY_VENUE_BOOST, |b, a| {
+            b.activity_venue_boost += a
+        });
+        assert_eq!(n, 1);
+        assert_eq!(results.len(), 2, "boost must never remove results");
+        assert_eq!(results[0].doc_id, "restaurant");
+        assert_eq!(results[0].score, 9.0 + ACTIVITY_VENUE_BOOST);
+        assert_eq!(
+            results[0].score_breakdown.activity_venue_boost,
+            ACTIVITY_VENUE_BOOST
+        );
+        // Untouched hits keep their score and carry no venue boost.
+        assert_eq!(results[1].doc_id, "parkrun");
+        assert_eq!(results[1].score, 10.0);
+        assert_eq!(results[1].score_breakdown.activity_venue_boost, 0.0);
     }
 
     #[test]
@@ -2803,120 +2816,10 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
-    }
-
-    #[test]
-    fn korean_particle_mismatch_still_retrieves() {
-        // Smoke test: the document inflects "학교" as "학교에"/"학교에서";
-        // the bare-stem query "학교" must still retrieve it via the
-        // particle-stripped index tokens.
-        let mut service = service();
-        service
-            .add(AddRequest {
-                request_id: "ko-1".into(),
-                messages: vec![Message {
-                    role: "user".into(),
-                    timestamp: None,
-                    content: "김철수는 학교에 갔다. 학교에서 친구를 만났다.".into(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: "user-ko".into(),
-                session_id: "session-ko".into(),
-            })
-            .unwrap();
-        let response = service
-            .search(SearchRequest {
-                query: "학교".into(),
-                options: None,
-                user_id: "user-ko".into(),
-                top_k: 100,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        assert_eq!(response.data.len(), 1, "bare stem query should retrieve the doc");
-        assert!(response.data[0].content.contains("학교에"));
-
-        // Inflected query form also retrieves.
-        let response = service
-            .search(SearchRequest {
-                query: "학교에서".into(),
-                options: None,
-                user_id: "user-ko".into(),
-                top_k: 100,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        assert_eq!(response.data.len(), 1);
-    }
-
-    #[test]
-    fn korean_question_retrieves_answer_memory() {
-        // End-to-end: a natural Korean question (with interrogative 어디)
-        // retrieves the memory holding its answer and ranks it above a
-        // distractor that shares no content words.
-        let mut service = service();
-        service
-            .add(AddRequest {
-                request_id: "ko-q-target".into(),
-                messages: vec![Message {
-                    role: "user".into(),
-                    timestamp: None,
-                    content: "박영희는 부산에서 태어났다. 지금은 서울에 산다.".into(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: "user-ko".into(),
-                session_id: "session-ko".into(),
-            })
-            .unwrap();
-        service
-            .add(AddRequest {
-                request_id: "ko-q-d1".into(),
-                messages: vec![Message {
-                    role: "user".into(),
-                    timestamp: None,
-                    content: "김철수는 주말에 공원에서 조깅을 즐긴다.".into(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: "user-ko".into(),
-                session_id: "session-ko".into(),
-            })
-            .unwrap();
-        let response = service
-            .search(SearchRequest {
-                query: "박영희는 어디에서 태어났나?".into(),
-                options: None,
-                user_id: "user-ko".into(),
-                top_k: 100,
-                session_id: None,
-                scope: None,
-                filters: None,
-                lang: None,
-            })
-            .unwrap();
-        assert!(
-            !response.data.is_empty(),
-            "Korean question should retrieve the answer memory"
-        );
-        assert!(
-            response.data[0].content.contains("부산에서"),
-            "target should rank first, got {:?}",
-            response.data.iter().map(|r| &r.content).collect::<Vec<_>>()
-        );
     }
 
     #[test]
@@ -2950,146 +2853,12 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert!(response
             .data
             .iter()
             .all(|memory| memory.content.contains("amber")));
-    }
-
-    #[test]
-    fn search_with_empty_user_id_skips_ownership_filter() {
-        // Provider-scoped callers (MCP adapters) pass no user id: documents
-        // without a memory_user_id filter must still be returned. This is the
-        // regression test for the Hermes 0-hits finding — an unconditional
-        // ownership filter would zero out the adapter's local corpus.
-        let mut service = service();
-        let mut owned_filters = BTreeMap::new();
-        owned_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
-        for (doc_id, content, filters) in [
-            (
-                "owned-doc",
-                "The owned ledger records amber transactions.",
-                owned_filters,
-            ),
-            (
-                "unowned-doc",
-                "The shared ledger records amber transactions.",
-                BTreeMap::new(),
-            ),
-        ] {
-            service.store.upsert(SourceDocument {
-                doc_id: doc_id.to_string(),
-                source: format!("hook://{doc_id}"),
-                content: content.to_string(),
-                concept: doc_id.to_string(),
-                group_id: Some(doc_id.to_string()),
-                headings: vec![],
-                links: vec![],
-                timestamp: None,
-                doc_length: content.len(),
-                author_agent: None,
-                filters,
-                key_phrases: Vec::new(),
-                key_phrase_extraction_hash: String::new(),
-            });
-        }
-        service.store.refresh().unwrap();
-
-        let response = service
-            .search(SearchRequest {
-                query: "amber ledger transactions".into(),
-                options: None,
-                user_id: "".into(),
-                top_k: 10,
-                session_id: None,
-                scope: None,
-                filters: None,
-
-                lang: None,
-            })
-            .unwrap();
-        let ids: Vec<&str> = response
-            .data
-            .iter()
-            .map(|memory| memory.id.as_str())
-            .collect();
-        assert!(
-            ids.contains(&"owned-doc"),
-            "empty user_id must not hide owned docs, got {ids:?}"
-        );
-        assert!(
-            ids.contains(&"unowned-doc"),
-            "empty user_id must not hide unowned docs, got {ids:?}"
-        );
-    }
-
-    #[test]
-    fn search_with_user_id_still_enforces_ownership_filter() {
-        // The server path is unaffected: a supplied user id filters exactly
-        // as before.
-        let mut service = service();
-        let mut owned_filters = BTreeMap::new();
-        owned_filters.insert(USER_FILTER.to_string(), "user-a".to_string());
-        for (doc_id, content, filters) in [
-            (
-                "owned-doc",
-                "The owned ledger records amber transactions.",
-                owned_filters,
-            ),
-            (
-                "unowned-doc",
-                "The shared ledger records amber transactions.",
-                BTreeMap::new(),
-            ),
-        ] {
-            service.store.upsert(SourceDocument {
-                doc_id: doc_id.to_string(),
-                source: format!("hook://{doc_id}"),
-                content: content.to_string(),
-                concept: doc_id.to_string(),
-                group_id: Some(doc_id.to_string()),
-                headings: vec![],
-                links: vec![],
-                timestamp: None,
-                doc_length: content.len(),
-                author_agent: None,
-                filters,
-                key_phrases: Vec::new(),
-                key_phrase_extraction_hash: String::new(),
-            });
-        }
-        service.store.refresh().unwrap();
-
-        let response = service
-            .search(SearchRequest {
-                query: "amber ledger transactions".into(),
-                options: None,
-                user_id: "user-a".into(),
-                top_k: 10,
-                session_id: None,
-                scope: None,
-                filters: None,
-
-                lang: None,
-            })
-            .unwrap();
-        let ids: Vec<&str> = response
-            .data
-            .iter()
-            .map(|memory| memory.id.as_str())
-            .collect();
-        assert!(
-            ids.contains(&"owned-doc"),
-            "supplied user_id must return owned docs, got {ids:?}"
-        );
-        assert!(
-            !ids.contains(&"unowned-doc"),
-            "supplied user_id must hide unowned docs, got {ids:?}"
-        );
     }
 
     #[test]
@@ -3120,9 +2889,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         let b = service
             .search(SearchRequest {
@@ -3133,9 +2900,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert_eq!(a.data.len(), 1);
         assert_eq!(b.data.len(), 1);
@@ -3254,9 +3019,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert!(response
             .data
@@ -3290,9 +3053,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert!(response.data.is_empty());
         assert!(!service.delete("user-a", "missing").unwrap());
@@ -3330,9 +3091,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("new deployment"));
@@ -3380,9 +3139,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("shared deployment"));
@@ -3616,9 +3373,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
 
         // Turn 2 is a follow-up: the carried anchor must restrict retrieval
@@ -3632,9 +3387,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
         assert!(
@@ -3657,9 +3410,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
             .data
@@ -3704,11 +3455,7 @@ mod tests {
         service.store.refresh().unwrap();
     }
 
-    fn search(
-        service: &mut MemoryService,
-        query: &str,
-        session_id: Option<&str>,
-    ) -> SearchResponse {
+    fn search(service: &mut MemoryService, query: &str, session_id: Option<&str>) -> SearchResponse {
         service
             .search(SearchRequest {
                 query: query.into(),
@@ -3718,9 +3465,7 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap()
     }
 
@@ -3730,11 +3475,7 @@ mod tests {
         add_quartz_fixture(&mut service);
 
         // Turn 1 establishes the session's entities.
-        let first = search(
-            &mut service,
-            "Tell me about the Quartz database",
-            Some("s1"),
-        );
+        let first = search(&mut service, "Tell me about the Quartz database", Some("s1"));
         assert!(first.data.iter().any(|m| m.content.contains("Quartz")));
 
         // A follow-up with no standalone meaning resolves against the session.
@@ -3766,9 +3507,7 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
-
-                    lang: None,
-                })
+})
                 .unwrap_err();
             assert!(
                 error.to_string().contains("session_id must not be empty"),
@@ -4067,7 +3806,6 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
-            lang: None,
         }
     }
 
@@ -4286,6 +4024,9 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
     fn enrichment_service(script: &std::path::Path) -> MemoryService {
         MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // These tests exercise the spaCy extractor; opt out of the
+            // Python-free default explicitly.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script.to_path_buf()),
             ..PipelineOptions::default()
         })
@@ -4386,9 +4127,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert!(response
             .data
@@ -4400,6 +4139,8 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
     fn key_phrase_enrichment_fails_open_without_extractor() {
         let mut service = MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // Test the spaCy fail-open path; opt out of Python-free default.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(std::path::PathBuf::from("/nonexistent/extractor.py")),
             ..PipelineOptions::default()
         });
@@ -4423,9 +4164,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("jazz festival"));
@@ -4534,9 +4273,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
-
-                            lang: None,
-                        });
+});
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
                     }
@@ -4579,9 +4316,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert!(!response.data.is_empty());
     }
@@ -4644,6 +4379,9 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
     fn extractor_service(script: &std::path::Path) -> MemoryService {
         MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // These tests exercise the spaCy extractor; opt out of the
+            // Python-free default explicitly.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script.to_path_buf()),
             ..PipelineOptions::default()
         })
@@ -4717,11 +4455,13 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         );
         // The rebuilt record carries the phrase as a key entity, so the
         // query that triggered the backfill already sees it indexed.
+        // Head-noun admission: the key entity is "phrase", not the whole
+        // "canary phrase" (modifiers are not the thing denoted).
         let record = service.store.record_by_id("search-doc").unwrap();
         assert!(record
             .key_entities
             .iter()
-            .any(|e| e.text == "canary phrase"));
+            .any(|e| e.text == "phrase"));
     }
 
     #[test]
@@ -4746,6 +4486,8 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         std::fs::create_dir_all(&dir).unwrap();
         let options = PipelineOptions {
             key_phrase_enrichment: true,
+            // Test exercises the spaCy extractor; opt out of Python-free.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script),
             ..PipelineOptions::default()
         };
@@ -4878,6 +4620,8 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
     fn key_phrase_backfill_fail_open_without_extractor() {
         let mut service = MemoryService::in_memory(PipelineOptions {
             key_phrase_enrichment: true,
+            // Test the spaCy fail-open path; opt out of Python-free default.
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(std::path::PathBuf::from("/nonexistent/extractor.py")),
             ..PipelineOptions::default()
         });
@@ -4899,9 +4643,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         let _ = response;
     }
@@ -4916,12 +4658,15 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         std::fs::create_dir_all(&dir).unwrap();
         // Same option shape as the Claude Code / Codex / Gemini hooks:
         // segmented layout with top-3 routing, enrichment on.
+        // These tests exercise the spaCy extractor; opt out of the
+        // Python-free default explicitly.
         let options = PipelineOptions {
             memory_index_layout: crate::MemoryIndexLayout::Segmented {
                 query_top_n: 3,
                 routing_strategy: crate::segments::SegmentRoutingStrategy::LocalDistinctiveness,
             },
             key_phrase_enrichment: true,
+            ner_provider: Tier1NerProvider::Spacy,
             extractor_script: Some(script),
             ..PipelineOptions::default()
         };
@@ -5122,9 +4867,7 @@ mod board_integration_tests {
     fn board_open_is_idempotent() {
         let mut service = svc();
         let a = service.board_open(OWNER, WS, "task-a", "Task A").unwrap();
-        let b = service
-            .board_open(OWNER, WS, "task-a", "Different title")
-            .unwrap();
+        let b = service.board_open(OWNER, WS, "task-a", "Different title").unwrap();
         assert_eq!(a.board_id, b.board_id);
         assert_eq!(a.title, "Task A");
     }
@@ -5260,20 +5003,8 @@ mod board_integration_tests {
     #[test]
     fn board_search_finds_posts() {
         let mut service = svc();
-        post(
-            &mut service,
-            None,
-            Some(S1),
-            "the parser failure comes from empty input",
-            "r1",
-        );
-        post(
-            &mut service,
-            None,
-            Some(S1),
-            "unrelated status update",
-            "r2",
-        );
+        post(&mut service, None, Some(S1), "the parser failure comes from empty input", "r1");
+        post(&mut service, None, Some(S1), "unrelated status update", "r2");
         let hits = service
             .board_search(None, OWNER, WS, Some(S1), "parser failure", 10)
             .unwrap();

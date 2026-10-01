@@ -89,6 +89,8 @@ mod filters;
 mod graph;
 mod ownership;
 mod query_expansion;
+pub use query_expansion::preload_lexical_store;
+pub mod semantic_tags;
 mod query_semantics;
 pub mod question_focus;
 mod report;
@@ -97,6 +99,7 @@ mod rules;
 mod symbols;
 mod temporal;
 mod tier1;
+mod tier1_ner_daemon;
 pub mod tokenizer;
 mod stopwords_data;
 mod usage;
@@ -127,6 +130,9 @@ pub use crate::temporal_fact::{TemporalFact, TemporalFactStore, TimelineEvent, T
 // Re-exported so the public `index::DocRecord` struct can be constructed by
 // downstream users (`key_entities` / `important_terms` fields).
 pub use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+// Re-exported so binaries (the server, benchmarks) can prewarm the
+// long-lived spaCy NER daemon, mirroring the extractor/behood daemons.
+pub use crate::tier1_ner_daemon::NerDaemon;
 // Date helper for building timestamped documents (used by benchmarks; also
 // useful for anyone constructing `SourceDocument`s with timestamps).
 pub use crate::temporal::parse_temporal_date;
@@ -372,8 +378,6 @@ impl PyMemoryCore {
             session_id: None,
             scope: None,
             filters: None,
-
-            lang: None,
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => service.search(request).map_err(runtime_error)?,

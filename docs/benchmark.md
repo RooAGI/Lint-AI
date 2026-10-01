@@ -14,8 +14,13 @@ From the repository root, run:
 cargo run --release --bin haystack_scoped_benchmark -- \
   --longmemeval benchmark/data/longmemeval_s_raw.json \
   --k 5 --k 10 --k 20 \
+  --ner-provider heuristic \
   --out benchmark/data/lintai_longmemeval_scoped_results.json
 ```
+
+The `--ner-provider` flag selects the Tier1 NER backend (`heuristic` or `spacy`,
+default `spacy`). Pass `--ner-provider heuristic` to reproduce the numbers below,
+which were recorded with the heuristic release backend.
 
 The raw dataset can be refreshed and verified with:
 
@@ -96,7 +101,19 @@ Lint-AI's fractional recall is 85.6% at 5, 92.0% at 10, and 93.1% at 20.
 | Embeddings | Disabled |
 | Cutoffs | 5, 10, and 20 |
 | Average query latency | 13.0 ms |
-| Reproduction command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20` |
+| Reproduction command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 5 --k 10 --k 20 --ner-provider heuristic --parse-provider spacy` |
+
+The published numbers above used heuristic Tier1 NER. Note: this benchmark's
+query loop (`analyze_query` → lexical search → aggregation) never invokes
+behood, so the numbers are independent of the behood path.
+
+behood (bekind) owns the full tag→chunk→judge pipeline (Luyi 2026-09-30):
+the query path sends raw texts to `bekind --serve` and gets per-text
+verdicts back. No descriptors cross the process boundary and no Python
+process is involved. A 500-question parse→judge A/B (pre-move: spaCy parse
+vs heuristic parse, same bekind binary) gave identical scope verdicts on
+all 500 questions; entity verdicts matched on 228/500, the gap being
+spaCy-NER teacher votes the heuristic backend deliberately does not invent.
 
 ### Segmented-index comparison
 

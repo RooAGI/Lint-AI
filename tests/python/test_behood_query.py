@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from behood_query import _load_spacy, analyze_scope, question_np_descriptors  # noqa: E402
+from behood_query import _load_spacy, question_np_descriptors  # noqa: E402
 
 
 class QuestionPhraseExtractionTests(unittest.TestCase):
@@ -66,16 +66,56 @@ class QuestionPhraseExtractionTests(unittest.TestCase):
         self.assertFalse(any(d["id"].startswith("q:fb") for d in ds))
 
 
-class ScopeVerdictWiringTests(unittest.TestCase):
-    """analyze_scope is additive and fail-open; no bekind binary needed."""
+class UnchunkedNominalRecoveryTests(unittest.TestCase):
+    """spaCy mis-tags "cilantro" ADV in the mem-08 fact, so noun_chunks
+    drops it. Recovery is by nominal dependency slot, not per-question:
+    any uncovered nominal-slot token becomes a descriptor."""
 
-    def test_fail_open_without_binary(self):
-        # Deterministic: a missing binary path must fail open to [].
-        self.assertEqual(analyze_scope(["weekend routine"], binary="/nonexistent"), [])
+    @classmethod
+    def setUpClass(cls):
+        cls.nlp = _load_spacy()
+        if cls.nlp is None:
+            raise unittest.SkipTest("spaCy en_core_web_sm not available")
 
-    def test_empty_input_returns_empty(self):
-        # Empty input short-circuits before touching the binary.
-        self.assertEqual(analyze_scope([], binary="/nonexistent"), [])
+    def test_cilantro_recovered_from_mem08_fact(self):
+        ds = question_np_descriptors(
+            self.nlp("The user dislikes cilantro and always asks for it to be left out.")
+        )
+        texts = [d["text"] for d in ds]
+        self.assertIn("cilantro", texts, f"cilantro not recovered: {texts}")
+
+    def test_recovery_does_not_emit_verbs(self):
+        # "asks" is a conj VERB in the mem-08 parse: must not leak in.
+        ds = question_np_descriptors(
+            self.nlp("The user dislikes cilantro and always asks for it to be left out.")
+        )
+        for d in ds:
+            self.assertNotIn(
+                d["head_pos"], ("VERB", "AUX"), f"verb leaked into descriptors: {d}"
+            )
+
+    def test_recovered_descriptor_shape(self):
+        ds = question_np_descriptors(
+            self.nlp("The user dislikes cilantro and always asks for it to be left out.")
+        )
+        rec = [d for d in ds if d["id"].startswith("q:rec")]
+        self.assertTrue(rec, f"no recovered descriptors: {ds}")
+        for key in ("id", "text", "head_lemma", "head_pos", "ner_label", "modifiers"):
+            self.assertIn(key, rec[0])
+
+    def test_no_duplicates_when_chunk_covers_token(self):
+        # "it" is chunked; recovery must not duplicate it.
+        ds = question_np_descriptors(
+            self.nlp("The user dislikes cilantro and always asks for it to be left out.")
+        )
+        texts = [d["text"] for d in ds]
+        self.assertEqual(texts.count("it"), 1, f"duplicate descriptors: {texts}")
+
+    def test_clean_sentence_gains_no_junk(self):
+        # Chunks cover everything here: recovery adds nothing.
+        ds = question_np_descriptors(self.nlp("The cat sat on the mat."))
+        texts = sorted(d["text"] for d in ds)
+        self.assertEqual(texts, ["The cat", "the mat"], f"unexpected descriptors: {texts}")
 
 
 if __name__ == "__main__":

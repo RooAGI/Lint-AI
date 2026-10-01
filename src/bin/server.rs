@@ -67,10 +67,6 @@ struct Args {
     #[arg(long, value_enum, default_value_t = SegmentRoutingArg::GatedCoverageLocal)]
     segment_routing: SegmentRoutingArg,
     /// Content language. `auto` (default) detects per text from script
-    /// statistics (plus Spanish signals for Latin text); pass
-    /// `zh`/`ko`/`es`/`en` to force it.
-    #[arg(long, value_enum, default_value = "auto")]
-    lang: Lang,
     /// Project root containing provider hook telemetry under `.lint-ai`.
     #[arg(long)]
     project_root: Option<PathBuf>,
@@ -234,7 +230,6 @@ async fn main() -> anyhow::Result<()> {
         args.fuse_global,
         !args.no_conversational_rerank,
         args.segment_routing.strategy(),
-        args.lang,
     );
     let project_root = args
         .project_root
@@ -242,6 +237,11 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(std::env::current_dir()?)
         .canonicalize()?;
     let discovered_indexes = discover_index_paths(&project_root);
+    // behood (bekind) owns the full tag→chunk→judge pipeline (Luyi
+    // 2026-09-30): the query path sends raw texts to `bekind --serve` and
+    // gets verdicts back. No parse backend to select, no spaCy involved.
+    // Note: the structured-relations extractor (ExtractorDaemon,
+    // scripts/spacy_relations.py) is a separate spaCy component.
     let service = match args.index {
         Some(path) => MemoryService::at_path(&path, options)?,
         None => discovered_indexes
@@ -279,16 +279,22 @@ async fn main() -> anyhow::Result<()> {
         project_root,
     };
     // Warm the Python daemon children in the background: the first query
-    // that needs key-phrase backfill, structured relations, or behood
-    // entities then pays inference only (~100ms) instead of
-    // interpreter+model load (~2-3s).
+    // that needs key-phrase backfill or structured relations then pays
+    // inference only (~100ms) instead of interpreter+model load (~2-3s).
     // Best-effort — extraction/analysis falls back to one-shot subprocesses
     // if a daemon cannot start.
+    //
+    // The NER daemon is deliberately NOT prewarmed: it starts lazily on the
+    // first NER request. Prewarming would force a third Python+spaCy child
+    // (~145MB RSS) on every server start, even when the heuristic NER
+    // provider is configured and spaCy is never used. (Luyi 2026-09-29 P2.)
     std::thread::Builder::new()
         .name("python-daemon-prewarm".to_string())
-        .spawn(|| {
+        .spawn(move || {
             lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
-            lint_ai::behood_query::BehoodQueryDaemon::global().prewarm();
+            // The judge daemon is tiny (a Rust binary, ~ms startup); warm it
+            // so the first query pays no spawn.
+            lint_ai::behood_query::BekindDaemon::global().prewarm();
         })
         .ok();
     let app = Router::new()
@@ -350,12 +356,11 @@ fn memory_pipeline_options(
     fuse_global: bool,
     conversational_rerank: bool,
     routing_strategy: SegmentRoutingStrategy,
-    lang: Lang,
 ) -> PipelineOptions {
     if single_index {
         return PipelineOptions {
             memory_index_layout: MemoryIndexLayout::Single,
-            lang,
+
             ..default_production_pipeline_options()
         };
     }
@@ -381,7 +386,7 @@ fn memory_pipeline_options(
         memory_index_layout: layout,
         fuse_global_arm: fuse_global,
         conversational_rerank,
-        lang,
+
         ..default_production_pipeline_options()
     }
 }
@@ -828,8 +833,7 @@ fn dashboard_provider_indexes(
                     false,
                     false,
                     true,
-                    SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-                    Lang::Auto,
+                    SegmentRoutingStrategy::TypedEvidenceMultiplicative
                 ),
             )
             .ok()?
@@ -1412,8 +1416,7 @@ mod tests {
                 false,
                 false,
                 true,
-                SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-                Lang::Auto
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
             )
             .memory_index_layout,
             MemoryIndexLayout::Segmented { .. }
@@ -1429,8 +1432,7 @@ mod tests {
                 false,
                 false,
                 true,
-                SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-                Lang::Auto
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
             )
             .memory_index_layout,
             MemoryIndexLayout::AdaptiveSegmented {
@@ -1451,8 +1453,8 @@ mod tests {
                     false,
                     false,
                     true,
-                    SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-                    Lang::Auto
+                    SegmentRoutingStrategy::TypedEvidenceMultiplicative
+
                 )
                 .memory_index_layout,
                 MemoryIndexLayout::Segmented { .. }
@@ -1477,7 +1479,6 @@ mod tests {
             false,
             true,
             SegmentRoutingArg::GatedCoverageLocal.strategy(),
-            Lang::Auto,
         );
         assert!(matches!(
             options.memory_index_layout,
@@ -1517,7 +1518,7 @@ mod tests {
             ),
             (
                 SegmentRoutingArg::GatedCoverageLocal,
-                SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
             ),
             (
                 SegmentRoutingArg::GatedCoverageTeam,
@@ -1525,15 +1526,7 @@ mod tests {
             ),
         ] {
             assert_eq!(arg.strategy(), expected);
-            let options = memory_pipeline_options(
-                None,
-                false,
-                false,
-                false,
-                true,
-                arg.strategy(),
-                Lang::Auto,
-            );
+            let options = memory_pipeline_options(None, false, false, false, true, arg.strategy());
             assert!(matches!(
                 options.memory_index_layout,
                 MemoryIndexLayout::Segmented {
@@ -1557,8 +1550,7 @@ mod tests {
             false,
             false,
             true,
-            SegmentRoutingStrategy::TypedEvidenceMultiplicative,
-            Lang::Auto,
+            SegmentRoutingStrategy::TypedEvidenceMultiplicative
         ));
         service
             .add(AddRequest {
@@ -1596,9 +1588,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-
-                lang: None,
-            })
+})
             .unwrap();
         assert!(response.data.iter().any(|m| m.content.contains("zephyr")));
     }

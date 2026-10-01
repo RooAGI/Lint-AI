@@ -74,10 +74,10 @@ pub struct QueryPosTag {
 }
 
 #[derive(Debug, Clone)]
-struct POSTag {
-    word: String,
-    label: String,
-    score: f64,
+pub(crate) struct POSTag {
+    pub(crate) word: String,
+    pub(crate) label: String,
+    pub(crate) score: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -743,7 +743,31 @@ fn query_routing_intent(
     None
 }
 
-fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
+/// Frequent English lexical verbs (base forms). The heuristic POS tagger
+/// has no verb lexicon: a bare verb like "visit" falls through to NN and
+/// would glue neighboring noun phrases into one chunk ("Jean visit Paris"
+/// instead of "Jean" + "Paris"). Applied only to lowercase-initial words
+/// so capitalized names ("Mark") keep their NNP tag.
+const COMMON_VERB_BASES: &[&str] = &[
+    "ask", "answer", "book", "bring", "buy", "call", "camp", "climb", "close", "come", "cook",
+    "cost", "dance", "drink", "drive", "eat", "end", "enjoy", "feel", "fight", "find", "fish",
+    "fly", "forget", "get", "give", "go", "hate", "help", "hike", "hunt", "join", "know", "learn",
+    "leave", "like", "live", "lose", "love", "make", "meet", "move", "need", "open", "order",
+    "own", "pay", "play", "prefer", "read", "receive", "remember", "remind", "rent", "run",
+    "save", "say", "see", "sell", "send", "shop", "sing", "sleep", "speak", "spend", "start",
+    "stay", "stop", "study", "swim", "take", "talk", "teach", "tell", "think", "travel", "try",
+    "use", "visit", "wait", "wake", "walk", "want", "wash", "watch", "win", "work", "write",
+];
+
+/// Irregular past forms that do not end in -ed (the -ed suffix rule
+/// already catches regular pasts).
+const COMMON_VERB_PASTS: &[&str] = &[
+    "began", "brought", "bought", "came", "drank", "drove", "ate", "felt", "fought", "found",
+    "forgot", "gave", "went", "knew", "left", "lost", "made", "met", "paid", "ran", "said",
+    "saw", "sent", "spent", "took", "thought", "told", "understood", "woke", "won", "wrote",
+];
+
+pub(crate) fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
     let mut tags = Vec::new();
     for raw in query.split_whitespace() {
         let word = raw.trim_matches(|c: char| c.is_ascii_punctuation());
@@ -864,6 +888,35 @@ fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
             } else {
                 "VB"
             }
+        } else if word
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase())
+            && COMMON_VERB_BASES.contains(&lower.as_str())
+        {
+            // Frequent lexical verb ("visit"): lowercase-initial only, so a
+            // capitalized name ("Mark") still tags NNP below.
+            "VB"
+        } else if word
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase())
+            && COMMON_VERB_PASTS.contains(&lower.as_str())
+        {
+            "VBD"
+        } else if {
+            // Third-person singular ("visits"): the -s would otherwise tag
+            // NNS and glue the verb into a neighboring noun chunk.
+            let stem = lower.strip_suffix('s').unwrap_or(lower.as_str());
+            lower.ends_with('s')
+                && lower.len() > 4
+                && word
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase())
+                && COMMON_VERB_BASES.contains(&stem)
+        } {
+            "VBZ"
         } else if lower.ends_with("ing") && lower.len() > 4 {
             "VBG"
         } else if lower.ends_with("ed") && lower.len() > 3 {

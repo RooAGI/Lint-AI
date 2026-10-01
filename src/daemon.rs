@@ -54,6 +54,18 @@ struct DaemonMutable {
     responses: Option<mpsc::Receiver<String>>,
 }
 
+/// Query failure mode: distinguishes lock contention ("busy, try the
+/// fallback") from actual daemon failure (timeout, dead child, write
+/// error). Callers that track backend health (cooldowns, circuit
+/// breakers) should only penalize `Failed`, not `Busy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryStatus {
+    /// Another request holds the daemon lock; the daemon itself is fine.
+    Busy,
+    /// The daemon failed: write error, timeout, or dead child.
+    Failed,
+}
+
 impl JsonLinesDaemon {
     /// A daemon over an explicit script. Each daemon owns exactly one
     /// child; wrappers keep one process-wide instance per script.
@@ -108,25 +120,47 @@ impl JsonLinesDaemon {
     /// path, never a queue); the caller falls back to a one-shot
     /// subprocess.
     pub fn query(&self, request_line: &str, timeout: Duration) -> Option<String> {
+        self.query_with_status(request_line, timeout).ok()
+    }
+
+    /// Like [`query`](Self::query), but distinguishes lock contention
+    /// ([`QueryStatus::Busy`]) from actual daemon failure
+    /// ([`QueryStatus::Failed`]) so callers can avoid penalizing the
+    /// backend for ordinary contention.
+    pub fn query_with_status(
+        &self,
+        request_line: &str,
+        timeout: Duration,
+    ) -> Result<String, QueryStatus> {
         // Fast path only: never block behind another in-flight request.
-        let mut mutable = self.inner.mutable.try_lock().ok()?;
-        mutable.ensure_running(self.inner.name, &self.inner.argv)?;
+        let mut mutable = match self.inner.mutable.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err(QueryStatus::Busy),
+        };
+        // Fast path only: never block behind another in-flight request.
+        let mut mutable = match self.inner.mutable.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err(QueryStatus::Busy),
+        };
+        mutable
+            .ensure_running(self.inner.name, &self.inner.argv)
+            .ok_or(QueryStatus::Failed)?;
         if mutable.write_line(request_line).is_err() {
             mutable.kill();
-            return None;
+            return Err(QueryStatus::Failed);
         }
         match mutable
             .responses
             .as_ref()
             .and_then(|rx| rx.recv_timeout(timeout).ok())
         {
-            Some(line) => Some(line),
+            Some(line) => Ok(line),
             None => {
                 // Timeout or dead child: abandon the in-flight request and
                 // kill the child so a stale late response can never be
                 // misattributed to a later request. The next call respawns.
                 mutable.kill();
-                None
+                Err(QueryStatus::Failed)
             }
         }
     }

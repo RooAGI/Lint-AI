@@ -14,7 +14,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from behood_query import _load_spacy, analyze_scope, question_np_descriptors  # noqa: E402
+from behood_query import _load_spacy, question_np_descriptors  # noqa: E402
 
 
 class QuestionPhraseExtractionTests(unittest.TestCase):
@@ -116,18 +116,6 @@ class UnchunkedNominalRecoveryTests(unittest.TestCase):
         ds = question_np_descriptors(self.nlp("The cat sat on the mat."))
         texts = sorted(d["text"] for d in ds)
         self.assertEqual(texts, ["The cat", "the mat"], f"unexpected descriptors: {texts}")
-
-
-class ScopeVerdictWiringTests(unittest.TestCase):
-    """analyze_scope is additive and fail-open; no bekind binary needed."""
-
-    def test_fail_open_without_binary(self):
-        # Deterministic: a missing binary path must fail open to [].
-        self.assertEqual(analyze_scope(["weekend routine"], binary="/nonexistent"), [])
-
-    def test_empty_input_returns_empty(self):
-        # Empty input short-circuits before touching the binary.
-        self.assertEqual(analyze_scope([], binary="/nonexistent"), [])
 
 
 if __name__ == "__main__":

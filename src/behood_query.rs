@@ -146,9 +146,14 @@ impl BekindDaemon {
             }).collect::<Vec<_>>(),
         });
         let line = serde_json::to_string(&request).ok()?;
-        let response = match self.daemon.query(&line, DAEMON_TIMEOUT) {
-            Some(response) => response,
-            None => {
+        // Luyi 2026-09-30: distinguish lock contention (Busy) from daemon
+        // failure (Failed). Contention is normal under concurrent load —
+        // the caller falls back to a one-shot subprocess. Only actual
+        // failures trigger the cooldown.
+        let response = match self.daemon.query_with_status(&line, DAEMON_TIMEOUT) {
+            Ok(response) => response,
+            Err(crate::daemon::QueryStatus::Busy) => return None,
+            Err(crate::daemon::QueryStatus::Failed) => {
                 self.cooldown.note_failure();
                 return None;
             }

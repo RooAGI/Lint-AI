@@ -376,7 +376,7 @@ fn hash_opt_str(hasher: &mut Sha256, value: &Option<String>) {
 /// rebuild on the next refresh, after which the new hashes are stamped),
 /// so no separate version field on [`DocRecord`] is needed. Downgrades fail
 /// safe in the same direction (mismatch → rebuild).
-pub const DOC_RECORD_BUILD_VERSION: u32 = 1;
+pub const DOC_RECORD_BUILD_VERSION: u32 = 2;
 
 /// Content hash gating the doc-record rebuild short-circuit in
 /// `IndexStore::prepare_pending_changes`.

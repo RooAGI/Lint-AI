@@ -137,11 +137,6 @@ impl JsonLinesDaemon {
             Ok(guard) => guard,
             Err(_) => return Err(QueryStatus::Busy),
         };
-        // Fast path only: never block behind another in-flight request.
-        let mut mutable = match self.inner.mutable.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err(QueryStatus::Busy),
-        };
         mutable
             .ensure_running(self.inner.name, &self.inner.argv)
             .ok_or(QueryStatus::Failed)?;

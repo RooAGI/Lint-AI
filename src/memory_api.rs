@@ -3421,7 +3421,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3462,7 +3461,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3511,7 +3509,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3563,7 +3560,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3838,7 +3834,6 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-                lang: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);

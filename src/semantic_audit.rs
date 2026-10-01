@@ -226,7 +226,6 @@ pub fn run_case(case: &AuditCase, case_idx: usize, batched: bool) -> AuditResult
             session_id: None,
             scope: None,
             filters: None,
-            lang: None,
         })
         .expect("audit search failed");
     let visible: Vec<&str> = response

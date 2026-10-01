@@ -1481,6 +1481,13 @@ fn cue_reference(content: &str) -> CueReference {
     ] {
         if let Some(pos) = find_cue_word(&lower, pattern) {
             let mut rest = lower[pos + pattern.len()..].trim_start();
+            // Frontmatter `supersedes: decision-a.md` is an explicit link
+            // (handled via supersedes_id), not a natural-language correction
+            // cue. Skip it so the chain doesn't misread the metadata as a
+            // named value.
+            if rest.starts_with(':') {
+                continue;
+            }
             // Skip an opening quote: `instead of "Postgres"` names Postgres.
             if let Some(stripped) = rest
                 .strip_prefix('"')
@@ -2350,6 +2357,11 @@ mod scalar_configuration_supersession_tests {
         assert!(matches!(
             cue_reference("This supersedes Postgres."),
             CueReference::Named(v) if v == "postgres"
+        ));
+        // Frontmatter `supersedes:` is metadata, not a correction cue.
+        assert!(matches!(
+            cue_reference("---\nsupersedes: decision-a.md\n---\nContent here."),
+            CueReference::General
         ));
         // Quoted values are unquoted before comparison.
         assert!(matches!(

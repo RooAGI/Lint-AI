@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "lint-ai"
-version = "0.2.1"
+version = "0.3.0"
 description = "Semantic wiki and docs linting for contradictions, stale claims, orphan pages, and missing cross-references"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -22,5 +22,7 @@ Homepage = "https://www.rooagi.com"
 Repository = "https://github.com/RooAGI/Lint-AI"
 
 [tool.maturin]
-features = ["python"]
+# abi3-py38: one wheel installs on CPython 3.8+ (matches requires-python).
+# Without abi3, maturin emits per-interpreter wheels (cp312-cp312-...).
+features = ["python", "pyo3/abi3-py38"]
 module-name = "lint_ai"

@@ -1,6 +1,6 @@
 [package]
 name = "lint-ai"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Persistent memory layer for AI coding agents — MCP server with current-state retrieval and supersession tracking"
 license = "Apache-2.0"

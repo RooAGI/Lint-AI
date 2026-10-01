@@ -73,17 +73,32 @@ fn push_han_tokens(tokens: &mut Vec<Token>, position: &mut usize, han: &[(usize,
         *position += 1;
         return;
     }
-    for w in han.windows(2) {
-        let from = w[0].0;
-        let to = w[1].0 + w[1].1.len_utf8();
+    // Interleaved unigrams + bigrams, mirroring
+    // [`crate::tokenizer::push_han_bigrams`]: c1, c1c2, c2, c2c3, ..., cn.
+    // Index and query must agree, so both emitters change together.
+    for (i, (from, ch)) in han.iter().enumerate() {
         tokens.push(Token {
-            text: w.iter().map(|(_, c)| *c).collect(),
-            offset_from: from,
-            offset_to: to,
+            text: ch.to_string(),
+            offset_from: *from,
+            offset_to: from + ch.len_utf8(),
             position: *position,
             position_length: 1,
         });
         *position += 1;
+        if i + 1 < han.len() {
+            let (next_from, next_ch) = han[i + 1];
+            let mut text = String::new();
+            text.push(*ch);
+            text.push(next_ch);
+            tokens.push(Token {
+                text,
+                offset_from: *from,
+                offset_to: next_from + next_ch.len_utf8(),
+                position: *position,
+                position_length: 1,
+            });
+            *position += 1;
+        }
     }
 }
 
@@ -224,10 +239,13 @@ mod tests {
     }
 
     #[test]
-    fn chinese_segments_to_bigrams() {
+    fn chinese_segments_to_interleaved_unigrams_and_bigrams() {
         assert_eq!(
             token_texts("我毕业于清华大学"),
-            vec!["我毕", "毕业", "业于", "于清", "清华", "华大", "大学"]
+            vec![
+                "我", "我毕", "毕", "毕业", "业", "业于", "于", "于清", "清", "清华", "华",
+                "华大", "大", "大学", "学"
+            ]
         );
     }
 

@@ -9,6 +9,7 @@ use axum::{
 };
 use clap::Parser;
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use lint_ai::lang::Lang;
 use lint_ai::memory_api::{
     AddRequest, DeleteRequest, GetRequest, ListRequest, MemoryService, SearchRequest,
     SupersedeRequest, UpdateRequest,
@@ -22,7 +23,6 @@ use lint_ai::{
     default_production_pipeline_options, IndexStoreInspection, MemoryIndexLayout, PipelineOptions,
     DEFAULT_SEGMENT_QUERY_TOP_N,
 };
-use lint_ai::lang::Lang;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -1526,7 +1526,15 @@ mod tests {
             ),
         ] {
             assert_eq!(arg.strategy(), expected);
-            let options = memory_pipeline_options(None, false, false, false, true, arg.strategy(), Lang::Auto);
+            let options = memory_pipeline_options(
+                None,
+                false,
+                false,
+                false,
+                true,
+                arg.strategy(),
+                Lang::Auto,
+            );
             assert!(matches!(
                 options.memory_index_layout,
                 MemoryIndexLayout::Segmented {
@@ -1589,8 +1597,9 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+
                 lang: None,
-})
+            })
             .unwrap();
         assert!(response.data.iter().any(|m| m.content.contains("zephyr")));
     }

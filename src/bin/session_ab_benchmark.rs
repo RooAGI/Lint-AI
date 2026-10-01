@@ -938,6 +938,7 @@ fn main() -> Result<()> {
                 session_id,
                 scope: None,
                 filters: None,
+
                 lang: None,
             })?;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -954,17 +955,17 @@ fn main() -> Result<()> {
         };
 
         let mut search = |service: &mut MemoryService,
-                         query: &str,
-                         session_id: Option<String>|
+                          query: &str,
+                          session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
         };
 
         let mut search_scored_prod = |service: &mut MemoryService,
-                                     query: &str,
-                                     session_id: Option<String>,
-                                     top_k: usize|
+                                      query: &str,
+                                      session_id: Option<String>,
+                                      top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
             let response = service.search(SearchRequest {
@@ -975,6 +976,7 @@ fn main() -> Result<()> {
                 session_id,
                 scope: None,
                 filters: None,
+
                 lang: None,
             })?;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -991,8 +993,8 @@ fn main() -> Result<()> {
         };
 
         let mut search_prod = |service: &mut MemoryService,
-                              query: &str,
-                              session_id: Option<String>|
+                               query: &str,
+                               session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored_prod(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))

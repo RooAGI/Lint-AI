@@ -76,7 +76,7 @@ pub(crate) fn sanitize_bm25_query(query: &str) -> String {
 
 fn flush_cjk_run(parts: &mut Vec<String>, run: &str, is_han: bool) {
     if is_han {
-        parts.extend(crate::tokenizer::han_bigrams(run));
+        parts.extend(crate::tokenizer::han_tokens(run));
     } else {
         // A CJK run here is a maximal Hangul run = one eojeol.
         parts.extend(crate::tokenizer::hangul_eojeol_tokens(run));

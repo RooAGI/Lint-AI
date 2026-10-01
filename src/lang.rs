@@ -25,6 +25,8 @@ pub enum Lang {
     Zh,
     #[value(name = "ko")]
     Ko,
+    #[value(name = "es")]
+    Es,
 }
 
 impl Lang {
@@ -95,8 +97,145 @@ pub fn default_spacy_model_for_lang(lang: Lang) -> &'static str {
     match lang {
         Lang::Zh => "zh_core_web_sm",
         Lang::Ko => "ko_core_news_sm",
+        Lang::Es => "es_core_news_sm",
         _ => "en_core_web_sm",
     }
+}
+
+/// Value of a single Chinese numeral character, or `None` if `ch` is not
+/// one. 两 counts as 2; 〇/零 are 0.
+fn chinese_digit_value(ch: char) -> Option<i64> {
+    match ch {
+        '一' => Some(1),
+        '二' | '两' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        '〇' | '零' => Some(0),
+        _ => None,
+    }
+}
+
+/// True for any character that can appear in a Chinese numeral run.
+fn is_chinese_numeral_char(ch: char) -> bool {
+    chinese_digit_value(ch).is_some() || matches!(ch, '十' | '百' | '千' | '万' | '亿')
+}
+
+/// Parse a Chinese numeral string (e.g. 二十, 一百二十三, 三千五百万,
+/// 二〇二六) to an integer. Returns `None` for empty input, non-numeral
+/// input, or a bare unit (万/亿 alone carries no value).
+pub fn parse_chinese_numeral(s: &str) -> Option<i64> {
+    if s.is_empty() || !s.chars().all(is_chinese_numeral_char) {
+        return None;
+    }
+    let mut total = 0i64;
+    let mut current = 0i64; // value of the section below 万/亿
+    let mut pending = 0i64; // most recent digit(s) not yet attached to a unit
+    let mut has_pending = false;
+    // Anything that carries value on its own (digits, or 十/百/千 with
+    // their implicit 1). Bare 万/亿 carry nothing.
+    let mut saw_value = false;
+    for ch in s.chars() {
+        if let Some(d) = chinese_digit_value(ch) {
+            saw_value = true;
+            pending = pending * 10 + d;
+            has_pending = true;
+            continue;
+        }
+        // A small unit (十/百/千) with no pending digit means an implicit
+        // 1 (十 = 10). 万/亿 fold the whole current section and add no
+        // implicit 1 (五百万 = 5,000,000, not 5,000,001).
+        match ch {
+            '十' | '百' | '千' => {
+                saw_value = true;
+                let v = if has_pending { pending } else { 1 };
+                pending = 0;
+                has_pending = false;
+                match ch {
+                    '十' => current += v * 10,
+                    '百' => current += v * 100,
+                    _ => current += v * 1000,
+                }
+            }
+            '万' | '亿' => {
+                let section = current + if has_pending { pending } else { 0 };
+                pending = 0;
+                has_pending = false;
+                total += section * if ch == '万' { 10_000 } else { 100_000_000 };
+                current = 0;
+            }
+            _ => return None, // unreachable: input pre-validated
+        }
+    }
+    if !saw_value {
+        // Bare 万/亿 (or empty, already excluded) carry no value.
+        return None;
+    }
+    total += current + if has_pending { pending } else { 0 };
+    Some(total)
+}
+
+/// Common Chinese measure words / units. A single-character numeral is
+/// only treated as a number when followed by one of these (or 年/月/日/号
+/// for dates) — this keeps 一起 ("together") and 一心一意 ("wholehearted")
+/// from becoming "1起" and "1心1意".
+const CHINESE_MEASURE_WORDS: &[char] = &[
+    '个', '位', '名', '只', '条', '张', '把', '件', '本', '块', '元', '角', '分', '头', '匹', '栋',
+    '层', '间', '所', '家', '次', '回', '趟', '遍', '顿', '场', '节', '课', '道', '题', '篇', '章',
+    '首', '幅', '双', '对', '串', '群', '批', '组', '队', '班', '套', '台', '辆', '架', '艘', '枚',
+    '颗', '粒', '滴', '点', '口', '扇', '盏', '枝', '根', '株', '棵', '朵', '片', '页', '封', '袋',
+    '包', '箱', '盒', '瓶', '杯', '碗', '盘', '桶', '盆', '罐', '捆', '堆', '人', '口', '户', '家',
+    '国', '省', '市', '区', '县', '镇', '村', '路', '街', '号', '楼', '室', '年', '月', '日', '号',
+    '天', '周', '岁', '时', '分', '秒', '米', '里', '斤', '两', '吨', '升', '瓦', '倍',
+];
+
+/// Replace Chinese numeral runs in `text` with Arabic digits, so
+/// downstream English-oriented number handling (text2num, `\d+` regexes)
+/// sees them. Multi-character runs are always numbers; a single-character
+/// run must be followed by a measure word (see
+/// [`CHINESE_MEASURE_WORDS`]) to avoid rewriting idioms like 一起.
+pub fn normalize_chinese_numbers(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_chinese_numeral_char(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && is_chinese_numeral_char(chars[j]) {
+            j += 1;
+        }
+        let run: String = chars[i..j].iter().collect();
+        let run_len = j - i;
+        let next = chars.get(j).copied();
+        // 两 is also a unit of weight (50g); as a numeral run of length 1
+        // followed by a non-measure it is left alone by the same rule.
+        let replace = if run_len >= 2 {
+            true
+        } else {
+            matches!(next, Some(n) if CHINESE_MEASURE_WORDS.contains(&n))
+        };
+        if replace {
+            if let Some(n) = parse_chinese_numeral(&run) {
+                out.push_str(&n.to_string());
+                i = j;
+                continue;
+            }
+        }
+        // Not a number after all (e.g. bare 万, or 一起): emit verbatim.
+        for c in chars[i..j].iter() {
+            out.push(*c);
+        }
+        i = j;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -135,6 +274,46 @@ mod tests {
     fn spacy_model_defaults() {
         assert_eq!(default_spacy_model_for_lang(Lang::Zh), "zh_core_web_sm");
         assert_eq!(default_spacy_model_for_lang(Lang::Ko), "ko_core_news_sm");
+        assert_eq!(default_spacy_model_for_lang(Lang::Es), "es_core_news_sm");
         assert_eq!(default_spacy_model_for_lang(Lang::En), "en_core_web_sm");
+    }
+
+    #[test]
+    fn parses_chinese_numerals() {
+        for (s, n) in [
+            ("一", 1),
+            ("二", 2),
+            ("两", 2),
+            ("十", 10),
+            ("十二", 12),
+            ("二十", 20),
+            ("二十五", 25),
+            ("一百", 100),
+            ("一百二十三", 123),
+            ("三千五百万", 35_000_000),
+            ("一亿两千万", 120_000_000),
+            ("二〇二六", 2026),
+            ("两百", 200),
+            ("十万", 100_000),
+            ("〇", 0),
+        ] {
+            assert_eq!(parse_chinese_numeral(s), Some(n), "for {s:?}");
+        }
+        for s in ["", "万", "亿", "abc", "三a", "一起"] {
+            assert_eq!(parse_chinese_numeral(s), None, "for {s:?}");
+        }
+    }
+
+    #[test]
+    fn normalizes_chinese_numbers_in_text() {
+        assert_eq!(normalize_chinese_numbers("我买了三本书"), "我买了3本书");
+        assert_eq!(normalize_chinese_numbers("二十五天后见"), "25天后见");
+        // Single char + measure word.
+        assert_eq!(normalize_chinese_numbers("等一个人"), "等1个人");
+        // Idioms are left alone.
+        assert_eq!(normalize_chinese_numbers("我们一起去"), "我们一起去");
+        assert_eq!(normalize_chinese_numbers("一心一意"), "一心一意");
+        // Non-numeral text untouched.
+        assert_eq!(normalize_chinese_numbers("今天天气很好"), "今天天气很好");
     }
 }

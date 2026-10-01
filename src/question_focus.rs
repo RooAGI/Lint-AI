@@ -42,14 +42,18 @@ pub fn identify_focus(query: &str) -> QuestionFocus {
         .and_then(|s| {
             // Return the original unstemmed form
             tokens.iter().find(|t| stem_token(t) == s).cloned()
-        });
+        })
+        // Chinese interrogatives are matched as substrings (tokens are
+        // bigrams, so single characters like 谁/哪 would never match a
+        // token).
+        .or_else(|| chinese_question_word(query));
 
     let mut focus_terms = Vec::new();
     let mut constraint_terms = Vec::new();
 
     for token in tokens {
         let stemmed = stem_token(&token);
-        if is_question_word(&stemmed) {
+        if is_question_word(&stemmed) || is_chinese_interrogative_token(&token) {
             continue;
         }
         // Skip stopwords (they're structure, not focus or constraints)
@@ -91,6 +95,61 @@ pub(crate) fn is_question_word(term: &str) -> bool {
         | "어떻게" | "어떡해"                         // how
         | "어느" | "어떤"                            // which
     )
+}
+
+/// Chinese interrogative words. The scan in [`chinese_question_word`]
+/// picks the earliest match (ties broken by longer match), so list order
+/// does not matter.
+const CHINESE_QUESTION_WORDS: &[&str] = &[
+    "为什么",
+    "怎么样",
+    "什么样",
+    "多少",
+    "什么",
+    "怎么",
+    "怎样",
+    "如何",
+    "为何",
+    "哪里",
+    "哪儿",
+    "何时",
+    "何处",
+    "何地",
+    "谁",
+    "哪",
+    "几",
+    "啥",
+    "吗",
+    "呢",
+];
+
+/// Find the Chinese interrogative in `query`, if any. Returns the earliest
+/// match (ties broken by longer match), so the question word reflects
+/// where the question is asked.
+pub(crate) fn chinese_question_word(query: &str) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
+    for word in CHINESE_QUESTION_WORDS {
+        if let Some(pos) = query.find(word) {
+            let replace = match best {
+                None => true,
+                Some((best_pos, best_word)) => {
+                    pos < best_pos || (pos == best_pos && word.len() > best_word.len())
+                }
+            };
+            if replace {
+                best = Some((pos, word));
+            }
+        }
+    }
+    best.map(|(_, w)| w.to_string())
+}
+
+/// True if a Chinese token is or contains an interrogative word.
+/// Tokens are character bigrams, so this checks exact multi-character
+/// matches plus single-character interrogatives (谁/哪/几/啥/吗/呢/何).
+fn is_chinese_interrogative_token(token: &str) -> bool {
+    const SINGLE: &[char] = &['谁', '哪', '几', '啥', '吗', '呢', '何'];
+    CHINESE_QUESTION_WORDS.iter().any(|w| token == *w) || token.chars().any(|c| SINGLE.contains(&c))
 }
 
 fn dedup(terms: Vec<String>) -> Vec<String> {
@@ -164,5 +223,35 @@ mod tests {
             "focus should contain 'roadtrip', got {:?}",
             focus.focus_terms
         );
+    }
+
+    #[test]
+    fn chinese_what_question_detects_interrogative() {
+        let focus = identify_focus("我毕业于哪所大学？");
+        assert_eq!(focus.question_word, Some("哪".to_string()));
+        // Interrogative bigrams are not focus terms.
+        assert!(
+            !focus.focus_terms.iter().any(|t| t.contains('哪')),
+            "interrogative should not be focus, got {:?}",
+            focus.focus_terms
+        );
+    }
+
+    #[test]
+    fn chinese_why_question_prefers_longest_earliest() {
+        let focus = identify_focus("你为什么学习中文？");
+        assert_eq!(focus.question_word, Some("为什么".to_string()));
+    }
+
+    #[test]
+    fn chinese_how_many_question() {
+        let focus = identify_focus("你买了多少本书？");
+        assert_eq!(focus.question_word, Some("多少".to_string()));
+    }
+
+    #[test]
+    fn chinese_non_question_has_no_question_word() {
+        let focus = identify_focus("我毕业于清华大学。");
+        assert_eq!(focus.question_word, None);
     }
 }

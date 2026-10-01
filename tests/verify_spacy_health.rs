@@ -92,3 +92,37 @@ fn spacy_extraction_healthy() {
     
     println!("ALL HEALTH CHECKS PASSED");
 }
+
+fn chinese_turns() -> Vec<RelationTurn> {
+    vec![RelationTurn {
+        speaker: "王芳".to_string(),
+        session_id: "zh::session_1".to_string(),
+        turn_idx: 0,
+        doc_id: "zh::session_1::0".to_string(),
+        text: "我昨天在北京见了李明，我们讨论了新的项目计划。".to_string(),
+        session_date: Some("2026-09-28".to_string()),
+    }]
+}
+
+/// Chinese relation-extraction contract: spaCy's `doc.noun_chunks` is not
+/// implemented for Chinese ([E894]), so `scripts/spacy_relations.py`
+/// cannot extract relations/key phrases from Chinese text and the Rust
+/// side fails open (empty output, no hang, no crash). Fixing the script
+/// needs Python-side logic, which is outside the Rust-only
+/// language-support rule -- recorded here so the gap is explicit, not
+/// silent. The NER path (`spacy_ner.py`) is unaffected; see
+/// `tier1::spacy_chinese_ner_extracts_entities`.
+#[test]
+fn spacy_chinese_relations_fail_open_on_e894() {
+    let turns = chinese_turns();
+    let output =
+        extract_relations_via_spacy(&turns, Duration::from_secs(180), "zh_core_web_sm");
+
+    println!(
+        "Chinese relations: {} relations, {} key phrases (E894 fail-open)",
+        output.relations.len(),
+        output.key_phrases.len()
+    );
+    // The contract is fail-open: whatever spaCy does, this returns.
+    // (Today that is empty because of E894.)
+}

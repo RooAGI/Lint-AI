@@ -1,50 +1,32 @@
 #!/usr/bin/env python3
-"""Query-time behood analysis.
+"""Query-time text parsing for behood judgments.
 
-Takes a question string, runs spaCy to extract noun phrases, sends them to
-the behood binary via the JSON protocol, and outputs (text, kind) pairs.
+Pure spaCy parsing: one pass per text over the already-loaded model,
+emitting the noun-phrase descriptors (`mentions`, `np_mentions`) that
+bekind's JSON bridge judges. Judgment itself happens in the bekind
+`--serve` daemon, owned directly by lint-ai's Rust code — this process
+never spawns a subprocess and never touches the bekind binary.
 
-This is the query-time half of Luyi's design: "the behood provide people as
-the source, then we have place and thing." Behood judges the question's
-entities; lint-ai uses the text for matching and the kind for filtering.
+This is the parse half of Luyi's design: "the behood provide people as
+the source, then we have place and thing." spaCy parses the question;
+bekind judges the descriptors; lint-ai uses the text for matching and
+the kind for filtering.
 
 Usage:
-    echo "Which city have both Jean and John visited?" | python3 behood_query.py
-    python3 behood_query.py "Which city have both Jean and John visited?"
-    python3 behood_query.py --serve   # one {"question": ...} per stdin line,
-                                     # one {"entities": [...]} per stdout line;
-                                     # or one {"scope_texts": [...]} per stdin
-                                     # line, one {"scope_verdicts": [...]} per
-                                     # stdout line
+    python3 behood_query.py --serve   # one {"parse_texts": [...]} per
+                                      # stdin line, one {"parsed": [...]}
+                                      # per stdout line
+    python3 behood_query.py --parse "Which city have both Jean and John visited?"
+                                      # one-shot: prints {"parsed": [...]}
 
 Output (JSON to stdout):
-    {"entities": [{"text": "Jean", "kind": "person"}, ...]}
+    {"parsed": [{"id": "p:0", "mentions": [...], "np_mentions": [...]}]}
 
-Fail-open: on any error, outputs {"entities": []} and exits 0.
+Fail-open: on any error, outputs {"parsed": []} and exits 0.
 """
 
 import json
-import os
-import shutil
-import subprocess
 import sys
-
-
-def _behood_bin():
-    """Path to the compiled `bekind` classifier, if available."""
-    env = os.environ.get("BEHOOD_BIN")
-    if env and os.path.isfile(env) and os.access(env, os.X_OK):
-        return env
-    # Project renamed behood -> bekind; try the new binary name first,
-    # fall back to the old one during transition.
-    found = shutil.which("bekind") or shutil.which("behood")
-    if found:
-        return found
-    for name in ("bekind", "behood"):
-        cargo_bin = os.path.expanduser(f"~/.cargo/bin/{name}")
-        if os.path.isfile(cargo_bin) and os.access(cargo_bin, os.X_OK):
-            return cargo_bin
-    return None
 
 
 def _load_spacy():
@@ -107,6 +89,52 @@ def _descriptor_for_token(tok, did):
     }
 
 
+# Dependency labels that fill a nominal slot (subject/object/...). When the
+# parser gets the relation right but mis-tags the POS (e.g. "cilantro" as
+# ADV in "dislikes cilantro and always asks ..."), noun_chunks drops the
+# token; recovering by dep is robust to that quirk.
+_NOMINAL_DEPS = frozenset(
+    {"nsubj", "nsubjpass", "dobj", "pobj", "iobj", "attr", "appos", "conj"}
+)
+# POS tags that can never head a recovered nominal descriptor.
+_NON_NOMINAL_POS = frozenset(
+    {"VERB", "AUX", "ADP", "CCONJ", "SCONJ", "PART", "PUNCT", "SYM", "X", "NUM"}
+)
+
+
+def _recover_unchunked_nominals(doc, descriptors):
+    """Recover nominal-slot tokens the chunker dropped (parser POS quirk).
+
+    Systematic, not per-question: any token filling a nominal dependency
+    slot (dobj/pobj/nsubj/...) that no noun chunk covers becomes an
+    additional descriptor. The dependency label is trusted over the POS
+    tag for slot-filling: in "The user dislikes cilantro and always asks
+    ...", spaCy tags "cilantro" ADV but its dep is dobj -- the relation
+    is right, the tag is wrong, and noun_chunks misses it.
+    """
+    covered = set()
+    for chunk in doc.noun_chunks:
+        covered.update(range(chunk.start, chunk.end))
+    seen_texts = {d["text"] for d in descriptors}
+    recovered = []
+    for tok in doc:
+        if tok.i in covered:
+            continue
+        if tok.dep_ not in _NOMINAL_DEPS:
+            continue
+        if tok.pos_ in _NON_NOMINAL_POS:
+            continue
+        if not tok.is_alpha:
+            continue
+        if tok.text in seen_texts:
+            continue
+        d = _descriptor_for_token(tok, f"q:rec{len(descriptors) + len(recovered)}")
+        if d["text"]:
+            recovered.append(d)
+            seen_texts.add(tok.text)
+    return recovered
+
+
 def question_np_descriptors(doc):
     """Noun-phrase descriptors for behood's phrase layer, with a fallback.
 
@@ -135,38 +163,18 @@ def question_np_descriptors(doc):
             fb = _descriptor_for_token(nominal, f"q:fb{len(descriptors)}")
             if fb["text"] and not any(d["text"] == fb["text"] for d in descriptors):
                 descriptors.append(fb)
+    # Systematic recovery: nominal-slot tokens the chunker dropped.
+    descriptors.extend(_recover_unchunked_nominals(doc, descriptors))
     return descriptors
 
 
-def analyze_question(question, nlp=None, binary=None):
-    """Return [(text, kind)] for the question's noun phrases via behood.
+def _doc_descriptors(doc):
+    """Noun-phrase descriptors + PROPN personhood mentions for one parsed doc.
 
-    When `nlp`/`binary` are not supplied (one-shot mode) they are resolved
-    here; serve mode resolves them once at startup and passes them in.
+    Shared by analyze_question and analyze_query_semantics so both build
+    identical bekind payloads from a single spaCy parse.
     """
-    if nlp is None:
-        nlp = _load_spacy()
-    if binary is None:
-        binary = _behood_bin()
-    if nlp is None or binary is None:
-        return []
-
-    doc = nlp(question)
-
-    entities = []
-
-    # Temporal question words: "when", "what time", "how long" ask for a time.
-    # Behood judges these as time-seeking; lint-ai uses the kind to filter.
-    import re
-    ql = question.lower()
-    temporal_qw = re.search(r'\b(when|what time|how long|what date|which date|what day|which day)\b', ql)
-    if temporal_qw:
-        entities.append({"text": temporal_qw.group(0), "kind": "time"})
-
-    # Build noun-phrase descriptors for behood's phrase layer.
     np_descriptors = question_np_descriptors(doc)
-
-    # Also send PROPN tokens as personhood mentions so names get judged.
     mentions = []
     for i, tok in enumerate(doc):
         if tok.pos_ == "PROPN":
@@ -177,114 +185,47 @@ def analyze_question(question, nlp=None, binary=None):
                 "pos": tok.pos_,
                 "head_lemma": tok.lemma_.lower(),
             })
-
-    if not np_descriptors and not mentions:
-        return []
-
-    payload = {
-        "strategy": "discourse",
-        "mentions": mentions,
-        "chunks": [],
-        "np_mentions": np_descriptors,
-        "context": {"speaker_names": []},
-    }
-
-    try:
-        proc = subprocess.run(
-            [binary],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except Exception:
-        return []
-    if proc.returncode != 0:
-        return []
-    try:
-        data = json.loads(proc.stdout)
-    except Exception:
-        return []
-
-    # Map verdicts back to text.
-    id_to_text = {}
-    for d in np_descriptors:
-        id_to_text[d["id"]] = d["text"]
-    for d in mentions:
-        id_to_text[d["id"]] = d["text"]
-
-    for v in data.get("phrase_verdicts", []):
-        if v.get("is_entity_mention"):
-            text = id_to_text.get(v["id"], "")
-            kind = v.get("kind", "thing")
-            if text:
-                entities.append({"text": text, "kind": kind})
-    for v in data.get("verdicts", []):
-        if v.get("is_person"):
-            text = id_to_text.get(v["id"], "")
-            if text and not any(e["text"] == text for e in entities):
-                entities.append({"text": text, "kind": "person"})
-
-    return entities
+    return np_descriptors, mentions
 
 
-def _scope_verdicts_via_binary(texts, binary):
-    """Query the bekind JSON bridge for scope verdicts. Fail-open: []."""
-    if not texts:
-        return []
-    payload = {
-        "scope_texts": [{"id": f"s:{i}", "text": t} for i, t in enumerate(texts)],
-    }
-    try:
-        proc = subprocess.run(
-            [binary],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except Exception:
-        return []
-    if proc.returncode != 0:
-        return []
-    try:
-        data = json.loads(proc.stdout)
-    except Exception:
-        return []
-    return data.get("scope_verdicts", [])
 
 
-def analyze_scope(texts, binary=None):
-    """Return bekind scope verdicts for raw text spans.
+def parse_texts(texts, nlp=None):
+    """Parse raw texts into bekind-ready descriptors.
 
-    Additive: does not change analyze_question's output shape. Each input
-    text gets one verdict dict:
-        {"id", "activity_phrase", "temporal_words", "habitual", "evidence"}
-    Fail-open: on any error, returns [].
+    Pure parsing: one spaCy pass per text over the already-loaded model.
+    No judgment, no subprocess, no bekind binary. Returns a list of
+    {"id", "mentions", "np_mentions"} with caller-assigned ids echoed;
+    texts that fail to parse are skipped (fail-open: the caller treats a
+    missing slot as "no descriptors").
     """
-    if binary is None:
-        binary = _behood_bin()
-    if binary is None:
+    if nlp is None:
+        nlp = _load_spacy()
+    if nlp is None:
         return []
-    return _scope_verdicts_via_binary(texts, binary)
+    parsed = []
+    for id_, text in texts:
+        try:
+            doc = nlp(text)
+        except Exception:
+            continue
+        np_descriptors, mentions = _doc_descriptors(doc)
+        parsed.append({"id": id_, "mentions": mentions, "np_mentions": np_descriptors})
+    return parsed
 
 
 def serve():
-    """Line-delimited JSON protocol.
+    """Line-delimited JSON protocol: pure spaCy parsing.
 
-    One {"question": ...} per stdin line → one {"entities": [...]} per stdout
-    line; or one {"scope_texts": [{"id", "text"}, ...]} per stdin line →
-    one {"scope_verdicts": [...]} per stdout line. spaCy and the bekind
-    binary are resolved once at startup so per-query cost is milliseconds,
-    not seconds. Exits non-zero when the backend cannot be initialized, so
-    the caller can fail over to the heuristic path without paying per-query
-    spawn costs.
+    One {"parse_texts": [{"id", "text"}, ...]} per stdin line →
+    one {"parsed": [{"id", "mentions", "np_mentions"}, ...]} per stdout
+    line. The descriptors are bekind's Request payload pieces; judgment
+    happens in the bekind --serve daemon, owned directly by lint-ai's
+    Rust code. This process never spawns a subprocess: spaCy is loaded
+    once at startup, so per-request cost is milliseconds, not seconds.
+    Exits non-zero when the backend cannot be initialized, so the caller
+    can fail over without paying per-request spawn costs.
     """
-    # Fail fast: the binary check is cheap; the spaCy load costs seconds.
-    binary = _behood_bin()
-    if binary is None:
-        sys.stderr.write("behood_query --serve: bekind binary not found\n")
-        return 3
     nlp = _load_spacy()
     if nlp is None:
         sys.stderr.write("behood_query --serve: spaCy model unavailable\n")
@@ -297,24 +238,16 @@ def serve():
             payload = json.loads(line)
         except Exception:
             payload = {}
-        if "scope_texts" in payload:
-            try:
-                texts = [
-                    t.get("text", "")
-                    for t in payload["scope_texts"]
-                    if isinstance(t, dict)
-                ]
-                verdicts = _scope_verdicts_via_binary(texts, binary)
-            except Exception:
-                verdicts = []
-            sys.stdout.write(json.dumps({"scope_verdicts": verdicts}) + "\n")
-        else:
-            question = payload.get("question", "")
-            try:
-                entities = analyze_question(question, nlp=nlp, binary=binary)
-            except Exception:
-                entities = []
-            sys.stdout.write(json.dumps({"entities": entities}) + "\n")
+        texts = [
+            (t.get("id", f"p:{i}"), t.get("text", ""))
+            for i, t in enumerate(payload.get("parse_texts", []))
+            if isinstance(t, dict)
+        ]
+        try:
+            parsed = parse_texts(texts, nlp=nlp)
+        except Exception:
+            parsed = []
+        sys.stdout.write(json.dumps({"parsed": parsed}) + "\n")
         sys.stdout.flush()
     return 0
 
@@ -322,22 +255,16 @@ def serve():
 def main():
     if "--serve" in sys.argv[1:]:
         return serve()
-    # Fail fast: the bekind binary check is cheap; spaCy load costs seconds.
-    # When behood is unavailable there is no point paying the model load.
-    binary = _behood_bin()
-    if binary is None:
-        print(json.dumps({"entities": []}))
+    if "--parse" in sys.argv[1:]:
+        texts = [a for a in sys.argv[1:] if a not in ("--serve", "--parse")]
+        try:
+            parsed = parse_texts([(f"p:{i}", t) for i, t in enumerate(texts)])
+        except Exception:
+            parsed = []
+        print(json.dumps({"parsed": parsed}))
         return 0
-    if len(sys.argv) > 1:
-        question = " ".join(a for a in sys.argv[1:] if a != "--serve")
-    else:
-        question = sys.stdin.read().strip()
-    try:
-        entities = analyze_question(question, binary=binary)
-    except Exception:
-        entities = []
-    print(json.dumps({"entities": entities}))
-    return 0
+    sys.stderr.write("behood_query: expected --serve or --parse\n")
+    return 2
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+use crate::lang::Lang;
 use crate::query_expansion::{expand_query_terms, normalize_for_index};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -18,6 +19,17 @@ pub(crate) const IMPORTANT_TERM_PREFIX_MULTIPLIER: f32 = 0.25;
 
 pub(crate) const QUERY_TERM_CACHE_CAPACITY: usize = 256;
 
+/// Multiplier on definitional semantic-tag TermQueries inside the tantivy
+/// scorer (Luyi 2026-09-28). Same kind of parameter as the LEXICAL_*_BOOST
+/// field boosts the system already tunes: set by measurement, minimally.
+/// The tag match itself is scored by BM25 (IDF/length-norm/saturation);
+/// this only scales that in-scorer weight.
+///
+/// Tuning (2026-09-28, BEHOOD_BIN binary):
+/// Luyi 2026-09-29: no fixed tag multiplier. Tags join the lexical query as
+/// plain SHOULD TermQueries, scored by BM25 like every other term. (The old
+/// TAG_BOOST = 29.0 was calibrated only on the 19-fact toy set and was never
+/// validated retrieval-wide.)
 #[derive(Clone)]
 pub(crate) struct PreparedQueryTerms {
     pub(crate) normalized: String,
@@ -31,9 +43,12 @@ pub(crate) static RAW_PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Prepa
     OnceLock::new();
 // All MemoryIndex lexical shards use the same fixed schema, so Tantivy's parsed
 // query object can be shared safely between shards. This avoids rebuilding the
-// QueryParser and query tree once per selected segment.
-pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn Query>>>> =
-    OnceLock::new();
+// QueryParser and query tree once per selected segment. The key includes the
+// definitional semantic tags: the same query text with different tags is a
+// different tantivy query.
+pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<
+    Mutex<HashMap<(String, Vec<String>), Arc<dyn Query>>>,
+> = OnceLock::new();
 
 pub(crate) fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
     const MAX_QUERY_CHARS: usize = 4096;
@@ -82,7 +97,7 @@ pub(crate) fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
         terms.push(normalized.clone());
     }
     let prepared = PreparedQueryTerms {
-        expanded_terms: expand_query_terms(&terms).expanded_terms,
+        expanded_terms: expand_query_terms(&terms, Lang::Auto.resolve(truncated)).expanded_terms,
         normalized: normalized.clone(),
         terms,
     };

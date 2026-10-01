@@ -1,9 +1,11 @@
 use super::{
-    build_doc_record, chunk_lineage_key, current_time_ms, doc_record_content_hash,
-    ensure_store_metadata, execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot,
-    load_segment_manifest, load_semantic_state, persist_segment_manifest, persist_semantic_state,
-    persist_store_metadata, source_document_from_record, IndexLocation, IndexStoreInspection,
-    LexicalState, MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
+    build_doc_record_with_entities, chunk_lineage_key, current_time_ms,
+    doc_record_content_hash, ensure_store_metadata, execute_prepared_on_snapshot_parts,
+    inspect_memory_index_snapshot, load_segment_manifest, load_semantic_state,
+    persist_segment_manifest, persist_semantic_state, persist_store_metadata,
+    rank_key_entities_batched, source_document_from_record, source_documents_to_tier1_inputs,
+    IndexLocation, IndexStoreInspection, LexicalState, MemoryIndexLayout, MemoryIndexSnapshot,
+    PipelineOptions,
 };
 use crate::conversational_rerank::{RerankDocSource, RerankDocView};
 use crate::index::{
@@ -459,9 +461,8 @@ impl IndexStore {
         let semantic_relations =
             SemanticRelationStore::try_from_documents(source_docs.values(), options.supersession)?;
         let mut lexical = LexicalState::new(None)?;
-        for record in records.values() {
-            lexical.upsert_record(record)?;
-        }
+        let all_records: Vec<&DocRecord> = records.values().collect();
+        lexical.upsert_records(&all_records)?;
         lexical.commit_reload()?;
 
         let snapshot = (!segments.is_empty())
@@ -566,9 +567,8 @@ impl IndexStore {
             chunk_latest_by_lineage.insert(meta.lineage_key.clone(), meta.chunk_id.clone());
         }
         let mut lexical = LexicalState::new(lexical_index_dir)?;
-        for record in records.values() {
-            lexical.upsert_record(record)?;
-        }
+        let all_records: Vec<&DocRecord> = records.values().collect();
+        lexical.upsert_records(&all_records)?;
         lexical.commit_reload()?;
         Ok(Self {
             options,
@@ -736,9 +736,8 @@ impl IndexStore {
             semantic_docs.insert(record.doc_id.clone(), state);
         }
         let mut lexical = LexicalState::new(None)?;
-        for record in records.values() {
-            lexical.upsert_record(record)?;
-        }
+        let all_records: Vec<&DocRecord> = records.values().collect();
+        lexical.upsert_records(&all_records)?;
         lexical.commit_reload()?;
         let store_paths = StorePaths {
             root: None,
@@ -1265,7 +1264,9 @@ impl IndexStore {
     /// `dirty_docs`.
     fn prepare_pending_changes(&mut self) -> Result<HashSet<String>> {
         let dirty_doc_ids = self.dirty_docs.iter().cloned().collect::<Vec<String>>();
-        let mut reprocessed_doc_ids = HashSet::new();
+        // Pass 1: content-hash gate. Unchanged docs reuse their stored record
+        // and never reach the NLP below.
+        let mut rebuild_ids: Vec<String> = Vec::new();
         for doc_id in &dirty_doc_ids {
             let incoming_hash = {
                 let source_doc = self
@@ -1283,11 +1284,34 @@ impl IndexStore {
                 self.dirty_docs.remove(doc_id);
                 continue;
             }
+            rebuild_ids.push(doc_id.clone());
+        }
+        // Pass 2: batch the expensive NER daemon call across every doc being
+        // rebuilt — one spaCy request, not one per document. Luyi 2026-09-29:
+        // the refresh loop's per-doc NER was the bulk-build slowness; the
+        // mutable side batches it before the immutable snapshot is published.
+        let rebuild_docs: Vec<SourceDocument> = rebuild_ids
+            .iter()
+            .map(|doc_id| {
+                self.source_docs
+                    .get(doc_id)
+                    .expect("dirty doc should still exist in source docs")
+                    .clone()
+            })
+            .collect();
+        let tier1_inputs = source_documents_to_tier1_inputs(&rebuild_docs);
+        let mut entities_by_doc = rank_key_entities_batched(&tier1_inputs, &self.options)?;
+        // Pass 3: per-doc bookkeeping (semantic aggregate, chunk lifecycle)
+        // with the precomputed NER entities.
+        let mut reprocessed_doc_ids = HashSet::new();
+        for (doc_id, tier1_doc) in rebuild_ids.iter().zip(tier1_inputs.iter()) {
             let source_doc = self
                 .source_docs
                 .get(doc_id)
                 .expect("dirty doc should still exist in source docs");
-            let record = build_doc_record(source_doc, &self.options)?;
+            let key_entities = entities_by_doc.remove(doc_id).unwrap_or_default();
+            let record =
+                build_doc_record_with_entities(source_doc, tier1_doc, key_entities, &self.options)?;
             self.semantic_aggregate.remove_doc(doc_id);
             let semantic_state = build_semantic_doc_state(&record, self.options.claim_extraction);
             self.semantic_aggregate.insert_doc_state(&semantic_state);
@@ -1341,9 +1365,9 @@ impl IndexStore {
                 .filter_map(|doc_id| self.records.get(doc_id))
                 .collect::<Vec<_>>()
         };
-        for record in lexical_upserts {
-            self.lexical.upsert_record(record)?;
-        }
+        // Batched: one scope-verdict + one kind-verdict daemon call for all
+        // upserted records, not two per record.
+        self.lexical.upsert_records(&lexical_upserts)?;
         self.lexical.commit_reload()?;
         Ok(reprocessed_doc_ids)
     }

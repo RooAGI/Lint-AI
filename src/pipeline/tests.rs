@@ -1367,7 +1367,11 @@ fn segment_index_ptrs(index: &IndexStore) -> Vec<*const crate::index::MemoryInde
 fn doc_record_content_hash_matches_built_record() {
     let options = PipelineOptions::default();
     let doc = sample_doc("doc-1", "hash agreement probe");
-    let record = build_doc_record(&doc, &options).expect("build should succeed");
+    let record = build_doc_records(std::slice::from_ref(&doc), &options)
+        .expect("build should succeed")
+        .into_iter()
+        .next()
+        .expect("one input yields one record");
     assert_eq!(record.content_hash.len(), 64);
     assert_eq!(
         record.content_hash,

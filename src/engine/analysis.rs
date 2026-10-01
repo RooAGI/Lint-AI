@@ -480,6 +480,8 @@ pub(crate) fn show_tier1_entities(
     let docs: Vec<Tier1DocInput> = source_documents_to_tier1_inputs(&source_docs);
     let heuristic = HeuristicKeyEntityRanker;
     let mut heuristic_by_doc = heuristic.rank_docs(&docs)?;
+    // Luyi 2026-09-29: heuristic ranker restored; spaCy failures fall back to
+    // heuristic (never silently to zero entities).
     let mut by_doc = match provider {
         Tier1NerProvider::Heuristic => heuristic_by_doc.clone(),
         Tier1NerProvider::Spacy => {
@@ -559,7 +561,6 @@ pub(crate) fn build_memory_index(
     let options = crate::pipeline::PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
-        lang: *lang,
         term_ranker: ranker_kind.clone(),
         chunk_strategy: chunk_strategy.clone(),
         chunk_lines,

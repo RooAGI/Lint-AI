@@ -24,7 +24,8 @@ use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 
 use crate::index::{SearchResult, TemporalQueryContext};
-use crate::tokenizer::{is_stopword, tokenize, TokenizerMode};
+use crate::lang::Lang;
+use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
 
 use super::catalog::query_connection_profile;
 use super::diagnostics::{SegmentQueryDiagnostics, SegmentQueryOutput};
@@ -352,6 +353,7 @@ fn quoted_spans(text: &str) -> Vec<String> {
 fn scope_entities(scope: &str) -> Vec<ScopeEntity> {
     let mut entities = Vec::new();
     let mut seen = HashSet::new();
+    let lang = Lang::Auto.resolve(scope);
     let push = |display: String, entities: &mut Vec<ScopeEntity>, seen: &mut HashSet<String>| {
         let mention = normalize_mention(&display);
         if mention.is_empty() || !seen.insert(mention.clone()) {
@@ -360,7 +362,7 @@ fn scope_entities(scope: &str) -> Vec<ScopeEntity> {
         let tokens: Vec<&str> = mention.split_whitespace().collect();
         if tokens
             .iter()
-            .all(|t| is_stopword(t, TokenizerMode::Stemmed))
+            .all(|t| is_stopword_for_lang(t, TokenizerMode::Stemmed, lang))
         {
             return;
         }
@@ -722,10 +724,13 @@ pub fn reveal_question(question: &str) -> RevealedQuestion {
             // Keywords for scopes with no entities: content words for the
             // sub-query (used by TemporalFilter's class side).
             let keywords = if entities.is_empty() {
+                let lang = Lang::Auto.resolve(text);
                 text.split(|ch: char| !ch.is_alphanumeric())
                     .filter(|w| w.len() > 2)
                     .map(|w| normalize_mention(w))
-                    .filter(|w| !w.is_empty() && !is_stopword(w, TokenizerMode::Stemmed))
+                    .filter(|w| {
+                        !w.is_empty() && !is_stopword_for_lang(w, TokenizerMode::Stemmed, lang)
+                    })
                     .collect::<Vec<_>>()
             } else {
                 Vec::new()

@@ -372,6 +372,11 @@ pub(crate) struct LexicalIndex {
     pub(crate) terms_f: Field,
     pub(crate) entities_f: Field,
     pub(crate) temporal_f: Field,
+    /// Definitional semantic tags (closed-set temporal words, "habitual",
+    /// admitted kind tags). Indexed as ordinary TEXT terms so tag matches
+    /// score through BM25 like every other term (Luyi 2026-09-28:
+    /// definitional knowledge is a match, not a bonus).
+    pub(crate) tags_f: Field,
 }
 
 /// A live corpus-wide BM25 statistics provider assembled from shard searchers.
@@ -512,9 +517,10 @@ pub struct ScoreBreakdown {
     pub graph_link_score: f32,
     pub entity_graph_score: f32,
     pub sequence_rerank_score: f32,
-    /// Additive temporal-scope rank boost (bekind scope verdicts). Boost
-    /// only — a zero here means "no scope information", never a penalty.
-    pub scope_boost: f32,
+    /// Additive activity↔venue rank boost (lint-ai activity→venue table
+    /// over bekind's activity phrase + place-kind verdicts). Boost only —
+    /// a zero here means "no venue match", never a penalty.
+    pub activity_venue_boost: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -600,6 +606,12 @@ pub struct TemporalQueryContext<'a> {
     pub allowed_doc_ids: Option<&'a HashSet<String>>,
     pub allowed_doc_bitmap: Option<&'a RoaringBitmap>,
     pub allowed_segment_doc_bitmaps: Option<&'a HashMap<String, RoaringBitmap>>,
+    /// Definitional semantic tags for the query (closed-set temporal words,
+    /// "habitual", admitted kind tags), computed from the ORIGINAL user
+    /// query. Carried through to the tantivy lexical query as SHOULD
+    /// TermQueries on the `semantic_tags` field. Empty = tag matching off;
+    /// tags never filter or penalize (Luyi 2026-09-28).
+    pub semantic_tags: &'a [String],
 }
 
 impl<'a> Default for TemporalQueryContext<'a> {
@@ -617,6 +629,7 @@ impl<'a> Default for TemporalQueryContext<'a> {
             allowed_doc_ids: None,
             allowed_doc_bitmap: None,
             allowed_segment_doc_bitmaps: None,
+            semantic_tags: &[],
         }
     }
 }

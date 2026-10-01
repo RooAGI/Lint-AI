@@ -80,8 +80,11 @@ fn main() {
     println!("Unique sessions: {}", sessions.len());
 
     println!("\n=== RUNNING SPACY EXTRACTION ===");
-    let output = extract_relations_via_spacy(&turns, Duration::from_secs(300), "en_core_web_sm");
-
+    let output = extract_relations_via_spacy(
+        &turns,
+        Duration::from_secs(300),
+        lint_ai::DEFAULT_SPACY_MODEL,
+    );
     println!("\n=== SPACY HEALTH ===");
     println!("Relations extracted: {}", output.relations.len());
     println!("Key phrases extracted: {}", output.key_phrases.len());

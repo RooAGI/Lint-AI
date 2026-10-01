@@ -1,6 +1,7 @@
 use crate::index::{
     prepare_query_terms, DocRecord, MemoryIndex, TemporalQueryContext, TemporalQueryHint,
 };
+use crate::lang::Lang;
 use crate::query_expansion::normalize_for_index;
 use crate::query_semantics::parse_reference_date;
 use crate::tier1::BEHOOD_NP_ENTITY_SOURCE;
@@ -1426,9 +1427,10 @@ fn add_weight_literal(distribution: &mut HashMap<String, f32>, text: &str, weigh
 /// chars), stopwords removed. Matches the entity channel's literal indexing
 /// of grammar-accepted phrases.
 pub(crate) fn literal_query_tokens(input: &str) -> Vec<String> {
+    let lang = Lang::Auto.resolve(input);
     tokenizer::tokenize(input, TokenizerMode::Unstemmed)
         .into_iter()
-        .filter(|token| !tokenizer::is_stopword(token, TokenizerMode::Unstemmed))
+        .filter(|token| !tokenizer::is_stopword_for_lang(token, TokenizerMode::Unstemmed, lang))
         .collect()
 }
 

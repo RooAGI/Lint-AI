@@ -76,6 +76,13 @@ const WH_WORDS: &[&str] = &[
     // Korean interrogatives (common surface forms; see question_focus).
     "누구", "누가", "누구를", "누구의", "무엇", "뭐", "무슨", "어디", "언제", "얼마", "얼마나", "왜",
     "어떻게", "어떡해", "어느", "어떤",
+    // Spanish interrogatives (accented and unaccented — leading position
+    // plus the ¿/trim handling below disambiguates; none are English words.
+    // Unaccented "como" is excluded: "como" (like/as) opens statements too
+    // often, while "cómo" (how) is unambiguous.
+    "qué", "quién", "quiénes", "cuál", "cuáles", "dónde", "cuándo", "cuánto", "cuánta", "cuántos",
+    "cuántas", "cómo", "quien", "quienes", "cual", "cuales", "donde", "cuando", "cuanto", "cuanta",
+    "cuantos", "cuantas",
 ];
 
 /// Strip the indexer's structured "{role}: " prefix so turn-level heuristics
@@ -130,6 +137,10 @@ pub fn is_wh_question(query: &str) -> bool {
                 "what" | "when" | "where" | "who" | "whom" | "whose" | "which" | "why" | "how"
                 | "누구" | "누가" | "누구를" | "누구의" | "무엇" | "뭐" | "무슨" | "어디" | "언제"
                 | "얼마" | "얼마나" | "왜" | "어떻게" | "어떡해" | "어느" | "어떤"
+                | "qué" | "quién" | "quiénes" | "cuál" | "cuáles" | "dónde" | "cuándo"
+                | "cuánto" | "cuánta" | "cuántos" | "cuántas" | "cómo"
+                | "quien" | "quienes" | "cual" | "cuales" | "donde" | "cuando"
+                | "cuanto" | "cuanta" | "cuantos" | "cuantas"
             )
         })
         .unwrap_or(false)

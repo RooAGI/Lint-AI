@@ -162,6 +162,12 @@ pub fn resolve_temporal_target(query: &str, anchor_date: Option<&str>) -> Option
     }
     let lower = query.to_lowercase();
 
+    // Spanish relative dates and weekday/month names resolve before the
+    // English path (no substring overlap between the two languages).
+    if let Some(target) = resolve_spanish_temporal_target(&lower, base_date) {
+        return Some(target);
+    }
+
     if lower.contains("today") {
         return Some(TemporalTarget {
             target_date: base_date,
@@ -402,6 +408,257 @@ fn parse_korean_explicit_date(query: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(y, m, d)
 }
 
+/// Spanish temporal expressions, resolved before the English path.
+/// Table- and regex-driven; returns the same `TemporalTarget` shape the
+/// English branches produce. All matching is on the lowercased query.
+fn resolve_spanish_temporal_target(lower: &str, base_date: NaiveDate) -> Option<TemporalTarget> {
+    // Normalize Spanish number words ("dos" -> "2") so "hace dos semanas"
+    // works. Spanish-only normalization is safe here: this layer only
+    // probes for Spanish temporal patterns, and English text contains no
+    // Spanish number words. (The auto-detecting wrapper would default
+    // short queries like "hace dos semanas" to English and skip them.)
+    let normalized = text2num::replace_numbers_in_text(lower, &text2num::Language::spanish(), 0.0);
+    let lower = normalized.as_str();
+    // Whole-word match: "hoy" must not fire inside "hoyuelos".
+    let has_word = |word: &str| lower.split(|c: char| !c.is_alphabetic()).any(|w| w == word);
+
+    // Relative days. "anteayer"/"antes de ayer" first: they contain "ayer".
+    if has_word("anteayer") || lower.contains("antes de ayer") {
+        return Some(TemporalTarget {
+            target_date: base_date - Duration::days(2),
+            window_days: 2,
+        });
+    }
+    if has_word("ayer") {
+        return Some(TemporalTarget {
+            target_date: base_date - Duration::days(1),
+            window_days: 2,
+        });
+    }
+    if lower.contains("pasado mañana") || lower.contains("pasado manana") {
+        return Some(TemporalTarget {
+            target_date: base_date + Duration::days(2),
+            window_days: 2,
+        });
+    }
+    if standalone_manana(lower) {
+        return Some(TemporalTarget {
+            target_date: base_date + Duration::days(1),
+            window_days: 2,
+        });
+    }
+    if has_word("hoy") {
+        return Some(TemporalTarget {
+            target_date: base_date,
+            window_days: 2,
+        });
+    }
+
+    // Relative weeks / months / years.
+    for (phrase, target_date, window_days) in [
+        ("la semana pasada", base_date - Duration::weeks(1), 7),
+        ("esta semana", base_date, 7),
+        ("la próxima semana", base_date + Duration::weeks(1), 7),
+        ("la proxima semana", base_date + Duration::weeks(1), 7),
+        ("el mes pasado", shift_months(base_date, -1), 14),
+        ("este mes", base_date, 14),
+        ("el próximo mes", shift_months(base_date, 1), 14),
+        ("el proximo mes", shift_months(base_date, 1), 14),
+        ("el año pasado", shift_years(base_date, -1), 30),
+        ("el ano pasado", shift_years(base_date, -1), 30),
+        ("este año", base_date, 30),
+        ("este ano", base_date, 30),
+        ("el próximo año", shift_years(base_date, 1), 30),
+        ("el proximo año", shift_years(base_date, 1), 30),
+    ] {
+        if lower.contains(phrase) {
+            return Some(TemporalTarget {
+                target_date,
+                window_days,
+            });
+        }
+    }
+
+    // "hace 3 días" / "hace dos semanas" is digits-only here (number words
+    // are normalized to digits upstream by `normalize_number_words`).
+    static HACE_RE: OnceLock<Regex> = OnceLock::new();
+    let hace_re = HACE_RE.get_or_init(|| {
+        Regex::new(r"\bhace\s+(\d+)\s+(días?|dias?|semanas?|meses?|años?|anos?)\b")
+            .expect("valid hace regex")
+    });
+    if let Some(cap) = hace_re.captures(lower) {
+        let n: i64 = cap
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let unit = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Units arrive accented ("días", "años"); match both forms.
+        let (target_date, window_days) = if unit.starts_with("día") || unit.starts_with("dia") {
+            (base_date - Duration::days(n), 2)
+        } else if unit.starts_with("semana") {
+            (base_date - Duration::weeks(n), 7)
+        } else if unit.starts_with("mes") {
+            (shift_months(base_date, -(n as i32)), 14)
+        } else {
+            (shift_years(base_date, -(n as i32)), 30)
+        };
+        return Some(TemporalTarget {
+            target_date,
+            window_days,
+        });
+    }
+
+    // "en 3 días" (future). The full phrase is required — bare "en" is
+    // far too common to trigger on.
+    static EN_RE: OnceLock<Regex> = OnceLock::new();
+    let en_re = EN_RE.get_or_init(|| {
+        Regex::new(r"\ben\s+(\d+)\s+(días?|dias?|semanas?|meses?|años?|anos?)\b")
+            .expect("valid en-future regex")
+    });
+    if let Some(cap) = en_re.captures(lower) {
+        let n: i64 = cap
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let unit = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let (target_date, window_days) = if unit.starts_with("día") || unit.starts_with("dia") {
+            (base_date + Duration::days(n), 2)
+        } else if unit.starts_with("semana") {
+            (base_date + Duration::weeks(n), 7)
+        } else if unit.starts_with("mes") {
+            (shift_months(base_date, n as i32), 14)
+        } else {
+            (shift_years(base_date, n as i32), 30)
+        };
+        return Some(TemporalTarget {
+            target_date,
+            window_days,
+        });
+    }
+
+    // Weekday mentions: "el lunes", "este martes", "el próximo miércoles",
+    // "el viernes pasado". Prefix maps onto `resolve_weekday`'s
+    // this/next/last contract.
+    const ES_WEEKDAYS: &[(&str, Weekday)] = &[
+        ("lunes", Weekday::Mon),
+        ("martes", Weekday::Tue),
+        ("miércoles", Weekday::Wed),
+        ("miercoles", Weekday::Wed),
+        ("jueves", Weekday::Thu),
+        ("viernes", Weekday::Fri),
+        ("sábado", Weekday::Sat),
+        ("sabado", Weekday::Sat),
+        ("domingo", Weekday::Sun),
+    ];
+    for (name, weekday) in ES_WEEKDAYS {
+        if has_word(name) {
+            let prefix = if lower.contains(&format!("próximo {name}"))
+                || lower.contains(&format!("proximo {name}"))
+                || lower.contains(&format!("{name} próximo"))
+                || lower.contains(&format!("{name} proximo"))
+            {
+                "next"
+            } else if lower.contains(&format!("{name} pasado"))
+                || lower.contains(&format!("pasado {name}"))
+            {
+                "last"
+            } else {
+                "this"
+            };
+            return Some(TemporalTarget {
+                target_date: resolve_weekday(base_date, prefix, *weekday),
+                window_days: 2,
+            });
+        }
+    }
+
+    // "29 de septiembre de 2026".
+    static ES_DATE_RE: OnceLock<Regex> = OnceLock::new();
+    let es_date_re = ES_DATE_RE.get_or_init(|| {
+        Regex::new(
+            r"\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+de\s+(\d{4})\b",
+        )
+        .expect("valid Spanish date regex")
+    });
+    if let Some(cap) = es_date_re.captures(lower) {
+        let day: u32 = cap
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let month: u32 = match cap.get(2).map(|m| m.as_str()).unwrap_or("") {
+            "enero" => 1,
+            "febrero" => 2,
+            "marzo" => 3,
+            "abril" => 4,
+            "mayo" => 5,
+            "junio" => 6,
+            "julio" => 7,
+            "agosto" => 8,
+            "septiembre" | "setiembre" => 9,
+            "octubre" => 10,
+            "noviembre" => 11,
+            _ => 12,
+        };
+        let year: i32 = cap
+            .get(3)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+            return Some(TemporalTarget {
+                target_date: date,
+                window_days: 2,
+            });
+        }
+    }
+
+    // "29/09/2026" and "29-09-2026" (Spanish day-first convention; ISO
+    // yyyy-mm-dd cannot match: its first group is 4 digits).
+    static DMY_RE: OnceLock<Regex> = OnceLock::new();
+    let dmy_re = DMY_RE.get_or_init(|| {
+        Regex::new(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b").expect("valid dmy regex")
+    });
+    if let Some(cap) = dmy_re.captures(lower) {
+        let day: u32 = cap
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let month: u32 = cap
+            .get(2)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let year: i32 = cap
+            .get(3)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+            return Some(TemporalTarget {
+                target_date: date,
+                window_days: 2,
+            });
+        }
+    }
+
+    None
+}
+
+/// True when "mañana"/"manana" is used as "tomorrow" rather than "morning".
+/// "por la mañana", "de la mañana", "esta/esa/la mañana" mean "in the
+/// morning" — only a standalone occurrence counts as tomorrow.
+fn standalone_manana(lower: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\b(mañana|manana)\b").expect("valid mañana regex"));
+    for m in re.find_iter(lower) {
+        let before = lower[..m.start()].trim_end();
+        let is_morning = ["por la", "de la", "esta", "esa", "la"]
+            .iter()
+            .any(|p| before.ends_with(p));
+        if !is_morning {
+            return true;
+        }
+    }
+    false
+}
+
 fn resolve_temporal_target_with_temps(query: &str, base_date: NaiveDate) -> Option<TemporalTarget> {
     let now_date = DateTime::<Utc>::from(SystemTime::now()).date_naive();
     let tokens = query_word_tokens(query);
@@ -536,7 +793,7 @@ fn month_day_mentions(lower: &str) -> Vec<(String, String)> {
     static MONTH_DAY_RE: OnceLock<Regex> = OnceLock::new();
     let re = MONTH_DAY_RE.get_or_init(|| {
         Regex::new(
-            r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\b",
+            r"\b(january|february|march|april|may|june|july|august|september|october|november|december|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\s+(\d{1,2})\b",
         )
         .expect("valid month-day regex")
     });
@@ -554,7 +811,7 @@ fn month_day_mentions(lower: &str) -> Vec<(String, String)> {
 fn standalone_weekday_mentions(lower: &str) -> Vec<Weekday> {
     static WEEKDAY_RE: OnceLock<Regex> = OnceLock::new();
     let re = WEEKDAY_RE.get_or_init(|| {
-        Regex::new(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b")
+        Regex::new(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)\b")
             .expect("valid weekday mention regex")
     });
     let mut out = Vec::new();
@@ -760,13 +1017,13 @@ fn push_unique(tokens: &mut Vec<String>, seen: &mut HashSet<String>, token: Stri
 
 fn parse_weekday(input: &str) -> Option<Weekday> {
     match input {
-        "monday" => Some(Weekday::Mon),
-        "tuesday" => Some(Weekday::Tue),
-        "wednesday" => Some(Weekday::Wed),
-        "thursday" => Some(Weekday::Thu),
-        "friday" => Some(Weekday::Fri),
-        "saturday" => Some(Weekday::Sat),
-        "sunday" => Some(Weekday::Sun),
+        "monday" | "lunes" => Some(Weekday::Mon),
+        "tuesday" | "martes" => Some(Weekday::Tue),
+        "wednesday" | "miércoles" | "miercoles" => Some(Weekday::Wed),
+        "thursday" | "jueves" => Some(Weekday::Thu),
+        "friday" | "viernes" => Some(Weekday::Fri),
+        "saturday" | "sábado" | "sabado" => Some(Weekday::Sat),
+        "sunday" | "domingo" => Some(Weekday::Sun),
         _ => None,
     }
 }
@@ -1376,6 +1633,91 @@ mod tests {
         assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2024, 5, 1).unwrap());
         // Non-temporal Korean query: no target.
         assert!(resolve_korean_temporal_target("학교에 갔다", base).is_none());
+    }
+
+    #[test]
+    fn spanish_relative_days() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap(); // a Tuesday
+        let t = |q: &str| resolve_spanish_temporal_target(&q.to_lowercase(), base).unwrap();
+        assert_eq!(t("¿Qué hice ayer?").target_date.to_string(), "2026-09-28");
+        assert_eq!(t("¿Qué hago hoy?").target_date.to_string(), "2026-09-29");
+        assert_eq!(t("Nos vemos mañana").target_date.to_string(), "2026-09-30");
+        assert_eq!(t("Llegó anteayer").target_date.to_string(), "2026-09-27");
+        assert_eq!(
+            t("Sale pasado mañana").target_date.to_string(),
+            "2026-10-01"
+        );
+    }
+
+    #[test]
+    fn spanish_manana_morning_is_not_tomorrow() {
+        // "por la mañana" = in the morning, not tomorrow.
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        assert!(
+            resolve_spanish_temporal_target(
+                &"¿Qué hiciste ayer por la mañana?".to_lowercase(),
+                base
+            )
+            .unwrap()
+            .target_date
+            .to_string()
+                == "2026-09-28"
+        );
+        // No day word at all: "mañana" alone in a morning phrase is not
+        // tomorrow either (falls through to None here; English path may
+        // still match "morning"-less queries).
+        assert!(
+            resolve_spanish_temporal_target(&"desayunamos por la mañana".to_lowercase(), base)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn spanish_weeks_months_years() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = |q: &str| resolve_spanish_temporal_target(&q.to_lowercase(), base).unwrap();
+        assert_eq!(t("la semana pasada").target_date.to_string(), "2026-09-22");
+        assert_eq!(t("esta semana").target_date.to_string(), "2026-09-29");
+        assert_eq!(t("la próxima semana").target_date.to_string(), "2026-10-06");
+        assert_eq!(t("el mes pasado").target_date.to_string(), "2026-08-29");
+        assert_eq!(t("el año pasado").target_date.to_string(), "2025-09-29");
+    }
+
+    #[test]
+    fn spanish_hace_and_en() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = |q: &str| resolve_spanish_temporal_target(&q.to_lowercase(), base).unwrap();
+        assert_eq!(t("hace 3 días").target_date.to_string(), "2026-09-26");
+        // Number words are normalized upstream ("dos" -> "2").
+        assert_eq!(t("hace dos semanas").target_date.to_string(), "2026-09-15");
+        assert_eq!(t("hace 2 semanas").target_date.to_string(), "2026-09-15");
+        assert_eq!(t("en 5 días").target_date.to_string(), "2026-10-04");
+    }
+
+    #[test]
+    fn spanish_absolute_dates() {
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = |q: &str| resolve_spanish_temporal_target(&q.to_lowercase(), base).unwrap();
+        assert_eq!(
+            t("el 29 de septiembre de 2026").target_date.to_string(),
+            "2026-09-29"
+        );
+        assert_eq!(t("29/09/2026").target_date.to_string(), "2026-09-29");
+        assert_eq!(t("29-09-2026").target_date.to_string(), "2026-09-29");
+        // ISO yyyy-mm-dd must NOT match the day-first pattern.
+        assert!(resolve_spanish_temporal_target(&"2026-09-29".to_lowercase(), base).is_none());
+    }
+
+    #[test]
+    fn spanish_weekdays() {
+        // 2026-09-29 is a Tuesday. "el lunes" -> most recent Monday.
+        let base = NaiveDate::from_ymd_opt(2026, 9, 29).unwrap();
+        let t = |q: &str| resolve_spanish_temporal_target(&q.to_lowercase(), base).unwrap();
+        assert_eq!(t("el lunes").target_date.to_string(), "2026-09-28");
+        assert_eq!(
+            t("el próximo viernes").target_date.to_string(),
+            "2026-10-09"
+        );
     }
 
     #[test]

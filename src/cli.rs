@@ -171,15 +171,16 @@ pub struct Args {
     pub ontology_out: String,
     #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json")]
     pub tier0_index_out: Option<String>,
-    #[arg(long, value_enum, default_value = "heuristic")]
+    #[arg(long, value_enum, default_value = "spacy")]
     pub tier1_ner_provider: Tier1NerProvider,
     #[arg(long, value_enum, default_value = "yake")]
     pub tier1_term_ranker: Tier1TermRankerKind,
     #[arg(long, default_value = "en_core_web_sm")]
     pub spacy_model: String,
     /// Content language. `auto` (default) detects per text from script
-    /// statistics; pass `zh`/`ko`/`en` to force it. Drives per-language
-    /// defaults such as the spaCy model when `--spacy-model` is not given.
+    /// statistics (plus Spanish signals for Latin text); pass
+    /// `zh`/`ko`/`es`/`en` to force it. Drives per-language defaults such
+    /// as the spaCy model when `--spacy-model` is not given.
     #[arg(long, value_enum, default_value = "auto")]
     pub lang: Lang,
     #[arg(long, value_enum, default_value = "heading")]

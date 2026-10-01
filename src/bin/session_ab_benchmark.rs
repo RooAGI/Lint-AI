@@ -71,7 +71,13 @@ struct Args {
     /// 5-fold cross-validation. Prints a JSON tune report to stdout.
     #[arg(long)]
     tune: bool,
+
+    /// Tier1 NER backend. `heuristic` reproduces the published
+    /// docs/benchmark.md numbers; `spacy` is the current default.
+    #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
+    ner_provider: Tier1NerProvider,
 }
+
 
 #[derive(Debug, Deserialize)]
 struct LocomoConversation {
@@ -743,6 +749,7 @@ struct DeltaSummary {
 
 #[derive(Debug, Serialize)]
 struct Report {
+    ner_provider: Tier1NerProvider,
     dataset: String,
     commit: String,
     conversations: usize,
@@ -823,7 +830,7 @@ fn main() -> Result<()> {
     eprintln!("processing {} conversations...", conversations.len());
 
     let options = PipelineOptions {
-        ner_provider: Tier1NerProvider::Heuristic,
+        ner_provider: args.ner_provider.clone(),
         spacy_model: "en_core_web_sm".to_string(),
         term_ranker: Tier1TermRankerKind::Yake,
         chunk_strategy: ChunkStrategy::Heading,
@@ -938,8 +945,6 @@ fn main() -> Result<()> {
                 session_id,
                 scope: None,
                 filters: None,
-
-                lang: None,
             })?;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
             let mut seen = HashSet::new();
@@ -955,17 +960,17 @@ fn main() -> Result<()> {
         };
 
         let mut search = |service: &mut MemoryService,
-                          query: &str,
-                          session_id: Option<String>|
+                         query: &str,
+                         session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
         };
 
         let mut search_scored_prod = |service: &mut MemoryService,
-                                      query: &str,
-                                      session_id: Option<String>,
-                                      top_k: usize|
+                                     query: &str,
+                                     session_id: Option<String>,
+                                     top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
             let response = service.search(SearchRequest {
@@ -976,8 +981,6 @@ fn main() -> Result<()> {
                 session_id,
                 scope: None,
                 filters: None,
-
-                lang: None,
             })?;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
             let mut seen = HashSet::new();
@@ -993,8 +996,8 @@ fn main() -> Result<()> {
         };
 
         let mut search_prod = |service: &mut MemoryService,
-                               query: &str,
-                               session_id: Option<String>|
+                              query: &str,
+                              session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored_prod(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
@@ -1244,6 +1247,7 @@ fn main() -> Result<()> {
     per_pair.sort_by(|a, b| a.id.cmp(&b.id));
 
     let report = Report {
+        ner_provider: args.ner_provider.clone(),
         dataset: "LoCoMo (snap-research/locomo locomo10.json), pronominalized follow-up pairs, turn-level scoring".to_string(),
         commit: env!("CARGO_PKG_VERSION").to_string(),
         conversations: conversations.len(),

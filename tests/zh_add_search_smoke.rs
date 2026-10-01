@@ -4,7 +4,6 @@
 // partial-overlap query -- not the exact sentence -- so the test proves
 // bigram retrieval works rather than exact matching. The English test
 // guards against regressions from the CJK tokenizer changes.
-use lint_ai::lang::Lang;
 use lint_ai::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
 use lint_ai::PipelineOptions;
 use std::collections::BTreeMap;
@@ -34,8 +33,7 @@ fn doc_id(user_id: &str, request_id: &str) -> String {
 fn search(
     service: &mut MemoryService,
     query: &str,
-    user_id: &str,
-    lang: Lang,
+    user_id: &str
 ) -> Vec<lint_ai::memory_api::SearchMemory> {
     let response = service
         .search(SearchRequest {
@@ -46,7 +44,6 @@ fn search(
             session_id: None,
             scope: None,
             filters: None,
-            lang: Some(lang),
         })
         .expect("search");
     response.data
@@ -55,7 +52,6 @@ fn search(
 #[test]
 fn chinese_add_search_ranks_target_first() {
     let options = PipelineOptions {
-        lang: Lang::Zh,
         ..PipelineOptions::default()
     };
     let mut service = MemoryService::in_memory(options);
@@ -71,7 +67,7 @@ fn chinese_add_search_ranks_target_first() {
 
     // Partial overlap: shares bigrams (清华, 华大, 大学, 计算...) with the
     // target but is not the stored sentence.
-    let results = search(&mut service, "清华大学计算机专业", user_id, Lang::Zh);
+    let results = search(&mut service, "清华大学计算机专业", user_id);
     assert!(
         !results.is_empty(),
         "Chinese query should retrieve the target memory"
@@ -87,7 +83,6 @@ fn chinese_add_search_ranks_target_first() {
 #[test]
 fn chinese_question_retrieves_answer_memory() {
     let options = PipelineOptions {
-        lang: Lang::Zh,
         ..PipelineOptions::default()
     };
     let mut service = MemoryService::in_memory(options);
@@ -101,7 +96,7 @@ fn chinese_question_retrieves_answer_memory() {
     add_memory(&mut service, user_id, "zh-d1", "我喜欢在周末去公园跑步。");
 
     // Interrogative + partial content overlap.
-    let results = search(&mut service, "我在哪所大学毕业的？", user_id, Lang::Zh);
+    let results = search(&mut service, "我在哪所大学毕业的？", user_id);
     assert!(
         !results.is_empty(),
         "Chinese question should retrieve the target memory"
@@ -117,7 +112,6 @@ fn chinese_question_retrieves_answer_memory() {
 #[test]
 fn english_add_search_still_ranks_target_first() {
     let options = PipelineOptions {
-        lang: Lang::En,
         ..PipelineOptions::default()
     };
     let mut service = MemoryService::in_memory(options);
@@ -145,7 +139,7 @@ fn english_add_search_still_ranks_target_first() {
         &mut service,
         "Stanford computer science degree",
         user_id,
-        Lang::En,
+
     );
     assert!(
         !results.is_empty(),
@@ -186,7 +180,6 @@ fn auto_detect_routes_chinese_query_to_chinese_memory() {
                 f.insert("memory_user_id".to_string(), user_id.to_string());
                 f
             }),
-            lang: None,
         })
         .expect("search");
     assert!(

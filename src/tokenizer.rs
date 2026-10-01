@@ -15,6 +15,7 @@
 //!
 //! Keep both modes and pick per caller; don't unify them.
 
+use crate::lang::Lang;
 use crate::query_expansion::normalize_for_index;
 use regex::Regex;
 use rust_stemmers::{Algorithm, Stemmer};
@@ -35,6 +36,42 @@ pub enum TokenizerMode {
     /// Hangul runs become eojeol + stem with no stemming. Used by
     /// `crate::segments`'s routing path.
     Stemmed,
+}
+
+/// Latin letter class for token regexes: ASCII plus accented Latin
+/// (Latin-1 Supplement U+00C0–U+00FF and Latin Extended-A U+0100–U+017F),
+/// so Spanish/French/etc. words tokenize as units ("niño" is one token,
+/// not "ni"). Pure-ASCII input matches byte-identically to `[A-Za-z]`.
+pub(crate) const LATIN_LETTER: &str = r"A-Za-zÀ-ÿĀ-ſ";
+
+/// Strip diacritics from a (lowercased) Latin token: NFD decomposition
+/// followed by removal of combining marks. `niño` -> `nino`,
+/// `dónde` -> `donde`. Pure-ASCII input is returned unchanged
+/// (byte-identical, via the fast path below).
+///
+/// Used for dual emission (see [`unstemmed_tokens`] and
+/// `crate::index::latin_tokenizer`): both the original and the folded
+/// form are indexed and queried, so unaccented queries match accented
+/// text while exact matches still rank higher. Only combining marks are
+/// removed — `ß`, `ø`, `ł` keep their identity (this is not full
+/// ASCII-folding).
+pub fn fold_diacritics(s: &str) -> String {
+    if s.is_ascii() {
+        return s.to_string();
+    }
+    s.nfd().filter(|c| !is_combining_mark(*c)).collect()
+}
+
+/// True for Unicode combining marks (diacritics) — the marks that NFD
+/// decomposition separates from their base letters.
+fn is_combining_mark(c: char) -> bool {
+    matches!(c,
+        '\u{300}'..='\u{36F}'   // Combining Diacritical Marks
+        | '\u{1AB0}'..='\u{1AFF}' // Combining Diacritical Marks Extended
+        | '\u{1DC0}'..='\u{1DFF}' // Combining Diacritical Marks Supplement
+        | '\u{20D0}'..='\u{20FF}' // Combining Diacritical Marks for Symbols
+        | '\u{FE20}'..='\u{FE2F}' // Combining Half Marks
+    )
 }
 
 /// Tokenizes `input` according to `mode`. Order matches input order and
@@ -74,12 +111,15 @@ pub(crate) fn is_chinese_stopword(token: &str) -> bool {
 
 fn unstemmed_tokens(input: &str) -> Vec<String> {
     static TOKEN_RE: OnceLock<Regex> = OnceLock::new();
-    let token_re =
-        TOKEN_RE.get_or_init(|| Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").expect("valid regex"));
+    let token_re = TOKEN_RE.get_or_init(|| {
+        Regex::new(&format!(r"[{L}][{L}0-9_\-]{{2,}}", L = LATIN_LETTER)).expect("valid regex")
+    });
     // Script-aware single pass: Latin runs keep the exact historical regex
     // behavior (no regex match can span a Han/Hangul char, so segmenting at
     // script boundaries is byte-identical for Latin); Han runs emit
     // bigrams; Hangul runs emit the eojeol plus a particle-stripped stem.
+    // Latin runs dual-emit the original and the diacritic-folded form
+    // (see `push_unstemmed_run`).
     let mut out = Vec::new();
     let mut seg = String::new();
     let mut seg_script = Script::Latin;
@@ -150,7 +190,21 @@ fn push_unstemmed_run(
 ) {
     match script {
         Script::Latin => {
-            out.extend(token_re.find_iter(seg).map(|m| m.as_str().to_lowercase()));
+            for m in token_re.find_iter(seg) {
+                let lowered = m.as_str().to_lowercase();
+                // Dual emission for accent-insensitive matching: the
+                // original form plus the diacritic-folded form (when
+                // different). Index and query both emit both, so `nino`
+                // matches a doc containing `niño`, while a query for `niño`
+                // matches two terms in an exact doc vs one in a folded-only
+                // doc — exact matches rank higher with no boost machinery.
+                // Pure-ASCII tokens emit once (byte-identical to before).
+                let folded = fold_diacritics(&lowered);
+                out.push(lowered);
+                if folded != *out.last().unwrap() {
+                    out.push(folded);
+                }
+            }
         }
         Script::Han => push_han_bigrams(out, &seg.chars().collect::<Vec<_>>()),
         Script::Hangul => out.extend(hangul_eojeol_tokens(seg)),
@@ -381,16 +435,6 @@ pub(crate) fn chinese_stopwords() -> &'static HashSet<&'static str> {
 /// `tier1::cjk_term_tests::chinese_generous_budget_keeps_late_payload_terms`.
 const CHINESE_CURRENT_STATE_KEEP: &[&str] = &["现在"];
 
-/// Strip diacritics via NFD decomposition + combining-mark removal.
-/// `niño` -> `nino`, `está` -> `esta`; `ß`/`ø`/`ł` keep their identity
-/// (no transliteration). Used to derive the folded twins of Spanish
-/// stopwords for accent-insensitive matching.
-pub(crate) fn fold_diacritics(s: &str) -> String {
-    s.nfd()
-        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
-        .collect()
-}
-
 /// Spanish function words: the vendored spaCy `es` list
 /// (`crate::stopwords_data::STOPWORDS_ES`, MIT) plus mechanical
 /// diacritic-folded twins (`está`/`esta`), because dual emission means
@@ -412,8 +456,38 @@ pub(crate) fn spanish_stopwords() -> &'static HashSet<String> {
                 .iter()
                 .map(|w| fold_diacritics(w)),
         );
+        // Stemmed forms: query-term paths run through the English Porter
+        // stemmer (via normalize_for_index), so the set must be closed
+        // under stemming. Stemming is not idempotent ("adelante" ->
+        // "adelant" -> "adel"), so iterate to a fixed point.
+        let stemmer = Stemmer::create(Algorithm::English);
+        loop {
+            let stemmed: Vec<String> = set
+                .iter()
+                .map(|w| stemmer.stem(w).to_string())
+                .filter(|s| !set.contains(s))
+                .collect();
+            if stemmed.is_empty() {
+                break;
+            }
+            set.extend(stemmed);
+        }
         set
     })
+}
+
+
+/// True if `token` is a stopword for `lang` under `mode`. English behavior
+/// is unchanged (`is_stopword`); Spanish adds its function words on top.
+/// `lang` must already be resolved — `Auto` falls back to English.
+pub fn is_stopword_for_lang(token: &str, mode: TokenizerMode, lang: Lang) -> bool {
+    if is_stopword(token, mode) {
+        return true;
+    }
+    match lang {
+        Lang::Es => spanish_stopwords().contains(token),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -422,7 +496,7 @@ mod tests {
 
     #[test]
     fn unstemmed_matches_manual_regex() {
-        let re = Regex::new(r"[A-Za-z][A-Za-z0-9_-]{2,}").unwrap();
+        let re = Regex::new(&format!(r"[{L}][{L}0-9_\-]{{2,}}", L = LATIN_LETTER)).unwrap();
         let samples = [
             "What degree did I graduate with?",
             "How many miles did I run last week?",
@@ -463,6 +537,44 @@ mod tests {
     }
 
     #[test]
+    fn unstemmed_keeps_spanish_accents() {
+        // Accented words must tokenize as units (previously "niño" yielded
+        // zero tokens and "está" was truncated to "est"). Dual emission:
+        // the original form plus the folded form.
+        assert_eq!(
+            tokenize("¿Dónde está la biblioteca?", TokenizerMode::Unstemmed),
+            vec!["dónde", "donde", "está", "esta", "biblioteca"]
+        );
+        assert_eq!(
+            tokenize("El niño juega", TokenizerMode::Unstemmed),
+            vec!["niño", "nino", "juega"]
+        );
+    }
+
+    #[test]
+    fn fold_diacritics_strips_marks() {
+        assert_eq!(fold_diacritics("niño"), "nino");
+        assert_eq!(fold_diacritics("dónde"), "donde");
+        assert_eq!(fold_diacritics("sí"), "si");
+        assert_eq!(fold_diacritics("año"), "ano");
+        assert_eq!(fold_diacritics("Ñoño"), "Nono"); // case preserved, marks stripped
+        // Pure ASCII is byte-identical (fast path).
+        assert_eq!(fold_diacritics("siesta"), "siesta");
+        // Not full ASCII-folding: ß/ø/ł keep their identity.
+        assert_eq!(fold_diacritics("straße"), "straße");
+        assert_eq!(fold_diacritics("søren"), "søren");
+    }
+
+    #[test]
+    fn unstemmed_ascii_unchanged() {
+        // Pure-ASCII input emits exactly one token per word, as before.
+        assert_eq!(
+            tokenize("The quick brown fox", TokenizerMode::Unstemmed),
+            vec!["the", "quick", "brown", "fox"]
+        );
+    }
+
+    #[test]
     fn unstemmed_single_han_char_is_kept() {
         assert_eq!(
             tokenize("天", TokenizerMode::Unstemmed),
@@ -492,6 +604,66 @@ mod tests {
         for word in [
             "how", "many", "does", "was", "the", "and", "however", "therefore", "among",
         ] {
+            assert!(
+                is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should be a stopword"
+            );
+        }
+        for word in ["degree", "graduate", "miles", "pasta"] {
+            assert!(
+                !is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} should not be a stopword"
+            );
+        }
+    }
+
+    #[test]
+    fn spanish_stopwords_cover_normalized_forms() {
+        // Fixed-point check: every Spanish stopword, once run through the
+        // index-time normalization, must land back in the set (or vanish).
+        // Otherwise the normalized query-term paths would miss it.
+        for word in spanish_stopwords().iter() {
+            let normalized = normalize_for_index(word);
+            for form in normalized.split_whitespace() {
+                assert!(
+                    spanish_stopwords().contains(form),
+                    "normalized form {form:?} of {word:?} missing from Spanish stopwords"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spanish_stopwords_do_not_leak_into_english() {
+        // The per-language gate: English text never consults the Spanish
+        // list, so Spanish-only surface forms stay live in English.
+        // (Words like "no"/"son"/"era" are also English stopwords, so they
+        // can't test the gate — use Spanish-only forms here.)
+        for word in ["también", "dónde", "está", "niño", "biblioteca"] {
+            assert!(
+                !is_stopword(word, TokenizerMode::Unstemmed),
+                "{word} must not be an English stopword"
+            );
+        }
+        // But they ARE Spanish stopwords when Lang::Es is passed.
+        for word in ["no", "son", "era", "tan", "la", "el"] {
+            assert!(
+                is_stopword_for_lang(word, TokenizerMode::Unstemmed, Lang::Es),
+                "{word} should be a Spanish stopword"
+            );
+        }
+        // Spanish-only forms are not filtered for English.
+        for word in ["también", "dónde", "está"] {
+            assert!(
+                !is_stopword_for_lang(word, TokenizerMode::Unstemmed, Lang::En),
+                "{word} must not be filtered for English"
+            );
+        }
+    }
+
+    #[test]
+    fn unstemmed_stopword_matches_original_list() {
+        for word in ["how", "many", "does", "was", "the", "and"] {
             assert!(
                 is_stopword(word, TokenizerMode::Unstemmed),
                 "{word} should be a stopword"

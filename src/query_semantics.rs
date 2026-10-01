@@ -74,10 +74,10 @@ pub struct QueryPosTag {
 }
 
 #[derive(Debug, Clone)]
-struct POSTag {
-    word: String,
-    label: String,
-    score: f64,
+pub(crate) struct POSTag {
+    pub(crate) word: String,
+    pub(crate) label: String,
+    pub(crate) score: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -502,12 +502,77 @@ struct NounPhrase {
 }
 
 fn classify_query_kind(query: &str) -> QueryKind {
-    let lower = query.trim().to_lowercase();
+    // Strip leading inverted punctuation (¿/¡) and quotes so Spanish
+    // questions classify like English ones.
+    let lower = query
+        .trim()
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase();
     if lower.starts_with("how many") {
         return QueryKind::HowMany;
     }
     if lower.starts_with("how much") {
         return QueryKind::HowMuch;
+    }
+    // Spanish interrogatives. Accented forms are unambiguous; unaccented
+    // "que" is deliberately NOT mapped (relative pronoun). "cuántos" does
+    // not prefix-collide with "cuánto" ("cuántos " vs "cuánto " differ at
+    // index 6), so order between them is safe.
+    if lower.starts_with("cuántos ")
+        || lower.starts_with("cuántas ")
+        || lower.starts_with("cuantos ")
+        || lower.starts_with("cuantas ")
+        || lower == "cuántos"
+        || lower == "cuántas"
+    {
+        return QueryKind::HowMany;
+    }
+    if lower.starts_with("cuánto ")
+        || lower.starts_with("cuánta ")
+        || lower.starts_with("cuanto ")
+        || lower.starts_with("cuanta ")
+        || lower == "cuánto"
+        || lower == "cuánta"
+    {
+        return QueryKind::HowMuch;
+    }
+    if lower.starts_with("quién ")
+        || lower.starts_with("quiénes ")
+        || lower.starts_with("quien ")
+        || lower.starts_with("quienes ")
+        || lower == "quién"
+        || lower == "quien"
+    {
+        return QueryKind::Who;
+    }
+    if lower.starts_with("qué ") || lower == "qué" {
+        return QueryKind::What;
+    }
+    if lower.starts_with("cuál ")
+        || lower.starts_with("cuáles ")
+        || lower.starts_with("cual ")
+        || lower.starts_with("cuales ")
+        || lower == "cuál"
+        || lower == "cual"
+    {
+        return QueryKind::Which;
+    }
+    if lower.starts_with("dónde ")
+        || lower.starts_with("donde ")
+        || lower == "dónde"
+        || lower == "donde"
+    {
+        return QueryKind::Where;
+    }
+    if lower.starts_with("cuándo ")
+        || lower.starts_with("cuando ")
+        || lower == "cuándo"
+        || lower == "cuando"
+    {
+        return QueryKind::When;
+    }
+    if lower.starts_with("por qué") || lower.starts_with("por que") {
+        return QueryKind::Why;
     }
     if lower.starts_with("who ") || lower == "who" {
         return QueryKind::Who;
@@ -678,7 +743,31 @@ fn query_routing_intent(
     None
 }
 
-fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
+/// Frequent English lexical verbs (base forms). The heuristic POS tagger
+/// has no verb lexicon: a bare verb like "visit" falls through to NN and
+/// would glue neighboring noun phrases into one chunk ("Jean visit Paris"
+/// instead of "Jean" + "Paris"). Applied only to lowercase-initial words
+/// so capitalized names ("Mark") keep their NNP tag.
+const COMMON_VERB_BASES: &[&str] = &[
+    "ask", "answer", "book", "bring", "buy", "call", "camp", "climb", "close", "come", "cook",
+    "cost", "dance", "drink", "drive", "eat", "end", "enjoy", "feel", "fight", "find", "fish",
+    "fly", "forget", "get", "give", "go", "hate", "help", "hike", "hunt", "join", "know", "learn",
+    "leave", "like", "live", "lose", "love", "make", "meet", "move", "need", "open", "order",
+    "own", "pay", "play", "prefer", "read", "receive", "remember", "remind", "rent", "run",
+    "save", "say", "see", "sell", "send", "shop", "sing", "sleep", "speak", "spend", "start",
+    "stay", "stop", "study", "swim", "take", "talk", "teach", "tell", "think", "travel", "try",
+    "use", "visit", "wait", "wake", "walk", "want", "wash", "watch", "win", "work", "write",
+];
+
+/// Irregular past forms that do not end in -ed (the -ed suffix rule
+/// already catches regular pasts).
+const COMMON_VERB_PASTS: &[&str] = &[
+    "began", "brought", "bought", "came", "drank", "drove", "ate", "felt", "fought", "found",
+    "forgot", "gave", "went", "knew", "left", "lost", "made", "met", "paid", "ran", "said",
+    "saw", "sent", "spent", "took", "thought", "told", "understood", "woke", "won", "wrote",
+];
+
+pub(crate) fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
     let mut tags = Vec::new();
     for raw in query.split_whitespace() {
         let word = raw.trim_matches(|c: char| c.is_ascii_punctuation());
@@ -799,6 +888,35 @@ fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
             } else {
                 "VB"
             }
+        } else if word
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase())
+            && COMMON_VERB_BASES.contains(&lower.as_str())
+        {
+            // Frequent lexical verb ("visit"): lowercase-initial only, so a
+            // capitalized name ("Mark") still tags NNP below.
+            "VB"
+        } else if word
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase())
+            && COMMON_VERB_PASTS.contains(&lower.as_str())
+        {
+            "VBD"
+        } else if {
+            // Third-person singular ("visits"): the -s would otherwise tag
+            // NNS and glue the verb into a neighboring noun chunk.
+            let stem = lower.strip_suffix('s').unwrap_or(lower.as_str());
+            lower.ends_with('s')
+                && lower.len() > 4
+                && word
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase())
+                && COMMON_VERB_BASES.contains(&stem)
+        } {
+            "VBZ"
         } else if lower.ends_with("ing") && lower.len() > 4 {
             "VBG"
         } else if lower.ends_with("ed") && lower.len() > 3 {
@@ -1521,8 +1639,11 @@ fn build_augmented_query(
         // Skip question words and temporal markers: they're filters, not content.
         // Check both kind and text: "when" appears as Entity/Subject/QuestionWord.
         let text_lower = entity.text.to_lowercase();
-        if matches!(entity.kind, QuerySpanKind::QuestionWord | QuerySpanKind::Temporal)
-            || crate::question_focus::is_question_word(&text_lower) {
+        if matches!(
+            entity.kind,
+            QuerySpanKind::QuestionWord | QuerySpanKind::Temporal
+        ) || crate::question_focus::is_question_word(&text_lower)
+        {
             continue;
         }
         push_term(&entity.text);
@@ -1535,7 +1656,23 @@ fn build_augmented_query(
         // "will" in "will start" is not the focus; "start" is.
         // "do"/"does"/"did" in "what does X do" are not the focus either.
         let stemmed = crate::tokenizer::tokenize(phrase, crate::tokenizer::TokenizerMode::Stemmed);
-        if stemmed.iter().any(|t| matches!(t.as_str(), "will" | "shall" | "should" | "can" | "could" | "may" | "might" | "must" | "do" | "doe" | "did" | "done")) {
+        if stemmed.iter().any(|t| {
+            matches!(
+                t.as_str(),
+                "will"
+                    | "shall"
+                    | "should"
+                    | "can"
+                    | "could"
+                    | "may"
+                    | "might"
+                    | "must"
+                    | "do"
+                    | "doe"
+                    | "did"
+                    | "done"
+            )
+        }) {
             continue;
         }
         push_term(phrase);

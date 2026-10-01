@@ -37,6 +37,12 @@ jobs:
           python-version: "3.12"
       - name: Install maturin
         run: pip install maturin
+      - name: Create venv for maturin develop
+        # maturin develop refuses to install outside a virtualenv; put the
+        # venv first on PATH so later steps use it without re-activating.
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Build and install the extension
         # NB: do not pass --features here; the CLI flag would override the
         # [tool.maturin] features in pyproject.toml (python + pyo3/abi3-py38).

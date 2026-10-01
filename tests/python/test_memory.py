@@ -1,4 +1,11 @@
+import os
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
 import unittest
+import urllib.request
 
 import lint_ai
 
@@ -371,3 +378,128 @@ class TestFilterContract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRemoteLifecycle(unittest.TestCase):
+    """End-to-end remote mode against a real server binary (Luyi gate #2).
+
+    Starts `target/debug/server` on a free loopback port with
+    `--server-token` auth, runs a full CRUD lifecycle through
+    `lint_ai.Memory(base_url=..., api_key=...)`, then checks the
+    unauthorized and missing-record paths. Hermetic: localhost only.
+    Skips cleanly when the server binary has not been built
+    (`cargo build --bin server`).
+    """
+
+    TOKEN = "remote-test-secret"
+
+    @classmethod
+    def _repo_root(cls):
+        return os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.binary = os.path.join(cls._repo_root(), "target", "debug", "server")
+        if not os.path.isfile(cls.binary):
+            raise unittest.SkipTest(
+                "server binary not built; run `cargo build --bin server`"
+            )
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            cls.port = probe.getsockname()[1]
+        cls.tmpdir = tempfile.mkdtemp(prefix="lintai-remote-test-")
+        # Scrub ambient auth config so the test controls the server's
+        # credentials exactly (JWT auth is env-only; token via CLI flag).
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("JWT_SECRET", "SERVER_TOKEN", "SERVER_TENANT_ID")
+        }
+        cls.proc = subprocess.Popen(
+            [
+                cls.binary,
+                "--bind", f"127.0.0.1:{cls.port}",
+                "--index", cls.tmpdir,
+                "--server-token", cls.TOKEN,
+            ],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        cls.base_url = f"http://127.0.0.1:{cls.port}"
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if cls.proc.poll() is not None:
+                raise RuntimeError(
+                    f"server exited during startup (code {cls.proc.returncode})"
+                )
+            try:
+                with urllib.request.urlopen(
+                    f"{cls.base_url}/health", timeout=2
+                ) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                time.sleep(0.2)
+        else:
+            cls.proc.terminate()
+            raise RuntimeError("server did not become ready within 30s")
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "proc"):
+            cls.proc.terminate()
+            try:
+                cls.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cls.proc.kill()
+        if hasattr(cls, "tmpdir"):
+            shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _memory(self, api_key=TOKEN):
+        return lint_ai.Memory(base_url=self.base_url, api_key=api_key)
+
+    def test_remote_crud_lifecycle(self):
+        memory = self._memory()
+
+        added = memory.add(
+            "remote-1",
+            "remote-user",
+            "remote-session",
+            [{"role": "user", "content": "Remote memory about submarines"}],
+        )
+        self.assertTrue(added["success"])
+
+        found = memory.search("submarines", "remote-user", 5)
+        self.assertGreaterEqual(len(found), 1)
+        record = found[0]
+        self.assertEqual(record["user_id"], "remote-user")
+
+        fetched = memory.get(record["id"], "remote-user")
+        self.assertEqual(fetched["id"], record["id"])
+
+        listed = memory.list("remote-user")
+        self.assertEqual(len(listed["data"]), 1)
+
+        updated = memory.update(
+            record["id"], "remote-user", "Remote memory about sailboats"
+        )
+        self.assertIn("sailboats", updated["content"])
+
+        self.assertTrue(memory.delete("remote-user", record["id"]))
+        self.assertIsNone(memory.get(record["id"], "remote-user"))
+        memory.refresh()
+
+    def test_remote_wrong_api_key_is_unauthorized(self):
+        memory = self._memory(api_key="wrong-key")
+        with self.assertRaises(RuntimeError) as ctx:
+            memory.list("remote-user")
+        self.assertIn("401", str(ctx.exception))
+
+    def test_remote_missing_record_returns_none(self):
+        memory = self._memory()
+        self.assertIsNone(memory.get("does-not-exist", "remote-user"))
+        self.assertIsNone(memory.update("does-not-exist", "remote-user", "x"))
+        self.assertFalse(memory.delete("remote-user", "does-not-exist"))

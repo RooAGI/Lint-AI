@@ -94,12 +94,7 @@ pub fn default_board(owner: &str, workspace: &str, session_id: &str) -> Board {
 
 /// Whether a board ID is the default board for (owner, workspace,
 /// session_id) — i.e. that session's board.
-pub fn is_default_board(
-    board_id: &str,
-    owner: &str,
-    workspace: &str,
-    session_id: &str,
-) -> bool {
+pub fn is_default_board(board_id: &str, owner: &str, workspace: &str, session_id: &str) -> bool {
     board_id == default_board_id(owner, workspace, session_id)
 }
 
@@ -168,13 +163,13 @@ pub fn board_post_doc_id(board_id: &str, sequence: u64) -> String {
 /// Build the [`SourceDocument`] filters for a board definition.
 pub fn board_doc_filters(board: &Board) -> BTreeMap<String, String> {
     let mut f = BTreeMap::new();
-    f.insert(BOARD_DOC_KIND_FILTER.to_string(), BOARD_DOC_KIND.to_string());
+    f.insert(
+        BOARD_DOC_KIND_FILTER.to_string(),
+        BOARD_DOC_KIND.to_string(),
+    );
     f.insert(BOARD_ID_FILTER.to_string(), board.board_id.clone());
     f.insert(BOARD_OWNER_FILTER.to_string(), board.owner.clone());
-    f.insert(
-        BOARD_WORKSPACE_FILTER.to_string(),
-        board.workspace.clone(),
-    );
+    f.insert(BOARD_WORKSPACE_FILTER.to_string(), board.workspace.clone());
     f.insert(BOARD_KEY_FILTER.to_string(), board.key.clone());
     f
 }
@@ -187,17 +182,14 @@ pub fn board_post_doc_filters(post: &BoardPost, request_id: &str) -> BTreeMap<St
         BOARD_POST_KIND.to_string(),
     );
     f.insert(BOARD_ID_FILTER.to_string(), post.board_id.clone());
-    f.insert(BOARD_AUTHOR_FILTER.to_string(), post.author_agent_id.clone());
-    f.insert(BOARD_PROVIDER_FILTER.to_string(), post.provider.clone());
     f.insert(
-        BOARD_SEQUENCE_FILTER.to_string(),
-        post.sequence.to_string(),
+        BOARD_AUTHOR_FILTER.to_string(),
+        post.author_agent_id.clone(),
     );
+    f.insert(BOARD_PROVIDER_FILTER.to_string(), post.provider.clone());
+    f.insert(BOARD_SEQUENCE_FILTER.to_string(), post.sequence.to_string());
     if !request_id.is_empty() {
-        f.insert(
-            BOARD_REQUEST_ID_FILTER.to_string(),
-            request_id.to_string(),
-        );
+        f.insert(BOARD_REQUEST_ID_FILTER.to_string(), request_id.to_string());
     }
     f
 }

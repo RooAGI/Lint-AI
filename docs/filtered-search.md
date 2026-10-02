@@ -192,10 +192,10 @@ filter fields would be the natural next step.
 ## Usage Example
 
 ```rust
-use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
+use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
 use std::collections::BTreeMap;
 
-let mut store = IndexStore::new(PipelineOptions::default());
+let mut store = MemoryService::in_memory(PipelineOptions::default());
 
 // Index documents tagged with run and artifact scope
 for (i, text) in texts.iter().enumerate() {
@@ -212,11 +212,14 @@ for (i, text) in texts.iter().enumerate() {
 
 // Single-term filtered query
 let scope = BTreeMap::from([("run_id".into(), "run-abc".into())]);
-let results = store.query_filtered("NVDA earnings", 5, &scope)?;
+store.refresh()?;
+let results = store.search_with_filters("NVDA earnings", "workspace", None, 5, &scope)?;
 
-// Multi-term filtered query. The filter scan happens once.
+// Run each query through the service.
 let terms = &["NVDA", "TSLA", "AMD"];
-let per_term = store.query_filtered_multi(terms, 5, &scope)?;
+let per_term = terms.iter().map(|query|
+    store.search_with_filters(query, "workspace", None, 5, &scope)
+).collect::<anyhow::Result<Vec<_>>>()?;
 // per_term[0] = results for "NVDA"
 // per_term[1] = results for "TSLA"
 // per_term[2] = results for "AMD"

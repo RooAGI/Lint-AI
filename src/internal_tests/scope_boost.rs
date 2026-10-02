@@ -18,12 +18,11 @@
 // (e.g. ~/workspace/bekind/target/release/bekind at commit e89c5cf).
 // Without BEHOOD_BIN the test skips loudly instead of failing — the pure
 // tag-emission logic is covered by unit tests that need no binary.
-use lint_ai::memory_api::{AddRequest, MemoryService, Message};
-use lint_ai::PipelineOptions;
+use crate::memory_api::{AddRequest, MemoryService, Message};
+use crate::PipelineOptions;
 use std::collections::BTreeMap;
 
-const FACT_A: &str =
-    "The user runs 5 kilometers every Saturday morning in Golden Gate Park.";
+const FACT_A: &str = "The user runs 5 kilometers every Saturday morning in Golden Gate Park.";
 const FACT_B: &str = "The user swims every Monday evening at the pool.";
 const QUESTION: &str = "What is the user's weekend exercise routine?";
 
@@ -35,7 +34,7 @@ fn bekind_bin() -> Option<String> {
 
 fn doc_id(user_id: &str, request_id: &str) -> String {
     // Mirrors MemoryService's internal doc_id_for: "{user}:{request}:0".
-    lint_ai::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
+    crate::memory_api::memory_document_id(user_id, request_id, 0)
 }
 
 fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, content: &str) {
@@ -55,7 +54,11 @@ fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, conten
         .expect("add fact");
 }
 
-fn search(service: &mut MemoryService, user_id: &str, question: &str) -> Vec<lint_ai::SearchResult> {
+fn search(
+    service: &mut MemoryService,
+    user_id: &str,
+    question: &str,
+) -> Vec<crate::SearchResult> {
     let mut filters = BTreeMap::new();
     // Literal key, matching internal convention (cf. USER_FILTER and the
     // locomo benchmark server): the ownership filter const is crate-private.
@@ -108,10 +111,7 @@ fn weekend_question_ranks_saturday_fact_above_monday_fact_via_tags() {
     // to live in.
     eprintln!(
         "semantic_tags: A score={:.2} (lexical {:.2}) | B score={:.2} (lexical {:.2})",
-        a.score,
-        a.score_breakdown.lexical_score,
-        b.score,
-        b.score_breakdown.lexical_score,
+        a.score, a.score_breakdown.lexical_score, b.score, b.score_breakdown.lexical_score,
     );
 
     assert!(

@@ -11,7 +11,7 @@ and lifecycle operations.
 |---|---|---|
 | HTTP server | The framework can make HTTP requests or you want a service boundary. | Call `/add` after a turn and `/search` before the next model decision. |
 | MCP server | The framework supports MCP tools and you want the model to request memory explicitly. | Connect Lint-AI as an MCP server and expose its tools to the agent. |
-| Rust library | The framework is Rust-based and can embed the index directly. | Manage an `IndexStore` and call `upsert`/`query` in the agent loop. |
+| Rust library | The framework is Rust-based and can embed Lint-AI. | Own one `MemoryService` and call its memory operations in the agent loop. |
 
 The HTTP and MCP paths work with any framework and do not require Lint-AI's
 provider-specific lifecycle hooks.

@@ -182,12 +182,7 @@ fn script_of(ch: char) -> Script {
     }
 }
 
-fn push_unstemmed_run(
-    out: &mut Vec<String>,
-    token_re: &Regex,
-    script: Script,
-    seg: &str,
-) {
+fn push_unstemmed_run(out: &mut Vec<String>, token_re: &Regex, script: Script, seg: &str) {
     match script {
         Script::Latin => {
             for m in token_re.find_iter(seg) {
@@ -291,10 +286,37 @@ pub(crate) fn hangul_eojeol_tokens(eojeol: &str) -> Vec<String> {
 /// `아이` -> `아`) only adds a noisy extra token that single-character
 /// queries could match — no morphological analyzer required.
 const KOREAN_SUFFIXES: &[&str] = &[
-    "에게서", "한테서", // 3-char
-    "에서", "에게", "한테", "께서", "부터", "까지", "처럼", "마저", "조차", "으로", "하고", "이랑",
+    "에게서",
+    "한테서", // 3-char
+    "에서",
+    "에게",
+    "한테",
+    "께서",
+    "부터",
+    "까지",
+    "처럼",
+    "마저",
+    "조차",
+    "으로",
+    "하고",
+    "이랑",
     "이나", // 2-char
-    "은", "는", "이", "가", "을", "를", "에", "의", "도", "만", "로", "와", "과", "랑", "나", "야",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "에",
+    "의",
+    "도",
+    "만",
+    "로",
+    "와",
+    "과",
+    "랑",
+    "나",
+    "야",
     "아", // 1-char
 ];
 
@@ -325,7 +347,12 @@ fn strip_one_korean_suffix(word: &str) -> Option<String> {
 /// hand-built list. Shared with the tier-1 term ranker (`crate::tier1`).
 pub(crate) fn english_stopwords() -> &'static HashSet<&'static str> {
     static STOP: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    STOP.get_or_init(|| crate::stopwords_data::STOPWORDS_EN.iter().copied().collect())
+    STOP.get_or_init(|| {
+        crate::stopwords_data::STOPWORDS_EN
+            .iter()
+            .copied()
+            .collect()
+    })
 }
 
 fn unstemmed_stopwords() -> &'static HashSet<&'static str> {
@@ -358,19 +385,80 @@ pub(crate) fn korean_stopwords() -> &'static HashSet<&'static str> {
     STOP.get_or_init(|| {
         let mut set: HashSet<&'static str> = [
             // Particles / case markers.
-            "은", "는", "이", "가", "을", "를", "에", "의", "와", "과", "도", "만", "로", "으로",
-            "에서", "에게", "한테", "부터", "까지", "처럼", "이랑", "랑", "하고", "나", "야", "아",
+            "은",
+            "는",
+            "이",
+            "가",
+            "을",
+            "를",
+            "에",
+            "의",
+            "와",
+            "과",
+            "도",
+            "만",
+            "로",
+            "으로",
+            "에서",
+            "에게",
+            "한테",
+            "부터",
+            "까지",
+            "처럼",
+            "이랑",
+            "랑",
+            "하고",
+            "나",
+            "야",
+            "아",
             // Demonstratives, bound nouns, quantifiers.
-            "그", "저", "것", "거", "수", "등", "및", "한", "두", "세", "더", "또",
+            "그",
+            "저",
+            "것",
+            "거",
+            "수",
+            "등",
+            "및",
+            "한",
+            "두",
+            "세",
+            "더",
+            "또",
             // Negation / adverbs.
-            "안", "못", "잘",
+            "안",
+            "못",
+            "잘",
             // Pronouns.
-            "나", "너", "우리", "저희", "자기", "제", "내", "네",
+            "나",
+            "너",
+            "우리",
+            "저희",
+            "자기",
+            "제",
+            "내",
+            "네",
             // Interrogatives (kept for term stats; focus sees them anyway).
-            "뭐", "왜", "언제", "어디", "누구", "누가", "무엇", "무슨", "어떤", "어떻게", "얼마나",
-            "얼마", "어느",
+            "뭐",
+            "왜",
+            "언제",
+            "어디",
+            "누구",
+            "누가",
+            "무엇",
+            "무슨",
+            "어떤",
+            "어떻게",
+            "얼마나",
+            "얼마",
+            "어느",
             // Deictic adverbs.
-            "이렇게", "그렇게", "저렇게", "이런", "그런", "저런", "모든",
+            "이렇게",
+            "그렇게",
+            "저렇게",
+            "이런",
+            "그런",
+            "저런",
+            "모든",
         ]
         .into_iter()
         .collect();
@@ -398,21 +486,17 @@ pub(crate) fn chinese_stopwords() -> &'static HashSet<&'static str> {
             "个", "为", "对", "从", "到", "向", "往", "及", "比", "被", "把", "将", "会", "可",
             "应", "能", "够", "以", "之", "其", "些", "每", "各", "该", "此", "若", "如", "乃",
             "则", "然", "故", "因", "虽", "即", "既", "亦", "又", "再", "更", "最", "太", "吗",
-            "呢", "吧", "啊", "呀", "哇", "哦", "嗯",
-            // Pronouns and demonstratives.
-            "我们", "你们", "他们", "她们", "它们", "我的", "你的", "他的", "她的", "它的",
-            "这是", "那是", "这个", "那个", "这些", "那些", "这里", "那里", "这种", "那种",
-            "这样", "那样",
+            "呢", "吧", "啊", "呀", "哇", "哦", "嗯", // Pronouns and demonstratives.
+            "我们", "你们", "他们", "她们", "它们", "我的", "你的", "他的", "她的", "它的", "这是",
+            "那是", "这个", "那个", "这些", "那些", "这里", "那里", "这种", "那种", "这样", "那样",
             // Conjunctions.
-            "然后", "但是", "因为", "所以", "如果", "虽然", "还是", "或者", "以及", "并且",
-            "而且", "不过", "然而", "于是", "因此", "其实", "比如", "例如",
+            "然后", "但是", "因为", "所以", "如果", "虽然", "还是", "或者", "以及", "并且", "而且",
+            "不过", "然而", "于是", "因此", "其实", "比如", "例如",
             // Prepositions / coverbs.
-            "关于", "对于", "由于", "随着", "通过", "作为",
-            // Modals and auxiliaries.
-            "可以", "应该", "必须", "能够", "可能",
-            // Common function bigrams.
-            "的是", "在了", "有了", "是的", "的话", "之一", "之间", "之中", "以内", "以外",
-            "以前", "以后", "之前", "之后", "正在", "已经", "曾经",
+            "关于", "对于", "由于", "随着", "通过", "作为", // Modals and auxiliaries.
+            "可以", "应该", "必须", "能够", "可能", // Common function bigrams.
+            "的是", "在了", "有了", "是的", "的话", "之一", "之间", "之中", "以内", "以外", "以前",
+            "以后", "之前", "之后", "正在", "已经", "曾经",
         ]
         .into_iter()
         .collect();
@@ -476,7 +560,6 @@ pub(crate) fn spanish_stopwords() -> &'static HashSet<String> {
     })
 }
 
-
 /// True if `token` is a stopword for `lang` under `mode`. English behavior
 /// is unchanged (`is_stopword`); Spanish adds its function words on top.
 /// `lang` must already be resolved — `Auto` falls back to English.
@@ -515,8 +598,8 @@ mod tests {
         assert_eq!(
             tokenize("我毕业于清华大学", TokenizerMode::Unstemmed),
             vec![
-                "我", "我毕", "毕", "毕业", "业", "业于", "于", "于清", "清", "清华", "华",
-                "华大", "大", "大学", "学"
+                "我", "我毕", "毕", "毕业", "业", "业于", "于", "于清", "清", "清华", "华", "华大",
+                "大", "大学", "学"
             ]
             .into_iter()
             .map(String::from)
@@ -529,10 +612,12 @@ mod tests {
         // Latin regex behavior is unchanged around Han runs.
         assert_eq!(
             tokenize("我在学习Rust编程", TokenizerMode::Unstemmed),
-            vec!["我", "我在", "在", "在学", "学", "学习", "习", "rust", "编", "编程", "程"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()
+            vec![
+                "我", "我在", "在", "在学", "学", "学习", "习", "rust", "编", "编程", "程"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
         );
     }
 
@@ -558,7 +643,7 @@ mod tests {
         assert_eq!(fold_diacritics("sí"), "si");
         assert_eq!(fold_diacritics("año"), "ano");
         assert_eq!(fold_diacritics("Ñoño"), "Nono"); // case preserved, marks stripped
-        // Pure ASCII is byte-identical (fast path).
+                                                     // Pure ASCII is byte-identical (fast path).
         assert_eq!(fold_diacritics("siesta"), "siesta");
         // Not full ASCII-folding: ß/ø/ł keep their identity.
         assert_eq!(fold_diacritics("straße"), "straße");
@@ -602,7 +687,15 @@ mod tests {
         // Canonical spaCy en list (vendored): the old hand-built words
         // still stop, plus spaCy-only function words.
         for word in [
-            "how", "many", "does", "was", "the", "and", "however", "therefore", "among",
+            "how",
+            "many",
+            "does",
+            "was",
+            "the",
+            "and",
+            "however",
+            "therefore",
+            "among",
         ] {
             assert!(
                 is_stopword(word, TokenizerMode::Unstemmed),
@@ -773,7 +866,9 @@ mod tests {
     #[test]
     fn spanish_folded_twins_are_stopped() {
         let stop = spanish_stopwords();
-        for word in ["está", "esta", "sí", "si", "están", "estan", "también", "tambien"] {
+        for word in [
+            "está", "esta", "sí", "si", "están", "estan", "también", "tambien",
+        ] {
             assert!(stop.contains(word), "{word} should be a Spanish stopword");
         }
         // Content words are not stopwords, folded or not.
@@ -787,7 +882,9 @@ mod tests {
     #[test]
     fn spanish_known_spacy_entries_present() {
         let stop = spanish_stopwords();
-        for word in ["donde", "cuando", "porque", "también", "tambien", "además", "ademas"] {
+        for word in [
+            "donde", "cuando", "porque", "también", "tambien", "además", "ademas",
+        ] {
             assert!(stop.contains(word), "{word} should be a Spanish stopword");
         }
     }
@@ -882,4 +979,3 @@ mod tests {
         assert!(toks.iter().any(|t| t.chars().all(crate::lang::is_han)));
     }
 }
-

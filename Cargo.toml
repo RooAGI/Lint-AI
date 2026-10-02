@@ -1,4 +1,5 @@
 [package]
+autobins = false
 name = "lint-ai"
 version = "0.2.1"
 edition = "2021"
@@ -48,7 +49,7 @@ console = { version = "0.16.3", features = ["std"] }
 sha2 = "0.10"
 rayon = "1.11"
 libflate = "1.4"
-pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.29", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 
 [features]
@@ -66,21 +67,62 @@ python = ["dep:pyo3", "dep:reqwest"]
 experimental = []
 
 [[bin]]
-name = "segment_scoped_benchmark"
-path = "src/bin/segment_scoped_benchmark.rs"
-required-features = ["experimental"]
-
-[[bin]]
-name = "recency_benchmark"
-path = "src/bin/recency_benchmark.rs"
-
-[[bin]]
-name = "project_memory_recency_benchmark"
-path = "src/bin/project_memory_recency_benchmark.rs"
+name = "lint-ai"
+path = "src/main.rs"
 
 [[bin]]
 name = "corpus_scale_benchmark"
-path = "src/bin/corpus_scale_benchmark.rs"
+path = "src/bin/launchers/corpus_scale_benchmark.rs"
+
+[[bin]]
+name = "haystack_indexstore_benchmark"
+path = "src/bin/launchers/haystack_indexstore_benchmark.rs"
+
+[[bin]]
+name = "haystack_scoped_benchmark"
+path = "src/bin/launchers/haystack_scoped_benchmark.rs"
+
+[[bin]]
+name = "jevbench_case_classifier"
+path = "src/bin/launchers/jevbench_case_classifier.rs"
+
+[[bin]]
+name = "locomo_benchmark"
+path = "src/bin/launchers/locomo_benchmark.rs"
+
+[[bin]]
+name = "locomo_benchmark_search_server"
+path = "src/bin/launchers/locomo_benchmark_search_server.rs"
+required-features = ["agent-integrations"]
+
+[[bin]]
+name = "project_memory_recency_benchmark"
+path = "src/bin/launchers/project_memory_recency_benchmark.rs"
+
+[[bin]]
+name = "recency_benchmark"
+path = "src/bin/launchers/recency_benchmark.rs"
+
+[[bin]]
+name = "refresh_scaling_benchmark"
+path = "src/bin/launchers/refresh_scaling_benchmark.rs"
+
+[[bin]]
+name = "segment_scoped_benchmark"
+path = "src/bin/launchers/segment_scoped_benchmark.rs"
+required-features = ["experimental"]
+
+[[bin]]
+name = "server"
+path = "src/bin/launchers/server.rs"
+
+[[bin]]
+name = "session_ab_benchmark"
+path = "src/bin/launchers/session_ab_benchmark.rs"
+
+[[bin]]
+name = "validate_corpus"
+path = "src/bin/launchers/validate_corpus.rs"
 
 [dev-dependencies]
 # Only the SIGKILL crash test needs raw syscalls now; the lock itself is std.

@@ -509,7 +509,7 @@ pub fn promote_recorded_session(
     // The events file is read before taking the write lock; the whole
     // upsert + refresh sequence runs under the cross-process lock so it
     // cannot interleave with hook captures or MCP board/memory writes.
-    crate::integrations::mcp_index::with_shared_memory_service(project_root, |store| {
+    crate::memory_api::MemoryService::with_shared_memory(project_root, |store| {
         let mut imported_document_ids = Vec::new();
         let mut skipped_events = 0;
 

@@ -346,7 +346,10 @@ mod tests {
             "Spanish expansion must be a no-op, got {:?}",
             out.expanded_terms
         );
-        assert_eq!(out.original_terms, vec!["biblioteca".to_string(), "pan".to_string()]);
+        assert_eq!(
+            out.original_terms,
+            vec!["biblioteca".to_string(), "pan".to_string()]
+        );
     }
 
     #[test]

@@ -105,7 +105,7 @@ at the character level throughout.
   implement for Chinese — every Chinese relations call errors and the
   Rust side returns empty evidence. A script-side fallback needs
   Python logic, so this awaits a scope decision; it is recorded in
-  `tests/verify_spacy_health.rs` (`spacy_chinese_relations_fail_open_on_e894`)
+  `src/internal_tests/verify_spacy_health.rs` (`spacy_chinese_relations_fail_open_on_e894`)
   rather than left as a silent gap.
 - **No cross-lingual retrieval.** A Chinese query matches Chinese
   memories; there is no translation or language-bridging layer.

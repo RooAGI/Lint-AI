@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
-use lint_ai::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
-use lint_ai::{
+use crate::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
+use crate::{
     parse_reference_date, segments::SegmentRoutingStrategy, AggregateOutput, ChunkStrategy,
     MemoryIndexLayout, PipelineOptions, QueryDiagnostics, QueryTimings, Tier1NerProvider,
     Tier1TermRankerKind,
@@ -79,14 +79,12 @@ struct Args {
     index_mode: IndexModeArg,
 }
 
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum IndexModeArg {
     Single,
     Segmented,
     Adaptive,
 }
-
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SegmentRouterArg {
@@ -102,7 +100,9 @@ impl From<SegmentRouterArg> for SegmentRoutingStrategy {
             SegmentRouterArg::Sparse => SegmentRoutingStrategy::SparseOverlap,
             SegmentRouterArg::Kl => SegmentRoutingStrategy::KlDivergence,
             SegmentRouterArg::Local => SegmentRoutingStrategy::LocalDistinctiveness,
-            SegmentRouterArg::TypedEvidenceMultiplicative => SegmentRoutingStrategy::TypedEvidenceMultiplicative,
+            SegmentRouterArg::TypedEvidenceMultiplicative => {
+                SegmentRoutingStrategy::TypedEvidenceMultiplicative
+            }
         }
     }
 }
@@ -175,7 +175,7 @@ struct SegmentVariantMetrics {
     recall_any_at_k: HashMap<usize, f64>,
     mrr: f64,
     ndcg_at_10: f64,
-    diagnostics: Option<lint_ai::segments::SegmentQueryDiagnostics>,
+    diagnostics: Option<crate::segments::SegmentQueryDiagnostics>,
     router_miss: Option<bool>,
     missing_relevant_segments: Vec<String>,
 }
@@ -241,7 +241,7 @@ struct BenchmarkReport {
     per_query: Vec<QueryMetrics>,
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     let mut ks = args
         .ks

@@ -604,10 +604,7 @@ fn classify_query_kind(query: &str) -> QueryKind {
         }
         None
     };
-    if let Some(k) = ko_kind(
-        &["누구", "누가", "누구를", "누구의"],
-        QueryKind::Who,
-    ) {
+    if let Some(k) = ko_kind(&["누구", "누가", "누구를", "누구의"], QueryKind::Who) {
         return k;
     }
     if let Some(k) = ko_kind(&["무엇", "뭐", "무슨"], QueryKind::What) {
@@ -753,18 +750,46 @@ const COMMON_VERB_BASES: &[&str] = &[
     "cost", "dance", "drink", "drive", "eat", "end", "enjoy", "feel", "fight", "find", "fish",
     "fly", "forget", "get", "give", "go", "hate", "help", "hike", "hunt", "join", "know", "learn",
     "leave", "like", "live", "lose", "love", "make", "meet", "move", "need", "open", "order",
-    "own", "pay", "play", "prefer", "read", "receive", "remember", "remind", "rent", "run",
-    "save", "say", "see", "sell", "send", "shop", "sing", "sleep", "speak", "spend", "start",
-    "stay", "stop", "study", "swim", "take", "talk", "teach", "tell", "think", "travel", "try",
-    "use", "visit", "wait", "wake", "walk", "want", "wash", "watch", "win", "work", "write",
+    "own", "pay", "play", "prefer", "read", "receive", "remember", "remind", "rent", "run", "save",
+    "say", "see", "sell", "send", "shop", "sing", "sleep", "speak", "spend", "start", "stay",
+    "stop", "study", "swim", "take", "talk", "teach", "tell", "think", "travel", "try", "use",
+    "visit", "wait", "wake", "walk", "want", "wash", "watch", "win", "work", "write",
 ];
 
 /// Irregular past forms that do not end in -ed (the -ed suffix rule
 /// already catches regular pasts).
 const COMMON_VERB_PASTS: &[&str] = &[
-    "began", "brought", "bought", "came", "drank", "drove", "ate", "felt", "fought", "found",
-    "forgot", "gave", "went", "knew", "left", "lost", "made", "met", "paid", "ran", "said",
-    "saw", "sent", "spent", "took", "thought", "told", "understood", "woke", "won", "wrote",
+    "began",
+    "brought",
+    "bought",
+    "came",
+    "drank",
+    "drove",
+    "ate",
+    "felt",
+    "fought",
+    "found",
+    "forgot",
+    "gave",
+    "went",
+    "knew",
+    "left",
+    "lost",
+    "made",
+    "met",
+    "paid",
+    "ran",
+    "said",
+    "saw",
+    "sent",
+    "spent",
+    "took",
+    "thought",
+    "told",
+    "understood",
+    "woke",
+    "won",
+    "wrote",
 ];
 
 pub(crate) fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
@@ -888,19 +913,13 @@ pub(crate) fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
             } else {
                 "VB"
             }
-        } else if word
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase())
+        } else if word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
             && COMMON_VERB_BASES.contains(&lower.as_str())
         {
             // Frequent lexical verb ("visit"): lowercase-initial only, so a
             // capitalized name ("Mark") still tags NNP below.
             "VB"
-        } else if word
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase())
+        } else if word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
             && COMMON_VERB_PASTS.contains(&lower.as_str())
         {
             "VBD"
@@ -910,10 +929,7 @@ pub(crate) fn heuristic_pos_tags(query: &str) -> Vec<POSTag> {
             let stem = lower.strip_suffix('s').unwrap_or(lower.as_str());
             lower.ends_with('s')
                 && lower.len() > 4
-                && word
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_lowercase())
+                && word.chars().next().is_some_and(|c| c.is_ascii_lowercase())
                 && COMMON_VERB_BASES.contains(&stem)
         } {
             "VBZ"
@@ -1751,7 +1767,10 @@ mod tests {
     fn chinese_questions_classify_by_interrogative() {
         // Regression: every Chinese question fell through to Statement
         // because the classifier only knew English prefixes.
-        assert_eq!(classify_query_kind("我儿子叫什么，今年几岁？"), QueryKind::What);
+        assert_eq!(
+            classify_query_kind("我儿子叫什么，今年几岁？"),
+            QueryKind::What
+        );
         assert_eq!(classify_query_kind("谁家养了金毛？"), QueryKind::Who);
         assert_eq!(classify_query_kind("我妈现在住在哪儿？"), QueryKind::Where);
         assert_eq!(
@@ -1759,7 +1778,10 @@ mod tests {
             QueryKind::Why
         );
         assert_eq!(classify_query_kind("你什么时候回来？"), QueryKind::When);
-        assert_eq!(classify_query_kind("我今年计划读多少本书？"), QueryKind::HowMany);
+        assert_eq!(
+            classify_query_kind("我今年计划读多少本书？"),
+            QueryKind::HowMany
+        );
         assert_eq!(
             classify_query_kind("乐乐最后上的是公立学校还是国际学校？"),
             QueryKind::Which
@@ -1767,10 +1789,16 @@ mod tests {
         // 为什么 contains 什么 — the longer form must win.
         assert_eq!(classify_query_kind("你为什么迟到？"), QueryKind::Why);
         // Sentence-final particles: a question, kind unclear.
-        assert_eq!(classify_query_kind("我上周去杭州见客户了吗？"), QueryKind::Other);
+        assert_eq!(
+            classify_query_kind("我上周去杭州见客户了吗？"),
+            QueryKind::Other
+        );
         // English behavior unchanged.
         assert_eq!(classify_query_kind("Who is my manager?"), QueryKind::Who);
-        assert_eq!(classify_query_kind("The cat is black."), QueryKind::Statement);
+        assert_eq!(
+            classify_query_kind("The cat is black."),
+            QueryKind::Statement
+        );
     }
 
     #[test]

@@ -11,9 +11,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::pipeline::{IndexLocation, IndexStore, MemoryIndexLayout, PipelineOptions};
-use lint_ai::segments::SegmentRoutingStrategy;
-use lint_ai::SourceDocument;
+use crate::pipeline::{IndexLocation, IndexStore, MemoryIndexLayout, PipelineOptions};
+use crate::segments::SegmentRoutingStrategy;
+use crate::SourceDocument;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
@@ -197,7 +197,7 @@ fn median(mut xs: Vec<u128>) -> u128 {
     xs[xs.len() / 2]
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     if args.sizes.is_empty() {
         anyhow::bail!("--sizes must list at least one corpus size");

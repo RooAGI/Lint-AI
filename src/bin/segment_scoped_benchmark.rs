@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
-use lint_ai::index::{DocRecord, TemporalQueryHint};
-use lint_ai::{
+use crate::index::{DocRecord, TemporalQueryHint};
+use crate::{
     analyze_query, build_aggregate_output, build_doc_records, build_query_snapshot_from_records,
     normalize_for_index, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
     segments::{
@@ -71,7 +71,6 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
 }
-
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SegmentRouterArg {
@@ -334,7 +333,7 @@ struct RouterMissEvidenceBucket {
     missing_query_terms: Vec<String>,
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     let mut ks = args
         .ks
@@ -350,7 +349,7 @@ fn main() -> Result<()> {
     // Warm the long-lived spaCy NER daemon so the index build pays the
     // interpreter + model load once, up front, instead of inside the
     // first ranking call. Mirrors src/bin/server.rs.
-    lint_ai::NerDaemon::global().prewarm();
+    crate::NerDaemon::global().prewarm();
 
     eprintln!("loading raw LongMemEval data...");
     let data = fs::read_to_string(&args.longmemeval)
@@ -1416,7 +1415,7 @@ fn verify_segment_group_alignment(
 }
 
 fn connection_diagnostics(
-    records: &[lint_ai::index::DocRecord],
+    records: &[crate::index::DocRecord],
     diagnostics: &SegmentQueryDiagnostics,
     relevant: &HashSet<String>,
 ) -> MultiSessionConnectionDiagnostics {
@@ -1595,7 +1594,7 @@ fn local_memory_terms(diagnostics: &SegmentQueryDiagnostics) -> Vec<String> {
     terms
 }
 
-fn record_connection_terms(record: &lint_ai::index::DocRecord) -> HashSet<String> {
+fn record_connection_terms(record: &crate::index::DocRecord) -> HashSet<String> {
     let mut terms = HashSet::new();
     for term in &record.important_terms {
         terms.extend(normalized_tokens(&term.term));

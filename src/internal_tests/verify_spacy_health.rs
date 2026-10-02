@@ -5,8 +5,8 @@
 //! 2. Nate->meet relations are found for session_14 and session_23
 //! 3. object_kind tags are present (event, place, thing)
 
-use lint_ai::segments::relations::{extract_relations_via_spacy, RelationTurn};
-use lint_ai::DEFAULT_SPACY_MODEL;
+use crate::segments::relations::{extract_relations_via_spacy, RelationTurn};
+use crate::DEFAULT_SPACY_MODEL;
 use std::time::Duration;
 
 fn real_turns() -> Vec<RelationTurn> {
@@ -117,8 +117,7 @@ fn chinese_turns() -> Vec<RelationTurn> {
 #[test]
 fn spacy_chinese_relations_fail_open_on_e894() {
     let turns = chinese_turns();
-    let output =
-        extract_relations_via_spacy(&turns, Duration::from_secs(180), "zh_core_web_sm");
+    let output = extract_relations_via_spacy(&turns, Duration::from_secs(180), "zh_core_web_sm");
 
     println!(
         "Chinese relations: {} relations, {} key phrases (E894 fail-open)",

@@ -35,10 +35,10 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
-use lint_ai::session_prepare::is_follow_up;
-use lint_ai::{
-    stable_doc_id_from_source, ChunkStrategy, PipelineOptions, Tier1NerProvider,
+use crate::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
+use crate::session_prepare::is_follow_up;
+use crate::{
+    ChunkStrategy, PipelineOptions, Tier1NerProvider,
     Tier1TermRankerKind,
 };
 use serde::{Deserialize, Serialize};
@@ -77,7 +77,6 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
 }
-
 
 #[derive(Debug, Deserialize)]
 struct LocomoConversation {
@@ -816,7 +815,7 @@ fn category_label(category: u8) -> &'static str {
     }
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
 
     let data = fs::read_to_string(&args.locomo)
@@ -909,7 +908,7 @@ fn main() -> Result<()> {
                     supersedes_id: None,
                 });
                 let doc_id =
-                    stable_doc_id_from_source(&format!("{USER_ID}:{request_id}:{turn_idx}"));
+                    crate::memory_api::memory_document_id(USER_ID, &request_id, turn_idx);
                 doc_to_turn.insert(doc_id, format!("s{n}t{turn_idx}"));
                 turn_lookup.insert((*n, turn_idx), (turn.speaker.clone(), turn.text.clone()));
             }
@@ -960,17 +959,17 @@ fn main() -> Result<()> {
         };
 
         let mut search = |service: &mut MemoryService,
-                         query: &str,
-                         session_id: Option<String>|
+                          query: &str,
+                          session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
         };
 
         let mut search_scored_prod = |service: &mut MemoryService,
-                                     query: &str,
-                                     session_id: Option<String>,
-                                     top_k: usize|
+                                      query: &str,
+                                      session_id: Option<String>,
+                                      top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
             let response = service.search(SearchRequest {
@@ -996,8 +995,8 @@ fn main() -> Result<()> {
         };
 
         let mut search_prod = |service: &mut MemoryService,
-                              query: &str,
-                              session_id: Option<String>|
+                               query: &str,
+                               session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored_prod(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))

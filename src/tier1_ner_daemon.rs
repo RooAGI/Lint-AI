@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use crate::daemon::JsonLinesDaemon;
 use crate::tier1::{
-    default_spacy_script_path, detect_python_executable, SpacyBatchInput,
-    SpacyBatchOutput, SpacyDocInput, Tier1DocInput, Tier1Entity,
+    default_spacy_script_path, detect_python_executable, SpacyBatchInput, SpacyBatchOutput,
+    SpacyDocInput, Tier1DocInput, Tier1Entity,
 };
 
 /// Handle to the process-wide NER daemon.
@@ -35,12 +35,8 @@ impl NerDaemon {
     /// [`NerDaemon::new`] for isolation.
     pub fn global() -> &'static NerDaemon {
         static DAEMON: OnceLock<NerDaemon> = OnceLock::new();
-        DAEMON.get_or_init(|| {
-            NerDaemon::new(
-                default_spacy_script_path(),
-                detect_python_executable(),
-            )
-        })
+        DAEMON
+            .get_or_init(|| NerDaemon::new(default_spacy_script_path(), detect_python_executable()))
     }
 
     /// A daemon over an explicit script (tests, benchmarks).
@@ -86,8 +82,7 @@ impl NerDaemon {
         };
         let line = serde_json::to_string(&payload).ok()?;
         let response = self.daemon.query(&line, timeout)?;
-        let value: serde_json::Value =
-            serde_json::from_str(response.trim()).ok()?;
+        let value: serde_json::Value = serde_json::from_str(response.trim()).ok()?;
         // In-protocol errors (bad payload, model refused) fail open like
         // any other daemon failure.
         if value.get("error").is_some() {
@@ -252,10 +247,7 @@ for line in sys.stdin:
 
     #[test]
     fn daemon_returns_none_when_script_missing() {
-        let daemon = NerDaemon::new(
-            PathBuf::from("/nonexistent/spacy_ner.py"),
-            test_python(),
-        );
+        let daemon = NerDaemon::new(PathBuf::from("/nonexistent/spacy_ner.py"), test_python());
         let docs = vec![daemon_doc("doc-1", "anything")];
         assert!(
             daemon

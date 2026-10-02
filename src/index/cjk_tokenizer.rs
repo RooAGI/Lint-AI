@@ -131,11 +131,7 @@ fn push_han_tokens(tokens: &mut Vec<Token>, position: &mut usize, han: &[(usize,
     }
 }
 
-fn push_hangul_tokens(
-    tokens: &mut Vec<Token>,
-    position: &mut usize,
-    hangul: &[(usize, char)],
-) {
+fn push_hangul_tokens(tokens: &mut Vec<Token>, position: &mut usize, hangul: &[(usize, char)]) {
     // One Hangul run is one eojeol. Emit it plus the particle-stripped
     // stem (shared logic with the Rust query tokenizer, so index and query
     // agree).
@@ -272,8 +268,8 @@ mod tests {
         assert_eq!(
             token_texts("我毕业于清华大学"),
             vec![
-                "我", "我毕", "毕", "毕业", "业", "业于", "于", "于清", "清", "清华", "华",
-                "华大", "大", "大学", "学"
+                "我", "我毕", "毕", "毕业", "业", "业于", "于", "于清", "清", "清华", "华", "华大",
+                "大", "大学", "学"
             ]
         );
     }
@@ -281,10 +277,7 @@ mod tests {
     #[test]
     fn korean_eojeol_emits_stem() {
         assert_eq!(token_texts("학교에"), vec!["학교에", "학교"]);
-        assert_eq!(
-            token_texts("학교에 갔다"),
-            vec!["학교에", "학교", "갔다"]
-        );
+        assert_eq!(token_texts("학교에 갔다"), vec!["학교에", "학교", "갔다"]);
     }
 
     #[test]

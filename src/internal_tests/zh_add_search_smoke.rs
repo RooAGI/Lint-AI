@@ -4,8 +4,8 @@
 // partial-overlap query -- not the exact sentence -- so the test proves
 // bigram retrieval works rather than exact matching. The English test
 // guards against regressions from the CJK tokenizer changes.
-use lint_ai::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
-use lint_ai::PipelineOptions;
+use crate::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
+use crate::PipelineOptions;
 use std::collections::BTreeMap;
 
 fn add_memory(service: &mut MemoryService, user_id: &str, request_id: &str, content: &str) {
@@ -27,14 +27,14 @@ fn add_memory(service: &mut MemoryService, user_id: &str, request_id: &str, cont
 
 fn doc_id(user_id: &str, request_id: &str) -> String {
     // Mirrors MemoryService's internal doc_id_for: "{user}:{request}:0".
-    lint_ai::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
+    crate::memory_api::memory_document_id(user_id, request_id, 0)
 }
 
 fn search(
     service: &mut MemoryService,
     query: &str,
-    user_id: &str
-) -> Vec<lint_ai::memory_api::SearchMemory> {
+    user_id: &str,
+) -> Vec<crate::memory_api::SearchMemory> {
     let response = service
         .search(SearchRequest {
             query: query.to_string(),
@@ -135,12 +135,7 @@ fn english_add_search_still_ranks_target_first() {
         "Winters in Boston are very cold.",
     );
 
-    let results = search(
-        &mut service,
-        "Stanford computer science degree",
-        user_id,
-
-    );
+    let results = search(&mut service, "Stanford computer science degree", user_id);
     assert!(
         !results.is_empty(),
         "English query should retrieve the target memory"

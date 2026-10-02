@@ -1,4 +1,5 @@
 use crate::ids::stable_chunk_id;
+use crate::index::write_lock::with_guarded_index_writer;
 use crate::query_expansion::normalize_for_index;
 use anyhow::Result;
 use roaring::RoaringBitmap;
@@ -696,7 +697,8 @@ impl MemoryIndex {
     fn build_lexical_index(
         docs: &HashMap<String, DocRecord>,
         lexical_dir: Option<&Path>,
-    ) -> Result<LexicalIndex> {        let mut schema_builder = Schema::builder();
+    ) -> Result<LexicalIndex> {
+        let mut schema_builder = Schema::builder();
         let doc_id_f = schema_builder.add_text_field("doc_id", STRING | STORED);
         let content_f = schema_builder.add_text_field("content", TEXT);
         let headings_f = schema_builder.add_text_field("headings", TEXT);
@@ -713,41 +715,80 @@ impl MemoryIndex {
         // to documents by position.
         let mut ordered: Vec<&DocRecord> = docs.values().collect();
         ordered.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-        let content_texts: Vec<String> =
-            ordered.iter().map(|doc| lexical_content_text(doc)).collect();
+        let content_texts: Vec<String> = ordered
+            .iter()
+            .map(|doc| lexical_content_text(doc))
+            .collect();
         let content_refs: Vec<&str> = content_texts.iter().map(String::as_str).collect();
         // One batched daemon round-trip for the whole index. Fail-open:
         // no daemon/binary yields no tags and the index builds exactly as
         // before (every doc simply indexes an empty tags field).
         let tags_per_doc = crate::semantic_tags::batch_doc_semantic_tags(&content_refs);
         let index = if let Some(dir) = lexical_dir {
-            fs::create_dir_all(dir)?;
-            // An on-disk index predating the tags field has documents
-            // without tags: wipe and rebuild once so every document carries
-            // them. Afterwards the existing index is reused as before.
-            let needs_rebuild = match Index::open_in_dir(dir) {
-                Ok(existing) => existing.schema().get_field("semantic_tags").is_err(),
-                Err(_) => true,
-            };
-            if needs_rebuild {
-                if dir.exists() {
-                    let _ = fs::remove_dir_all(dir);
+            // Index open, schema migration, and population run through the
+            // shared guarded writer entry point.
+            let mut selected = Index::create_in_ram(schema.clone());
+            with_guarded_index_writer(
+                &mut selected,
+                Some(dir),
+                50_000_000,
+                |dir, schema| {
                     fs::create_dir_all(dir)?;
-                }
-                let created = Index::create_in_dir(dir, schema.clone())?;
-                Self::populate_lexical_index(
-                    &created, 50_000_000, &ordered, &tags_per_doc, doc_id_f, content_f,
-                    headings_f, terms_f, entities_f, temporal_f, tags_f,
-                )?;
-                created
-            } else {
-                Index::open_in_dir(dir)?
-            }
+                    match Index::open_in_dir(dir) {
+                        Ok(existing) if existing.schema().get_field("semantic_tags").is_ok() => {
+                            return Ok((existing, false));
+                        }
+                        // Only a confirmed old schema authorizes replacement.
+                        Ok(_) => fs::remove_dir_all(dir)?,
+                        Err(_) if fs::read_dir(dir)?.next().is_none() => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    fs::create_dir_all(dir)?;
+                    Ok((Index::create_in_dir(dir, schema.clone())?, true))
+                },
+                |writer| {
+                    for (doc, tags) in ordered.iter().zip(tags_per_doc.iter()) {
+                        let headings_text = doc
+                            .section_chunks
+                            .iter()
+                            .map(|c| c.heading.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let terms_text = doc
+                            .section_chunks
+                            .iter()
+                            .flat_map(|c| c.important_terms.iter().map(String::as_str))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let entities_text = doc
+                            .section_chunks
+                            .iter()
+                            .flat_map(|c| c.key_entities.iter().map(String::as_str))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let content_text = lexical_content_text(doc);
+                        let temporal_text = doc.temporal_terms.join(" ");
+                        let tags_text = tags.join(" ");
+                        writer.add_document(doc!(doc_id_f => doc.doc_id.clone(), content_f => content_text, headings_f => headings_text, terms_f => terms_text, entities_f => entities_text, temporal_f => temporal_text, tags_f => tags_text))?;
+                    }
+                    Ok(())
+                },
+            )?;
+            selected
         } else {
             let ram = Index::create_in_ram(schema);
             Self::populate_lexical_index(
-                &ram, 15_000_001, &ordered, &tags_per_doc, doc_id_f, content_f,
-                headings_f, terms_f, entities_f, temporal_f, tags_f,
+                &ram,
+                15_000_001,
+                &ordered,
+                &tags_per_doc,
+                doc_id_f,
+                content_f,
+                headings_f,
+                terms_f,
+                entities_f,
+                temporal_f,
+                tags_f,
             )?;
             ram
         };
@@ -799,40 +840,48 @@ impl MemoryIndex {
         temporal_f: Field,
         tags_f: Field,
     ) -> Result<()> {
-        let mut writer = index.writer(writer_heap)?;
-        for (doc, tags) in ordered.iter().zip(tags_per_doc.iter()) {
-            let headings_text = doc
-                .section_chunks
-                .iter()
-                .map(|c| c.heading.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-            let terms_text = doc
-                .section_chunks
-                .iter()
-                .flat_map(|c| c.important_terms.iter().map(String::as_str))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let entities_text = doc
-                .section_chunks
-                .iter()
-                .flat_map(|c| c.key_entities.iter().map(String::as_str))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let content_text = lexical_content_text(doc);
-            let temporal_text = doc.temporal_terms.join(" ");
-            let tags_text = tags.join(" ");
-            writer.add_document(doc!(
-                doc_id_f => doc.doc_id.clone(),
-                content_f => content_text,
-                headings_f => headings_text,
-                terms_f => terms_text,
-                entities_f => entities_text,
-                temporal_f => temporal_text,
-                tags_f => tags_text
-            ))?;
-        }
-        writer.commit()?;
+        let mut index = index.clone();
+        with_guarded_index_writer(
+            &mut index,
+            None,
+            writer_heap,
+            |_, schema| Ok((Index::create_in_ram(schema.clone()), true)),
+            |writer| {
+                for (doc, tags) in ordered.iter().zip(tags_per_doc.iter()) {
+                    let headings_text = doc
+                        .section_chunks
+                        .iter()
+                        .map(|c| c.heading.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let terms_text = doc
+                        .section_chunks
+                        .iter()
+                        .flat_map(|c| c.important_terms.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let entities_text = doc
+                        .section_chunks
+                        .iter()
+                        .flat_map(|c| c.key_entities.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let content_text = lexical_content_text(doc);
+                    let temporal_text = doc.temporal_terms.join(" ");
+                    let tags_text = tags.join(" ");
+                    writer.add_document(doc!(
+                        doc_id_f => doc.doc_id.clone(),
+                        content_f => content_text,
+                        headings_f => headings_text,
+                        terms_f => terms_text,
+                        entities_f => entities_text,
+                        temporal_f => temporal_text,
+                        tags_f => tags_text
+                    ))?;
+                }
+                Ok(())
+            },
+        )?;
         Ok(())
     }
 

@@ -1,92 +1,50 @@
-# Artifact Indexing and Update Model
+# Artifact indexing through MemoryService
 
-This document explains how `lint-ai` can be used from an artifact-oriented
-system, where each fetch creates or updates an artifact record that should later
-be queried through the retrieval layer.
+`MemoryService` is the public API for indexing and retrieving artifacts.
+`IndexStore`, `MemoryIndex`, snapshots, builders, and persistence paths are
+internal. See [the API migration guide](memory-service-api.md) for the Rust
+visibility changes.
 
-## What Is Implemented Now
+## Artifact flow
 
-The library now supports a practical artifact flow with:
-
-- `IndexStore` as the public mutable artifact-facing facade
-- `MemoryIndex` as the frozen built query structure
-
-Implemented pieces:
-
-- `SourceDocument`
-  - generic input document type for non-Markdown sources
-- `PipelineOptions`
-  - library-facing configuration for chunking and enrichment
-- `MemoryIndexLayout`
-  - selects single, fixed segmented, or adaptive segmented snapshots
-- `build_index_store(...)`
-  - builder for the public mutable `IndexStore`
-- `build_query_snapshot(...)`
-  - compatibility-named builder for the frozen search snapshot
-- `IndexStore`
-  - public mutable store that owns source docs, cached records, tombstones,
-    an internal Tantivy lexical index, and the current built semantic snapshot.
-    Readers query the latest complete generation through
-    `IndexStore::query_prepared_cached` without taking the writer lock.
-
-Relevant API surface:
-
-- `src/source.rs`
-  - `SourceDocument`
-- `src/pipeline.rs`
-  - `PipelineOptions`
-  - `ChunkStrategy`
-  - `Tier1NerProvider`
-  - `Tier1TermRankerKind`
-  - `build_index_store(...)`
-  - `build_query_snapshot(...)`
-  - `build_query_snapshot_from_source_documents(...)`
-  - `IndexStore`
-  - `MemoryIndexLayout`
-- `src/index.rs`
-  - `MemoryIndex`
-  - `SearchResult`
-
-Top-level re-exports are also available from `lint_ai` through `src/lib.rs`.
-
-## Current Library Flow
-
-The intended artifact flow is:
-
-1. Fetch or load an artifact in the host application.
-2. Extract normalized text and metadata from that artifact.
-3. Convert it into `SourceDocument`.
-4. Internally derive or update a cached `DocRecord`.
-5. Insert or update it inside `IndexStore`.
-6. Query through the current snapshot.
-
-For a read path that must see a consistent generation without blocking on
-writer refreshes, query through `IndexStore::query_prepared_cached`, which
-runs against the latest complete generation. It excludes mutable writer and
-persistence state and never exposes a partially updated index.
-
-Example:
+1. Extract text and metadata in the host application.
+2. Represent the artifact as a `SourceDocument` with a stable document ID.
+3. Call `MemoryService::upsert` for each new or changed document.
+4. Call `refresh` to publish the batch.
+5. Search through the service.
 
 ```rust
-use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
+use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
+use std::collections::BTreeMap;
 
-let mut index = IndexStore::new(PipelineOptions::default());
-
-index.upsert(SourceDocument {
-    doc_id: "artifact-123".to_string(),
-    source: "s3://bucket/report.pdf".to_string(),
-    content: "normalized extracted text".to_string(),
-    concept: "quarterly report".to_string(),
-    headings: vec!["Summary".to_string(), "Financials".to_string()],
-    links: vec![],
-    timestamp: None,
-    doc_length: 24,
-    author_agent: None,
-});
-
-let results = index.query("financial summary", 5)?;
+let mut memory = MemoryService::in_memory(PipelineOptions::default());
+memory.upsert(SourceDocument::with_stable_doc_id_from_source(
+    "artifacts/report.txt".into(),
+    "The quarterly report describes quartz deployment costs.".into(),
+    "quarterly report".into(),
+    None,
+    vec!["Costs".into()],
+    vec![],
+    None,
+    None,
+));
+memory.refresh()?;
+let results = memory.search_with_filters(
+    "quartz costs", "artifacts", None, 5, &BTreeMap::new(),
+)?;
 # Ok::<(), anyhow::Error>(())
 ```
+
+Use `MemoryService::at_path(path, options)` for persistence. Use `add` and
+`add_batch` with typed requests for user/session memories; these methods
+publish their changes internally. `upsert` is the explicit bulk source-document
+path and requires `refresh` to publish the batch.
+
+## Implementation reference
+
+The following storage and snapshot details describe crate internals. Types such
+as `IndexStore` and `MemoryIndex` mentioned below cannot be imported by library
+clients; use `MemoryService` as shown above.
 
 ## Artifact to SourceDocument Mapping
 
@@ -296,7 +254,7 @@ primary user-facing ingestion contract.
 
 ## How IndexStore Works Today
 
-`IndexStore` is the public mutable artifact-facing index.
+`IndexStore` is the internal mutable implementation owned by `MemoryService`.
 
 In the current design, `refresh()` is the boundary where mutable document state
 is turned into the immutable queryable snapshot.
@@ -332,7 +290,7 @@ Behavior:
 - `remove` deletes a document from the mutable source set and records a tombstone
 - `refresh` converts the current mutable state into a rebuilt immutable
   semantic `MemoryIndex` if the index is dirty
-- `query` is the single public query path and uses a fresh semantic snapshot
+- `query` is the internal query path and uses a fresh semantic snapshot
 - unchanged documents reuse cached `DocRecord`s during refresh
 - `IndexLocation` determines whether Tantivy is in-memory, corpus-local, or
   under an explicit index root
@@ -553,7 +511,7 @@ This means the documented `semantic/` path is now active, not just reserved.
 
 The library still uses the concept of a snapshot internally:
 
-- mutable state exists inside public `IndexStore`
+- mutable state exists inside the internal `IndexStore`
 - Tantivy lexical state is updated incrementally inside `IndexStore`
 - the queryable `MemoryIndex` is the frozen semantic search snapshot
 - `refresh()` materializes that semantic snapshot from current mutable state
@@ -603,7 +561,7 @@ For an artifact system, the recommended architecture remains:
 2. Normalization layer
    - converts artifacts into `SourceDocument`
 3. Mutable artifact index state
-   - public `IndexStore`
+   - public `MemoryService`
 4. Immutable query snapshot
    - internal `MemoryIndex`, produced by `refresh()`
 
@@ -618,7 +576,7 @@ Current state:
 
 - artifact-friendly document type is implemented
 - library-facing pipeline config is implemented
-- public mutable `IndexStore` with `upsert/remove/refresh/query` is implemented
+- internal mutable `IndexStore` with `upsert/remove/refresh/query` is implemented
 - per-document `DocRecord` cache is implemented
 - `DocRecord` already serves as the internal per-document indexed artifact layer
 - tombstone tracking is implemented

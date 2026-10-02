@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::{build_query_snapshot, PipelineOptions, SourceDocument, TemporalQueryContext};
+use crate::{build_query_snapshot, PipelineOptions, SourceDocument, TemporalQueryContext};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;
@@ -39,7 +39,7 @@ struct Turn {
     content: String,
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     let raw: Vec<Entry> = serde_json::from_str(&fs::read_to_string(&args.longmemeval)?)
         .context("failed to parse LongMemEval JSON")?;

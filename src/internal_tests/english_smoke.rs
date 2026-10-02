@@ -1,12 +1,12 @@
 // English regression check: mirrors the Spanish smoke test to confirm
 // English add -> search behavior is unchanged by the Spanish work.
-use lint_ai::memory_api::{AddRequest, MemoryService, Message};
-use lint_ai::PipelineOptions;
+use crate::memory_api::{AddRequest, MemoryService, Message};
+use crate::PipelineOptions;
 use std::collections::BTreeMap;
 
 fn options_for() -> PipelineOptions {
     let mut opts = PipelineOptions::default();
-    opts.ner_provider = lint_ai::pipeline::Tier1NerProvider::Heuristic;
+    opts.ner_provider = crate::pipeline::Tier1NerProvider::Heuristic;
     opts
 }
 
@@ -45,8 +45,8 @@ fn english_add_search_regression() {
         "The Madrid library is on Alcala street.",
     );
 
-    let id_book = lint_ai::stable_doc_id_from_source(&format!("{user_id}:req-book:0"));
-    let id_library = lint_ai::stable_doc_id_from_source(&format!("{user_id}:req-library:0"));
+    let id_book = crate::memory_api::memory_document_id(user_id, "req-book", 0);
+    let id_library = crate::memory_api::memory_document_id(user_id, "req-library", 0);
 
     let mut filters = BTreeMap::new();
     filters.insert("memory_user_id".to_string(), user_id.to_string());
@@ -61,7 +61,13 @@ fn english_add_search_regression() {
 
     // "What did the user buy yesterday?" must retrieve the book fact.
     let r = service
-        .search_with_filters("What did the user buy yesterday?", user_id, None, 10, &filters)
+        .search_with_filters(
+            "What did the user buy yesterday?",
+            user_id,
+            None,
+            10,
+            &filters,
+        )
         .expect("search");
     assert!(
         r.iter().any(|hit| hit.doc_id == id_book),
@@ -73,7 +79,7 @@ fn english_add_search_regression() {
     // stopwords, so they can't test the gate — use Spanish-only forms.)
     for w in ["también", "dónde", "está"] {
         assert!(
-            !lint_ai::tokenizer::is_stopword(w, lint_ai::tokenizer::TokenizerMode::Unstemmed),
+            !crate::tokenizer::is_stopword(w, crate::tokenizer::TokenizerMode::Unstemmed),
             "{w} must not be an English stopword"
         );
     }

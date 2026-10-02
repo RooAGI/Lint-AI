@@ -29,7 +29,7 @@ the legacy directory untouched, so no memory is lost.
 ## How an agent uses memory
 
 1. A lifecycle hook receives the agent event and transcript context.
-2. Retrieval hooks query the existing `IndexStore` and return relevant context
+2. Retrieval hooks query the existing `MemoryService` and return relevant context
    to the agent.
 3. Capture hooks extract a bounded checkpoint, outcome, or session summary.
 4. The adapter upserts the document and refreshes the index snapshot.
@@ -70,10 +70,10 @@ sequenceDiagram
 
 ```text
 1. User submits a prompt
-2. Retrieval hook queries the existing IndexStore
+2. Retrieval hook queries the existing MemoryService
 3. Agent may call tools (pre-tool and post-tool hooks can retrieve context)
 4. Agent finishes the turn
-5. Stop/AfterAgent captures the turn outcome and refreshes IndexStore
+5. Stop/AfterAgent captures the turn outcome and refreshes MemoryService
 6. The next prompt can retrieve that captured outcome
 ```
 
@@ -93,7 +93,7 @@ memory. That memory is injected on a later retrieval event.
 
 ### Retrieval events
 
-Adapters query their provider-specific `IndexStore` on events such as:
+Adapters query their provider-specific `MemoryService` on events such as:
 
 - `SessionStart`
 - `UserPromptSubmit`
@@ -110,7 +110,7 @@ Agent hook receives prompt/tool context
         ↓
 Adapter builds a provider-scoped query
         ↓
-IndexStore ranks matching records with project/user filters
+MemoryService ranks matching records with project/user filters
         ↓
 Adapter bounds and formats the selected excerpts
         ↓
@@ -153,7 +153,7 @@ prevents Lint-AI from participating in subsequent turns.
 
 When session recording is enabled, the adapters record every supported hook
 invocation for replay and diagnostics. These records are telemetry; they do
-not update the searchable `IndexStore`:
+not update the searchable `MemoryService`:
 
 | Provider | Recorded hook events |
 |---|---|
@@ -172,7 +172,7 @@ not update the searchable `IndexStore`:
 | Antigravity CLI | `Stop` (transcript capture) | `.lint-ai/memory` |
 
 At a capture event, the adapter reads the transcript, extracts structured
-memory, calls `IndexStore::upsert`, and then calls `refresh`. This makes the
+memory, calls `MemoryService::upsert`, and then calls `refresh`. This makes the
 document available in the index when the hook completes successfully, but it
 does not inject the new document back into the conversation that just ended.
 The document is returned on a later retrieval event, typically the next prompt
@@ -181,7 +181,7 @@ content, the event completes without adding a document.
 
 ### Two kinds of persistence
 
-- `IndexStore` contains searchable memory documents.
+- `MemoryService` contains searchable memory documents.
 - Session recording archives raw provider hook events for replay and debugging.
 
 Recording a hook event does not by itself make a document searchable; it must

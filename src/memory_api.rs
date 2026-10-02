@@ -18,6 +18,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code",
+    feature = "openclaw",
+    feature = "hermes"
+))]
+pub(crate) mod workspace;
+
 const USER_FILTER: &str = "memory_user_id";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,7 +268,11 @@ fn run_key_phrase_extraction_bounded(
     let turns: Vec<crate::segments::relations::RelationTurn> = turns.to_vec();
     let script = script.map(|s| s.to_path_buf());
     // Detect language from the combined turn text for model selection.
-    let combined_text: String = turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+    let combined_text: String = turns
+        .iter()
+        .map(|t| t.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text));
     let model = model.to_string();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -282,7 +297,7 @@ impl MemoryService {
     /// would stall concurrent queries behind the extractor. `None` means
     /// the run timed out or the extractor failed (transient: retry later);
     /// `Some` means the extractor ran to completion.
-    pub fn extract_key_phrases_for_docs(
+    pub(crate) fn extract_key_phrases_for_docs(
         docs: &[SourceDocument],
         script: Option<&std::path::Path>,
     ) -> Option<Vec<crate::segments::relations::RawKeyPhrase>> {
@@ -390,8 +405,13 @@ fn relations_index_for(
     // Bound the subprocess: run extraction on a worker thread and give up
     // after the timeout, leaving the cache empty (fail-open to lexical).
     // Detect language for model selection (language PRs added model param).
-    let combined_text: String = turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
-    let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text)).to_string();
+    let combined_text: String = turns
+        .iter()
+        .map(|t| t.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let model = crate::lang::default_spacy_model_for_lang(crate::lang::detect_lang(&combined_text))
+        .to_string();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = extract_relations_via_spacy(
@@ -465,7 +485,8 @@ fn structured_fact_results(
         })
         .collect();
     visible.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-    let index = match relations_index_for(&visible, &request.user_id, cache, options.python_free()) {
+    let index = match relations_index_for(&visible, &request.user_id, cache, options.python_free())
+    {
         Some(index) => index,
         None => return Vec::new(),
     };
@@ -597,9 +618,7 @@ fn venue_text_matches(descriptor_text: &str, venues: &[&str]) -> bool {
             .collect::<Vec<_>>()
             .join(" ")
     );
-    venues
-        .iter()
-        .any(|v| norm.contains(&format!(" {v} ")))
+    venues.iter().any(|v| norm.contains(&format!(" {v} ")))
 }
 
 /// Pure activity↔venue match predicate, unit-testable without the daemon.
@@ -751,6 +770,11 @@ impl MemoryService {
     /// persistence paths before sending it outside the process.
     pub fn inspection(&self) -> crate::pipeline::IndexStoreInspection {
         self.store.inspection()
+    }
+
+    /// CLI-only diagnostics: serialize records without exposing storage handles.
+    pub(crate) fn diagnostic_records(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(self.store.records())?)
     }
 
     /// Publish pending mutations. Normal mutation methods already call this;
@@ -911,7 +935,7 @@ impl MemoryService {
     /// to decide whether a write-lock backfill is worthwhile, keeping the
     /// steady state at zero extra cost. False when `python_free()` — the
     /// extractor is spaCy-only.
-    pub fn key_phrase_backfill_needed(&self) -> bool {
+    pub(crate) fn key_phrase_backfill_needed(&self) -> bool {
         if !self.store.options().key_phrase_enrichment || self.store.options().python_free() {
             return false;
         }
@@ -948,7 +972,7 @@ impl MemoryService {
     /// any service lock, then applies the result with
     /// [`apply_key_phrase_backfill`]. Returns no documents when enrichment
     /// is disabled or when `python_free()` — the extractor is spaCy-only.
-    pub fn key_phrase_backfill_snapshot(
+    pub(crate) fn key_phrase_backfill_snapshot(
         &self,
     ) -> (Vec<SourceDocument>, Option<std::path::PathBuf>) {
         if !self.store.options().key_phrase_enrichment || self.store.options().python_free() {
@@ -976,7 +1000,7 @@ impl MemoryService {
     /// background queue so the worker does not redo them, and refresh so
     /// the current query retries them. Fast; refresh failures are fail-open.
     /// Returns the number of documents extracted.
-    pub fn apply_key_phrase_backfill(
+    pub(crate) fn apply_key_phrase_backfill(
         &mut self,
         docs: &[SourceDocument],
         raw: Option<Vec<crate::segments::relations::RawKeyPhrase>>,
@@ -1038,7 +1062,7 @@ impl MemoryService {
     /// Bounded and fail-open: an extractor failure or timeout leaves the
     /// documents phrase-less (a later query retries). Returns the number of
     /// documents extracted.
-    pub fn backfill_key_phrases(&mut self) -> usize {
+    pub(crate) fn backfill_key_phrases(&mut self) -> usize {
         let (docs, script) = self.key_phrase_backfill_snapshot();
         if docs.is_empty() {
             return 0;
@@ -1120,8 +1144,6 @@ impl MemoryService {
             }
             if let Some(supersedes_id) = &message.supersedes_id {
                 validate_identifier(supersedes_id, "supersedes_id")?;
-                self.superseded_ids
-                    .insert((request.user_id.clone(), supersedes_id.clone()));
                 filters.insert("supersedes_id".to_string(), supersedes_id.clone());
             }
             let timestamp = message
@@ -1129,10 +1151,7 @@ impl MemoryService {
                 .map(|millis| timestamp_to_rfc3339(millis, "timestamp"))
                 .transpose()?;
             new_docs.push(SourceDocument {
-                doc_id: crate::stable_doc_id_from_source(&format!(
-                    "{}:{}:{message_index}",
-                    request.user_id, request.request_id
-                )),
+                doc_id: memory_document_id(&request.user_id, &request.request_id, message_index),
                 source,
                 content: format!("{}: {}", message.role, message.content),
                 concept: "memory".to_string(),
@@ -1147,9 +1166,26 @@ impl MemoryService {
                 key_phrase_extraction_hash: String::new(),
             });
         }
+        // Check the whole request before writing any document or supersession.
+        // Even a hash collision must never replace another owner's memory or
+        // a different request belonging to the same owner.
+        for doc in &new_docs {
+            if let Some(existing) = self.store.source_document_by_id(&doc.doc_id) {
+                anyhow::ensure!(
+                    owns_memory(existing, &request.user_id)
+                        && existing.filters.get("request_id") == Some(&request.request_id)
+                        && existing.filters.get("request_fingerprint") == Some(&fingerprint),
+                    "memory document identity conflict"
+                );
+            }
+        }
         // The documents are written; key phrases arrive asynchronously.
         // `upsert` queues each document for background enrichment.
         for doc in new_docs {
+            if let Some(old_id) = doc.filters.get("supersedes_id") {
+                self.superseded_ids
+                    .insert((request.user_id.clone(), old_id.clone()));
+            }
             self.upsert(doc);
         }
 
@@ -1370,7 +1406,8 @@ impl MemoryService {
         // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
         let analysis = analyze_query(query);
         let query_text = analysis.augmented_query.as_str();
-        let mut prepared = prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        let mut prepared =
+            prepare_session_query(&self.conversation_states, scope, session_id, query_text);
         // Definitional semantic tags (Luyi 2026-09-28): computed from the
         // ORIGINAL user query, not the augmented text. Closed-set temporal
         // words ("weekend"/"weekday"), "habitual", and admitted kind tags
@@ -1382,8 +1419,7 @@ impl MemoryService {
         // One behood daemon round-trip for the query's whole semantics
         // (scope verdict + tags); the scope verdict is reused below by the
         // activity↔venue boost instead of a second daemon request.
-        let (query_scope_verdicts, query_tags) =
-            crate::semantic_tags::query_semantics(query);
+        let (query_scope_verdicts, query_tags) = crate::semantic_tags::query_semantics(query);
         prepared.set_semantic_tags(query_tags);
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
@@ -1470,7 +1506,7 @@ impl MemoryService {
         &mut self,
         memory_root: &std::path::Path,
     ) -> anyhow::Result<bool> {
-        crate::integrations::mcp_index::sync_memory_documents(memory_root, self)
+        workspace::sync_memory_documents(memory_root, self)
     }
 
     /// Refresh the index after syncing, so newly synced documents are
@@ -1599,7 +1635,8 @@ impl MemoryService {
                         )
                     })?;
                 if ensure_default {
-                    let board = self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
+                    let board =
+                        self.board_open_session(owner, workspace, sid, DEFAULT_BOARD_TITLE)?;
                     Ok(board.board_id)
                 } else {
                     Ok(default_board_id(owner, workspace, sid))
@@ -1798,15 +1835,16 @@ impl MemoryService {
                     return Ok(None);
                 }
                 if d.filters.get(BOARD_OWNER_FILTER).map(String::as_str) != Some(owner)
-                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str)
-                        != Some(workspace)
+                    || d.filters.get(BOARD_WORKSPACE_FILTER).map(String::as_str) != Some(workspace)
                 {
                     return Ok(None);
                 }
                 let Some(board) = board_from_doc_content(&d.content) else {
                     return Ok(None);
                 };
-                if board.owner != owner || board.workspace != workspace || board.board_id != board_id
+                if board.owner != owner
+                    || board.workspace != workspace
+                    || board.board_id != board_id
                 {
                     return Ok(None);
                 }
@@ -1849,7 +1887,10 @@ impl MemoryService {
         let board_id = self.resolve_board_id(board_id, owner, workspace, session_id, true)?;
         // The board must exist; posting never creates one implicitly
         // (the session board is ensured by resolve_board_id above).
-        if self.board_info(&board_id, owner, workspace, session_id)?.is_none() {
+        if self
+            .board_info(&board_id, owner, workspace, session_id)?
+            .is_none()
+        {
             anyhow::bail!("unknown board_id: {board_id}");
         }
         // Idempotency: a retried request_id returns the original post.
@@ -1870,10 +1911,9 @@ impl MemoryService {
             if let Some(post_id) = self.board_find_request_id(&board_id, request_id)? {
                 // Repopulate the map so later retries stay cheap.
                 let mut state = self.board_state.lock().expect("board state lock poisoned");
-                state.request_ids.insert(
-                    (board_id.clone(), request_id.to_string()),
-                    post_id.clone(),
-                );
+                state
+                    .request_ids
+                    .insert((board_id.clone(), request_id.to_string()), post_id.clone());
                 drop(state);
                 return self
                     .board_get(Some(&board_id), owner, workspace, session_id, &post_id)?
@@ -2013,10 +2053,7 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: doc.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f
-                    .get(BOARD_AUTHOR_FILTER)
-                    .cloned()
-                    .unwrap_or_default(),
+                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: doc.content.clone(),
                 sequence,
@@ -2064,10 +2101,7 @@ impl MemoryService {
                 Ok(Some(BoardPost {
                     post_id: d.doc_id.clone(),
                     board_id: board_id.clone(),
-                    author_agent_id: f
-                        .get(BOARD_AUTHOR_FILTER)
-                        .cloned()
-                        .unwrap_or_default(),
+                    author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
                     provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                     content: d.content.clone(),
                     sequence,
@@ -2112,12 +2146,9 @@ impl MemoryService {
         for r in results {
             // search_with_filters already applied the board_id filter, but
             // verify again: never leak across boards.
-            let doc = self
-                .store
-                .source_document_by_id(&r.doc_id)
-                .filter(|d| {
-                    d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
-                });
+            let doc = self.store.source_document_by_id(&r.doc_id).filter(|d| {
+                d.filters.get(BOARD_ID_FILTER).map(String::as_str) == Some(board_id.as_str())
+            });
             let Some(d) = doc else { continue };
             let f = &d.filters;
             let sequence: u64 = f
@@ -2127,10 +2158,7 @@ impl MemoryService {
             posts.push(BoardPost {
                 post_id: d.doc_id.clone(),
                 board_id: board_id.clone(),
-                author_agent_id: f
-                    .get(BOARD_AUTHOR_FILTER)
-                    .cloned()
-                    .unwrap_or_default(),
+                author_agent_id: f.get(BOARD_AUTHOR_FILTER).cloned().unwrap_or_default(),
                 provider: f.get(BOARD_PROVIDER_FILTER).cloned().unwrap_or_default(),
                 content: d.content.clone(),
                 sequence,
@@ -2166,13 +2194,6 @@ impl MemoryService {
     }
 
     /// All source documents, for migration and sync iteration.
-    #[cfg(any(
-        feature = "claude-code",
-        feature = "codex",
-        feature = "gemini-cli",
-        feature = "agy",
-        feature = "muse-code"
-    ))]
     pub(crate) fn source_documents(&self) -> Vec<&crate::SourceDocument> {
         self.store.source_documents()
     }
@@ -2498,6 +2519,21 @@ fn owns_memory(doc: &SourceDocument, user_id: &str) -> bool {
     doc.filters.get(USER_FILTER).map(String::as_str) == Some(user_id)
 }
 
+/// Versioned, exact identity for new API memories. Length prefixes keep field
+/// boundaries unambiguous; identifiers retain their case and whitespace.
+/// Existing stored IDs stay valid, and persisted request fingerprints keep
+/// retries of legacy requests idempotent without generating a replacement ID.
+pub(crate) fn memory_document_id(user_id: &str, request_id: &str, message_index: usize) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"lint-ai:memory:v2\0");
+    for component in [user_id, request_id] {
+        hash.update((component.len() as u64).to_be_bytes());
+        hash.update(component.as_bytes());
+    }
+    hash.update((message_index as u64).to_be_bytes());
+    format!("doc:memory:v2:{:x}", hash.finalize())
+}
+
 fn memory_record(doc: &SourceDocument) -> MemoryRecord {
     let mut metadata = doc.filters.clone();
     metadata.retain(|key, _| {
@@ -2680,6 +2716,167 @@ mod tests {
         MemoryService::in_memory(PipelineOptions::default())
     }
 
+    #[test]
+    fn add_preserves_memories_with_colliding_legacy_identifiers() {
+        for ((owner_a, request_a), (owner_b, request_b)) in [
+            (("alice", "team:r1"), ("alice:team", "r1")),
+            (("Alice", "r1"), ("alice", "r1")),
+            (("alice  team", "r1"), ("alice team", "r1")),
+            (("alice", "R1"), ("alice", "r1")),
+        ] {
+            let mut service = service();
+            add_message(
+                &mut service,
+                request_a,
+                owner_a,
+                "session",
+                "original memory",
+            );
+            add_message(&mut service, request_b, owner_b, "session", "second memory");
+            let docs = service.store.source_documents();
+            assert_eq!(
+                docs.len(),
+                2,
+                "both memories must survive: {owner_a}/{request_a} vs {owner_b}/{request_b}"
+            );
+            assert!(docs
+                .iter()
+                .any(|doc| owns_memory(doc, owner_a) && doc.content == "user: original memory"));
+            assert!(docs
+                .iter()
+                .any(|doc| owns_memory(doc, owner_b) && doc.content == "user: second memory"));
+        }
+    }
+
+    #[test]
+    fn add_rejects_existing_document_owned_by_another_user() {
+        let mut service = service();
+        let target_id = doc_id_for("alice", "r1");
+        let mut existing = direct_doc(&target_id, "original memory");
+        existing.filters.insert(USER_FILTER.into(), "bob".into());
+        service.upsert(existing);
+        let error = service
+            .add(AddRequest {
+                user_id: "alice".into(),
+                request_id: "r1".into(),
+                session_id: "session".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    content: "replacement".into(),
+                    timestamp: None,
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+            })
+            .expect_err("must refuse a cross-owner replacement");
+        assert!(error.to_string().contains("conflict"));
+        let preserved = service.store.source_document_by_id(&target_id).unwrap();
+        assert!(owns_memory(preserved, "bob"));
+        assert_eq!(preserved.content, "original memory");
+    }
+
+    #[test]
+    fn add_identity_conflict_does_not_write_earlier_messages_or_supersessions() {
+        let mut service = service();
+        let target_id = memory_document_id("alice", "r1", 1);
+        let mut existing = direct_doc(&target_id, "original memory");
+        existing.filters.insert(USER_FILTER.into(), "alice".into());
+        existing
+            .filters
+            .insert("request_id".into(), "different-request".into());
+        service.upsert(existing);
+        let result = service.add(AddRequest {
+            user_id: "alice".into(),
+            request_id: "r1".into(),
+            session_id: "session".into(),
+            messages: vec![
+                Message {
+                    role: "user".into(),
+                    content: "first".into(),
+                    timestamp: None,
+                    expires_at_ms: None,
+                    supersedes_id: Some("old-memory".into()),
+                },
+                Message {
+                    role: "user".into(),
+                    content: "second".into(),
+                    timestamp: None,
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                },
+            ],
+        });
+        assert!(result.is_err());
+        assert_eq!(service.store.source_documents().len(), 1);
+        assert_eq!(
+            service
+                .store
+                .source_document_by_id(&target_id)
+                .unwrap()
+                .content,
+            "original memory"
+        );
+        assert!(!service
+            .superseded_ids
+            .contains(&("alice".into(), "old-memory".into())));
+        assert!(!service
+            .request_fingerprints
+            .contains_key(&("alice".into(), "r1".into())));
+    }
+
+    #[test]
+    fn legacy_memory_retry_keeps_stored_id_after_reopening() {
+        let dir = canonical_temp_dir("legacy-memory-id-retry");
+        let request = AddRequest {
+            user_id: "alice".into(),
+            request_id: "team:r1".into(),
+            session_id: "session".into(),
+            messages: vec![Message {
+                role: "user".into(),
+                content: "original memory".into(),
+                timestamp: None,
+                expires_at_ms: None,
+                supersedes_id: None,
+            }],
+        };
+        let legacy_id = crate::stable_doc_id_from_source("alice:team:r1:0");
+        {
+            let mut service = MemoryService::at_path(&dir, PipelineOptions::default()).unwrap();
+            let mut legacy = direct_doc(&legacy_id, "user: original memory");
+            legacy.group_id = Some(request.session_id.clone());
+            legacy
+                .filters
+                .insert(USER_FILTER.into(), request.user_id.clone());
+            legacy
+                .filters
+                .insert("request_id".into(), request.request_id.clone());
+            legacy.filters.insert(
+                "request_fingerprint".into(),
+                request_fingerprint(&request.session_id, &request.messages).unwrap(),
+            );
+            service.upsert(legacy);
+            service.refresh().unwrap();
+        }
+        {
+            let mut service = MemoryService::at_path(&dir, PipelineOptions::default()).unwrap();
+            service.add(request.clone()).unwrap();
+            assert_eq!(service.store.source_documents().len(), 1);
+            assert_eq!(
+                service
+                    .store
+                    .source_document_by_id(&legacy_id)
+                    .unwrap()
+                    .content,
+                "user: original memory"
+            );
+            add_message(&mut service, "r1", "alice:team", "session", "second memory");
+            assert_eq!(service.store.source_documents().len(), 2);
+            service.add(request).unwrap();
+            assert_eq!(service.store.source_documents().len(), 2);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Temp dir with symlinks resolved (on macOS `TMPDIR` lives under
     /// `/var`, which is a symlink to `/private/var`; comparing or
     /// reopening paths through the unresolved prefix breaks).
@@ -2816,7 +3013,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
@@ -2853,7 +3050,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert!(response
             .data
@@ -2889,7 +3086,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         let b = service
             .search(SearchRequest {
@@ -2900,7 +3097,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert_eq!(a.data.len(), 1);
         assert_eq!(b.data.len(), 1);
@@ -3019,7 +3216,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert!(response
             .data
@@ -3053,7 +3250,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert!(response.data.is_empty());
         assert!(!service.delete("user-a", "missing").unwrap());
@@ -3062,7 +3259,7 @@ mod tests {
     #[test]
     fn superseded_memory_is_hidden_but_replacement_remains_searchable() {
         let mut service = service();
-        let old_id = crate::stable_doc_id_from_source("user-a:old:0");
+        let old_id = memory_document_id("user-a", "old", 0);
         for (request_id, content, supersedes_id) in [
             ("old", "old deployment decision", None),
             ("new", "new deployment decision", Some(old_id.as_str())),
@@ -3091,7 +3288,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("new deployment"));
@@ -3139,7 +3336,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("shared deployment"));
@@ -3373,7 +3570,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
 
         // Turn 2 is a follow-up: the carried anchor must restrict retrieval
@@ -3387,7 +3584,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
         assert!(
@@ -3410,7 +3607,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
             .data
@@ -3455,7 +3652,11 @@ mod tests {
         service.store.refresh().unwrap();
     }
 
-    fn search(service: &mut MemoryService, query: &str, session_id: Option<&str>) -> SearchResponse {
+    fn search(
+        service: &mut MemoryService,
+        query: &str,
+        session_id: Option<&str>,
+    ) -> SearchResponse {
         service
             .search(SearchRequest {
                 query: query.into(),
@@ -3465,7 +3666,7 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap()
     }
 
@@ -3475,7 +3676,11 @@ mod tests {
         add_quartz_fixture(&mut service);
 
         // Turn 1 establishes the session's entities.
-        let first = search(&mut service, "Tell me about the Quartz database", Some("s1"));
+        let first = search(
+            &mut service,
+            "Tell me about the Quartz database",
+            Some("s1"),
+        );
         assert!(first.data.iter().any(|m| m.content.contains("Quartz")));
 
         // A follow-up with no standalone meaning resolves against the session.
@@ -3507,7 +3712,7 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
-})
+                })
                 .unwrap_err();
             assert!(
                 error.to_string().contains("session_id must not be empty"),
@@ -4063,7 +4268,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
     }
 
     fn doc_id_for(user_id: &str, request_id: &str) -> String {
-        crate::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
+        memory_document_id(user_id, request_id, 0)
     }
 
     fn key_phrases_of(service: &MemoryService, doc_id: &str) -> Vec<String> {
@@ -4127,7 +4332,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert!(response
             .data
@@ -4164,7 +4369,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("jazz festival"));
@@ -4273,7 +4478,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
-});
+                        });
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
                     }
@@ -4316,7 +4521,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         assert!(!response.data.is_empty());
     }
@@ -4458,10 +4663,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         // Head-noun admission: the key entity is "phrase", not the whole
         // "canary phrase" (modifiers are not the thing denoted).
         let record = service.store.record_by_id("search-doc").unwrap();
-        assert!(record
-            .key_entities
-            .iter()
-            .any(|e| e.text == "phrase"));
+        assert!(record.key_entities.iter().any(|e| e.text == "phrase"));
     }
 
     #[test]
@@ -4643,7 +4845,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
-})
+            })
             .unwrap();
         let _ = response;
     }
@@ -4867,7 +5069,9 @@ mod board_integration_tests {
     fn board_open_is_idempotent() {
         let mut service = svc();
         let a = service.board_open(OWNER, WS, "task-a", "Task A").unwrap();
-        let b = service.board_open(OWNER, WS, "task-a", "Different title").unwrap();
+        let b = service
+            .board_open(OWNER, WS, "task-a", "Different title")
+            .unwrap();
         assert_eq!(a.board_id, b.board_id);
         assert_eq!(a.title, "Task A");
     }
@@ -5003,8 +5207,20 @@ mod board_integration_tests {
     #[test]
     fn board_search_finds_posts() {
         let mut service = svc();
-        post(&mut service, None, Some(S1), "the parser failure comes from empty input", "r1");
-        post(&mut service, None, Some(S1), "unrelated status update", "r2");
+        post(
+            &mut service,
+            None,
+            Some(S1),
+            "the parser failure comes from empty input",
+            "r1",
+        );
+        post(
+            &mut service,
+            None,
+            Some(S1),
+            "unrelated status update",
+            "r2",
+        );
         let hits = service
             .board_search(None, OWNER, WS, Some(S1), "parser failure", 10)
             .unwrap();
@@ -5079,5 +5295,54 @@ mod board_integration_tests {
         let mut seqs: Vec<u64> = posts.iter().map(|p| p.sequence).collect();
         seqs.sort_unstable();
         assert_eq!(seqs, (1..=40).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code",
+    feature = "openclaw",
+    feature = "hermes"
+))]
+impl MemoryService {
+    /// Serialize a shared-store mutation against fresh persisted state.
+    /// The service owns store selection, lock lifetime, and persistence.
+    pub(crate) fn with_shared_memory<T>(
+        root: &Path,
+        operation: impl FnOnce(&mut Self) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        workspace::with_shared_memory_service(root, operation)
+    }
+
+    pub(crate) fn open_workspace(
+        root: &Path,
+        memory_name: &str,
+        ignore_paths: &[String],
+        source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
+    ) -> anyhow::Result<Self> {
+        workspace::open_workspace_memory_store(root, memory_name, ignore_paths, source_documents)
+    }
+
+    pub(crate) fn open_persistent_workspace(
+        root: &Path,
+        index_name: &str,
+        memory_name: &str,
+        ignore_paths: &[String],
+        source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
+    ) -> anyhow::Result<Self> {
+        workspace::open_persistent_store(
+            root,
+            index_name,
+            memory_name,
+            ignore_paths,
+            source_documents,
+        )
+    }
+
+    pub(crate) fn migrate_legacy_memories(root: &Path) -> anyhow::Result<()> {
+        workspace::migrate_legacy_provider_memory_dirs(root)
     }
 }

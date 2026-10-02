@@ -333,7 +333,7 @@ impl MuseMcp {
             let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
             let root = self.root.clone();
-            *store = Some(mcp_index::open_workspace_memory_store(
+            *store = Some(crate::memory_api::MemoryService::open_workspace(
                 &root,
                 mcp_index::SHARED_MEMORY_DIR,
                 &self.ignore_paths,
@@ -349,16 +349,14 @@ impl MuseMcp {
         let mut reader = BufReader::new(stdin.lock());
         let mut writer = stdout.lock();
 
-        while let Some((request, line_framed)) = mcp_transport::read_request(&mut reader)? {
-            mcp_index::trace_event(&format!("request:{}", request.method));
-            if request.id.is_none() {
-                continue;
-            }
-            let response = self.handle_request(request)?;
-            mcp_transport::write_response(&mut writer, &response, line_framed)?;
-            mcp_index::trace_event("response-written");
-        }
-        Ok(())
+        mcp_transport::serve_requests(
+            &mut reader,
+            &mut writer,
+            |request| self.handle_request(request),
+            |method| mcp_index::trace_event(&format!("request:{method}")),
+            |method, error| mcp_index::trace_event(&format!("request-error:{method}:{error:#}")),
+            || mcp_index::trace_event("response-written"),
+        )
     }
 
     fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {

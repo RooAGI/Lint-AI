@@ -5,8 +5,6 @@
 //! - `src/memory_api.rs` — the service itself,
 //! - `#[cfg(test)]` modules,
 //! - `src/bin/*benchmark*.rs` — benchmarks,
-//! - `inspect_index_store` in `src/engine/run.rs` — the documented low-level
-//!   CLI diagnostic (see its doc comment).
 //!
 //! Everything else (integrations, hooks, recall, server) must go through the
 //! service's constructors and methods.
@@ -55,48 +53,6 @@ fn test_regions(lines: &[&str]) -> Vec<(usize, usize)> {
     regions
 }
 
-/// Name of the `fn` whose body contains `line_idx`, via brace tracking.
-fn enclosing_fn(lines: &[&str], line_idx: usize) -> Option<String> {
-    let mut depth: i32 = 0;
-    let mut current: Option<(String, i32)> = None;
-    for (idx, line) in lines.iter().enumerate() {
-        if idx > line_idx {
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.starts_with("fn ")
-            || trimmed.starts_with("pub fn ")
-            || trimmed.starts_with("pub(crate) fn ")
-        {
-            let name = trimmed
-                .trim_start_matches("pub(crate) ")
-                .trim_start_matches("pub ")
-                .trim_start_matches("fn ")
-                .split(['(', '<'])
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            // Only treat it as a body start if the signature opens a brace
-            // on this line or a later line before the next fn.
-            current = Some((name, depth));
-        }
-        for ch in line.chars() {
-            if ch == '{' {
-                depth += 1;
-            } else if ch == '}' {
-                depth -= 1;
-                if let Some((_, fn_depth)) = &current {
-                    if depth < *fn_depth {
-                        current = None;
-                    }
-                }
-            }
-        }
-    }
-    current.map(|(name, _)| name)
-}
-
 fn in_test_region(regions: &[(usize, usize)], idx: usize) -> bool {
     regions.iter().any(|(s, e)| idx >= *s && idx <= *e)
 }
@@ -120,6 +76,8 @@ fn contains_index_store_word(code: &str) -> bool {
 fn is_path_allowed(relative: &str) -> bool {
     relative.starts_with("pipeline/")
         || relative == "memory_api.rs"
+        || relative.starts_with("memory_api/")
+        || relative.starts_with("internal_tests/")
         || (relative.starts_with("bin/") && relative.contains("benchmark"))
 }
 
@@ -193,13 +151,12 @@ fn check_file(path: &Path, relative: &str) -> Vec<String> {
                 stripped.push(ch);
             }
         }
-        // Public API re-export tracking (curated in PR #66); the type stays
-        // public for downstream crates, but in-crate production code goes
-        // through the service. Runs before the word check so multi-line
-        // `pub use` continuations are tracked on every line.
+        // Crate-private aliases are allowed in lib.rs. Public exports are
+        // checked normally; stores must not become a downstream API again.
+        // Track multiline imports before checking individual words.
         if relative == "lib.rs" {
             let t = stripped.trim_start();
-            if t.starts_with("pub use") || t.starts_with("use ") {
+            if t.starts_with("pub(crate) use") || t.starts_with("use ") {
                 in_lib_use_stmt = !stripped.contains(';');
                 continue;
             }
@@ -209,13 +166,6 @@ fn check_file(path: &Path, relative: &str) -> Vec<String> {
             }
         }
         if !contains_index_store_word(&stripped) {
-            continue;
-        }
-        // Documented low-level diagnostic exception.
-        if relative == "engine/run.rs"
-            && (stripped.trim_start().starts_with("use ")
-                || enclosing_fn(&lines, idx).as_deref() == Some("inspect_index_store"))
-        {
             continue;
         }
         violations.push(format!("{}:{}: {}", relative, idx + 1, line.trim()));
@@ -256,7 +206,7 @@ fn production_code_does_not_bypass_memory_service() {
     assert!(
         violations.is_empty(),
         "direct IndexStore use outside MemoryService (allowed: src/pipeline/*, \
-         src/memory_api.rs, #[cfg(test)] modules, benchmarks, documented diagnostics):\n{}",
+         src/memory_api.rs, #[cfg(test)] modules, internal tests and benchmarks):\n{}",
         violations.join("\n")
     );
 }

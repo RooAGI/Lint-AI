@@ -188,7 +188,9 @@ pub(crate) fn test_handle(
 }
 
 impl GeminiMcp {
-    pub(crate) fn store(&self) -> Result<std::sync::MutexGuard<'_, Option<crate::memory_api::MemoryService>>> {
+    pub(crate) fn store(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<crate::memory_api::MemoryService>>> {
         let mut store = self
             .store
             .lock()
@@ -209,7 +211,7 @@ impl GeminiMcp {
                 max_total_bytes: self.max_total_bytes,
             };
             let ignores = self.ignore_paths.clone();
-            *store = Some(mcp_index::open_workspace_memory_store(
+            *store = Some(crate::memory_api::MemoryService::open_workspace(
                 &self.root,
                 mcp_index::SHARED_MEMORY_DIR,
                 &ignores,
@@ -228,14 +230,14 @@ impl GeminiMcp {
         let stdout = io::stdout();
         let mut reader = BufReader::new(stdin.lock());
         let mut writer = stdout.lock();
-        while let Some((request, line_framed)) = mcp_transport::read_request(&mut reader)? {
-            if request.id.is_none() {
-                continue;
-            }
-            let response = self.handle_request(request)?;
-            mcp_transport::write_response(&mut writer, &response, line_framed)?;
-        }
-        Ok(())
+        mcp_transport::serve_requests(
+            &mut reader,
+            &mut writer,
+            |request| self.handle_request(request),
+            |_| {},
+            |_, _| {},
+            || {},
+        )
     }
 
     pub(crate) fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
@@ -877,7 +879,7 @@ mod tests {
                 mem_request,
                 "{provider:?}: add_memory response missing request id: {added}"
             );
-            let memory_id = crate::stable_doc_id_from_source(&format!("mcp:{mem_request}:0"));
+            let memory_id = crate::memory_api::memory_document_id("mcp", &mem_request, 0);
             let fetched = call_tool(&mcp, "get_memory", json!({"memory_id": memory_id}));
             assert!(
                 fetched["content"]

@@ -20,12 +20,6 @@ use crate::integrations::agy::{
     install_memory_skill as install_agy_memory_skill,
     install_user_config as install_agy_user_config, run_server as run_agy_server, AgyServerOptions,
 };
-#[cfg(feature = "hermes")]
-use crate::integrations::hermes::{
-    install_memory_skill as install_hermes_memory_skill,
-    install_user_config as install_hermes_user_config, run_server as run_hermes_server,
-    HermesServerOptions,
-};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
@@ -51,14 +45,11 @@ use crate::integrations::gemini_cli::{
     install_user_config as install_gemini_user_config, run_server as run_gemini_server,
     GeminiCliServerOptions,
 };
-#[cfg(feature = "openclaw")]
-use crate::integrations::openclaw::hooks::{run_hook as run_openclaw_hook, OpenClawHookKind};
-#[cfg(feature = "openclaw")]
-use crate::integrations::openclaw::{
-    install_hooks as install_openclaw_hooks, install_memory_skill as install_openclaw_memory_skill,
-    install_plugin as install_openclaw_plugin, install_plugin_config as install_openclaw_plugin_config,
-    install_user_config as install_openclaw_user_config,
-    run_server as run_openclaw_server, OpenClawServerOptions,
+#[cfg(feature = "hermes")]
+use crate::integrations::hermes::{
+    install_memory_skill as install_hermes_memory_skill,
+    install_user_config as install_hermes_user_config, run_server as run_hermes_server,
+    HermesServerOptions,
 };
 #[cfg(feature = "muse-code")]
 use crate::integrations::muse_code::{
@@ -68,7 +59,17 @@ use crate::integrations::muse_code::{
     install_user_config as install_muse_user_config, run_server as run_muse_server,
     MuseServerOptions,
 };
-use crate::pipeline::{IndexStore, MemoryIndexLayout, PipelineOptions};
+#[cfg(feature = "openclaw")]
+use crate::integrations::openclaw::hooks::{run_hook as run_openclaw_hook, OpenClawHookKind};
+#[cfg(feature = "openclaw")]
+use crate::integrations::openclaw::{
+    install_hooks as install_openclaw_hooks, install_memory_skill as install_openclaw_memory_skill,
+    install_plugin as install_openclaw_plugin,
+    install_plugin_config as install_openclaw_plugin_config,
+    install_user_config as install_openclaw_user_config, run_server as run_openclaw_server,
+    OpenClawServerOptions,
+};
+use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::query_plan::PreparedQuery;
 use crate::report::Report;
 use crate::rules::cross_refs::check_cross_refs;
@@ -1111,12 +1112,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
     Ok(())
 }
 
-/// Low-level index diagnostic for the CLI `inspect` command.
-///
-/// Approved exception to the MemoryService routing rule: this intentionally
-/// opens the raw [`IndexStore`] to dump index internals (records, snapshot)
-/// for debugging. It never serves agent traffic; all serving paths go
-/// through [`crate::memory_api::MemoryService`].
+/// CLI index diagnostics use the same MemoryService boundary as serving paths.
 fn inspect_index_store(index_path: &Path, view: IndexInspectView) -> Result<()> {
     if !index_path.exists() {
         anyhow::bail!("index path does not exist: {}", index_path.display());
@@ -1128,7 +1124,7 @@ fn inspect_index_store(index_path: &Path, view: IndexInspectView) -> Result<()> 
         },
         ..PipelineOptions::default()
     };
-    let mut store = IndexStore::at_path(index_path, options)?;
+    let mut store = crate::MemoryService::at_path(index_path, options)?;
     store.refresh()?;
     let payload = match view {
         IndexInspectView::Summary => serde_json::json!({
@@ -1141,7 +1137,7 @@ fn inspect_index_store(index_path: &Path, view: IndexInspectView) -> Result<()> 
         }),
         IndexInspectView::Records => serde_json::json!({
             "index_path": index_path,
-            "records": store.records(),
+            "records": store.diagnostic_records()?,
         }),
         IndexInspectView::Segments => serde_json::json!({
             "index_path": index_path,

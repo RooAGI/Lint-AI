@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{Duration, Utc};
-use lint_ai::{build_query_snapshot, PipelineOptions, SourceDocument};
+use crate::{build_query_snapshot, PipelineOptions, SourceDocument};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -36,7 +36,7 @@ fn bucket(doc_id: &str) -> &'static str {
         .unwrap_or("unknown")
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let today = chrono::DateTime::<Utc>::from(SystemTime::now()).date_naive();
     let documents = TOPICS
         .iter()

@@ -7,6 +7,7 @@ mod query_terms;
 mod semantic;
 #[cfg(test)]
 mod tests;
+pub(crate) mod write_lock;
 
 pub use model::*;
 

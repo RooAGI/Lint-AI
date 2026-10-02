@@ -335,7 +335,7 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         key_phrases: Vec::new(),
         key_phrase_extraction_hash: String::new(),
     };
-    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
+    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
         store.upsert(document);
         store.refresh_index()?;
         Ok(())

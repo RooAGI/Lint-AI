@@ -529,10 +529,7 @@ mod tests {
 
     #[test]
     fn korean_numerals_normalize() {
-        assert_eq!(
-            normalize_number_words("삼천원을 썼다"),
-            "3000원을 썼다"
-        );
+        assert_eq!(normalize_number_words("삼천원을 썼다"), "3000원을 썼다");
         assert_eq!(normalize_number_words("오만개"), "50000개");
         assert_eq!(normalize_number_words("하나의 사과"), "1의 사과");
         assert_eq!(normalize_number_words("스물 명"), "20 명");

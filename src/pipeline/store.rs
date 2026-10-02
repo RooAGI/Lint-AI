@@ -1,11 +1,10 @@
 use super::{
-    build_doc_record_with_entities, chunk_lineage_key, current_time_ms,
-    doc_record_content_hash, ensure_store_metadata, execute_prepared_on_snapshot_parts,
-    inspect_memory_index_snapshot, load_segment_manifest, load_semantic_state,
-    persist_segment_manifest, persist_semantic_state, persist_store_metadata,
-    rank_key_entities_batched, source_document_from_record, source_documents_to_tier1_inputs,
-    IndexLocation, IndexStoreInspection, LexicalState, MemoryIndexLayout, MemoryIndexSnapshot,
-    PipelineOptions,
+    build_doc_record_with_entities, chunk_lineage_key, current_time_ms, doc_record_content_hash,
+    ensure_store_metadata, execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot,
+    load_segment_manifest, load_semantic_state, persist_segment_manifest, persist_semantic_state,
+    persist_store_metadata, rank_key_entities_batched, source_document_from_record,
+    source_documents_to_tier1_inputs, IndexLocation, IndexStoreInspection, LexicalState,
+    MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
 };
 use crate::conversational_rerank::{RerankDocSource, RerankDocView};
 use crate::index::{
@@ -567,9 +566,15 @@ impl IndexStore {
             chunk_latest_by_lineage.insert(meta.lineage_key.clone(), meta.chunk_id.clone());
         }
         let mut lexical = LexicalState::new(lexical_index_dir)?;
-        let all_records: Vec<&DocRecord> = records.values().collect();
-        lexical.upsert_records(&all_records)?;
-        lexical.commit_reload()?;
+        if lexical.needs_initial_population() {
+            // Populate a new/missing Tantivy index from the durable semantic
+            // records. An existing index is already committed and must remain
+            // read-only on open; rewriting every record here makes ordinary
+            // search startup contend with real writers across MCP processes.
+            let all_records: Vec<&DocRecord> = records.values().collect();
+            lexical.upsert_records(&all_records)?;
+            lexical.commit_reload()?;
+        }
         Ok(Self {
             options,
             store_paths,

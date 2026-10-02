@@ -7,9 +7,9 @@
 //! 3. docs_for_activity returns doc_ids for Nate+meet
 //! 4. query_structured returns hits (score 1000+)
 
-use lint_ai::segments::relations::{
-    analyze_fact_question, extract_activity_verb, query_structured, RelationIndex,
-    RawRelation, RelationTurn,
+use crate::segments::relations::{
+    analyze_fact_question, extract_activity_verb, query_structured, RawRelation, RelationIndex,
+    RelationTurn,
 };
 
 const QUESTION: &str = "What places has Nate met new people?";
@@ -88,14 +88,20 @@ fn fixture_raw() -> Vec<RawRelation> {
 #[test]
 fn step1_analyzer_returns_expect_place() {
     let fq = analyze_fact_question(QUESTION);
-    assert!(fq.is_some(), "STEP 1 FAILED: analyze_fact_question returned None");
+    assert!(
+        fq.is_some(),
+        "STEP 1 FAILED: analyze_fact_question returned None"
+    );
     let fq = fq.unwrap();
     println!("persons: {:?}", fq.persons);
     println!("expect_place: {}", fq.expect_place);
     println!("time_window: {:?}", fq.time_window);
     assert_eq!(fq.persons.len(), 1, "STEP 1 FAILED: expected 1 person");
     assert!(fq.expect_place, "STEP 1 FAILED: expect_place is false");
-    assert!(fq.time_window.is_none(), "STEP 1 FAILED: expected no time window");
+    assert!(
+        fq.time_window.is_none(),
+        "STEP 1 FAILED: expected no time window"
+    );
     println!("STEP 1 PASSED");
 }
 
@@ -103,7 +109,11 @@ fn step1_analyzer_returns_expect_place() {
 fn step2_activity_verb_is_meet() {
     let verb = extract_activity_verb(QUESTION, "Nate");
     println!("activity verb: {:?}", verb);
-    assert_eq!(verb.as_deref(), Some("meet"), "STEP 2 FAILED: expected 'meet'");
+    assert_eq!(
+        verb.as_deref(),
+        Some("meet"),
+        "STEP 2 FAILED: expected 'meet'"
+    );
     println!("STEP 2 PASSED");
 }
 
@@ -113,8 +123,14 @@ fn step3_docs_for_activity() {
     let docs = index.docs_for_activity("Nate", "meet");
     println!("doc_ids: {:?}", docs);
     assert!(!docs.is_empty(), "STEP 3 FAILED: no doc_ids returned");
-    assert!(docs.contains(&"doc14_7".to_string()), "STEP 3 FAILED: missing session_14 doc");
-    assert!(docs.contains(&"doc23_0".to_string()), "STEP 3 FAILED: missing session_23 doc");
+    assert!(
+        docs.contains(&"doc14_7".to_string()),
+        "STEP 3 FAILED: missing session_14 doc"
+    );
+    assert!(
+        docs.contains(&"doc23_0".to_string()),
+        "STEP 3 FAILED: missing session_23 doc"
+    );
     println!("STEP 3 PASSED");
 }
 
@@ -123,9 +139,15 @@ fn step4_query_structured_returns_hits() {
     let index = RelationIndex::build(&fixture_turns(), &fixture_raw());
     let hits = query_structured(&index, QUESTION);
     println!("hits: {:?}", hits.as_ref().map(|h| h.len()));
-    assert!(hits.is_some(), "STEP 4 FAILED: query_structured returned None");
+    assert!(
+        hits.is_some(),
+        "STEP 4 FAILED: query_structured returned None"
+    );
     let hits = hits.unwrap();
     assert!(!hits.is_empty(), "STEP 4 FAILED: empty hits");
-    assert!(hits.iter().all(|h| h.score >= 1000.0), "STEP 4 FAILED: scores < 1000");
+    assert!(
+        hits.iter().all(|h| h.score >= 1000.0),
+        "STEP 4 FAILED: scores < 1000"
+    );
     println!("STEP 4 PASSED: {} hits", hits.len());
 }

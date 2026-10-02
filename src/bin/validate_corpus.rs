@@ -7,11 +7,11 @@
 //! 2. Coverage: persons, predicates, sessions
 //! 3. Behood metadata: kind distribution, relations per person, gaps
 
-use lint_ai::segments::relations::{extract_relations_via_spacy, RelationTurn};
+use crate::segments::relations::{extract_relations_via_spacy, RelationTurn};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-fn main() {
+pub(crate) fn main() {
     let path = std::env::args()
         .nth(1)
         .expect("usage: validate_corpus <locomo10.json>");
@@ -83,7 +83,7 @@ fn main() {
     let output = extract_relations_via_spacy(
         &turns,
         Duration::from_secs(300),
-        lint_ai::DEFAULT_SPACY_MODEL,
+        crate::DEFAULT_SPACY_MODEL,
     );
     println!("\n=== SPACY HEALTH ===");
     println!("Relations extracted: {}", output.relations.len());

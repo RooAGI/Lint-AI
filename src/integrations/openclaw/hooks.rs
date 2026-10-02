@@ -441,7 +441,7 @@ fn capture_outcome(
     // Writes go through the persistent shared store under the cross-process
     // write lock (never the in-memory view): hook captures must survive the
     // hook process and be visible to MCP servers and other hooks.
-    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
+    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
         store.upsert(document.into_source_document()?);
         store.refresh_index()
     })?;
@@ -528,7 +528,7 @@ fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> 
     // Writes go through the persistent shared store under the cross-process
     // write lock (never the in-memory view): hook captures must survive the
     // hook process and be visible to MCP servers and other hooks.
-    crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
+    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
         store.upsert(document.into_source_document()?);
         store.refresh_index()
     })?;
@@ -716,7 +716,11 @@ mod tests {
     #[test]
     fn bootstrap_without_workspace_dir_uses_resolved_root_for_injected_path() {
         let root = test_root();
-        write_memory_doc(&root, "seed-1", "The team standardized on SQLite for local state.");
+        write_memory_doc(
+            &root,
+            "seed-1",
+            "The team standardized on SQLite for local state.",
+        );
         // Live 2026.9.6 payloads sometimes omit `context.workspaceDir`;
         // `resolve_root` then falls back to the install root, which is the
         // `root` the handler receives.
@@ -781,7 +785,9 @@ mod tests {
         assert_eq!(third["ok"], true);
 
         let mut store = open_store(&root).unwrap();
-        let results = store.observe_plain_query("deployment steps", "openclaw", None, 10).unwrap();
+        let results = store
+            .observe_plain_query("deployment steps", "openclaw", None, 10)
+            .unwrap();
         let outcomes: Vec<_> = results
             .iter()
             .filter_map(|r| store.record_by_id(&r.doc_id))
@@ -828,7 +834,9 @@ mod tests {
         assert_eq!(output["ok"], true);
 
         let mut store = open_store(&root).unwrap();
-        let results = store.observe_plain_query("reset the gateway", "openclaw", None, 10).unwrap();
+        let results = store
+            .observe_plain_query("reset the gateway", "openclaw", None, 10)
+            .unwrap();
         let summaries: Vec<_> = results
             .iter()
             .filter_map(|r| store.record_by_id(&r.doc_id))

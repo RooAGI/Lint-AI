@@ -109,7 +109,7 @@ pub(crate) fn is_question_word(term: &str) -> bool {
         | "얼마" | "얼마나"                           // how much / many
         | "왜"                                       // why
         | "어떻게" | "어떡해"                         // how
-        | "어느" | "어떤"                            // which
+        | "어느" | "어떤" // which
     )
 }
 
@@ -223,8 +223,19 @@ mod tests {
     #[test]
     fn korean_question_words_recognized() {
         for w in [
-            "누구", "누가", "무엇", "뭐", "무슨", "어디", "언제", "얼마", "얼마나", "왜", "어떻게",
-            "어느", "어떤",
+            "누구",
+            "누가",
+            "무엇",
+            "뭐",
+            "무슨",
+            "어디",
+            "언제",
+            "얼마",
+            "얼마나",
+            "왜",
+            "어떻게",
+            "어느",
+            "어떤",
         ] {
             assert!(is_question_word(w), "{w} should be a question word");
         }

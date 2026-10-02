@@ -778,5 +778,3 @@ impl ImportantTermRanker for TextRankStyleTermRanker {
         sorted_terms(out, 12)
     }
 }
-
-

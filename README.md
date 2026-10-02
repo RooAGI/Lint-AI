@@ -387,7 +387,9 @@ memory.add(
 print(memory.search("docker ubuntu", "user-1", 5))
 
 # Use the same API against a running lint-ai server:
-remote = lint_ai.RemoteMemory("http://127.0.0.1:8080", api_key="local-token")
+# NOTE: base_url must be passed by keyword. A positional first argument
+# is `path` and would silently create a local index instead of connecting.
+remote = lint_ai.Memory(base_url="http://127.0.0.1:8080", api_key="local-token")
 print(remote.search("docker ubuntu", "user-1", 5))
 ```
 

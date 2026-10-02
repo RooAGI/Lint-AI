@@ -965,6 +965,13 @@ impl IndexStore {
         self.semantic_relations.relations()
     }
 
+    pub fn semantic_document_state(
+        &self,
+        doc_id: &str,
+    ) -> crate::semantic_relations::DocumentSemanticState {
+        self.semantic_relations.document_state(doc_id)
+    }
+
     pub fn temporal_facts_as_of(&self, date: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
         self.temporal_facts.as_of(date)
     }

@@ -1,6 +1,6 @@
 mod build;
 mod config;
-mod persistence;
+pub(crate) mod persistence;
 mod store;
 mod watcher;
 

@@ -155,10 +155,10 @@ excluded from focus-term expansion via `is_expandable_concept`.
   stopword fixed-point, focus, temporal, aggregation, expansion no-op).
 - Tokenizer tests: `cargo test --lib cjk_tokenizer` (accent preservation,
   ASCII unchanged, long-token drop, CJK segmentation).
-- Smoke test: `cargo test --test spanish_smoke` — add Spanish memories,
+- Smoke test: `cargo test --lib internal_tests::spanish_smoke` — add Spanish memories,
   search in Spanish, verify retrieval (explicit `--lang es` and
   `--lang auto`).
-- English regression: `cargo test --test english_smoke` — add/search in
+- English regression: `cargo test --lib internal_tests::english_smoke` — add/search in
   English, verify no behavior change.
 
 ## Merge notes (zh/ko parallel tracks)

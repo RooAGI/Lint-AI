@@ -36,9 +36,9 @@ fn load_from_path(path: &Path, max_bytes: u64) -> Result<Config, String> {
 
 /// Load config from a JSON file, or default if none is found.
 ///
-/// Example:
-/// ```
-/// use lint_ai::config::load_config;
+/// Internal example:
+/// ```ignore
+/// use crate::config::load_config;
 /// let cfg = load_config(None, "docs", false, 2_000_000).unwrap();
 /// ```
 pub fn load_config(

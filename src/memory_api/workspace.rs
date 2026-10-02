@@ -137,7 +137,7 @@ const SHARED_STORE_WRITE_LOCK_RETRY: Duration = Duration::from_millis(50);
 /// Luyi's architectural rule: external paths go through `MemoryService`;
 /// this helper opens one on the shared store — it never touches
 /// `IndexStore` directly.
-pub fn with_shared_memory_service<T>(
+pub(super) fn with_shared_memory_service<T>(
     root: &Path,
     operation: impl FnOnce(&mut MemoryService) -> Result<T>,
 ) -> Result<T> {
@@ -188,7 +188,7 @@ pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
 /// attribution travels with the documents, so nothing is lost or duplicated),
 /// and the legacy directory is removed only after the shared store refreshes
 /// successfully. Failures leave the legacy directory untouched.
-pub fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
+pub(super) fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
     let lint_ai = root.join(".lint-ai");
     let mut migrated_any = false;
     for provider in LEGACY_PROVIDERS {
@@ -297,7 +297,7 @@ pub fn trace_event(event: &str) {
 /// has moved on. `ignore_paths` is part of that description: the documents the
 /// caller hands over depend on it, so an index built under different ignores is
 /// as stale as one built at a different revision.
-pub fn open_persistent_store(
+pub(super) fn open_persistent_store(
     root: &Path,
     index_name: &str,
     memory_name: &str,
@@ -334,7 +334,7 @@ pub fn open_persistent_store(
 /// transfers the already-published workspace and provider segments rather than
 /// reprocessing source documents, then recomputes only cross-store routing and
 /// ranking statistics.
-pub fn open_workspace_memory_store(
+pub(super) fn open_workspace_memory_store(
     root: &Path,
     memory_name: &str,
     ignore_paths: &[String],
@@ -374,7 +374,10 @@ pub fn open_workspace_memory_store(
     MemoryService::compose_segmented(workspace, provider_memory)
 }
 
-pub fn sync_memory_documents(memory_root: &Path, target: &mut MemoryService) -> Result<bool> {
+pub(super) fn sync_memory_documents(
+    memory_root: &Path,
+    target: &mut MemoryService,
+) -> Result<bool> {
     if !memory_root.exists() {
         return Ok(false);
     }
@@ -859,11 +862,8 @@ mod tests {
             start.elapsed() < Duration::from_secs(5),
             "lock was not released promptly"
         );
-        let store = MemoryService::at_path(
-            shared_memory_root(&root),
-            segmented_store_options(),
-        )
-        .expect("reopen");
+        let store = MemoryService::at_path(shared_memory_root(&root), segmented_store_options())
+            .expect("reopen");
         assert!(store.source_document_by_id("doc-1").is_some());
         assert!(store.source_document_by_id("doc-2").is_some());
         let _ = fs::remove_dir_all(&root);
@@ -897,7 +897,7 @@ mod tests {
         let mut child = Command::new(exe)
             .arg("--exact")
             .arg(
-                "integrations::mcp_index::tests::\
+                "memory_api::workspace::tests::\
                  shared_store_write_lock_survives_crashed_holder",
             )
             .arg("--nocapture")

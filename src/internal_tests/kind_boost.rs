@@ -23,9 +23,9 @@
 // Requires a kind-capable bekind binary: set BEHOOD_BIN to it
 // (e.g. ~/workspace/bekind/target/release/bekind at commit e89c5cf).
 // Without BEHOOD_BIN the test skips loudly instead of failing.
-use lint_ai::memory_api::{AddRequest, MemoryService, Message};
-use lint_ai::semantic_tags::{batch_doc_semantic_tags, query_semantic_tags};
-use lint_ai::PipelineOptions;
+use crate::memory_api::{AddRequest, MemoryService, Message};
+use crate::semantic_tags::{batch_doc_semantic_tags, query_semantic_tags};
+use crate::PipelineOptions;
 use std::collections::BTreeMap;
 
 const FACT_A: &str = "The user dislikes cilantro and always asks for it to be left out.";
@@ -39,7 +39,7 @@ fn bekind_bin() -> Option<String> {
 }
 
 fn doc_id(user_id: &str, request_id: &str) -> String {
-    lint_ai::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
+    crate::memory_api::memory_document_id(user_id, request_id, 0)
 }
 
 fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, content: &str) {

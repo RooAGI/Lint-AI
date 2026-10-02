@@ -6,6 +6,7 @@ use crate::chunking::{
     chunk_document_hybrid, chunk_document_lines, chunk_document_sections, enrich_section_chunks,
 };
 use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor};
+use crate::index::write_lock::with_guarded_index_writer;
 use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
@@ -20,24 +21,23 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::Value;
 use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
-use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, Term};
-/// How long to wait for another session to finish writing before giving up.
-const WRITER_LOCK_WAIT: Duration = Duration::from_secs(10);
-const WRITER_LOCK_RETRY: Duration = Duration::from_millis(150);
+use tantivy::{Index, IndexReader, ReloadPolicy, Term};
+
+enum LexicalWrite {
+    Delete(Term),
+    Add(TantivyDocument),
+}
 
 pub(crate) struct LexicalState {
     index: Index,
-    /// Created on first write. Tantivy's writer lock is exclusive across
-    /// processes, so constructing one eagerly means a second agent session
-    /// searching the same project dies with LockBusy before it can read
-    /// anything. Readers need no lock, and many can share one index.
-    writer: Option<IndexWriter>,
+    index_dir: Option<PathBuf>,
+    needs_initial_population: bool,
+    pending_writes: Vec<LexicalWrite>,
     reader: IndexReader,
     doc_id_f: Field,
     content_f: Field,
@@ -63,11 +63,16 @@ impl LexicalState {
         schema_builder.add_text_field("semantic_tags", TEXT);
         let schema = schema_builder.build();
 
-        let index = match index_dir.as_deref() {
-            Some(dir) => Self::open_or_create_on_disk(dir, &schema)?,
-            None => Index::create_in_ram(schema),
+        let (index, needs_initial_population) = match index_dir.as_deref() {
+            Some(dir) => {
+                let _lock = crate::index::write_lock::PersistentIndexWriteLock::acquire(dir)?;
+                fs::create_dir_all(dir)?;
+                let is_new = is_directory_empty(dir)?;
+                let index = Self::open_or_create_on_disk(dir, &schema)?;
+                (index, is_new)
+            }
+            None => (Index::create_in_ram(schema), true),
         };
-        let writer = None;
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -83,7 +88,9 @@ impl LexicalState {
         let tags_f = schema_ref.get_field("semantic_tags").ok();
         Ok(Self {
             index,
-            writer,
+            index_dir,
+            needs_initial_population,
+            pending_writes: Vec::new(),
             reader,
             doc_id_f,
             content_f,
@@ -92,6 +99,10 @@ impl LexicalState {
             entities_f,
             tags_f,
         })
+    }
+
+    pub(crate) fn needs_initial_population(&self) -> bool {
+        self.needs_initial_population
     }
 
     fn open_or_create_on_disk(dir: &Path, schema: &Schema) -> Result<Index> {
@@ -156,8 +167,10 @@ impl LexicalState {
             self.tags_f,
         );
         let doc_id = record.doc_id.clone();
-        let writer = self.writer()?;
-        writer.delete_term(Term::from_field_text(doc_id_f, &doc_id));
+        self.pending_writes
+            .push(LexicalWrite::Delete(Term::from_field_text(
+                doc_id_f, &doc_id,
+            )));
         let mut document = TantivyDocument::new();
         document.add_text(doc_id_f, &doc_id);
         document.add_text(content_f, &content_text);
@@ -171,60 +184,61 @@ impl LexicalState {
             let tags_text = tags.join(" ");
             document.add_text(tags_f, tags_text);
         }
-        writer.add_document(document)?;
+        self.pending_writes.push(LexicalWrite::Add(document));
         Ok(())
     }
 
     pub(crate) fn remove_doc(&mut self, doc_id: &str) -> Result<()> {
         let doc_id_f = self.doc_id_f;
-        self.writer()?
-            .delete_term(Term::from_field_text(doc_id_f, doc_id));
+        self.pending_writes
+            .push(LexicalWrite::Delete(Term::from_field_text(
+                doc_id_f, doc_id,
+            )));
         Ok(())
     }
 
-    /// Takes the index lock, waiting briefly if another process is mid-write.
-    ///
-    /// Tantivy's writer lock is exclusive across processes, so two agent sessions
-    /// working in the same project contend for it. Holding one for the life of the
-    /// process makes that fatal for whichever starts second; taking it per write
-    /// and waiting a moment makes them take turns.
-    fn writer(&mut self) -> Result<&mut IndexWriter> {
-        if self.writer.is_none() {
-            let mut waited = Duration::ZERO;
-            loop {
-                match self.index.writer(50_000_000) {
-                    Ok(writer) => {
-                        self.writer = Some(writer);
-                        break;
+    pub(crate) fn commit_reload(&mut self) -> Result<()> {
+        if !self.pending_writes.is_empty() {
+            let writes = std::mem::take(&mut self.pending_writes);
+            let result = with_guarded_index_writer(
+                &mut self.index,
+                self.index_dir.as_deref(),
+                50_000_000,
+                |dir, schema| Ok((Self::open_or_create_on_disk(dir, schema)?, true)),
+                |writer| {
+                    for write in &writes {
+                        match write {
+                            LexicalWrite::Delete(term) => {
+                                writer.delete_term(term.clone());
+                            }
+                            LexicalWrite::Add(document) => {
+                                writer.add_document(document.clone())?;
+                            }
+                        }
                     }
-                    Err(error) if waited < WRITER_LOCK_WAIT => {
-                        std::thread::sleep(WRITER_LOCK_RETRY);
-                        waited += WRITER_LOCK_RETRY;
-                        let _ = error;
-                    }
-                    Err(error) => {
-                        return Err(anyhow::anyhow!(
-                            "another session is writing this project's index: {error}"
-                        ))
-                    }
-                }
+                    Ok(())
+                },
+            );
+            if let Err(error) = result {
+                self.pending_writes = writes;
+                return Err(error);
             }
         }
-        self.writer
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("index writer missing immediately after creation"))
-    }
-
-    pub(crate) fn commit_reload(&mut self) -> Result<()> {
-        // Nothing was written, so there is nothing to commit and no reason to
-        // have taken the lock.
-        if let Some(writer) = self.writer.as_mut() {
-            writer.commit()?;
-        }
+        let schema = self.index.schema();
+        let reader = self
+            .index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()?;
+        self.reader = reader;
+        self.doc_id_f = schema.get_field("doc_id")?;
+        self.content_f = schema.get_field("content")?;
+        self.headings_f = schema.get_field("headings")?;
+        self.terms_f = schema.get_field("important_terms")?;
+        self.entities_f = schema.get_field("entities")?;
+        self.tags_f = schema.get_field("semantic_tags").ok();
         // Dropping the writer releases the lock. Keeping it would hold the index
         // against every other session in this project for as long as we run.
-        self.writer = None;
-        self.reader.reload()?;
         Ok(())
     }
 

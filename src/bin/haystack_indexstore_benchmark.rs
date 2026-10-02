@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::query_plan::PreparedQuery;
-use lint_ai::{
+use crate::query_plan::PreparedQuery;
+use crate::{
     build_index_store, ChunkStrategy, PipelineOptions, SearchResult, SourceDocument,
     Tier1NerProvider, Tier1TermRankerKind,
 };
@@ -40,7 +40,6 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 struct LongMemEvalEntry {
@@ -111,7 +110,7 @@ struct BenchmarkReport {
     per_query: Vec<QueryMetrics>,
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     let mut ks = args.ks.into_iter().filter(|k| *k > 0).collect::<Vec<_>>();
     ks.sort_unstable();
@@ -123,7 +122,7 @@ fn main() -> Result<()> {
     // Warm the long-lived spaCy NER daemon so the index build pays the
     // interpreter + model load once, up front, instead of inside the
     // first ranking call. Mirrors src/bin/server.rs.
-    lint_ai::NerDaemon::global().prewarm();
+    crate::NerDaemon::global().prewarm();
 
     let data = fs::read_to_string(&args.longmemeval)
         .with_context(|| format!("failed to read {}", args.longmemeval.display()))?;

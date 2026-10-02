@@ -33,11 +33,16 @@ Run the integration contract suite with every integration enabled:
 cargo test --features 'claude-code,codex,gemini-cli,agy' --lib
 ```
 
-Run the core black-box suite separately:
+Run the core public-service black-box suite separately:
 
 ```bash
-cargo test --test integration
+cargo test --test memory_service_api --test no_store_bypass
 ```
+
+Storage and query-engine unit tests live inside the crate because the storage
+types are intentionally not part of the external Rust API. For example,
+`cargo test --lib internal_tests::english_smoke` runs the English service
+regression cases.
 
 External smoke tests are intentionally not part of the default suite: they require a local
 provider installation, authentication, and can change independently of this crate. A provider

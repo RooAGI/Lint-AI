@@ -10,9 +10,8 @@
 //! outcome, not over-suppression) and every expected-superseded write's
 //! document *is* Superseded (true-positive controls keep the harness honest).
 
-use crate::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
+use crate::memory_api::{memory_document_id, AddRequest, MemoryService, Message, SearchRequest};
 use crate::semantic_relations::SemanticStatus;
-use crate::stable_doc_id_from_source;
 
 /// One write in an audit case.
 pub struct AuditWrite {
@@ -172,9 +171,7 @@ pub fn run_case(case: &AuditCase, case_idx: usize, batched: bool) -> AuditResult
         .enumerate()
         .map(|(write_idx, write)| {
             let request_id = format!("audit-{case_idx}-{write_idx}");
-            doc_ids.push(stable_doc_id_from_source(&format!(
-                "audit-user:{request_id}:0"
-            )));
+            doc_ids.push(memory_document_id("audit-user", &request_id, 0));
             AddRequest {
                 request_id,
                 messages: vec![Message {
@@ -198,6 +195,13 @@ pub fn run_case(case: &AuditCase, case_idx: usize, batched: bool) -> AuditResult
     }
 
     let mut failures = Vec::new();
+    // Missing documents must fail both positive and negative controls.
+    // Otherwise a stale ID can make a protected fact appear to pass.
+    for (idx, doc_id) in doc_ids.iter().enumerate() {
+        if service.semantic_document_state(doc_id).status.is_none() {
+            failures.push(format!("write {idx} has no document state for {doc_id}"));
+        }
+    }
     for &idx in &case.must_stay_current {
         let state = service.semantic_document_state(&doc_ids[idx]);
         if state.status == Some(SemanticStatus::Superseded) {

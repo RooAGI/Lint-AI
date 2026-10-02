@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use lint_ai::{
+use crate::{
     analyze_query, build_query_snapshot_from_source_documents, ChunkStrategy, PipelineOptions,
     SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
@@ -48,7 +48,6 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Tier1NerProvider::Spacy)]
     ner_provider: Tier1NerProvider,
 }
-
 
 #[derive(Debug, Deserialize)]
 struct LocomoConversation {
@@ -312,7 +311,7 @@ fn aggregate_metrics(queries: &[QueryMetrics], ks: &[usize]) -> Aggregate {
     agg
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     let mut ks = args
         .ks

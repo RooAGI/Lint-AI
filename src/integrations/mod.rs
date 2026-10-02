@@ -11,12 +11,12 @@ pub mod codex;
     feature = "hermes"
 ))]
 pub mod gemini_cli;
+#[cfg(feature = "hermes")]
+pub mod hermes;
 #[cfg(feature = "muse-code")]
 pub mod muse_code;
 #[cfg(feature = "openclaw")]
 pub mod openclaw;
-#[cfg(feature = "hermes")]
-pub mod hermes;
 
 const MAX_HOOK_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -46,7 +46,7 @@ pub(crate) fn read_bounded_stdin() -> anyhow::Result<String> {
     Ok(String::from_utf8(bytes)?)
 }
 pub mod mcp_health;
-pub mod mcp_index;
+pub(crate) use crate::memory_api::workspace as mcp_index;
 pub mod mcp_tools;
 pub mod mcp_transport;
 pub mod recall;

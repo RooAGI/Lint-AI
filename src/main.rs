@@ -1,5 +1,3 @@
-use anyhow::Result;
-
-fn main() -> Result<()> {
-    lint_ai::cli::run()
+fn main() -> anyhow::Result<()> {
+    lint_ai::run_binary("lint-ai")
 }

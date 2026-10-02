@@ -8,8 +8,15 @@ use std::path::Path;
 
 /// Canonical provider values for `filters.provider`, the per-document
 /// attribution stamped on every captured memory.
-pub(crate) const PROVIDER_FILTER_VALUES: &[&str] =
-    &["claude", "codex", "gemini-cli", "agy", "muse", "openclaw", "hermes"];
+pub(crate) const PROVIDER_FILTER_VALUES: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini-cli",
+    "agy",
+    "muse",
+    "openclaw",
+    "hermes",
+];
 
 /// JSON Schema fragment for the optional `provider` search argument.
 pub(crate) fn provider_argument_schema() -> Value {
@@ -366,7 +373,13 @@ pub(crate) fn dispatch_board_tool(
         "board_open" => &["key", "title", "session_id"],
         "board_list" => &["session_id"],
         "board_info" => &["board_id", "session_id"],
-        "board_post" => &["board_id", "content", "request_id", "author_agent_id", "session_id"],
+        "board_post" => &[
+            "board_id",
+            "content",
+            "request_id",
+            "author_agent_id",
+            "session_id",
+        ],
         "board_read" => &["board_id", "after_sequence", "limit", "session_id"],
         "board_get" => &["board_id", "post_id", "session_id"],
         "board_search" => &["board_id", "query", "top_k", "session_id"],
@@ -452,9 +465,7 @@ pub(crate) fn dispatch_board_tool(
             Ok(post_json(&post))
         }
         "board_read" => {
-            let after_sequence = arguments
-                .get("after_sequence")
-                .and_then(Value::as_u64);
+            let after_sequence = arguments.get("after_sequence").and_then(Value::as_u64);
             let limit = arguments
                 .get("limit")
                 .and_then(Value::as_u64)
@@ -477,7 +488,13 @@ pub(crate) fn dispatch_board_tool(
             let post_id = get_str(arguments, "post_id")?;
             let session_id = resolve_search_session_id(arguments, &*service, provider)?;
             match service
-                .board_get(opt_board_id, owner, workspace, session_id.as_deref(), post_id)
+                .board_get(
+                    opt_board_id,
+                    owner,
+                    workspace,
+                    session_id.as_deref(),
+                    post_id,
+                )
                 .map_err(|e| e.to_string())?
             {
                 Some(post) => Ok(post_json(&post)),
@@ -593,10 +610,8 @@ pub(crate) fn dispatch_memory_tool(
             }
             // Same session resolution as search: explicit arg, else the
             // session most recently seen active in this workspace.
-            let session_id =
-                resolve_search_session_id(arguments, &*service, provider)?.ok_or_else(|| {
-                    "no active session: pass session_id to add_memory".to_string()
-                })?;
+            let session_id = resolve_search_session_id(arguments, &*service, provider)?
+                .ok_or_else(|| "no active session: pass session_id to add_memory".to_string())?;
             let request = AddRequest {
                 request_id: request_id.to_string(),
                 messages: vec![Message {
@@ -674,24 +689,30 @@ pub(crate) fn call_board_or_memory_tool(
         // service (a fresh service never sees hook-tracked sessions).
         let mut write_arguments = arguments.clone();
         if write_arguments.get("session_id").is_none() {
-            if let Some(session_id) =
-                resolve_search_session_id(&write_arguments, service, provider)
-                    .map_err(anyhow::Error::msg)?
+            if let Some(session_id) = resolve_search_session_id(&write_arguments, service, provider)
+                .map_err(anyhow::Error::msg)?
             {
                 write_arguments["session_id"] = json!(session_id);
             }
         }
-        match crate::integrations::mcp_index::with_shared_memory_service(root, |store| {
-            dispatch_write_tool(tool_name, &write_arguments, store, "mcp", &workspace, provider)
-                .map_err(anyhow::Error::msg)
+        match crate::memory_api::MemoryService::with_shared_memory(root, |store| {
+            dispatch_write_tool(
+                tool_name,
+                &write_arguments,
+                store,
+                "mcp",
+                &workspace,
+                provider,
+            )
+            .map_err(anyhow::Error::msg)
         }) {
             Ok(value) => Ok(value),
             Err(error) => Err(format!("{error:#}")),
         }
     } else {
         match tool_name {
-            "board_open" | "board_list" | "board_info" | "board_post" | "board_read" | "board_get"
-            | "board_search" => {
+            "board_open" | "board_list" | "board_info" | "board_post" | "board_read"
+            | "board_get" | "board_search" => {
                 dispatch_board_tool(tool_name, arguments, service, "mcp", &workspace, provider)
             }
             "add_memory" | "get_memory" => {
@@ -756,7 +777,8 @@ fn dispatch_write_tool(
     not(any(feature = "claude-code", feature = "gemini-cli")),
     allow(dead_code)
 )]
-pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'static str> {    if arguments
+pub(crate) fn parse_list_memories_limit(arguments: &Value) -> Result<usize, &'static str> {
+    if arguments
         .as_object()
         .map(|object| object.keys().any(|key| key != "limit"))
         .unwrap_or(false)
@@ -829,15 +851,17 @@ mod tests {
         let names: Vec<_> = defs.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["add_memory", "get_memory"]);
         // Schemas require only the essentials.
-        assert_eq!(defs[0].input_schema["required"], json!(["content", "request_id"]));
+        assert_eq!(
+            defs[0].input_schema["required"],
+            json!(["content", "request_id"])
+        );
         assert_eq!(defs[1].input_schema["required"], json!(["memory_id"]));
     }
 
     #[test]
     fn dispatch_memory_tool_rejects_unknown_tool_and_args() {
         let mut service = memory_service();
-        let err = dispatch_memory_tool("nope", &json!({}), &mut service, "claude")
-            .unwrap_err();
+        let err = dispatch_memory_tool("nope", &json!({}), &mut service, "claude").unwrap_err();
         assert!(err.contains("unknown memory tool"), "{err}");
         let err = dispatch_memory_tool(
             "add_memory",
@@ -864,7 +888,7 @@ mod tests {
         assert_eq!(payload["request_id"], json!("mem-1"));
 
         // The memory ID is deterministic: stable_doc_id("mcp:mem-1:0").
-        let memory_id = crate::stable_doc_id_from_source("mcp:mem-1:0");
+        let memory_id = crate::memory_api::memory_document_id("mcp", "mem-1", 0);
         let record = dispatch_memory_tool(
             "get_memory",
             &json!({"memory_id": memory_id}),
@@ -872,10 +896,7 @@ mod tests {
             "claude",
         )
         .unwrap();
-        assert!(record["content"]
-            .as_str()
-            .unwrap()
-            .contains("rate limit"));
+        assert!(record["content"].as_str().unwrap().contains("rate limit"));
 
         // Unknown ID is an error, not an empty result.
         let err = dispatch_memory_tool(
@@ -1201,11 +1222,7 @@ mod tests {
 
     /// Unwrap a successful `tools/call` envelope back to its JSON payload.
     fn tool_payload(response: &JsonRpcResponse) -> Value {
-        assert!(
-            response.error.is_none(),
-            "tool error: {:?}",
-            response.error
-        );
+        assert!(response.error.is_none(), "tool error: {:?}", response.error);
         let text = response.result.as_ref().expect("result")["content"][0]["text"]
             .as_str()
             .expect("text content");
@@ -1222,7 +1239,7 @@ mod tests {
         use crate::integrations::mcp_index;
         let root = test_root("board-persist");
         // Build the composed in-memory view exactly like the adapters do.
-        let mut view = mcp_index::open_workspace_memory_store(
+        let mut view = crate::memory_api::MemoryService::open_workspace(
             &root,
             mcp_index::SHARED_MEMORY_DIR,
             &[],
@@ -1319,7 +1336,7 @@ mod tests {
                 .any(|post| post["content"] == "hello board"),
             "post missing after reopen: {posts}"
         );
-        let memory_id = crate::stable_doc_id_from_source("mcp:mem-p1:0");
+        let memory_id = crate::memory_api::memory_document_id("mcp", "mem-p1", 0);
         let record = dispatch_memory_tool(
             "get_memory",
             &json!({"memory_id": memory_id}),
@@ -1328,10 +1345,7 @@ mod tests {
         )
         .expect("get_memory");
         assert!(
-            record["content"]
-                .as_str()
-                .unwrap()
-                .contains("rate limit"),
+            record["content"].as_str().unwrap().contains("rate limit"),
             "memory missing after reopen: {record}"
         );
 

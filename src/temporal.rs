@@ -399,7 +399,8 @@ fn resolve_korean_temporal_target(query: &str, base_date: NaiveDate) -> Option<T
 fn parse_korean_explicit_date(query: &str) -> Option<NaiveDate> {
     static KO_DATE_RE: OnceLock<Regex> = OnceLock::new();
     let re = KO_DATE_RE.get_or_init(|| {
-        Regex::new(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일").expect("valid Korean date regex")
+        Regex::new(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+            .expect("valid Korean date regex")
     });
     let caps = re.captures(query)?;
     let y: i32 = caps.get(1)?.as_str().parse().ok()?;
@@ -1117,7 +1118,8 @@ fn shift_years(base: NaiveDate, years: i32) -> NaiveDate {
 fn shift_days(base: NaiveDate, days: i64) -> NaiveDate {
     const MAX_DAYS: i64 = 95_000_000; // ~260k years, just inside chrono's ±262143-year range
     let days = days.clamp(-MAX_DAYS, MAX_DAYS);
-    base.checked_add_signed(Duration::days(days)).unwrap_or(base)
+    base.checked_add_signed(Duration::days(days))
+        .unwrap_or(base)
 }
 
 fn last_day_of_month(year: i32, month: u32) -> Option<u32> {
@@ -1616,7 +1618,10 @@ mod tests {
         assert_eq!(t.window_days, 7);
 
         let t = resolve_korean_temporal_target("다음달 여행", base).unwrap();
-        assert_eq!(t.target_date, NaiveDate::from_ymd_opt(2026, 10, 29).unwrap());
+        assert_eq!(
+            t.target_date,
+            NaiveDate::from_ymd_opt(2026, 10, 29).unwrap()
+        );
         assert_eq!(t.window_days, 14);
 
         let t = resolve_korean_temporal_target("작년 여름", base).unwrap();

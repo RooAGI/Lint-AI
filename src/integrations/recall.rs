@@ -151,7 +151,7 @@ pub fn recall(options: &RecallOptions<'_>) -> Result<RecallOutput> {
         max_total_bytes: options.max_total_bytes,
     };
     let mut store =
-        mcp_index::open_workspace_memory_store(&root, options.memory_name, &ignore_paths, || {
+        crate::memory_api::MemoryService::open_workspace(&root, options.memory_name, &ignore_paths, || {
             let graph = build_project_graph(&input)?;
             let graph = apply_ignore_paths(graph, &ignore_paths);
             Ok(graph_to_source_documents(&graph))
@@ -200,7 +200,7 @@ fn default_source() -> String {
 /// attribution on the records, not the directory. These stores remain
 /// project-scoped; the desktop worker never creates a consolidated copy.
 fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<MemoryService>> {
-    mcp_index::migrate_legacy_provider_memory_dirs(root)?;
+    crate::memory_api::MemoryService::migrate_legacy_memories(root)?;
     let mut stores = Vec::new();
     for entry in WalkDir::new(root)
         .max_depth(5)
@@ -259,7 +259,7 @@ pub fn run_recall_server(
             max_total_bytes,
         };
         let ignores = ignore_paths.to_vec();
-        mcp_index::open_persistent_store(
+        crate::memory_api::MemoryService::open_persistent_workspace(
             root,
             "desktop-document-index",
             "desktop-empty-memory",
@@ -708,7 +708,15 @@ mod tests {
 
     #[test]
     fn project_recall_sees_every_providers_memories_in_the_shared_store() {
-        let providers = ["claude", "codex", "gemini-cli", "agy", "muse", "openclaw", "hermes"];
+        let providers = [
+            "claude",
+            "codex",
+            "gemini-cli",
+            "agy",
+            "muse",
+            "openclaw",
+            "hermes",
+        ];
 
         let temp_base = std::env::temp_dir()
             .canonicalize()

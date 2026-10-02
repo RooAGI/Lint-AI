@@ -1,8 +1,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use lint_ai::index::DocRecord;
-use lint_ai::{build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument};
+use crate::index::DocRecord;
+use crate::{build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -64,7 +64,7 @@ fn source_document(record: DocRecord) -> SourceDocument {
     }
 }
 
-fn main() -> Result<()> {
+pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
     let payload: PersistedRecords = serde_json::from_str(&fs::read_to_string(&args.records)?)?;
     let now = DateTime::<Utc>::from(SystemTime::now());

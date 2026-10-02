@@ -112,10 +112,105 @@ pub fn write_response(
     Ok(())
 }
 
+/// Serve requests until the input closes. A handler failure is returned to
+/// the client as an internal JSON-RPC error and does not end the session.
+pub fn serve_requests(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    mut handle_request: impl FnMut(JsonRpcRequest) -> Result<JsonRpcResponse>,
+    mut on_request: impl FnMut(&str),
+    mut on_handler_error: impl FnMut(&str, &anyhow::Error),
+    mut on_response: impl FnMut(),
+) -> Result<()> {
+    while let Some((request, line_framed)) = read_request(reader)? {
+        on_request(&request.method);
+        if request.id.is_none() {
+            continue;
+        }
+        let request_id = request.id.clone();
+        let method = request.method.clone();
+        let response = match handle_request(request) {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("lint-ai MCP request '{method}' failed: {error:#}");
+                on_handler_error(&method, &error);
+                JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: request_id,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32603,
+                        message: "Internal error while handling MCP request".to_string(),
+                    }),
+                }
+            }
+        };
+        write_response(writer, &response, line_framed)?;
+        on_response();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn handler_error_returns_error_and_keeps_serving_session() {
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\"}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+        );
+        let mut reader = Cursor::new(input.as_bytes());
+        let mut output = Vec::new();
+        let mut handled = 0;
+        let mut reported_errors = Vec::new();
+
+        serve_requests(
+            &mut reader,
+            &mut output,
+            |_| {
+                handled += 1;
+                if handled == 1 {
+                    anyhow::bail!("workspace index failed")
+                }
+                Ok(JsonRpcResponse {
+                    jsonrpc: "2.0",
+                    id: Some(serde_json::json!(2)),
+                    result: Some(serde_json::json!({"tools": []})),
+                    error: None,
+                })
+            },
+            |_| {},
+            |method, error| reported_errors.push((method.to_string(), error.to_string())),
+            || {},
+        )
+        .unwrap();
+
+        let responses: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(handled, 2);
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0]["id"], 1);
+        assert_eq!(responses[0]["error"]["code"], -32603);
+        assert_eq!(
+            responses[0]["error"]["message"],
+            "Internal error while handling MCP request"
+        );
+        assert_eq!(responses[1]["id"], 2);
+        assert_eq!(responses[1]["result"]["tools"], serde_json::json!([]));
+        assert_eq!(
+            reported_errors,
+            vec![(
+                "tools/call".to_string(),
+                "workspace index failed".to_string()
+            )]
+        );
+    }
 
     #[test]
     fn reads_line_framed_requests() {

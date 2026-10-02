@@ -1,7 +1,7 @@
 // Public-API integration tests for the curated `lint_ai` surface.
 // White-box tests for crate-internal modules live in `src/` unit tests.
-use lint_ai::index::{DocRecord, MemoryIndex, Provenance};
-use lint_ai::{RankedTerm, Tier1Entity};
+use crate::index::{DocRecord, MemoryIndex, Provenance};
+use crate::{RankedTerm, Tier1Entity};
 
 #[test]
 fn query_baseline_still_works_without_semantic_match() {
@@ -55,7 +55,7 @@ fn query_baseline_still_works_without_semantic_match() {
 #[test]
 fn semantic_policy_hides_automatically_superseded_documents_and_exposes_history() {
     let documents = vec![
-        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+        crate::source::SourceDocument::with_stable_doc_id_from_source(
             "decisions/legacy.md".to_string(),
             "The platform team owns the control surface.".to_string(),
             "ownership decision".to_string(),
@@ -65,7 +65,7 @@ fn semantic_policy_hides_automatically_superseded_documents_and_exposes_history(
             Some("2026-01-01".to_string()),
             None,
         ),
-        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+        crate::source::SourceDocument::with_stable_doc_id_from_source(
             "decisions/current.md".to_string(),
             "The reliability team owns the control surface.".to_string(),
             "ownership decision".to_string(),
@@ -77,7 +77,7 @@ fn semantic_policy_hides_automatically_superseded_documents_and_exposes_history(
         ),
     ];
     let mut index =
-        lint_ai::IndexStore::with_documents(lint_ai::PipelineOptions::default(), documents);
+        crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
 
     let current = index.query("who owns the control surface", 10).unwrap();
     assert!(current
@@ -96,14 +96,14 @@ fn semantic_policy_hides_automatically_superseded_documents_and_exposes_history(
         .expect("historical query should retain the superseded source");
     assert_eq!(
         legacy.semantic_status,
-        Some(lint_ai::SemanticStatus::Historical)
+        Some(crate::SemanticStatus::Historical)
     );
 }
 
 #[test]
 fn reveals_bug_superseded_claim_hides_unrelated_current_content() {
     let documents = vec![
-        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+        crate::source::SourceDocument::with_stable_doc_id_from_source(
             "decisions/architecture.md".to_string(),
             concat!(
                 "The platform team owns the control surface.\n",
@@ -117,7 +117,7 @@ fn reveals_bug_superseded_claim_hides_unrelated_current_content() {
             Some("2026-01-01".to_string()),
             None,
         ),
-        lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+        crate::source::SourceDocument::with_stable_doc_id_from_source(
             "decisions/ownership-update.md".to_string(),
             "The reliability team owns the control surface.".to_string(),
             "ownership decision".to_string(),
@@ -129,7 +129,7 @@ fn reveals_bug_superseded_claim_hides_unrelated_current_content() {
         ),
     ];
     let mut index =
-        lint_ai::IndexStore::with_documents(lint_ai::PipelineOptions::default(), documents);
+        crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
 
     let results = index.query("blue-green deployment strategy", 10).unwrap();
 
@@ -143,14 +143,14 @@ fn reveals_bug_superseded_claim_hides_unrelated_current_content() {
         });
     assert_eq!(
         architecture.semantic_status,
-        Some(lint_ai::SemanticStatus::Conflicted),
+        Some(crate::SemanticStatus::Conflicted),
         "partial inferred supersession should remain visible as a conflict"
     );
 }
 
 #[test]
 fn reveals_bug_operational_before_query_exposes_superseded_guidance() {
-    let old = lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+    let old = crate::source::SourceDocument::with_stable_doc_id_from_source(
         "runbooks/legacy-deployment.md".to_string(),
         "Before deployment, operators must run the legacy smoke tests.".to_string(),
         "legacy deployment procedure".to_string(),
@@ -160,7 +160,7 @@ fn reveals_bug_operational_before_query_exposes_superseded_guidance() {
         Some("2026-01-01".to_string()),
         None,
     );
-    let mut current = lint_ai::source::SourceDocument::with_stable_doc_id_from_source(
+    let mut current = crate::source::SourceDocument::with_stable_doc_id_from_source(
         "runbooks/current-deployment.md".to_string(),
         "Before deployment, operators must run the current safety checks.".to_string(),
         "current deployment procedure".to_string(),
@@ -175,8 +175,8 @@ fn reveals_bug_operational_before_query_exposes_superseded_guidance() {
         .insert("supersedes_id".to_string(), old.doc_id.clone());
     let legacy_id = old.doc_id.clone();
     let current_id = current.doc_id.clone();
-    let mut index = lint_ai::IndexStore::with_documents(
-        lint_ai::PipelineOptions::default(),
+    let mut index = crate::IndexStore::with_documents(
+        crate::PipelineOptions::default(),
         vec![old, current],
     );
 

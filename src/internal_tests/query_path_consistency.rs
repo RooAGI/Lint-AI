@@ -1,5 +1,5 @@
-use lint_ai::query_plan::PreparedQuery;
-use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
+use crate::query_plan::PreparedQuery;
+use crate::{IndexStore, PipelineOptions, SourceDocument};
 use std::collections::BTreeMap;
 
 fn document(id: &str, content: &str, timestamp: &str, group: &str) -> SourceDocument {
@@ -20,7 +20,7 @@ fn document(id: &str, content: &str, timestamp: &str, group: &str) -> SourceDocu
     }
 }
 
-fn ids(results: &[lint_ai::SearchResult]) -> Vec<&str> {
+fn ids(results: &[crate::SearchResult]) -> Vec<&str> {
     results
         .iter()
         .map(|result| result.doc_id.as_str())
@@ -63,7 +63,7 @@ fn index_store_convenience_queries_share_the_prepared_path() {
 
 #[test]
 fn cli_uses_the_canonical_semantic_executor() {
-    let engine = include_str!("../src/engine/run.rs");
+    let engine = include_str!("../engine/run.rs");
     assert!(engine.contains("execute_on_index_with_semantics"));
     assert!(!engine.contains("semantic_relations::is_historical_query(query)"));
     assert!(!engine.contains("crate::semantic_relations::SemanticStatus::Superseded"));

@@ -5,8 +5,8 @@
 // Exercises the full pipeline: accent-preserving tokenization, script
 // agreement (no deunicode), Spanish stopwords, interrogative focus,
 // and temporal.
-use lint_ai::memory_api::{AddRequest, MemoryService, Message};
-use lint_ai::PipelineOptions;
+use crate::memory_api::{AddRequest, MemoryService, Message};
+use crate::PipelineOptions;
 use std::collections::BTreeMap;
 
 const FACT_LIBRO: &str = "El usuario compró un libro sobre la historia de Madrid ayer.";
@@ -17,7 +17,7 @@ const FACT_NINO: &str = "El niño juega en el parque con su pelota roja.";
 fn options_for() -> PipelineOptions {
     let mut opts = PipelineOptions::default();
     // Keep the smoke test hermetic: no spaCy, no bekind, no network.
-    opts.ner_provider = lint_ai::pipeline::Tier1NerProvider::Heuristic;
+    opts.ner_provider = crate::pipeline::Tier1NerProvider::Heuristic;
     opts
 }
 
@@ -38,7 +38,7 @@ fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, conten
         .expect("add fact");
 }
 
-fn search(service: &mut MemoryService, user_id: &str, query: &str) -> Vec<lint_ai::SearchResult> {
+fn search(service: &mut MemoryService, user_id: &str, query: &str) -> Vec<crate::SearchResult> {
     let mut filters = BTreeMap::new();
     filters.insert("memory_user_id".to_string(), user_id.to_string());
     service
@@ -47,7 +47,7 @@ fn search(service: &mut MemoryService, user_id: &str, query: &str) -> Vec<lint_a
 }
 
 fn doc_id(user_id: &str, request_id: &str) -> String {
-    lint_ai::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
+    crate::memory_api::memory_document_id(user_id, request_id, 0)
 }
 
 fn run_smoke(label: &str) {
@@ -64,7 +64,11 @@ fn run_smoke(label: &str) {
     let id_nino = doc_id(&user_id, "req-nino");
 
     // "Where is the Madrid library?" -> the biblioteca fact.
-    let r = search(&mut service, &user_id, "¿Dónde está la biblioteca de Madrid?");
+    let r = search(
+        &mut service,
+        &user_id,
+        "¿Dónde está la biblioteca de Madrid?",
+    );
     let top = r.first().expect("[{label}] donde: no results");
     eprintln!("[{label}] donde top: {} score={:.2}", top.doc_id, top.score);
     assert_eq!(top.doc_id, id_biblio, "[{label}] donde: wrong top hit");

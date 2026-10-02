@@ -229,10 +229,7 @@ impl DaemonMutable {
 
     fn write_line(&mut self, line: &str) -> std::io::Result<()> {
         let stdin = self.stdin.as_mut().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "daemon not running",
-            )
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "daemon not running")
         })?;
         stdin.write_all(line.as_bytes())?;
         stdin.write_all(b"\n")?;

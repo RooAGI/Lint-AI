@@ -17,6 +17,45 @@ fn text_overlap_prefers_matching_candidate() {
 }
 
 #[test]
+fn persistent_memory_index_build_waits_for_shared_tantivy_guard() {
+    use crate::index::write_lock::PersistentIndexWriteLock;
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "lint-ai-index-build-lock-{}-{suffix}",
+        std::process::id()
+    ));
+    let lexical_dir = root.join("lexical");
+    let held = PersistentIndexWriteLock::acquire(&lexical_dir).unwrap();
+
+    let (send, receive) = mpsc::channel();
+    let builder_dir = lexical_dir.clone();
+    let builder = std::thread::spawn(move || {
+        let index = MemoryIndex::from_records_with_lexical_dir(
+            Vec::new(),
+            Some(&builder_dir),
+            false,
+            false,
+            false,
+        );
+        send.send(index.lexical.is_some()).unwrap();
+    });
+
+    assert!(receive.recv_timeout(Duration::from_millis(150)).is_err());
+    drop(held);
+    assert!(receive
+        .recv_timeout(Duration::from_secs(2))
+        .expect("index build should proceed after the shared guard is released"));
+    builder.join().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn timestamped_chunk_detects_chunk_level_temporal_anchor() {
     let doc = DocRecord {
         doc_id: "doc-1".to_string(),

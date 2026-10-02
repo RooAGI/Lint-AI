@@ -33,12 +33,12 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use lint_ai::memory_api::MemoryService;
-use lint_ai::question_focus::identify_focus;
-use lint_ai::segments::relations::{
+use crate::memory_api::MemoryService;
+use crate::question_focus::identify_focus;
+use crate::segments::relations::{
     analyze_fact_question, extract_relations_via_spacy, RelationTurn,
 };
-use lint_ai::{default_production_pipeline_options, search_results, SourceDocument};
+use crate::{default_production_pipeline_options, search_results, SourceDocument};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -223,14 +223,14 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
     let extractor_output = extract_relations_via_spacy(
         &rel_turns,
         std::time::Duration::from_secs(120),
-        lint_ai::DEFAULT_SPACY_MODEL,
+        crate::DEFAULT_SPACY_MODEL,
     );
-    let mut phrases_by_session: HashMap<String, Vec<lint_ai::KeyPhrase>> = HashMap::new();
+    let mut phrases_by_session: HashMap<String, Vec<crate::KeyPhrase>> = HashMap::new();
     for kp in extractor_output.key_phrases {
         phrases_by_session
             .entry(kp.session_id.clone())
             .or_default()
-            .push(lint_ai::KeyPhrase {
+            .push(crate::KeyPhrase {
                 text: kp.text,
                 kind: kp.kind,
             });
@@ -355,7 +355,7 @@ async fn trace(
     // identify_focus does: tokenize_unstemmed -> skip question words/stopwords
     // -> split into focus (expandable) vs constraint terms.
     let tokenized: Vec<String> = {
-        use lint_ai::tokenizer::{tokenize, TokenizerMode};
+        use crate::tokenizer::{tokenize, TokenizerMode};
         tokenize(&p.q, TokenizerMode::Unstemmed)
     };
 
@@ -414,7 +414,7 @@ async fn trace(
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+pub(crate) async fn main() -> Result<()> {
     let args = Args::parse();
     eprintln!("loading LoCoMo data...");
     let data = fs::read_to_string(&args.locomo)
@@ -467,7 +467,7 @@ mod tests {
             timestamp: Some("2024-05-01".to_string()),
             doc_length: 41,
             author_agent: None,
-            key_phrases: vec![lint_ai::KeyPhrase {
+            key_phrases: vec![crate::KeyPhrase {
                 text: "Eiffel Tower".to_string(),
                 kind: "place".to_string(),
             }],

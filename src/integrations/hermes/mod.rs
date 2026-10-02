@@ -67,8 +67,9 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let root = root.canonicalize()?;
     let executable = env::current_exe()?;
     let existing = read_optional_text(&path)?;
-    let merged = merge_mcp_servers_yaml(existing.as_deref(), &root, &executable).with_context(|| {
-        format!(
+    let merged =
+        merge_mcp_servers_yaml(existing.as_deref(), &root, &executable).with_context(|| {
+            format!(
             "could not merge into {} (unexpected YAML shape); add the server manually instead:\n  \
              hermes mcp add lint-ai --command {} --args --hermes-serve --args {}\n  \
              hermes mcp test lint-ai",
@@ -76,7 +77,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
             executable.display(),
             root.display()
         )
-    })?;
+        })?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -113,10 +114,7 @@ fn read_optional_text(path: &Path) -> Result<Option<String>> {
 
 /// Quote a string as a YAML double-quoted scalar.
 fn yaml_string(value: &str) -> String {
-    format!(
-        "\"{}\"",
-        value.replace('\\', "\\\\").replace('"', "\\\"")
-    )
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Render the `lint-ai:` server block at the given entry indent.
@@ -215,12 +213,7 @@ fn merge_mcp_servers_yaml(
     let entry_prefix = format!("{entry_indent}{SERVER_NAME}:");
     let mut entry_idx = None;
     let mut entry_inline = false;
-    for (i, line) in lines
-        .iter()
-        .enumerate()
-        .take(section_end)
-        .skip(key_idx + 1)
-    {
+    for (i, line) in lines.iter().enumerate().take(section_end).skip(key_idx + 1) {
         if line.starts_with(&entry_prefix) {
             let rest = line[entry_prefix.len()..].trim();
             entry_idx = Some(i);
@@ -405,8 +398,8 @@ mod tests {
     // provider scoping. These mirror the live `hermes mcp test` checks.
     // ------------------------------------------------------------------
 
-    use serde_json::{json, Value};
     use crate::integrations::mcp_transport::JsonRpcRequest;
+    use serde_json::{json, Value};
 
     fn hermes_handle(root: &std::path::Path) -> gemini_cli::GeminiMcp {
         gemini_cli::test_handle(
@@ -453,10 +446,7 @@ mod tests {
         let mcp = hermes_handle(&root);
         let tools = list_tools(&mcp);
 
-        let names: Vec<&str> = tools
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         for required in [
             "search",
             "info",
@@ -511,7 +501,11 @@ mod tests {
         .unwrap();
 
         let mcp = hermes_handle(&root);
-        let result = call_tool(&mcp, "search", json!({"query": "oolong tea Alishan", "top_k": 3}));
+        let result = call_tool(
+            &mcp,
+            "search",
+            json!({"query": "oolong tea Alishan", "top_k": 3}),
+        );
         assert_eq!(result["provider"], "hermes");
         let results = result["results"].as_array().unwrap();
         assert!(
@@ -596,11 +590,7 @@ mod tests {
     fn entry_indent_follows_existing_servers() {
         let root = temp_root("config-indent");
         let config = root.join("config.yaml");
-        fs::write(
-            &config,
-            "mcp_servers:\n    other:\n      command: other\n",
-        )
-        .unwrap();
+        fs::write(&config, "mcp_servers:\n    other:\n      command: other\n").unwrap();
 
         install_user_config(&root, Some(&config)).unwrap();
 
@@ -652,8 +642,7 @@ mod tests {
 
         install_memory_skill(Some(&skill_dir), true).unwrap();
 
-        let content =
-            fs::read_to_string(skill_dir.join("lint-ai-memory/SKILL.md")).unwrap();
+        let content = fs::read_to_string(skill_dir.join("lint-ai-memory/SKILL.md")).unwrap();
         assert!(content.contains("Hermes"));
         assert!(content.contains("--hermes-serve"));
         fs::remove_dir_all(root).unwrap();

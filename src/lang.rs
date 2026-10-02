@@ -75,11 +75,23 @@ pub fn is_hangul(ch: char) -> bool {
 /// occur in normal Spanish prose; ¿ and ¡ are unique to Spanish
 /// orthography.
 fn is_spanish_distinctive(ch: char) -> bool {
-    matches!(ch,
+    matches!(
+        ch,
         'ñ' | 'Ñ'
-        | 'á' | 'é' | 'í' | 'ó' | 'ú' | 'ü'
-        | 'Á' | 'É' | 'Í' | 'Ó' | 'Ú' | 'Ü'
-        | '¿' | '¡'
+            | 'á'
+            | 'é'
+            | 'í'
+            | 'ó'
+            | 'ú'
+            | 'ü'
+            | 'Á'
+            | 'É'
+            | 'Í'
+            | 'Ó'
+            | 'Ú'
+            | 'Ü'
+            | '¿'
+            | '¡'
     )
 }
 
@@ -88,10 +100,9 @@ fn is_spanish_distinctive(ch: char) -> bool {
 const SPANISH_FUNCTION_WORDS: &[&str] = &[
     "el", "la", "los", "las", "del", "al", "de", "que", "en", "y", "e", "ni", "o", "u", "un",
     "una", "unos", "unas", "se", "no", "por", "para", "con", "sin", "sobre", "entre", "hasta",
-    "desde", "pero", "porque", "cuando", "donde", "como", "este", "esta", "estos", "estas",
-    "ese", "esa", "esos", "esas", "mi", "tu", "su", "sus", "me", "te", "nos", "les", "lo",
-    "hay", "muy", "tan", "mas", "tambien", "son", "es", "fue", "fueron", "era", "eran",
-    "estan", "estoy", "esta",
+    "desde", "pero", "porque", "cuando", "donde", "como", "este", "esta", "estos", "estas", "ese",
+    "esa", "esos", "esas", "mi", "tu", "su", "sus", "me", "te", "nos", "les", "lo", "hay", "muy",
+    "tan", "mas", "tambien", "son", "es", "fue", "fueron", "era", "eran", "estan", "estoy", "esta",
 ];
 
 /// True when Latin-script `text` looks Spanish. Needs either distinctive

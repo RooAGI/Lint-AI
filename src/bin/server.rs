@@ -9,16 +9,16 @@ use axum::{
 };
 use clap::Parser;
 use jsonwebtoken::{decode, DecodingKey, Validation};
-use lint_ai::memory_api::{
+use crate::memory_api::{
     AddRequest, DeleteRequest, GetRequest, ListRequest, MemoryService, SearchRequest,
     SupersedeRequest, UpdateRequest,
 };
-use lint_ai::segments::SegmentRoutingStrategy;
-use lint_ai::telemetry::{
+use crate::segments::SegmentRoutingStrategy;
+use crate::telemetry::{
     project_query_snapshot, provider_lifecycle_status, OperationalTelemetry,
     ProviderLifecycleEvent, TelemetrySnapshot,
 };
-use lint_ai::{
+use crate::{
     default_production_pipeline_options, lang::Lang, IndexStoreInspection, MemoryIndexLayout,
     PipelineOptions, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
@@ -206,7 +206,7 @@ struct DashboardSession {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub(crate) async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     args.server_token = args
         .server_token
@@ -295,10 +295,10 @@ async fn main() -> anyhow::Result<()> {
     std::thread::Builder::new()
         .name("python-daemon-prewarm".to_string())
         .spawn(move || {
-            lint_ai::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
+            crate::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
             // The judge daemon is tiny (a Rust binary, ~ms startup); warm it
             // so the first query pays no spawn.
-            lint_ai::behood_query::BekindDaemon::global().prewarm();
+            crate::behood_query::BekindDaemon::global().prewarm();
         })
         .ok();
     let app = Router::new()
@@ -1558,7 +1558,7 @@ mod tests {
         service
             .add(AddRequest {
                 request_id: "r1".into(),
-                messages: vec![lint_ai::memory_api::Message {
+                messages: vec![crate::memory_api::Message {
                     role: "user".into(),
                     timestamp: None,
                     content: "project codename zephyr".into(),

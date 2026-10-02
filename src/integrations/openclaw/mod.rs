@@ -89,7 +89,13 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 }
 
 pub fn run_server(root: &Path, options: OpenClawServerOptions<'_>) -> Result<()> {
-    gemini_cli::run_server_for(root, RecordingProvider::OpenClaw, "openclaw", "OpenClaw", options)
+    gemini_cli::run_server_for(
+        root,
+        RecordingProvider::OpenClaw,
+        "openclaw",
+        "OpenClaw",
+        options,
+    )
 }
 
 /// Install the internal-hook wrapper for recall/injection.
@@ -184,17 +190,14 @@ pub fn install_plugin_config(root: &Path, config_path: Option<&Path>) -> Result<
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("OpenClaw plugins.entries must be an object"))?;
     let entry = entries.entry(SERVER_NAME).or_insert_with(|| json!({}));
-    let entry = entry.as_object_mut().ok_or_else(|| {
-        anyhow::anyhow!("OpenClaw plugins.entries.lint-ai must be an object")
-    })?;
+    let entry = entry
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("OpenClaw plugins.entries.lint-ai must be an object"))?;
     let config = entry.entry("config").or_insert_with(|| json!({}));
     let config = config.as_object_mut().ok_or_else(|| {
         anyhow::anyhow!("OpenClaw plugins.entries.lint-ai.config must be an object")
     })?;
-    config.insert(
-        "projectRoot".to_string(),
-        json!(root.to_string_lossy()),
-    );
+    config.insert("projectRoot".to_string(), json!(root.to_string_lossy()));
     write_json_object(&path, &settings)?;
     Ok(path)
 }
@@ -417,10 +420,7 @@ mod tests {
         );
         // Reinstall is a no-op.
         install_plugin(Some(&plugin_dir), false).unwrap();
-        assert_eq!(
-            fs::read_to_string(dir.join("index.js")).unwrap(),
-            index
-        );
+        assert_eq!(fs::read_to_string(dir.join("index.js")).unwrap(), index);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -437,17 +437,13 @@ mod tests {
         install_plugin_config(&root, Some(&config)).unwrap();
         install_plugin_config(&root, Some(&config)).unwrap();
 
-        let config: Value =
-            serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        let config: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
         let entry = &config["plugins"]["entries"]["lint-ai"];
         // Existing entry keys survive; only config.projectRoot is set.
         assert_eq!(entry["enabled"], true);
         assert_eq!(
             entry["config"]["projectRoot"].as_str().unwrap(),
-            root.canonicalize()
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
+            root.canonicalize().unwrap().to_string_lossy().as_ref()
         );
         assert!(config["plugins"]["entries"]["other"].is_object());
         fs::remove_dir_all(root).unwrap();

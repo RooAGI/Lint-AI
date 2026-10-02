@@ -11,7 +11,7 @@ agent clients:
 
 | Mode | Available to | What it provides |
 |---|---|---|
-| Core/file-based CLI | Any workflow | Build and query an `IndexStore` directly from local files. |
+| Core/file-based CLI | Any workflow | Index and query local files through the `MemoryService` backed CLI. |
 | HTTP server | Any application or client | `/add`, `/search`, `/delete`, `/supersede`, and `/expire` over HTTP. |
 | MCP server | Any MCP-capable client | Search, memory inspection, and integration controls through JSON-RPC tools. |
 | Lifecycle hooks | Supported agents | Automatic retrieval, context injection, and turn/session capture. |

@@ -168,14 +168,13 @@ it locally with [uv](https://docs.astral.sh/uv/) and
 ```bash
 uv venv --python 3.10
 source .venv/bin/activate
-uv pip install maturin
-PYO3_PYTHON="$PWD/.venv/bin/python" maturin develop --release --uv
+uv pip install "maturin>=1.9.4,<2"
+maturin develop --release --uv
 ```
 
-The explicit `PYO3_PYTHON` keeps the Rust extension build on uv's Python
-environment instead of accidentally selecting an older system or Anaconda
-interpreter. The `--uv` flag is required because `uv venv` does not install
-`pip` by default.
+The active uv environment selects the Python interpreter, and Maturin handles
+the extension-module linker configuration. To build a wheel for distribution,
+run `maturin build --release`; it writes the wheel under `target/wheels/`.
 
 Then use it from Python:
 
@@ -193,53 +192,49 @@ print(memory.search("docker ubuntu", "user-1", 5))
 ```
 
 For a server-backed client, use `lint_ai.Memory(base_url=url, api_key=key)`
-with the same lifecycle methods. **Important:** `base_url` must be passed by
-keyword — the first positional argument is `path`, so
-`lint_ai.Memory("http://127.0.0.1:8080")` would silently create a *local*
-index at that path instead of connecting to the server.
+with the same lifecycle methods. Pass `base_url` by keyword; the first positional
+argument is the local index path.
 
-The Python `IndexStore` binding was removed in 0.3.0; Python applications
-should use `Memory` (or remain on the 0.2.x line). This is a Python-side
-change only — the Rust `IndexStore` remains public for Rust integrators
-(see §9 below). See `docs/python-migration-0.3.0.md` for the full 0.3.0
-migration guide.
+The Python `IndexStore` binding was removed in 0.3.0. Use `Memory` for Python
+applications and `MemoryService` for Rust memory access. See
+`docs/python-migration-0.3.0.md` for the migration guide.
 
 ## 9. Use it as a Rust library
 
-If you are integrating Lint-AI into a Rust app, start with `IndexStore` and `SourceDocument`.
+Use `MemoryService` for all memory access. Its supporting data types are
+available at the crate root; stores, indexes, snapshots, and builders are internal.
 
 ```rust
-use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
+use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
+use std::collections::BTreeMap;
 
 fn main() -> anyhow::Result<()> {
-    let mut index = IndexStore::in_memory(PipelineOptions::default());
-
-    index.upsert(SourceDocument {
-        doc_id: "artifact-1".to_string(),
-        source: "artifact://artifact-1".to_string(),
-        content: "docker install guide for linux hosts".to_string(),
-        concept: "docker install".to_string(),
-        group_id: None,
-        headings: vec!["Overview".to_string()],
-        links: vec![],
-        timestamp: None,
-        doc_length: 36,
-        author_agent: None,
-    });
-
-    let results = index.query("docker install", 5)?;
+    let mut memory = MemoryService::in_memory(PipelineOptions::default());
+    memory.upsert(SourceDocument::with_stable_doc_id_from_source(
+        "artifact://artifact-1".into(),
+        "Docker install guide for Linux hosts".into(),
+        "docker install".into(),
+        None, vec!["Overview".into()], vec![], None, None,
+    ));
+    memory.refresh()?;
+    let results = memory.search_with_filters(
+        "docker install", "artifacts", None, 5, &BTreeMap::new(),
+    )?;
     println!("{}", serde_json::to_string_pretty(&results)?);
     Ok(())
 }
 ```
 
-For corpus-local persistence under `.lint-ai/`, use:
+For persistence, construct the service with an explicit store root:
 
 ```rust
-use std::path::Path;
-use lint_ai::{IndexStore, PipelineOptions};
+use lint_ai::{MemoryService, PipelineOptions};
 
-let index = IndexStore::for_corpus(Path::new("/path/to/corpus"), PipelineOptions::default())?;
+let memory = MemoryService::at_path(
+    "/path/to/corpus/.lint-ai/memory", PipelineOptions::default(),
+)?;
+# Ok::<(), anyhow::Error>(())
 ```
 
-If you already have `DocRecord` values, use `lint_ai::index::MemoryIndex` for the built search structure.
+Use `add` and `add_batch` for user/session memories. See the
+[API migration guide](memory-service-api.md) for changes from direct index access.

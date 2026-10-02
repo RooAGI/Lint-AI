@@ -81,8 +81,7 @@ impl ServeCooldown {
     }
 
     fn note_failure(&self) {
-        *self.until.lock().unwrap() =
-            std::time::Instant::now() + SERVE_FAILURE_COOLDOWN;
+        *self.until.lock().unwrap() = std::time::Instant::now() + SERVE_FAILURE_COOLDOWN;
     }
 
     fn note_success(&self) {
@@ -117,10 +116,7 @@ impl BekindDaemon {
         BekindDaemon {
             daemon: JsonLinesDaemon::new_command(
                 "bekind",
-                vec![
-                    binary.to_string_lossy().into_owned(),
-                    "--serve".to_string(),
-                ],
+                vec![binary.to_string_lossy().into_owned(), "--serve".to_string()],
             ),
             cooldown: ServeCooldown::new(),
         }
@@ -213,10 +209,7 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                                 .collect()
                         })
                         .unwrap_or_default(),
-                    habitual: s
-                        .get("habitual")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
+                    habitual: s.get("habitual").and_then(|v| v.as_bool()).unwrap_or(false),
                 })
             }
         });
@@ -238,7 +231,11 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                     .collect()
             })
             .unwrap_or_default();
-        out.push(FusedTextResult { id, scope, entities });
+        out.push(FusedTextResult {
+            id,
+            scope,
+            entities,
+        });
     }
     Some(out)
 }
@@ -277,11 +274,10 @@ pub fn analyze_query_entities(question: &str) -> Vec<QueryEntity> {
 /// heuristics. The temporal question-word entity ("when"/"time") is
 /// prepended locally, winning text ties, as the old bridge did.
 pub fn analyze_query_semantics(question: &str) -> (Vec<ScopeVerdict>, Vec<QueryEntity>) {
-    let results =
-        match BekindDaemon::global().judge_texts(&[("q".to_string(), question, true)]) {
-            Some(results) => results,
-            None => return (Vec::new(), Vec::new()),
-        };
+    let results = match BekindDaemon::global().judge_texts(&[("q".to_string(), question, true)]) {
+        Some(results) => results,
+        None => return (Vec::new(), Vec::new()),
+    };
     let result = match results.into_iter().next() {
         Some(r) => r,
         None => return (Vec::new(), Vec::new()),
@@ -456,9 +452,18 @@ mod tests {
     #[test]
     fn query_persons_cleans_determiners_and_dedupes() {
         let entities = vec![
-            QueryEntity { text: "both Jean".to_string(), kind: "person".to_string() },
-            QueryEntity { text: "Jean".to_string(), kind: "person".to_string() },
-            QueryEntity { text: "Paris".to_string(), kind: "place".to_string() },
+            QueryEntity {
+                text: "both Jean".to_string(),
+                kind: "person".to_string(),
+            },
+            QueryEntity {
+                text: "Jean".to_string(),
+                kind: "person".to_string(),
+            },
+            QueryEntity {
+                text: "Paris".to_string(),
+                kind: "place".to_string(),
+            },
         ];
         assert_eq!(query_persons(&entities), vec!["Jean".to_string()]);
     }
@@ -514,7 +519,9 @@ mod tests {
     #[test]
     fn parse_text_results_rejects_missing_array() {
         assert!(parse_text_results(&json!({})).is_none());
-        assert!(parse_text_results(&json!({"text_results": []})).unwrap().is_empty());
+        assert!(parse_text_results(&json!({"text_results": []}))
+            .unwrap()
+            .is_empty());
     }
 
     // ---- daemon tests (fake bekind --serve speaking the fused protocol) ----
@@ -574,10 +581,7 @@ for line in sys.stdin:
         BekindDaemon {
             daemon: JsonLinesDaemon::new_command(
                 "fake-bekind",
-                vec![
-                    "python3".to_string(),
-                    script.to_string_lossy().into_owned(),
-                ],
+                vec!["python3".to_string(), script.to_string_lossy().into_owned()],
             ),
             cooldown: ServeCooldown::new(),
         }
@@ -603,15 +607,13 @@ for line in sys.stdin:
         assert_eq!(results[0].entities[0].kind, "herb");
         assert!(results[1].scope.is_none());
         // One fused call for both texts.
-        let count =
-            std::fs::read_to_string(dir.join("bekind_count.txt")).expect("count");
+        let count = std::fs::read_to_string(dir.join("bekind_count.txt")).expect("count");
         assert_eq!(count, "1");
     }
 
     #[test]
     fn fused_daemon_fails_open_on_bad_binary() {
-        let daemon =
-            BekindDaemon::new(std::path::PathBuf::from("/nonexistent/bekind"));
+        let daemon = BekindDaemon::new(std::path::PathBuf::from("/nonexistent/bekind"));
         assert!(
             daemon
                 .judge_texts(&[("q".to_string(), "anything", true)])
@@ -620,4 +622,3 @@ for line in sys.stdin:
         );
     }
 }
-

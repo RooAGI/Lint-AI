@@ -367,9 +367,12 @@ memory service from Python:
 ```bash
 uv venv --python 3.10
 source .venv/bin/activate
-uv pip install maturin
-PYO3_PYTHON="$PWD/.venv/bin/python" maturin develop --release --uv
+uv pip install "maturin>=1.9.4,<2"
+maturin develop --release --uv
 ```
+
+To build a distributable wheel instead, run `maturin build --release`; the
+wheel is written under `target/wheels/`.
 
 ```python
 import lint_ai
@@ -392,13 +395,17 @@ print(remote.search("docker ubuntu", "user-1", 5))
 
 ### Rust
 
+`MemoryService` is the only public memory access API. Request, response, document,
+and configuration types are public; stores, indexes, snapshots, builders, and
+persistence modules are internal. See [the API migration guide](docs/memory-service-api.md).
+
 ```rust
-use lint_ai::{IndexStore, PipelineOptions, SourceDocument};
+use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
 
 fn main() -> anyhow::Result<()> {
-    let mut index = IndexStore::in_memory(PipelineOptions::default());
+    let mut memory = MemoryService::in_memory(PipelineOptions::default());
 
-    index.upsert(SourceDocument::with_stable_doc_id_from_source(
+    memory.upsert(SourceDocument::with_stable_doc_id_from_source(
         "docs/install.md".to_string(),
         "Docker install guide for Linux hosts".to_string(),
         "docker install".to_string(),
@@ -409,7 +416,8 @@ fn main() -> anyhow::Result<()> {
         None,
     ));
 
-    let results = index.query("docker install", 5)?;
+    memory.refresh()?;
+    let results = memory.search_with_filters("docker install", "workspace", None, 5, &Default::default())?;
     println!("{}", serde_json::to_string_pretty(&results)?);
     Ok(())
 }

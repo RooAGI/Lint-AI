@@ -52,7 +52,11 @@ pub(crate) fn route_segments_with_corpus_stats(
         for term in &focus.focus_terms {
             terms.insert(term.clone());
             // Add stemmed form for the stemmed index
-            if let Some(stemmed) = crate::tokenizer::tokenize(term, crate::tokenizer::TokenizerMode::Stemmed).into_iter().next() {
+            if let Some(stemmed) =
+                crate::tokenizer::tokenize(term, crate::tokenizer::TokenizerMode::Stemmed)
+                    .into_iter()
+                    .next()
+            {
                 terms.insert(stemmed);
             }
         }
@@ -94,9 +98,12 @@ pub(crate) fn route_segments_with_corpus_stats(
                 // Focus terms are unstemmed (Luyi: no stemming for focus words),
                 // but the summary index is stemmed. Check both forms.
                 summary.terms.contains_key(term)
-                    || summary
-                        .terms
-                        .contains_key(&crate::tokenizer::tokenize(term, crate::tokenizer::TokenizerMode::Stemmed).into_iter().next().unwrap_or_else(|| term.clone()))
+                    || summary.terms.contains_key(
+                        &crate::tokenizer::tokenize(term, crate::tokenizer::TokenizerMode::Stemmed)
+                            .into_iter()
+                            .next()
+                            .unwrap_or_else(|| term.clone()),
+                    )
             })
         })
     };

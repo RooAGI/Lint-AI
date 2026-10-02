@@ -16,7 +16,7 @@ and a subagent parent/child segment split remain future work.
 
 The design deliberately keeps Claude-specific protocol types at the integration
 boundary. Lint-AI's public ingestion and query APIs remain `SourceDocument`,
-`IndexStore`, `MemoryIndexSnapshot`, and `SearchResult`.
+`MemoryService`, `MemoryIndexSnapshot`, and `SearchResult`.
 
 The entire adapter is compiled only with the non-default `claude-code` Cargo
 feature. Core library and Python builds do not include Claude protocol or CLI
@@ -52,7 +52,7 @@ Claude hook JSON
         v
 Claude protocol and adapter
         |
-        +---- retrieval ----> IndexStore::query(...)
+        +---- retrieval ----> MemoryService::query(...)
         |                           |
         |                           v
         |                    Vec<SearchResult>
@@ -66,11 +66,11 @@ Claude protocol and adapter
                               SourceDocument
                                     |
                                     v
-                            IndexStore::upsert(...)
+                            MemoryService::upsert(...)
 ```
 
 The Claude integration does not construct `MemoryIndex` or
-`SegmentedMemoryIndex` directly. `IndexStore` owns the published
+`SegmentedMemoryIndex` directly. `MemoryService` owns the published
 `MemoryIndexSnapshot`, which can be either a single index or a segmented index.
 
 ## Current Directory Structure
@@ -88,7 +88,7 @@ src/integrations/claude_code/
 - `document.rs` defines `ClaudeCodeDocument` and converts it to
   `SourceDocument`.
 - `hooks/protocol.rs` contains only Claude hook input and output schemas.
-- `hooks/mod.rs` dispatches hooks, queries `IndexStore`, extracts bounded
+- `hooks/mod.rs` dispatches hooks, queries `MemoryService`, extracts bounded
   transcript content, and captures durable memory.
 
 MCP and hook behavior can be split into smaller files later when those modules
@@ -152,7 +152,7 @@ absolute path. Session segmentation gives the router a natural local-memory
 boundary. Profiles from every session remain available to the router, which
 allows relevant older sessions to be selected.
 
-## IndexStore Configuration
+## MemoryService Configuration
 
 Claude interaction memory uses a dedicated persistent store:
 
@@ -163,7 +163,7 @@ Claude interaction memory uses a dedicated persistent store:
   metadata.json
 ```
 
-The adapter opens it with `IndexStore::at_path()` and segmented layout:
+The adapter opens it with `MemoryService::at_path()` and segmented layout:
 
 ```rust
 let options = PipelineOptions {
@@ -174,7 +174,7 @@ let options = PipelineOptions {
     ..PipelineOptions::default()
 };
 
-let store = IndexStore::at_path(memory_path, options)?;
+let store = MemoryService::at_path(memory_path, options)?;
 ```
 
 Capture uses the current mutable API:
@@ -200,16 +200,16 @@ lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view records
 lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view segments
 ```
 
-With segmented layout, `IndexStore::query()` routes over the configured top-N
+With segmented layout, `MemoryService::search_with_filters()` routes over the configured top-N
 segments. Its global index scores documents from the selected segments and is
 also the persistence surface. The current router returns no results when it
 finds no segment with useful signal; automatic all-segment fallback is not part
-of the current `IndexStore` API.
+of the current `MemoryService` API.
 
 The Claude memory store is separate from the existing workspace MCP index in
 the first release. Command hooks are short-lived processes, while the MCP server
 is long-lived; sharing one mutable on-disk store across those processes would
-require explicit locking and snapshot reload semantics that `IndexStore` does
+require explicit locking and snapshot reload semantics that `MemoryService` does
 not currently provide.
 
 ## Supported Hooks
@@ -223,7 +223,7 @@ Operation:
 1. Read `session_id`, `cwd`, and session source from the Claude payload.
 2. Resolve the project memory store.
 3. Build a retrieval query for recent decisions, unresolved work, and failures.
-4. Call `IndexStore::query()`.
+4. Call `MemoryService::search_with_filters()`.
 5. Format results within the session-start context budget.
 6. Return the text as Claude `additionalContext`.
 
@@ -240,7 +240,7 @@ Operation:
 2. Use the prompt as the base retrieval query.
 3. Apply Lint-AI's existing query analysis and expansion through the normal
    `MemoryIndex` query path.
-4. Route through the segmented `IndexStore` snapshot.
+4. Route through the segmented `MemoryService` snapshot.
 5. Drop low-confidence, duplicate, or oversized results.
 6. Return bounded `additionalContext` alongside the original prompt.
 
@@ -282,7 +282,7 @@ Operation:
    unresolved work.
 3. Remove raw tool output, secrets, and conversational filler.
 4. Create a deterministic `ClaudeCodeDocument` of type `Checkpoint`.
-5. Convert it to `SourceDocument` and call `IndexStore::upsert()`.
+5. Convert it to `SourceDocument` and call `MemoryService::upsert()`.
 
 Repeated compaction for the same session uses deterministic checkpoint IDs or
 content hashes so retries do not create duplicate memory.
@@ -327,7 +327,7 @@ tools or prevent source verification.
 Retrieval emits at most one document per Claude session. When a session has
 multiple durable captures, the adapter prefers `session-summary`, then
 `outcome`, then `checkpoint`; the newest record breaks ties within a type.
-Session ranking still comes from `IndexStore::query`.
+Session ranking still comes from `MemoryService::search_with_filters`.
 
 The adapter does not inject complete stored records. It scores content lines
 using the query and the index's matched terms, keeps up to three matching lines,
@@ -453,7 +453,7 @@ Before creating `SourceDocument`, capture must reject or redact:
 - transcript content outside the bounded capture window
 
 Retention and deletion operate through stable `doc_id` values and
-`IndexStore::remove()`. A later retention policy can remove old session outcomes
+`MemoryService::remove()`. A later retention policy can remove old session outcomes
 without changing the Claude protocol adapter.
 
 ## Installation Shape
@@ -498,9 +498,9 @@ response to stdout.
 ## Acceptance Criteria
 
 - existing MCP `search` and `info` behavior remains compatible
-- the default non-Claude `IndexStore` behavior remains a single index
+- the default non-Claude `MemoryService` behavior remains a single index
 - Claude memory documents are assigned stable session `group_id` values
-- hook retrieval uses segmented `IndexStore::query()`
+- hook retrieval uses segmented `MemoryService::search_with_filters()`
 - capture survives process restart
 - repeated hook delivery does not duplicate memory
 - irrelevant retrieval injects no context

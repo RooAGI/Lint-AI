@@ -19,8 +19,8 @@
 // (e.g. ~/workspace/bekind/target/release/bekind at commit e89c5cf).
 // Without BEHOOD_BIN the test skips loudly instead of failing — the pure
 // match/boost logic is covered by unit tests that need no binary.
-use lint_ai::memory_api::{AddRequest, MemoryService, Message};
-use lint_ai::PipelineOptions;
+use crate::memory_api::{AddRequest, MemoryService, Message};
+use crate::PipelineOptions;
 use std::collections::BTreeMap;
 
 const FACT_A: &str = "The user's favorite restaurant is Din Tai Fung in San Jose.";
@@ -38,7 +38,7 @@ fn bekind_bin() -> Option<String> {
 
 fn doc_id(user_id: &str, request_id: &str) -> String {
     // Mirrors MemoryService's internal doc_id_for: "{user}:{request}:0".
-    lint_ai::stable_doc_id_from_source(&format!("{user_id}:{request_id}:0"))
+    crate::memory_api::memory_document_id(user_id, request_id, 0)
 }
 
 fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, content: &str) {

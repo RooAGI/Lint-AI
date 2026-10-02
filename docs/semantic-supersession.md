@@ -11,7 +11,7 @@ source adapters and agent integrations
           SourceDocument
                  │
                  ▼
-           IndexStore::refresh
+           MemoryService::refresh
           ├─ claims and provenance
           ├─ temporal facts
           └─ semantic relations
@@ -75,11 +75,11 @@ the memory API's optional `supersedes_id` remain supported as explicit evidence
 for the same core relation engine.
 
 The public Rust API exposes `SemanticClaim`, `SemanticRelation`,
-`SemanticRelationStore`, and `SupersessionOptions`. `IndexStore` rebuilds this
+`SemanticRelationStore`, and `SupersessionOptions`. The service rebuilds this
 state alongside its lexical, semantic, chunk-lifecycle, and temporal state on
 refresh.
 
-Enabled supersession configurations are validated during `IndexStore`
+Enabled supersession configurations are validated during `MemoryService`
 construction and refresh. Fallible callers can use
 `SemanticRelationStore::try_from_documents` directly and receive the same
 validation error. Setting `enabled: false` intentionally returns an empty

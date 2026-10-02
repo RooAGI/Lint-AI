@@ -29,8 +29,7 @@ keyword form.
 The `lint_ai.IndexStore` class no longer exists. Python applications must
 go through `lint_ai.Memory`, which is the only supported external API.
 
-This is a **Python-side** change only. The Rust `IndexStore` remains public
-for Rust integrators (`use lint_ai::{IndexStore, PipelineOptions, ...}`).
+Rust integrations use `MemoryService`; stores and indexes are internal.
 If you were using `IndexStore` from Python, migrate to `Memory` or stay on
 the 0.2.x line.
 

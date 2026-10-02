@@ -1,50 +1,58 @@
-//! Lint-AI: persistent memory layer for AI coding agents.
+//! Persistent agent memory through one application API: [`MemoryService`].
 //!
-//! Lint-AI gives coding agents (Claude Code, Codex, Gemini CLI, Muse, Agy)
-//! long-term memory with a property most stores can't offer: retrieval knows
-//! what is *still true*. Memories carry timestamps, and newer memories can
-//! explicitly supersede older ones, so recall returns the current state of
-//! the world instead of a pile of contradictions.
+//! Construct a service with [`MemoryService::in_memory`] or
+//! [`MemoryService::at_path`], then use its add, search, get, list, update,
+//! delete, and board operations. Storage, index builders, snapshots, locking,
+//! and persistence are internal implementation details.
 //!
-//! The core workflow is three steps:
-//!
-//! 1. **Record** — capture session content as [`SourceDocument`]s.
-//! 2. **Index** — build an [`IndexStore`] with [`build_index_store`].
-//! 3. **Recall** — query through [`memory_api::MemoryService`] (`add` /
-//!    `search`) or [`MemoryIndex`] directly; superseded memories are
-//!    filtered automatically.
-//!
-//! Basic usage:
 //! ```no_run
-//! use lint_ai::{build_index_store, PipelineOptions, SourceDocument};
+//! use lint_ai::{MemoryService, PipelineOptions, AddRequest, Message};
 //!
-//! let docs = vec![SourceDocument::with_stable_doc_id_from_source(
-//!     "docs/getting-started.md".to_string(),
-//!     "# Getting started\n\nInstall with `cargo install lint-ai`.".to_string(),
-//!     "getting-started".to_string(),
-//!     None,
-//!     vec!["Getting started".to_string()],
-//!     vec![],
-//!     None,
-//!     None,
-//! )];
-//!
-//! let store = build_index_store(&docs, &PipelineOptions::default()).unwrap();
+//! let mut memory = MemoryService::in_memory(PipelineOptions::default());
+//! memory.add(AddRequest {
+//!     request_id: "request-1".into(),
+//!     user_id: "alice".into(),
+//!     session_id: "session-1".into(),
+//!     messages: vec![Message {
+//!         role: "user".into(),
+//!         content: "The release is on Friday.".into(),
+//!         timestamp: None,
+//!         expires_at_ms: None,
+//!         supersedes_id: None,
+//!     }],
+//! })?;
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
-//! Agents usually don't touch this crate directly — they talk to the
-//! `lint-ai` binary over MCP (`--claude-code-serve`, `--codex-serve`, …).
-//! The library API is for embedding: custom hosts, the Python bindings,
-//! and the HTTP server binary.
+//! Direct storage access is intentionally unavailable:
+//!
+//! ```compile_fail
+//! use lint_ai::IndexStore;
+//! ```
+//! ```compile_fail
+//! use lint_ai::index::MemoryIndex;
+//! ```
+//! ```compile_fail
+//! use lint_ai::pipeline::build_index_store;
+//! ```
+//! ```compile_fail
+//! use lint_ai::MemoryIndexSnapshot;
+//! ```
+//! ```compile_fail
+//! use lint_ai::segments::SegmentedMemoryIndex;
+//! ```
+//! ```compile_fail
+//! use lint_ai::build_query_snapshot;
+//! ```
 
-pub mod board;
-pub mod cli;
+mod board;
+mod cli;
 mod config;
-pub mod conversation_state;
+mod conversation_state;
 mod conversational_rerank;
-pub mod daemon;
+mod daemon;
 mod ids;
-pub mod index;
+mod index;
 #[cfg(any(
     feature = "claude-code",
     feature = "codex",
@@ -54,7 +62,7 @@ pub mod index;
     feature = "openclaw"
 ))]
 mod integrations;
-pub mod lang;
+mod lang;
 #[cfg(any(
     feature = "claude-code",
     feature = "codex",
@@ -64,24 +72,24 @@ pub mod lang;
 ))]
 /// Agent-facing search-result shaping, shared by the MCP `search` tools and
 /// the retrieval benchmark so both present hits identically.
-pub use crate::integrations::mcp_tools::search_results;
+pub(crate) use crate::integrations::mcp_tools::search_results;
 pub mod memory_api;
-pub mod pipeline;
-pub mod query_plan;
+mod pipeline;
+mod query_plan;
 mod remote_query;
-pub mod segments;
+mod segments;
 pub mod semantic_audit;
-pub mod semantic_relations;
-pub mod session_prepare;
-pub mod source;
-pub mod telemetry;
-pub mod temporal_fact;
+mod semantic_relations;
+mod session_prepare;
+mod source;
+mod telemetry;
+mod temporal_fact;
 
 // Internal implementation details. These modules are intentionally not part
 // of the public API; use the re-exports above instead.
 mod adapters;
 mod aggregation;
-pub mod behood_query;
+mod behood_query;
 mod chunking;
 mod claim_extractor;
 mod corpus_graph;
@@ -90,61 +98,73 @@ mod filters;
 mod graph;
 mod ownership;
 mod query_expansion;
-pub use query_expansion::preload_lexical_store;
-pub mod semantic_tags;
+pub(crate) use query_expansion::preload_lexical_store;
 mod query_semantics;
-pub mod question_focus;
+mod question_focus;
 mod report;
 mod review;
 mod rules;
+mod semantic_tags;
+mod stopwords_data;
 mod symbols;
 mod temporal;
 mod tier1;
 mod tier1_ner_daemon;
-pub mod tokenizer;
-mod stopwords_data;
+mod tokenizer;
 mod usage;
 
-pub use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
-pub use crate::index::{
-    GlobalBm25Statistics, MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult,
-    TemporalQueryContext,
+pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
+// Public data contracts used by MemoryService. None provides direct storage access.
+pub use crate::board::{Board, BoardPost};
+pub use crate::index::{QueryDiagnostics, QueryTimings, ScoreBreakdown, SearchResult};
+pub use crate::lang::Lang;
+pub use crate::memory_api::{
+    AddRequest, AddResponse, DeleteRequest, GetRequest, ListRequest, ListResponse, MemoryRecord,
+    MemoryService, Message, SearchMemory, SearchRequest, SearchResponse, SupersedeRequest,
+    UpdateRequest,
 };
 pub use crate::pipeline::{
+    ChunkStrategy, IndexLocation, IndexStoreInspection, MemoryIndexLayout,
+    MemoryIndexSegmentInspection, MemoryIndexSnapshotInspection, PipelineOptions, Tier1NerProvider,
+    Tier1TermRankerKind,
+};
+pub use crate::segments::{SegmentRoutingStrategy, ShardQueryCompleteness, ShardQueryFailure};
+pub use crate::semantic_relations::{SemanticStatus, SupersessionOptions};
+pub use crate::source::{KeyPhrase, SourceDocument};
+
+// Internal aliases used by implementation modules and development tools.
+pub(crate) use crate::aggregation::{build_aggregate_output, AggregateOutput};
+pub(crate) use crate::index::{GlobalBm25Statistics, MemoryIndex, TemporalQueryContext};
+pub(crate) use crate::pipeline::{
     build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
     build_query_snapshot_from_source_documents, default_production_pipeline_options,
-    resolve_store_paths, ChunkStrategy, IndexDump, IndexLocation, IndexStore, IndexStoreInspection,
-    MemoryIndexLayout, MemoryIndexSegmentInspection, MemoryIndexSnapshot,
-    MemoryIndexSnapshotInspection, PipelineOptions, StorePaths, Tier1NerProvider,
-    Tier1TermRankerKind, DEFAULT_SEGMENT_QUERY_TOP_N,
+    resolve_store_paths, IndexDump, IndexStore, MemoryIndexSnapshot, StorePaths,
+    DEFAULT_SEGMENT_QUERY_TOP_N,
 };
-pub use crate::segments::{
-    SegmentManifest, SegmentManifestEntry, ShardQueryCompleteness, ShardQueryFailure,
-};
-pub use crate::semantic_relations::{
-    DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
-    SemanticRelationStore, SemanticStatus, SupersessionOptions,
-};
-pub use crate::source::KeyPhrase;
-pub use crate::source::SourceDocument;
-pub use crate::temporal_fact::{TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair};
-// Re-exported so the public `index::DocRecord` struct can be constructed by
-// downstream users (`key_entities` / `important_terms` fields).
-pub use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
-// Re-exported so binaries (the server, benchmarks) can prewarm the
-// long-lived spaCy NER daemon, mirroring the extractor/behood daemons.
-pub use crate::tier1_ner_daemon::NerDaemon;
-// Date helper for building timestamped documents (used by benchmarks; also
-// useful for anyone constructing `SourceDocument`s with timestamps).
-pub use crate::temporal::parse_temporal_date;
-// Query-pipeline utilities used by the benchmark binaries and useful for
-// power users driving `MemoryIndex` directly.
-pub use crate::aggregation::{build_aggregate_output, AggregateOutput};
-pub use crate::query_expansion::normalize_for_index;
-pub use crate::query_semantics::{
+pub(crate) use crate::query_expansion::normalize_for_index;
+pub(crate) use crate::query_semantics::{
     analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
     temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
 };
+pub(crate) use crate::segments::{SegmentManifest, SegmentManifestEntry};
+pub(crate) use crate::semantic_relations::{
+    DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
+    SemanticRelationStore,
+};
+pub(crate) use crate::temporal::parse_temporal_date;
+pub(crate) use crate::temporal_fact::{
+    TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
+};
+pub(crate) use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+pub(crate) use crate::tier1_ner_daemon::NerDaemon;
+
+mod executables;
+
+/// Launch a bundled executable. This process entry point exposes no memory internals.
+#[doc(hidden)]
+pub fn run_binary(name: &str) -> anyhow::Result<()> {
+    executables::run(name)
+}
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -744,3 +764,6 @@ fn lint_ai(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMemory>()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod internal_tests;

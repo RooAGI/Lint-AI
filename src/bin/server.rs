@@ -1,14 +1,3 @@
-use axum::{
-    error_handling::HandleErrorLayer,
-    extract::{Extension, Json, Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    middleware::{self, Next},
-    response::{Html, IntoResponse},
-    routing::{get, post},
-    Router,
-};
-use clap::Parser;
-use jsonwebtoken::{decode, DecodingKey, Validation};
 use crate::memory_api::{
     AddRequest, DeleteRequest, GetRequest, ListRequest, MemoryService, SearchRequest,
     SupersedeRequest, UpdateRequest,
@@ -22,6 +11,17 @@ use crate::{
     default_production_pipeline_options, lang::Lang, IndexStoreInspection, MemoryIndexLayout,
     PipelineOptions, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
+use axum::{
+    error_handling::HandleErrorLayer,
+    extract::{Extension, Json, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
+    response::{Html, IntoResponse},
+    routing::{get, post},
+    Router,
+};
+use clap::Parser;
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -301,7 +301,15 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             crate::behood_query::BekindDaemon::global().prewarm();
         })
         .ok();
-    let app = Router::new()
+    let app = app_router(state);
+    let listener = tokio::net::TcpListener::bind(&args.bind).await?;
+    eprintln!("Lint-AI server listening on {}", args.bind);
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+fn app_router(state: AppState) -> Router {
+    Router::new()
         .route("/health", get(health))
         .route("/dashboard", get(dashboard))
         .route("/dashboard/app.js", get(dashboard_app))
@@ -344,11 +352,7 @@ pub(crate) async fn main() -> anyhow::Result<()> {
                 )),
         )
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind(&args.bind).await?;
-    eprintln!("Lint-AI server listening on {}", args.bind);
-    axum::serve(listener, app).await?;
-    Ok(())
+        .with_state(state)
 }
 
 /// Production pipeline options with the server's CLI flags applied as
@@ -411,6 +415,18 @@ async fn authorize(
     if path == "/health" || path == "/dashboard" || path.starts_with("/dashboard/") {
         return next.run(request).await;
     }
+    if is_workspace_telemetry_path(path) {
+        if let Some(expected) = state.token.as_deref() {
+            let supplied = headers
+                .get("authorization")
+                .or_else(|| headers.get("x-api-key"))
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if token_is_valid(supplied, expected) {
+                return next.run(request).await;
+            }
+        }
+    }
     if let Some(secret) = state.jwt_secret.as_deref() {
         let supplied = headers
             .get("authorization")
@@ -433,6 +449,16 @@ async fn authorize(
                     .into_response()
             }
         };
+        // JWT currently establishes a user identity only. Until the server
+        // defines and validates an administrative role, JWT identities must
+        // not read workspace-wide operational telemetry.
+        if is_workspace_telemetry_path(path) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"detail":"workspace telemetry requires server-token authentication"})),
+            )
+                .into_response();
+        }
         request.extensions_mut().insert(AuthContext {
             user_id: claims.sub,
         });
@@ -453,6 +479,19 @@ async fn authorize(
         }
     }
     next.run(request).await
+}
+
+fn is_workspace_telemetry_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/events"
+            | "/api/integrations"
+            | "/api/sessions"
+            | "/api/status"
+            | "/api/timeseries"
+            | "/api/metrics"
+            | "/metrics"
+    ) || path.starts_with("/api/sessions/")
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -994,7 +1033,7 @@ async fn search(
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let request = match serde_json::from_value::<SearchRequest>(value) {
+    let mut request = match serde_json::from_value::<SearchRequest>(value) {
         Ok(request) => request,
         Err(_) => {
             return (
@@ -1004,6 +1043,12 @@ async fn search(
                 .into_response()
         }
     };
+    if let Some(auth) = auth.as_ref() {
+        // The JWT subject owns both the documents and conversation context.
+        // Ignore caller-provided scope so one user cannot mutate another
+        // user's follow-up state.
+        request.scope = Some(auth.0.user_id.clone());
+    }
     // MemoryService::search takes a shared borrow: reads hold the read lock
     // and never block writers. Execute it directly so concurrent requests do
     // not queue behind the blocking-pool handoff; mutation/index rebuild
@@ -1410,6 +1455,183 @@ fn token_is_valid(supplied: &str, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn security_test_root() -> PathBuf {
+        static NEXT_ROOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "lint-ai-http-security-{}-{}-{}",
+            std::process::id(),
+            now_unix_ms(),
+            NEXT_ROOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::canonicalize(path).unwrap()
+    }
+
+    fn security_test_state(root: &std::path::Path) -> AppState {
+        AppState {
+            service: Arc::new(RwLock::new(
+                MemoryService::at_path(
+                    root,
+                    PipelineOptions {
+                        key_phrase_enrichment: false,
+                        ..PipelineOptions::default()
+                    },
+                )
+                .unwrap(),
+            )),
+            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            token: None,
+            jwt_secret: Some("test-secret".into()),
+            tenant_id: None,
+            telemetry: OperationalTelemetry::new(),
+            project_root: root.to_path_buf(),
+        }
+    }
+
+    fn security_test_token(claims: Value) -> String {
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(b"test-secret"),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn jwt_is_identity_only_and_cannot_read_workspace_telemetry() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let app = app_router(security_test_state(&root));
+        let token = security_test_token(json!({"sub":"alice", "exp":4_102_444_800u64}));
+        // A valid JWT can still use user-scoped memory APIs.
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/v1/memories?user_id=alice")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // JWT has no role model; an undocumented `admin` claim grants nothing.
+        for claims in [
+            json!({"sub":"alice", "exp":4_102_444_800u64}),
+            json!({"sub":"alice", "admin":true, "exp":4_102_444_800u64}),
+        ] {
+            let token = security_test_token(claims);
+            for path in [
+                "/api/events",
+                "/api/sessions/victim/events",
+                "/api/integrations",
+                "/api/sessions",
+                "/api/status",
+                "/api/timeseries",
+                "/api/metrics",
+                "/metrics",
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .uri(path)
+                            .header("authorization", format!("Bearer {token}"))
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::FORBIDDEN,
+                    "JWT telemetry exposed at {path}"
+                );
+            }
+        }
+        // The privilege claim is accepted only after signature validation.
+        let forged = jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &json!({"sub":"operator", "admin":true, "exp":4_102_444_800u64}),
+            &jsonwebtoken::EncodingKey::from_secret(b"wrong-secret"),
+        )
+        .unwrap();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/events")
+                    .header("authorization", format!("Bearer {forged}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn server_token_can_read_telemetry_when_jwt_auth_is_configured() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let mut state = security_test_state(&root);
+        state.token = Some("operator-token".into());
+        let app = app_router(state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/events")
+                    .header("authorization", "Bearer operator-token")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn jwt_search_scope_is_bound_to_subject() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let app = app_router(security_test_state(&root));
+        let token = security_test_token(json!({"sub":"alice", "exp":4_102_444_800u64}));
+        let body = json!({
+            "query":"some unusual query for session state",
+            "user_id":"alice",
+            "session_id":"shared-session",
+            "scope":"victim-scope",
+            "top_k":5
+        });
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/search")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut states = crate::conversation_state::ConversationStateStore::open_under(&root);
+        assert!(
+            states
+                .get("victim-scope", "shared-session", now_unix_ms())
+                .is_none(),
+            "request-provided scope contaminated another user's conversation state"
+        );
+        assert!(states
+            .get("alice", "shared-session", now_unix_ms())
+            .is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn server_uses_segmented_memory_index() {

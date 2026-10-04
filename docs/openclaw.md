@@ -99,6 +99,21 @@ The seven MCP tools: `search`, `info`, `list_memories`, `record_session`,
 (`board_open`, `board_post`, `board_read`, …). Board and memory writes go
 through the persistent shared store (`.lint-ai/memory/`) under a
 cross-process write lock, so they survive the MCP process and are visible to
-hooks and other providers. Hook schemas were verified against live OpenClaw
-2026.9.6 payloads; compaction capture is intentionally not wired, since those
-hooks were not observed on a live host.
+hooks and other providers.
+
+### Lifecycle hooks
+
+All hook schemas below were verified against live OpenClaw 2026.9.6
+payloads before shipping.
+
+| Hook | Kind | Lint-AI behavior |
+| --- | --- | --- |
+| `agent:bootstrap` | internal hook | Recalls relevant memories and injects them as `bootstrapFiles` (`LINTAI.md` appended, replacing any stale entry so repeated firings stay idempotent). |
+| `message:received` | internal hook | Remembers the latest user text per session so the bootstrap query targets the actual request. |
+| `agent_end` | typed plugin | Captures the run's outcome. |
+| `before_reset` | typed plugin | Captures an authoritative `SessionSummary` from the full departing transcript before OpenClaw wipes the session. |
+| `session_start` / `session_end` | typed plugin | Records session lifecycle links. |
+
+Compaction capture is intentionally not wired: the compaction hooks were not
+observed on a live host. Every hook is fail-open — a hook failure never
+blocks the agent turn.

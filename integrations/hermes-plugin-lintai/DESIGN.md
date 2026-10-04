@@ -2,7 +2,7 @@
 
 **Status:** design (approved pattern; implementation follows this document)
 **Date:** 2026-09-28
-**Probe basis:** `~/workspace/research_notes/hermes-hooks-probe.md` — live probe against
+**Probe basis:** `docs/hermes-hooks-probe.md` — live probe against
 NousResearch/hermes-agent @ `e408d363`. Every hook name, payload schema, and behavior
 below was verified against the real Hermes code and a real plugin load; nothing here
 is inferred from docs.
@@ -222,7 +222,7 @@ edge is the authoritative full-transcript boundary snapshot (`on_session_end(mes
 lint-ai retrieval is turn/segment-level. A provider also needs a `MemoryProvider`
 subclass (~500–700 lines, per the mem0 precedent) versus a directory plugin with zero
 Hermes changes. If Luyi later wants the provider slot, mem0's plugin is the template
-(`~/workspace/research_notes/hermes-mem0-integration.md`).
+(`docs/hermes-mem0-integration.md`).
 
 ## 11. Verification plan
 

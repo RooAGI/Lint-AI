@@ -249,11 +249,21 @@ impl ClaudeMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
-        if self
+        let file_changes = self
             .workspace_watcher
             .as_ref()
-            .is_some_and(mcp_index::WorkspaceWatcher::take_change)
-        {
+            .map(mcp_index::WorkspaceWatcher::take_file_changes)
+            .unwrap_or_default();
+        if !file_changes.is_empty() {
+            if let Err(error) =
+                crate::integrations::session_recording::capture_workspace_file_changes(
+                    RecordingProvider::Claude,
+                    &self.root,
+                    file_changes,
+                )
+            {
+                eprintln!("warning: failed to save workspace file changes: {error:#}");
+            }
             *store = None;
         }
         if store.is_none() {
@@ -266,6 +276,13 @@ impl ClaudeMcp {
             })?;
             let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
+            if let Some(watcher) = &self.workspace_watcher {
+                watcher.seed_baseline(
+                    documents
+                        .iter()
+                        .map(|document| (document.source.as_str(), document.content.as_str())),
+                );
+            }
             let root = self.root.clone();
             *store = Some(crate::memory_api::MemoryService::open_workspace(
                 &root,
@@ -578,17 +595,20 @@ impl ClaudeMcp {
                 // Board owner/workspace: the workspace root scopes boards;
                 // "mcp" is the stable owner for agent-posted boards.
                 let workspace = self.root.to_string_lossy().to_string();
-                let result = crate::memory_api::MemoryService::with_shared_memory(&self.root, |board_service| {
-                    mcp_tools::dispatch_board_tool(
-                        tool_name,
-                        &board_arguments,
-                        board_service,
-                        "mcp",
-                        &workspace,
-                        RecordingProvider::Claude.as_str(),
-                    )
-                    .map_err(anyhow::Error::msg)
-                })
+                let result = crate::memory_api::MemoryService::with_shared_memory(
+                    &self.root,
+                    |board_service| {
+                        mcp_tools::dispatch_board_tool(
+                            tool_name,
+                            &board_arguments,
+                            board_service,
+                            "mcp",
+                            &workspace,
+                            RecordingProvider::Claude.as_str(),
+                        )
+                        .map_err(anyhow::Error::msg)
+                    },
+                )
                 .map_err(|error| error.to_string());
                 match result {
                     Ok(payload) => Ok(JsonRpcResponse {
@@ -628,15 +648,18 @@ impl ClaudeMcp {
                             memory_arguments["session_id"] = json!(session_id);
                         }
                     }
-                    let write = crate::memory_api::MemoryService::with_shared_memory(&self.root, |shared| {
-                        mcp_tools::dispatch_memory_tool(
-                            tool_name,
-                            &memory_arguments,
-                            shared,
-                            RecordingProvider::Claude.as_str(),
-                        )
-                        .map_err(anyhow::Error::msg)
-                    })
+                    let write = crate::memory_api::MemoryService::with_shared_memory(
+                        &self.root,
+                        |shared| {
+                            mcp_tools::dispatch_memory_tool(
+                                tool_name,
+                                &memory_arguments,
+                                shared,
+                                RecordingProvider::Claude.as_str(),
+                            )
+                            .map_err(anyhow::Error::msg)
+                        },
+                    )
                     .map_err(|error| error.to_string());
                     // Re-sync the view so this process observes its own
                     // write without waiting for the next pre-dispatch sync.

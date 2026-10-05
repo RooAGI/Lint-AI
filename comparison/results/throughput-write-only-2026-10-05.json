@@ -1,0 +1,295 @@
+{
+  "benchmark": "write-only-http-load",
+  "created_at_utc": "2026-10-05T16:14:08.024696+00:00",
+  "server_binary": "/Users/louis/sources/Lint-AI/target/release/server",
+  "server_binary_sha256": "1f555908d11034313703a23b3cfa8e1a03b051c111edafec9ff697a7772b4b5c",
+  "git_revision": "7d11bfbeb831b52cc57538f53070cd92769364c2",
+  "tantivy_version": "v0.25.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "records_before_each_cell": 23366,
+  "sessions": 23,
+  "writer_workers": 1,
+  "readers": 0,
+  "measured_seconds_per_cell": 8,
+  "warmup_requests_per_cell": 5,
+  "batch_sizes_add_requests": [
+    1,
+    8,
+    32,
+    128
+  ],
+  "repetitions": 3,
+  "summary": {
+    "1": {
+      "request_throughput_median_per_s": 3.42,
+      "record_throughput_median_per_s": 3.42,
+      "p50_latency_median_ms": 293.614,
+      "p95_latency_median_ms": 306.294,
+      "p99_latency_median_ms": 316.222
+    },
+    "8": {
+      "request_throughput_median_per_s": 1.72,
+      "record_throughput_median_per_s": 13.76,
+      "p50_latency_median_ms": 579.729,
+      "p95_latency_median_ms": 591.153,
+      "p99_latency_median_ms": 591.153
+    },
+    "32": {
+      "request_throughput_median_per_s": 0.83,
+      "record_throughput_median_per_s": 26.58,
+      "p50_latency_median_ms": 1203.081,
+      "p95_latency_median_ms": 1217.001,
+      "p99_latency_median_ms": 1217.001
+    },
+    "128": {
+      "request_throughput_median_per_s": 0.74,
+      "record_throughput_median_per_s": 94.2,
+      "p50_latency_median_ms": 1340.838,
+      "p95_latency_median_ms": 1387.5,
+      "p99_latency_median_ms": 1387.5
+    }
+  },
+  "runs": [
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 8.154,
+      "requests": 6,
+      "successful_requests": 6,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 768,
+      "request_throughput_per_s": 0.74,
+      "record_throughput_per_s": 94.19,
+      "latency_ms": {
+        "p50": 1360.66,
+        "p95": 1387.5,
+        "p99": 1387.5,
+        "mean": 1358.954
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 8.034,
+      "requests": 28,
+      "successful_requests": 28,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 28,
+      "request_throughput_per_s": 3.49,
+      "record_throughput_per_s": 3.49,
+      "latency_ms": {
+        "p50": 286.114,
+        "p95": 293.959,
+        "p99": 296.782,
+        "mean": 286.928
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 32,
+      "seed_records": 23366,
+      "measured_seconds": 8.382,
+      "requests": 7,
+      "successful_requests": 7,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 224,
+      "request_throughput_per_s": 0.84,
+      "record_throughput_per_s": 26.72,
+      "latency_ms": {
+        "p50": 1192.192,
+        "p95": 1217.001,
+        "p99": 1217.001,
+        "mean": 1197.396
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 8,
+      "seed_records": 23366,
+      "measured_seconds": 8.096,
+      "requests": 14,
+      "successful_requests": 14,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 112,
+      "request_throughput_per_s": 1.73,
+      "record_throughput_per_s": 13.83,
+      "latency_ms": {
+        "p50": 578.186,
+        "p95": 584.067,
+        "p99": 584.067,
+        "mean": 578.255
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 8,
+      "seed_records": 23366,
+      "measured_seconds": 8.346,
+      "requests": 14,
+      "successful_requests": 14,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 112,
+      "request_throughput_per_s": 1.68,
+      "record_throughput_per_s": 13.42,
+      "latency_ms": {
+        "p50": 592.384,
+        "p95": 622.605,
+        "p99": 622.605,
+        "mean": 596.169
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 32,
+      "seed_records": 23366,
+      "measured_seconds": 8.439,
+      "requests": 7,
+      "successful_requests": 7,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 224,
+      "request_throughput_per_s": 0.83,
+      "record_throughput_per_s": 26.54,
+      "latency_ms": {
+        "p50": 1205.31,
+        "p95": 1217.89,
+        "p99": 1217.89,
+        "mean": 1205.595
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 8.153,
+      "requests": 6,
+      "successful_requests": 6,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 768,
+      "request_throughput_per_s": 0.74,
+      "record_throughput_per_s": 94.2,
+      "latency_ms": {
+        "p50": 1335.793,
+        "p95": 1408.691,
+        "p99": 1408.691,
+        "mean": 1358.757
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 8.067,
+      "requests": 27,
+      "successful_requests": 27,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 27,
+      "request_throughput_per_s": 3.35,
+      "record_throughput_per_s": 3.35,
+      "latency_ms": {
+        "p50": 298.611,
+        "p95": 312.246,
+        "p99": 343.762,
+        "mean": 298.77
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 8.066,
+      "requests": 6,
+      "successful_requests": 6,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 768,
+      "request_throughput_per_s": 0.74,
+      "record_throughput_per_s": 95.22,
+      "latency_ms": {
+        "p50": 1340.838,
+        "p95": 1366.829,
+        "p99": 1366.829,
+        "mean": 1344.215
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 8.196,
+      "requests": 28,
+      "successful_requests": 28,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 28,
+      "request_throughput_per_s": 3.42,
+      "record_throughput_per_s": 3.42,
+      "latency_ms": {
+        "p50": 293.614,
+        "p95": 306.294,
+        "p99": 316.222,
+        "mean": 292.7
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 32,
+      "seed_records": 23366,
+      "measured_seconds": 8.428,
+      "requests": 7,
+      "successful_requests": 7,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 224,
+      "request_throughput_per_s": 0.83,
+      "record_throughput_per_s": 26.58,
+      "latency_ms": {
+        "p50": 1203.081,
+        "p95": 1210.254,
+        "p99": 1210.254,
+        "mean": 1203.966
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 8,
+      "seed_records": 23366,
+      "measured_seconds": 8.14,
+      "requests": 14,
+      "successful_requests": 14,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 112,
+      "request_throughput_per_s": 1.72,
+      "record_throughput_per_s": 13.76,
+      "latency_ms": {
+        "p50": 579.729,
+        "p95": 591.153,
+        "p99": 591.153,
+        "mean": 581.447
+      },
+      "last_written_record_searchable": true
+    }
+  ]
+}

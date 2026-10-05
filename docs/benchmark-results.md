@@ -29,22 +29,69 @@ different metric from the comparison headline), see
 The rust-bert POS/NER branch is reported separately in
 [`benchmark/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/README.md).
 
-## Segmented-index comparison
+### Latest standalone rerun (2026-10-04)
 
-The latest 133-query multi-session run compares the supported index modes:
+The 500-question release run used the heuristic NER backend, single-index
+mode, no embeddings, and cutoffs 1, 3, 5, 10, and 20. Its detailed report is
+`comparison/results/retrieval-longmemeval-current-2026-10-04.json.gz`.
 
-| Mode | Any-hit Recall@5 | Any-hit Recall@10 | MRR | Average latency |
-|---|---:|---:|---:|---:|
-| Segmented (fixed top-5) | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
-| Segmented (adaptive 5→12) | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
-| Single index | 93.23% | 93.98% | 0.814 | 6.41 ms |
+| Metric | Result |
+|---|---:|
+| Fractional Recall@5 / @10 / @20 | 86.37% / 91.89% / 92.93% |
+| Any-hit Recall@5 / @10 / @20 | 94.2% / 96.8% / 97.6% |
+| MRR | 87.0% |
+| NDCG@10 | 85.11% |
+| Search latency, mean / p50 / p95 | 2.68 / 2.15 / 4.47 ms |
 
-These results are scoped to the multi-session slice and are not interchangeable
-with the 500-question aggregate headline above.
+The latency measures the `MemoryService::search` call and excludes indexing the
+question's haystack. The older published 13.0 ms latency uses a different
+timing scope, so it should not be compared directly.
 
-The checked-in summary is
-[`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).
+## Segmented-index comparison (500 questions)
 
+The 2026-10-04 segmented benchmark evaluated all 500 eligible LongMemEval-S
+questions. These variants share the same dataset and harness, including a
+single-index control:
+
+| Mode | Any-hit Recall@5 | Any-hit Recall@10 | Fractional Recall@5 | MRR | Average latency |
+|---|---:|---:|---:|---:|---:|
+| Segmented (fixed top-5) | 94.20% | 94.20% | **86.77%** | 0.880 | 4.08 ms |
+| Segmented (adaptive 5→12, enriched) | 94.20% | 96.20% | 85.64% | 0.869 | 7.05 ms |
+| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.77 ms |
+| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 29.47 ms |
+| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 26.98 ms |
+| Single-index control | 94.40% | 96.60% | 86.41% | **0.872** | 14.34 ms |
+
+The run used the heuristic backend, fixed top-5 routing, adaptive expansion to
+12 segments, and the `coverage-local` router. Latency is per-query benchmark
+time excluding haystack indexing. These direct-index timings are not comparable
+to the standalone MemoryService timing in the 500-question headline above.
+Fused temporal + global had the strongest recall and MRR among these listed
+variants, with higher latency; the intent baseline was the fastest listed.
+
+Full report: [`segment-longmemeval-500-2026-10-04.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-04.json.gz).
+
+
+### Tantivy 0.26.2 segmented rerun (2026-10-05)
+
+The same 500-question segmented comparison was rerun with Tantivy 0.26.2 and
+the experimental feature. Compared with the October 4 Tantivy 0.25.0 run,
+fixed top-5 keeps Recall@5 and Fractional@5, while MRR falls from 0.880 to
+0.858. Fused temporal + global remains strongest among these selected routes,
+with lower recall and MRR than before the upgrade.
+
+| Mode | Any-hit @5 | Any-hit @10 | Fractional @5 | MRR | Mean latency |
+|---|---:|---:|---:|---:|---:|
+| Routed fixed top-5 | 94.2% | 94.2% | 86.77% | 0.858 | 1.84 ms |
+| Intent | 93.8% | 96.4% | 84.73% | 0.838 | 0.66 ms |
+| Fused adaptive + global | 94.8% | 97.0% | 85.43% | 0.856 | 20.73 ms |
+| Fused temporal + global | **95.2%** | **97.6%** | **87.07%** | **0.865** | 18.78 ms |
+| Single-index control | 92.6% | 96.2% | 82.89% | 0.837 | 13.28 ms |
+
+Full report: [segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz](../comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz).
+
+The earlier 133-query multi-session comparison is retained as a historical
+slice in [`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).
 ## Segment router comparison (full 500, top_n=5)
 
 Seven routing strategies were compared on the full 500-question LongMemEval-S
@@ -190,3 +237,11 @@ cargo run --release --bin corpus_scale_benchmark -- \
 
 For the full recorded outputs and comparison methodology, see the repository
 [`comparison/`](https://github.com/RooAGI/Lint-AI/tree/main/comparison) folder.
+
+## Tantivy upgrade throughput verification
+
+The paired 0.25.0 versus 0.26.2 check uses 23,366 records, five sessions, five
+repetitions and 1,000 requests per cell. Single-index C=10 medians are
+2,246.69 → 2,769.53 req/s; routed medians are 888.86 → 901.29 req/s.
+See [Tantivy upgrade verification](releases/tantivy-0.26.2-verification.md)
+for the full protocol, compatibility qualifications and raw artifact locations.

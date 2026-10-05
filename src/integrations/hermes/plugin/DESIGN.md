@@ -31,7 +31,7 @@ plugin format Hermes loads). Python cannot reach into our Rust binary in-process
 bridge options are:
 
 1. **HTTP to a running lint-ai server** (chosen) — persistent keep-alive connection,
-   tiny per-turn cost, and the API already exists (`POST /add/batch`, `POST /search`,
+   tiny per-turn cost, and the provider-memory API already exists (`POST /provider-memory/add/batch`, `POST /provider-memory/search`,
    `POST /delete` on the `lint-ai serve` binary, default `127.0.0.1:8080`). No Rust
    changes needed. This is exactly the pattern mem0's own Hermes plugin uses
    (HTTP/SDK, no subprocess).
@@ -94,15 +94,18 @@ and every turn's `conversation_history` is captured.
 
 | Hermes hook | lint-ai action | Details |
 |---|---|---|
-| `pre_llm_call` | **Recall + inject** | Query `POST /search` with `user_message` (scoped by `user_id` from config). Format top hits as a compact context block; return `{"context": block}`. Keep it fast — the turn blocks on this hook (bounded by the 30s timeout; target <1s via the local server). Cache per `(session_id, turn_id)` so double-fires don't double-query. `parent_session_id` (present on resume/branch) is recorded for resume linking. |
+| `pre_llm_call` | **Recall + inject** | Query `POST /provider-memory/search` with `user_message` (scoped by `user_id` from config). Format top hits as a compact context block; return `{"context": block}`. Keep it fast — the turn blocks on this hook (bounded by the 30s timeout; target <1s via the local server). Cache per `(session_id, turn_id)` so double-fires don't double-query. `parent_session_id` (present on resume/branch) is recorded for resume linking. |
 | `post_tool_call` | **Structured tool-event records** | One record per tool call: `function_name`, args (truncated), `result` (truncated), `duration_ms`, `status` (+ `error_type`/`error_message` on failure). Dedupe by `tool_call_id`. Enqueued async — never blocks the agent. |
 | `post_llm_call` | **Per-turn transcript records** | One record per turn: `user_message`, `assistant_response`, plus a bounded slice of `conversation_history`. Dedupe by `(session_id, turn_id)`. Enqueued async. |
 | `on_session_start` | **Session registry entry** | `session_id`, `model`, `platform`, timestamp. |
 | `on_session_finalize` / `on_session_reset` | **Boundary markers** | Mark the session closed (`reason` recorded). Content is already captured incrementally; on reset, link old→new temporally when the new `on_session_start` arrives. |
+| `subagent_start` | **Child start record** | Parent/child session and subagent IDs, parent turn, role, and bounded delegated goal. Stored under the child session scope. |
+| `subagent_stop` | **Child completion record** | Parent linkage, child role/status, bounded summary, duration, and safe tool metadata (name/status/byte counts only). Stored under the child session scope. |
+| `agent_loop_stopped` | **Interruption marker** | Stores `session_key`, platform, reason, and invalidation reason only. Fires for gateway and TUI/desktop interruptions, not plain CLI; it has no transcript or turn ID. |
 
 Not subscribed (deliberately): `pre_tool_call` (fail-closed), `llm_request` middleware
-(verified working, but raw request rewriting is stronger than we need — reserved for
-future use), streaming/kanban/gateway/approval hooks (out of scope for memory).
+ (verified working, but raw request rewriting is stronger than we need — reserved for
+ future use), and streaming/kanban/gateway/approval hooks (out of scope for memory).
 
 ## 5. Dedupe — stateless, no state file
 
@@ -110,7 +113,7 @@ Following the OpenClaw purist fix (no `state.json`; store-level idempotency inst
 
 - **Turns:** `(session_id, turn_id)` — `turn_id` is `{session_id}:{task_id}:{uuid4[:8]}`,
   fresh per turn; re-fires/retries reuse the same `turn_id`, so they are idempotent.
-  Used as the `request_id` on `POST /add/batch` (the server treats `request_id` as the
+  Used as the `request_id` on `POST /provider-memory/add/batch` (the server treats `request_id` as the
   idempotency key).
 - **Tool events:** `tool_call_id` — unique per tool call; same request_id scheme.
 - **Session registry / boundary markers:** `hermes:session:{session_id}:start` and
@@ -151,10 +154,10 @@ Hermes-specific deviations called out in §3.
 - **Async bounded write queue:** hook callbacks never do network I/O inline. They
   append a work item to a bounded `queue.Queue` (default max 1000; drops oldest with a
   counter when full — memory is best-effort, the agent is not). A single background
-  daemon thread drains the queue, batching into `POST /add/batch` (server limit: 128
+  daemon thread drains the queue, batching into `POST /provider-memory/add/batch` (server limit: 128
   requests per batch).
 - **`pre_llm_call` is synchronous by necessity** (its return value is the injection),
-  so recall does a direct `POST /search` with a tight timeout instead of going through
+  so recall does a direct `POST /provider-memory/search` with a tight timeout instead of going through
   the queue. On timeout/error it returns `None` (no injection) — fail-open.
 - **Fail-open everywhere:** every handler is wrapped so exceptions are swallowed and
   counted, never raised into Hermes.
@@ -167,7 +170,7 @@ Hermes-specific deviations called out in §3.
 
 ## 8. Document types written to the lint-ai store
 
-All writes go through `POST /add/batch` as `AddRequest { request_id, user_id,
+All writes go through `POST /provider-memory/add/batch` as `AddRequest { request_id, user_id,
 session_id, messages: [{role, timestamp, content}] }`. `user_id` comes from config;
 `session_id` is `hermes:<session_id>` (namespaced so Hermes sessions never collide
 with other providers' sessions).
@@ -187,14 +190,20 @@ with other providers' sessions).
    - `session_id` on the request ties it to the session; the content header carries
      `turn_id` for turn-level correlation.
    - NOTE: role must be `"user"` (or `"assistant"`) — the server rejects
-     `role: "system"` on `/add/batch` (`memory_api.rs`: "messages[i].role must be
+     `role: "system"` on `/provider-memory/add/batch` (`memory_api.rs`: "messages[i].role must be
      user or assistant"). The `[tool_call]` content prefix marks the kind.
 3. **Session record** — `request_id = "hermes:session:{session_id}:start"` /
    `"hermes:session:{session_id}:close"` (distinct ids — see §5)
    - Written on `on_session_start`: `[{role: "user", content: "[meta] model=<m> platform=<p> parent_session_id=<pid or none>\nsession_start"}}]`.
-     (Role is `"user"` for the same `/add/batch` validation reason as above.)
+     (Role is `"user"` for the same `/provider-memory/add/batch` validation reason as above.)
    - Written on `on_session_finalize`/`reset`: `session_close reason=<reason>`.
      History of the session's turns is in the turn records.
+4. **Subagent start record** — `request_id = "hermes:subagent:start:{child_subagent_id}"`
+   - Stored under the child session scope with parent session, parent turn, optional
+     parent subagent, child role, and bounded delegated goal.
+5. **Subagent stop record** — `request_id = "hermes:subagent:stop:{child_session_id}"`
+   - Stores child status, duration, bounded final summary, and up to 20 metadata-only
+     tool-call entries. Raw tool inputs and outputs are excluded.
 
 Truncation policy: no single captured field exceeds 2000 chars; a turn's total
 payload is capped at ~24KB. Rationale: capture is for recall, not forensics; the
@@ -235,6 +244,6 @@ Hermes changes. If Luyi later wants the provider slot, mem0's plugin is the temp
    `pre_llm_call` (assert the returned context reaches the turn), fire
    `post_tool_call` + `post_llm_call` through the real `invoke_hook` dispatch against
    a stub lint-ai HTTP server, and assert the exact JSON the plugin POSTed to
-   `/search` and `/add/batch`.
+   `/provider-memory/search` and `/provider-memory/add/batch`.
 3. **Rust gate untouched:** this plugin is Python-only; `cargo test --all-targets`
    is unaffected (no Rust changes in this design).

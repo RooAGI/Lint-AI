@@ -195,11 +195,21 @@ impl GeminiMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("Gemini MCP store lock poisoned"))?;
-        if self
+        let file_changes = self
             .workspace_watcher
             .as_ref()
-            .is_some_and(mcp_index::WorkspaceWatcher::take_change)
-        {
+            .map(mcp_index::WorkspaceWatcher::take_file_changes)
+            .unwrap_or_default();
+        if !file_changes.is_empty() {
+            if let Err(error) =
+                crate::integrations::session_recording::capture_workspace_file_changes(
+                    self.provider,
+                    &self.root,
+                    file_changes,
+                )
+            {
+                eprintln!("warning: failed to save workspace file changes: {error:#}");
+            }
             *store = None;
         }
         if store.is_none() {
@@ -211,16 +221,23 @@ impl GeminiMcp {
                 max_total_bytes: self.max_total_bytes,
             };
             let ignores = self.ignore_paths.clone();
-            *store = Some(crate::memory_api::MemoryService::open_workspace(
-                &self.root,
-                mcp_index::SHARED_MEMORY_DIR,
-                &ignores,
-                || {
-                    let graph = build_project_graph(&input)?;
-                    let graph = apply_ignore_paths(graph, &ignores);
-                    Ok(graph_to_source_documents(&graph))
-                },
-            )?);
+            *store =
+                Some(crate::memory_api::MemoryService::open_workspace(
+                    &self.root,
+                    mcp_index::SHARED_MEMORY_DIR,
+                    &ignores,
+                    || {
+                        let graph = build_project_graph(&input)?;
+                        let graph = apply_ignore_paths(graph, &ignores);
+                        let documents = graph_to_source_documents(&graph);
+                        if let Some(watcher) = &self.workspace_watcher {
+                            watcher.seed_baseline(documents.iter().map(|document| {
+                                (document.source.as_str(), document.content.as_str())
+                            }));
+                        }
+                        Ok(documents)
+                    },
+                )?);
         }
         Ok(store)
     }
@@ -326,10 +343,18 @@ impl GeminiMcp {
                     results.as_ref().is_ok_and(Vec::is_empty),
                 );
                 let results = results?;
+                #[cfg(feature = "roo-runtime")]
+                let results = if matches!(self.provider, RecordingProvider::RooRuntime) {
+                    crate::integrations::roo_runtime::search_results_with_evidence(
+                        service, query, results,
+                    )
+                } else {
+                    serde_json::to_value(results)?
+                };
                 Ok(text_response(
                     id,
                     &serde_json::to_string_pretty(
-                        &json!({"query": query, "results": results, "provider": self.provider_label}),
+                        &json!({"query": query, "results": results, "provider": self.provider_label, "coverage":"ranked_subset"}),
                     )?,
                 ))
             }

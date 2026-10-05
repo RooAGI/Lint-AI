@@ -324,11 +324,21 @@ impl CodexMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
-        if self
+        let file_changes = self
             .workspace_watcher
             .as_ref()
-            .is_some_and(mcp_index::WorkspaceWatcher::take_change)
-        {
+            .map(mcp_index::WorkspaceWatcher::take_file_changes)
+            .unwrap_or_default();
+        if !file_changes.is_empty() {
+            if let Err(error) =
+                crate::integrations::session_recording::capture_workspace_file_changes(
+                    RecordingProvider::Codex,
+                    &self.root,
+                    file_changes,
+                )
+            {
+                eprintln!("warning: failed to save workspace file changes: {error:#}");
+            }
             *store = None;
         }
         if store.is_none() {
@@ -341,6 +351,13 @@ impl CodexMcp {
             })?;
             let graph = apply_ignore_paths(graph, &self.ignore_paths);
             let documents = graph_to_source_documents(&graph);
+            if let Some(watcher) = &self.workspace_watcher {
+                watcher.seed_baseline(
+                    documents
+                        .iter()
+                        .map(|document| (document.source.as_str(), document.content.as_str())),
+                );
+            }
             let root = self.root.clone();
             *store = Some(crate::memory_api::MemoryService::open_workspace(
                 &root,
@@ -652,17 +669,20 @@ impl CodexMcp {
                 // Board owner/workspace: the workspace root scopes boards;
                 // "mcp" is the stable owner for agent-posted boards.
                 let workspace = self.root.to_string_lossy().to_string();
-                let result = crate::memory_api::MemoryService::with_shared_memory(&self.root, |board_service| {
-                    mcp_tools::dispatch_board_tool(
-                        tool_name,
-                        &board_arguments,
-                        board_service,
-                        "mcp",
-                        &workspace,
-                        RecordingProvider::Codex.as_str(),
-                    )
-                    .map_err(anyhow::Error::msg)
-                })
+                let result = crate::memory_api::MemoryService::with_shared_memory(
+                    &self.root,
+                    |board_service| {
+                        mcp_tools::dispatch_board_tool(
+                            tool_name,
+                            &board_arguments,
+                            board_service,
+                            "mcp",
+                            &workspace,
+                            RecordingProvider::Codex.as_str(),
+                        )
+                        .map_err(anyhow::Error::msg)
+                    },
+                )
                 .map_err(|error| error.to_string());
                 match result {
                     Ok(payload) => Ok(JsonRpcResponse {
@@ -702,15 +722,18 @@ impl CodexMcp {
                             memory_arguments["session_id"] = json!(session_id);
                         }
                     }
-                    let write = crate::memory_api::MemoryService::with_shared_memory(&self.root, |shared| {
-                        mcp_tools::dispatch_memory_tool(
-                            tool_name,
-                            &memory_arguments,
-                            shared,
-                            RecordingProvider::Codex.as_str(),
-                        )
-                        .map_err(anyhow::Error::msg)
-                    })
+                    let write = crate::memory_api::MemoryService::with_shared_memory(
+                        &self.root,
+                        |shared| {
+                            mcp_tools::dispatch_memory_tool(
+                                tool_name,
+                                &memory_arguments,
+                                shared,
+                                RecordingProvider::Codex.as_str(),
+                            )
+                            .map_err(anyhow::Error::msg)
+                        },
+                    )
                     .map_err(|error| error.to_string());
                     // Re-sync the view so this process observes its own
                     // write without waiting for the next pre-dispatch sync.
@@ -1079,14 +1102,13 @@ mod tests {
 
         fs::remove_file(&document_path).unwrap();
         wait_for_workspace_store(&mcp, |store| {
-            let results = store
-                .search_with_filters("segmented indexes", "test", None, 5, &Default::default())
-                .unwrap_or_default();
-            !results.iter().any(|result| {
-                store
-                    .source_document_by_id(&result.doc_id)
-                    .is_some_and(|doc| doc.content.contains("segmented indexes"))
-            })
+            let documents = store.source_documents();
+            !documents.iter().any(|doc| doc.doc_id == "architecture.md")
+                && documents.iter().any(|doc| {
+                    doc.filters.get("source_type").map(String::as_str)
+                        == Some("workspace-file-change")
+                        && doc.content.contains("segmented indexes")
+                })
         });
 
         fs::remove_dir_all(root).unwrap();

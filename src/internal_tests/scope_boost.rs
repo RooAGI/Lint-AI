@@ -54,11 +54,7 @@ fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, conten
         .expect("add fact");
 }
 
-fn search(
-    service: &mut MemoryService,
-    user_id: &str,
-    question: &str,
-) -> Vec<crate::SearchResult> {
+fn search(service: &mut MemoryService, user_id: &str, question: &str) -> Vec<crate::SearchResult> {
     let mut filters = BTreeMap::new();
     // Literal key, matching internal convention (cf. USER_FILTER and the
     // locomo benchmark server): the ownership filter const is crate-private.

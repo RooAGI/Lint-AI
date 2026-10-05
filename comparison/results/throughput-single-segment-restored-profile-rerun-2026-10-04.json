@@ -1,0 +1,50 @@
+{
+  "benchmark": "single-segment-throughput-restored-metadata-loop",
+  "date": "2026-10-04",
+  "mode": "segment",
+  "records": 23366,
+  "segments": 1,
+  "seed_sessions": 1,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 3,
+  "build": "release, agent-integrations feature",
+  "metadata_loop": "candidate ID vector plus candidates.entry(doc_u32).or_default(); per-candidate substage profiler removed",
+  "environment": {
+    "LINT_AI_QUERY_TIMINGS": "1",
+    "LINT_AI_QUERY_METADATA_TIMINGS": "unset",
+    "LINT_AI_DISABLE_QUERY_CACHE": "1 (not read by current source)",
+    "effective_cache_behavior": "default"
+  },
+  "provenance": {
+    "git_head": "274b5c18aa6bf65fca62c6e036cee76fdbe6998b",
+    "working_tree": "modified",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "cargo": "cargo 1.96.0 (30a34c682 2026-05-25)",
+    "server_sha256": "5d7fe8f4999908a13b4c96c3100a75c53e1eaa1744df09400641ee25bf5124ec",
+    "query_rs_sha256": "549aac368e47c08faa8e8036d135cdbe60c5c87980bd37dd8927b61d7df721e1"
+  },
+  "summary": {
+    "c1": {"throughput_median_req_s": 374.26, "p50_median_ms": 2.648},
+    "c10": {"throughput_median_req_s": 1922.47, "p50_median_ms": 4.751}
+  },
+  "runs": [
+    {
+      "c1": {"throughput_req_s": 376.44, "p50_ms": 2.64},
+      "c10": {"throughput_req_s": 1764.53, "p50_ms": 5.034}
+    },
+    {
+      "c1": {"throughput_req_s": 373.31, "p50_ms": 2.655},
+      "c10": {"throughput_req_s": 1922.47, "p50_ms": 4.751}
+    },
+    {
+      "c1": {"throughput_req_s": 374.26, "p50_ms": 2.648},
+      "c10": {"throughput_req_s": 2115.14, "p50_ms": 4.292}
+    }
+  ],
+  "comparison": {
+    "prior_median_c10_req_s": 1916.25,
+    "rerun_median_c10_req_s": 1922.47,
+    "assessment": "The matched rerun is consistent with the prior result. Its C10 range is wide, so this supports equivalence within benchmark noise rather than a throughput change. The old artifact has no source revision; the current build restores the documented vector-plus-entry loop and uses the same query-timing environment."
+  }
+}

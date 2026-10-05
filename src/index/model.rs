@@ -354,6 +354,12 @@ pub struct MemoryIndex {
     #[serde(skip_serializing)]
     pub(crate) doc_rerank_tokens: Vec<Vec<String>>,
     #[serde(skip_serializing)]
+    pub(crate) doc_topic_tokens: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub(crate) doc_type_tokens: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub(crate) doc_claim_tokens: Vec<Vec<Vec<String>>>,
+    #[serde(skip_serializing)]
     pub(crate) doc_has_number: Vec<bool>,
     #[serde(skip_serializing)]
     pub(crate) claim_scoring: bool,

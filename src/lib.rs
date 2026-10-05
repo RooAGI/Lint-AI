@@ -59,7 +59,8 @@ mod index;
     feature = "gemini-cli",
     feature = "agy",
     feature = "muse-code",
-    feature = "openclaw"
+    feature = "openclaw",
+    feature = "roo-runtime"
 ))]
 mod integrations;
 mod lang;
@@ -120,8 +121,8 @@ pub use crate::index::{QueryDiagnostics, QueryTimings, ScoreBreakdown, SearchRes
 pub use crate::lang::Lang;
 pub use crate::memory_api::{
     AddRequest, AddResponse, DeleteRequest, GetRequest, ListRequest, ListResponse, MemoryRecord,
-    MemoryService, Message, SearchMemory, SearchRequest, SearchResponse, SupersedeRequest,
-    UpdateRequest,
+    MemoryService, Message, SearchMemory, SearchRequest, SearchResponse, StagedAddResponse,
+    SupersedeRequest, UpdateRequest,
 };
 pub use crate::pipeline::{
     ChunkStrategy, IndexLocation, IndexStoreInspection, MemoryIndexLayout,

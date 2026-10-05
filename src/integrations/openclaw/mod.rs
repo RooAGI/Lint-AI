@@ -415,7 +415,11 @@ mod tests {
             "string"
         );
         assert_eq!(
-            manifest["configSchema"]["properties"]["binaryPath"]["type"],
+            manifest["configSchema"]["properties"]["serverUrl"]["type"],
+            "string"
+        );
+        assert_eq!(
+            manifest["configSchema"]["properties"]["serverToken"]["type"],
             "string"
         );
         // Reinstall is a no-op.

@@ -51,7 +51,6 @@ for mode in results:
             str(args.warmup_requests),
             "--port",
             str(args.base_port + run_number),
-            "--no-cache",
         ]
         completed = subprocess.run(
             command,
@@ -93,7 +92,7 @@ report = {
     "requests_per_cell": args.requests,
     "warmup_requests_per_cell": args.warmup_requests,
     "repetitions": args.repetitions,
-    "cache": "disabled",
+    "cache": "default",
     "server": str(args.server_bin),
     "summary": summary,
     "runs": results,

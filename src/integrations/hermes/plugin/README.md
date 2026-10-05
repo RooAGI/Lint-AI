@@ -1,7 +1,8 @@
 # hermes-plugin-lintai
 
 Automatic lint-ai memory for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-via hooks — recall injected before every model call, per-turn and per-tool-call capture.
+via hooks — recall injected before every model call, per-turn, per-tool-call, and
+subagent lifecycle capture.
 The "next level" after the `--hermes-serve` MCP adapter: the MCP adapter makes memory
 available when the agent *chooses* to call a tool; this plugin makes capture/recall
 *automatic*.
@@ -20,7 +21,7 @@ against real Hermes payloads), the mapping, dedupe, transport, and open question
 
 ```bash
 # from the lint-ai repo
-hermes plugins install ./integrations/hermes-plugin-lintai
+hermes plugins install ./src/integrations/hermes/plugin
 hermes plugins enable lintai
 ```
 
@@ -28,7 +29,7 @@ Or per-project (no global install):
 
 ```bash
 mkdir -p .hermes/plugins
-cp -r /path/to/lint-ai/integrations/hermes-plugin-lintai .hermes/plugins/lintai
+cp -r /path/to/lint-ai/src/integrations/hermes/plugin .hermes/plugins/lintai
 HERMES_ENABLE_PROJECT_PLUGINS=1 hermes chat
 ```
 
@@ -45,11 +46,17 @@ Environment variables (win over `$HERMES_HOME/lintai.json`, which wins over defa
 | Variable | Default | Meaning |
 |---|---|---|
 | `LINTAI_SERVER_URL` | `http://127.0.0.1:8080` | lint-ai server base URL |
+| `LINTAI_SERVER_TOKEN` | empty | Optional server bearer token |
 | `LINTAI_USER_ID` | `hermes` | tenant/user id for all reads and writes |
 | `LINTAI_QUEUE_MAX` | `1000` | bounded async write queue; drops oldest when full |
 | `LINTAI_CAPTURE` | `on` | `off` disables all capture hooks |
 | `LINTAI_RECALL` | `on` | `off` disables recall injection |
 | `LINTAI_RECALL_TOP_K` | `5` | search hits injected per turn |
+
+The plugin writes through `/provider-memory/add/batch` into the workspace's
+shared `.lint-ai/memory/` store. Recall uses `/provider-memory/search`, which
+searches provider memory together with the workspace index. OpenClaw lifecycle
+captures use the same server and provider store.
 
 If the server is unreachable the plugin fails open: no injection, no capture, and
 Hermes keeps working.
@@ -62,6 +69,9 @@ Hermes keeps working.
   result, duration, status per tool call.
 - **Session records** (`hermes:session:<session>`) — registry entry on start,
   rewritten with a close marker on finalize/reset.
+- **Interruption markers** — session key, platform, and interruption reasons
+  from Hermes `agent_loop_stopped` events (gateway and TUI/desktop only; no
+  transcript content).
 
 Sessions are namespaced as `hermes:<session_id>` so they never collide with other
 integrations' data.
@@ -69,7 +79,7 @@ integrations' data.
 ## Tests
 
 ```bash
-cd integrations/hermes-plugin-lintai
+cd src/integrations/hermes/plugin
 python3 -m unittest discover -s tests -v
 ```
 

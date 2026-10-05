@@ -3,8 +3,8 @@ use super::{
     ensure_store_metadata, execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot,
     load_segment_manifest, load_semantic_state, persist_segment_manifest, persist_semantic_state,
     persist_store_metadata, rank_key_entities_batched, source_document_from_record,
-    source_documents_to_tier1_inputs, IndexLocation, IndexStoreInspection, LexicalState,
-    MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
+    source_documents_to_tier1_inputs, IndexLocation, IndexStoreInspection, MemoryIndexLayout,
+    MemoryIndexSnapshot, PipelineOptions,
 };
 use crate::conversational_rerank::{RerankDocSource, RerankDocView};
 use crate::index::{
@@ -241,12 +241,12 @@ pub struct IndexStore {
     semantic_relations: SemanticRelationStore,
     dirty_docs: HashSet<String>,
     tombstones: HashSet<String>,
-    lexical: LexicalState,
     snapshot: Option<Arc<MemoryIndexSnapshot>>,
     snapshot_revision: u64,
     store_revision: u64,
     background_refresh: Option<BackgroundRefresh>,
     dirty: bool,
+    checkpoint_pending: bool,
 }
 
 /// Group members visible to the conversational rerank: documents in `group_id`
@@ -361,6 +361,71 @@ fn take_segmented_snapshot(
 }
 
 impl IndexStore {
+    pub(crate) fn invalidate_snapshot(&mut self) {
+        self.snapshot = None;
+        self.dirty = true;
+    }
+    /// Detached read view. Shares the immutable indexes and captures the
+    /// metadata used by visibility filters and reranking in the same generation.
+    pub(crate) fn published_read_view(&self) -> Self {
+        Self {
+            options: PipelineOptions {
+                index_location: IndexLocation::InMemory,
+                ..self.options.clone()
+            },
+            store_paths: StorePaths {
+                root: None,
+                lexical_dir: None,
+                semantic_dir: None,
+                metadata_path: None,
+            },
+            source_docs: self.source_docs.clone(),
+            records: self.records.clone(),
+            semantic_docs: HashMap::new(),
+            semantic_aggregate: SemanticAggregate::default(),
+            chunk_lifecycle: self.chunk_lifecycle.clone(),
+            chunk_latest_by_lineage: HashMap::new(),
+            temporal_facts: self.temporal_facts.clone(),
+            semantic_relations: self.semantic_relations.clone(),
+            dirty_docs: HashSet::new(),
+            tombstones: HashSet::new(),
+            snapshot: self.snapshot.clone(),
+            snapshot_revision: self.snapshot_revision,
+            store_revision: self.snapshot_revision,
+            background_refresh: None,
+            dirty: false,
+            checkpoint_pending: false,
+        }
+    }
+    /// Wrap a prebuilt single-index query snapshot in the service-owned store
+    /// state used by `MemoryService`. This lets adapters that already have a
+    /// cached snapshot use the canonical service search path without rebuilding
+    /// document records or NLP features.
+    pub(crate) fn from_query_index(
+        index: MemoryIndex,
+        mut options: PipelineOptions,
+    ) -> Result<Self> {
+        options.index_location = IndexLocation::InMemory;
+        options.memory_index_layout = MemoryIndexLayout::Single;
+        let records = index
+            .docs
+            .values()
+            .cloned()
+            .map(PersistedDocRecord::from)
+            .collect();
+        let persisted = PersistedSemanticRecords {
+            schema_version: STORE_SCHEMA_VERSION,
+            layout_version: STORE_LAYOUT_VERSION.to_string(),
+            records,
+            chunk_lifecycle: Vec::new(),
+        };
+        let dump = IndexDump {
+            records_json: serde_json::to_vec(&persisted)?,
+            core_bytes: index.to_bytes()?,
+        };
+        Self::load_from_dump(dump, options)
+    }
+
     pub fn new(options: PipelineOptions) -> Self {
         match Self::try_new(options.clone()) {
             Ok(store) => store,
@@ -459,10 +524,6 @@ impl IndexStore {
         let temporal_facts = TemporalFactStore::from_records(records.values(), &chunk_lifecycle);
         let semantic_relations =
             SemanticRelationStore::try_from_documents(source_docs.values(), options.supersession)?;
-        let mut lexical = LexicalState::new(None)?;
-        let all_records: Vec<&DocRecord> = records.values().collect();
-        lexical.upsert_records(&all_records)?;
-        lexical.commit_reload()?;
 
         let snapshot = (!segments.is_empty())
             .then(|| SegmentedMemoryIndex::from_segments_with_generation(segments, 1))
@@ -491,12 +552,12 @@ impl IndexStore {
             semantic_relations,
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
-            lexical,
             snapshot_revision: usize::from(snapshot.is_some()) as u64,
             store_revision: usize::from(snapshot.is_some()) as u64,
             snapshot,
             background_refresh: None,
             dirty: false,
+            checkpoint_pending: false,
         })
     }
 
@@ -515,7 +576,6 @@ impl IndexStore {
     }
 
     fn build_with_store_paths(options: PipelineOptions, store_paths: StorePaths) -> Result<Self> {
-        let lexical_index_dir = store_paths.lexical_dir.clone();
         let (source_docs, records, chunk_lifecycle, loaded_snapshot) =
             load_semantic_state(&store_paths, &options.memory_index_layout)?;
         let snapshot =
@@ -565,16 +625,6 @@ impl IndexStore {
         for meta in chunk_lifecycle.values().filter(|meta| meta.is_latest) {
             chunk_latest_by_lineage.insert(meta.lineage_key.clone(), meta.chunk_id.clone());
         }
-        let mut lexical = LexicalState::new(lexical_index_dir)?;
-        if lexical.needs_initial_population() {
-            // Populate a new/missing Tantivy index from the durable semantic
-            // records. An existing index is already committed and must remain
-            // read-only on open; rewriting every record here makes ordinary
-            // search startup contend with real writers across MCP processes.
-            let all_records: Vec<&DocRecord> = records.values().collect();
-            lexical.upsert_records(&all_records)?;
-            lexical.commit_reload()?;
-        }
         Ok(Self {
             options,
             store_paths,
@@ -588,12 +638,12 @@ impl IndexStore {
             semantic_relations,
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
-            lexical,
             snapshot: snapshot.map(Arc::new),
             snapshot_revision: 0,
             store_revision: 0,
             background_refresh: None,
             dirty: false,
+            checkpoint_pending: false,
         })
     }
 
@@ -740,10 +790,6 @@ impl IndexStore {
             semantic_aggregate.insert_doc_state(&state);
             semantic_docs.insert(record.doc_id.clone(), state);
         }
-        let mut lexical = LexicalState::new(None)?;
-        let all_records: Vec<&DocRecord> = records.values().collect();
-        lexical.upsert_records(&all_records)?;
-        lexical.commit_reload()?;
         let store_paths = StorePaths {
             root: None,
             lexical_dir: None,
@@ -763,12 +809,12 @@ impl IndexStore {
             semantic_relations,
             dirty_docs: HashSet::new(),
             tombstones: HashSet::new(),
-            lexical,
             snapshot: Some(Arc::new(snapshot)),
             snapshot_revision: 1,
             store_revision: 1,
             background_refresh: None,
             dirty: false,
+            checkpoint_pending: false,
         })
     }
 
@@ -1009,6 +1055,14 @@ impl IndexStore {
     }
 
     pub fn refresh(&mut self) -> Result<()> {
+        self.refresh_internal(true)
+    }
+
+    pub(crate) fn refresh_without_checkpoint(&mut self) -> Result<()> {
+        self.refresh_internal(false)
+    }
+
+    fn refresh_internal(&mut self, checkpoint: bool) -> Result<()> {
         self.poll_background_refresh()?;
         if self.dirty || self.snapshot.is_none() {
             // Only documents whose content actually changed get fresh
@@ -1044,9 +1098,13 @@ impl IndexStore {
                 )));
             }
             self.snapshot_revision = self.store_revision;
+            self.checkpoint_pending = true;
+            self.dirty = false;
+        }
+        if checkpoint && self.checkpoint_pending {
             persist_store_metadata(&self.store_paths, &self.options)?;
             self.persist_compatibility_state()?;
-            self.dirty = false;
+            self.checkpoint_pending = false;
         }
         Ok(())
     }
@@ -1131,31 +1189,6 @@ impl IndexStore {
             receiver: Mutex::new(receiver),
         });
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    // Delegates to deprecated MemoryIndex helpers until they are removed in 0.2.0.
-    #[allow(deprecated)]
-    fn query_latest(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
-        self.poll_background_refresh()?;
-        if self.snapshot.is_none() {
-            self.refresh()?;
-        } else if self.dirty {
-            self.refresh_async()?;
-        }
-        let lexical_hits = self
-            .lexical
-            .search(query, top_k.saturating_mul(5).max(20))?;
-        match self
-            .snapshot
-            .as_deref()
-            .expect("snapshot should exist after latest query preparation")
-        {
-            MemoryIndexSnapshot::Single(index) => {
-                Ok(index.query_with_lexical_hits(query, top_k, Some(&lexical_hits)))
-            }
-            MemoryIndexSnapshot::Segmented(_) => self.query(query, top_k),
-        }
     }
 
     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
@@ -1340,9 +1373,6 @@ impl IndexStore {
         for doc_id in tombstoned {
             self.remove_chunk_lifecycle_for_doc(&doc_id);
         }
-        for doc_id in &self.tombstones {
-            self.lexical.remove_doc(doc_id)?;
-        }
         self.temporal_facts =
             TemporalFactStore::from_records(self.records.values(), &self.chunk_lifecycle);
         // Incremental semantic update: only reprocessed documents get fresh
@@ -1362,25 +1392,6 @@ impl IndexStore {
             &removed_docs,
             self.options.supersession,
         )?;
-        let lexical_upserts = if self.snapshot.is_none() && self.snapshot_revision == 0 {
-            self.records
-                .iter()
-                .filter(|(doc_id, _)| self.source_docs.contains_key(*doc_id))
-                .filter(|(doc_id, _)| !self.tombstones.contains(*doc_id))
-                .map(|(_, record)| record)
-                .collect::<Vec<_>>()
-        } else {
-            // Only actually-rebuilt docs need lexical upserts: skipped docs
-            // already have correct lexical entries from their last build.
-            reprocessed_doc_ids
-                .iter()
-                .filter_map(|doc_id| self.records.get(doc_id))
-                .collect::<Vec<_>>()
-        };
-        // Batched: one scope-verdict + one kind-verdict daemon call for all
-        // upserted records, not two per record.
-        self.lexical.upsert_records(&lexical_upserts)?;
-        self.lexical.commit_reload()?;
         Ok(reprocessed_doc_ids)
     }
 

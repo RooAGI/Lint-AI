@@ -9,11 +9,11 @@
 //!   the dataset's unique sessions tile it with replica suffixes (distinct
 //!   segment ids, real text); the output notes how many sessions are real.
 
-use anyhow::{Context, Result};
-use clap::Parser;
 use crate::pipeline::{IndexLocation, IndexStore, MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use crate::SourceDocument;
+use anyhow::{Context, Result};
+use clap::Parser;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;

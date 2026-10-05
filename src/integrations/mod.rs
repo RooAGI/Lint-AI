@@ -8,7 +8,8 @@ pub mod codex;
     feature = "gemini-cli",
     feature = "agy",
     feature = "openclaw",
-    feature = "hermes"
+    feature = "hermes",
+    feature = "roo-runtime"
 ))]
 pub mod gemini_cli;
 #[cfg(feature = "hermes")]
@@ -17,6 +18,8 @@ pub mod hermes;
 pub mod muse_code;
 #[cfg(feature = "openclaw")]
 pub mod openclaw;
+#[cfg(feature = "roo-runtime")]
+pub mod roo_runtime;
 
 const MAX_HOOK_INPUT_BYTES: u64 = 8 * 1024 * 1024;
 

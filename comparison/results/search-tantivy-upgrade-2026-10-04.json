@@ -1,0 +1,640 @@
+{
+  "documents": [
+    "Orion deployment uses blue green releases with PostgreSQL rollback.",
+    "Orion deployment uses canary releases for the payment gateway.",
+    "Orion configuration stores secrets in the vault with short lived tokens.",
+    "Vega deployment uses rolling releases on Kubernetes.",
+    "Vega configuration sets the database connection pool to forty.",
+    "PostgreSQL rollback restores the transaction snapshot.",
+    "Redis caching expires stale entries after thirty seconds.",
+    "Python dependencies use uv and a pinned lockfile.",
+    "Rust concurrency uses an owned mutex guard during persistence.",
+    "The kitchen recipe includes saffron rice and roasted almonds."
+  ],
+  "queries": [
+    "Orion deployment",
+    "PostgreSQL rollback",
+    "Vega configuration",
+    "Redis caching",
+    "Python dependencies",
+    "Rust concurrency",
+    "saffron almonds",
+    "nonexistentzzword"
+  ],
+  "layouts": {
+    "single": {
+      "ordered_ids_preserved": {
+        "Orion deployment": true,
+        "PostgreSQL rollback": true,
+        "Vega configuration": true,
+        "Redis caching": true,
+        "Python dependencies": true,
+        "Rust concurrency": true,
+        "saffron almonds": true,
+        "nonexistentzzword": true
+      },
+      "responses": {
+        "0.25.0": {
+          "Orion deployment": {
+            "data": [
+              {
+                "content": "user: Orion deployment uses canary releases for the payment gateway.",
+                "id": "doc:memory:v2:b77aed96fab9f29b9b93d060e3c0d218d9466e636a8df790850d670045343f59",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 37.25772476196289,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 36.587955474853516,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 24.502971649169922,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 13.0792875289917,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "PostgreSQL rollback": {
+            "data": [
+              {
+                "content": "user: PostgreSQL rollback restores the transaction snapshot.",
+                "id": "doc:memory:v2:5accbe6f78404e18d79cab275c30b9a216f152432b33e6d1df5a485a548bc11e",
+                "role": "user",
+                "score": 33.68153381347656,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 29.603343963623047,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Vega configuration": {
+            "data": [
+              {
+                "content": "user: Vega configuration sets the database connection pool to forty.",
+                "id": "doc:memory:v2:e1ba271ecc39762e0e8da6c31fc7d7172d54bc74e23b357a854318a32ddaeaf1",
+                "role": "user",
+                "score": 45.6734733581543,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 28.3824520111084,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 14.543359756469727,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Redis caching": {
+            "data": [
+              {
+                "content": "user: Redis caching expires stale entries after thirty seconds.",
+                "id": "doc:memory:v2:c077ca76bac2c8ed7d92110114495726c96365e5d39dec7c1d1e4eecec2cef43",
+                "role": "user",
+                "score": 38.613189697265625,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Python dependencies": {
+            "data": [
+              {
+                "content": "user: Python dependencies use uv and a pinned lockfile.",
+                "id": "doc:memory:v2:08be9205e035ab20de57616c62bb05d25d076b5f1f455aeb458b7a3d03de43d0",
+                "role": "user",
+                "score": 61.69741439819336,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Rust concurrency": {
+            "data": [
+              {
+                "content": "user: Rust concurrency uses an owned mutex guard during persistence.",
+                "id": "doc:memory:v2:50f87cb0d7f5f84be572548b484fc6f6dcf1823c2026d75abd4f12ff3ad83942",
+                "role": "user",
+                "score": 57.28475570678711,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "saffron almonds": {
+            "data": [
+              {
+                "content": "user: The kitchen recipe includes saffron rice and roasted almonds.",
+                "id": "doc:memory:v2:002a7f15eb13340b133d9f5ac2d80b09b9654e4c90d409119e588394fc7b56eb",
+                "role": "user",
+                "score": 39.568603515625,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "nonexistentzzword": {
+            "data": []
+          }
+        },
+        "0.26.2": {
+          "Orion deployment": {
+            "data": [
+              {
+                "content": "user: Orion deployment uses canary releases for the payment gateway.",
+                "id": "doc:memory:v2:b77aed96fab9f29b9b93d060e3c0d218d9466e636a8df790850d670045343f59",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 18.163240432739258,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 17.939983367919922,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 12.604990005493164,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 5.826428413391113,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "PostgreSQL rollback": {
+            "data": [
+              {
+                "content": "user: PostgreSQL rollback restores the transaction snapshot.",
+                "id": "doc:memory:v2:5accbe6f78404e18d79cab275c30b9a216f152432b33e6d1df5a485a548bc11e",
+                "role": "user",
+                "score": 13.893845558166504,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 12.587784767150879,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Vega configuration": {
+            "data": [
+              {
+                "content": "user: Vega configuration sets the database connection pool to forty.",
+                "id": "doc:memory:v2:e1ba271ecc39762e0e8da6c31fc7d7172d54bc74e23b357a854318a32ddaeaf1",
+                "role": "user",
+                "score": 20.968488693237305,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 13.951484680175781,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 6.2611188888549805,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Redis caching": {
+            "data": [
+              {
+                "content": "user: Redis caching expires stale entries after thirty seconds.",
+                "id": "doc:memory:v2:c077ca76bac2c8ed7d92110114495726c96365e5d39dec7c1d1e4eecec2cef43",
+                "role": "user",
+                "score": 22.218591690063477,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Python dependencies": {
+            "data": [
+              {
+                "content": "user: Python dependencies use uv and a pinned lockfile.",
+                "id": "doc:memory:v2:08be9205e035ab20de57616c62bb05d25d076b5f1f455aeb458b7a3d03de43d0",
+                "role": "user",
+                "score": 26.30980110168457,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Rust concurrency": {
+            "data": [
+              {
+                "content": "user: Rust concurrency uses an owned mutex guard during persistence.",
+                "id": "doc:memory:v2:50f87cb0d7f5f84be572548b484fc6f6dcf1823c2026d75abd4f12ff3ad83942",
+                "role": "user",
+                "score": 24.83891487121582,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "saffron almonds": {
+            "data": [
+              {
+                "content": "user: The kitchen recipe includes saffron rice and roasted almonds.",
+                "id": "doc:memory:v2:002a7f15eb13340b133d9f5ac2d80b09b9654e4c90d409119e588394fc7b56eb",
+                "role": "user",
+                "score": 15.90953540802002,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "nonexistentzzword": {
+            "data": []
+          }
+        }
+      },
+      "lexical_files_unchanged": true
+    },
+    "segment": {
+      "ordered_ids_preserved": {
+        "Orion deployment": true,
+        "PostgreSQL rollback": true,
+        "Vega configuration": true,
+        "Redis caching": true,
+        "Python dependencies": true,
+        "Rust concurrency": true,
+        "saffron almonds": true,
+        "nonexistentzzword": true
+      },
+      "responses": {
+        "0.25.0": {
+          "Orion deployment": {
+            "data": [
+              {
+                "content": "user: Orion deployment uses canary releases for the payment gateway.",
+                "id": "doc:memory:v2:b77aed96fab9f29b9b93d060e3c0d218d9466e636a8df790850d670045343f59",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 37.429725646972656,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 36.75995635986328,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 24.64997100830078,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 13.19228744506836,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "PostgreSQL rollback": {
+            "data": [
+              {
+                "content": "user: PostgreSQL rollback restores the transaction snapshot.",
+                "id": "doc:memory:v2:5accbe6f78404e18d79cab275c30b9a216f152432b33e6d1df5a485a548bc11e",
+                "role": "user",
+                "score": 44.220703125,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 44.220703125,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Vega configuration": {
+            "data": [
+              {
+                "content": "user: Vega configuration sets the database connection pool to forty.",
+                "id": "doc:memory:v2:e1ba271ecc39762e0e8da6c31fc7d7172d54bc74e23b357a854318a32ddaeaf1",
+                "role": "user",
+                "score": 45.84547424316406,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 28.545452117919922,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 14.640358924865723,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Redis caching": {
+            "data": [
+              {
+                "content": "user: Redis caching expires stale entries after thirty seconds.",
+                "id": "doc:memory:v2:c077ca76bac2c8ed7d92110114495726c96365e5d39dec7c1d1e4eecec2cef43",
+                "role": "user",
+                "score": 38.78519058227539,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Python dependencies": {
+            "data": [
+              {
+                "content": "user: Python dependencies use uv and a pinned lockfile.",
+                "id": "doc:memory:v2:08be9205e035ab20de57616c62bb05d25d076b5f1f455aeb458b7a3d03de43d0",
+                "role": "user",
+                "score": 61.869415283203125,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Rust concurrency": {
+            "data": [
+              {
+                "content": "user: Rust concurrency uses an owned mutex guard during persistence.",
+                "id": "doc:memory:v2:50f87cb0d7f5f84be572548b484fc6f6dcf1823c2026d75abd4f12ff3ad83942",
+                "role": "user",
+                "score": 57.456756591796875,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "saffron almonds": {
+            "data": [
+              {
+                "content": "user: The kitchen recipe includes saffron rice and roasted almonds.",
+                "id": "doc:memory:v2:002a7f15eb13340b133d9f5ac2d80b09b9654e4c90d409119e588394fc7b56eb",
+                "role": "user",
+                "score": 39.69060516357422,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "nonexistentzzword": {
+            "data": []
+          }
+        },
+        "0.26.2": {
+          "Orion deployment": {
+            "data": [
+              {
+                "content": "user: Orion deployment uses canary releases for the payment gateway.",
+                "id": "doc:memory:v2:b77aed96fab9f29b9b93d060e3c0d218d9466e636a8df790850d670045343f59",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 18.33523941040039,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 18.111982345581055,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 12.751989364624023,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 5.939428329467773,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "PostgreSQL rollback": {
+            "data": [
+              {
+                "content": "user: PostgreSQL rollback restores the transaction snapshot.",
+                "id": "doc:memory:v2:5accbe6f78404e18d79cab275c30b9a216f152432b33e6d1df5a485a548bc11e",
+                "role": "user",
+                "score": 18.477569580078125,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion deployment uses blue green releases with PostgreSQL rollback.",
+                "id": "doc:memory:v2:8e72c41aa19b4b86baf2c8d8ef44f23823dedd837f1bdb448fb965a649d4b931",
+                "relation_evidence": [
+                  "orion deployment changed from 'blue green releases with postgresql rollback' to 'canary releases for the payment gateway'"
+                ],
+                "role": "user",
+                "score": 18.477569580078125,
+                "session_id": "varied-session-0",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Vega configuration": {
+            "data": [
+              {
+                "content": "user: Vega configuration sets the database connection pool to forty.",
+                "id": "doc:memory:v2:e1ba271ecc39762e0e8da6c31fc7d7172d54bc74e23b357a854318a32ddaeaf1",
+                "role": "user",
+                "score": 21.140487670898438,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Vega deployment uses rolling releases on Kubernetes.",
+                "id": "doc:memory:v2:0297764bb0d7b5d9ff852c5897ff2cb390ef161841f431a15b784c5307417bb5",
+                "role": "user",
+                "score": 14.114484786987305,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              },
+              {
+                "content": "user: Orion configuration stores secrets in the vault with short lived tokens.",
+                "id": "doc:memory:v2:70ddaf1a042de9836351386ffc36e603d9c199190eff9de2403134449af9ff56",
+                "role": "user",
+                "score": 6.358119010925293,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Redis caching": {
+            "data": [
+              {
+                "content": "user: Redis caching expires stale entries after thirty seconds.",
+                "id": "doc:memory:v2:c077ca76bac2c8ed7d92110114495726c96365e5d39dec7c1d1e4eecec2cef43",
+                "role": "user",
+                "score": 22.39059066772461,
+                "session_id": "varied-session-1",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Python dependencies": {
+            "data": [
+              {
+                "content": "user: Python dependencies use uv and a pinned lockfile.",
+                "id": "doc:memory:v2:08be9205e035ab20de57616c62bb05d25d076b5f1f455aeb458b7a3d03de43d0",
+                "role": "user",
+                "score": 26.481800079345703,
+                "session_id": "varied-session-2",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "Rust concurrency": {
+            "data": [
+              {
+                "content": "user: Rust concurrency uses an owned mutex guard during persistence.",
+                "id": "doc:memory:v2:50f87cb0d7f5f84be572548b484fc6f6dcf1823c2026d75abd4f12ff3ad83942",
+                "role": "user",
+                "score": 25.010913848876953,
+                "session_id": "varied-session-3",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "saffron almonds": {
+            "data": [
+              {
+                "content": "user: The kitchen recipe includes saffron rice and roasted almonds.",
+                "id": "doc:memory:v2:002a7f15eb13340b133d9f5ac2d80b09b9654e4c90d409119e588394fc7b56eb",
+                "role": "user",
+                "score": 16.031536102294922,
+                "session_id": "varied-session-4",
+                "user_id": "bench-user"
+              }
+            ]
+          },
+          "nonexistentzzword": {
+            "data": []
+          }
+        }
+      },
+      "lexical_files_unchanged": true
+    }
+  }
+}

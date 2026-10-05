@@ -11,12 +11,12 @@
 //! 3 open-domain, 4 single-hop, 5 adversarial (abstention; reported
 //! separately since retrieval recall is not the right lens for it).
 
-use anyhow::{Context, Result};
-use clap::Parser;
 use crate::{
     analyze_query, build_query_snapshot_from_source_documents, ChunkStrategy, PipelineOptions,
     SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
+use anyhow::{Context, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;

@@ -1,0 +1,96 @@
+{
+  "benchmark": "routed-multisegment-filter-profile",
+  "date": "2026-10-04",
+  "records": 23366,
+  "requests_per_cell": 25,
+  "warmup_requests_per_cell": 3,
+  "repetitions": 1,
+  "cache": "server-default",
+  "server": "target/release/server",
+  "profile_env": "LINT_AI_QUERY_TIMINGS=1",
+  "host": "Darwin arm64 (exact model not recorded)",
+  "note": "Single-run working-tree diagnostic; not a release benchmark.",
+  "one_segment": {
+    "seed_sessions": 1,
+    "measurements": [
+      {
+        "concurrency": 1,
+        "requests": 25,
+        "p50_ms": 3.242,
+        "p90_ms": 3.437,
+        "p99_ms": 3.554,
+        "mean_ms": 3.273,
+        "throughput_per_s": 304.12
+      },
+      {
+        "concurrency": 10,
+        "requests": 25,
+        "p50_ms": 5.591,
+        "p90_ms": 9.647,
+        "p99_ms": 10.474,
+        "mean_ms": 6.254,
+        "throughput_per_s": 1310.28
+      }
+    ],
+    "profile": {
+      "filter_ms": {
+        "median": 0.034,
+        "p95": 0.042,
+        "samples": 56
+      },
+      "segmented_ms": {
+        "median": 2.736,
+        "p95": 5.422,
+        "samples": 56
+      },
+      "queried_segments": [
+        0,
+        1
+      ]
+    }
+  },
+  "twenty_three_segments": {
+    "seed_sessions": 23,
+    "measurements": [
+      {
+        "concurrency": 1,
+        "requests": 25,
+        "p50_ms": 7.237,
+        "p90_ms": 10.166,
+        "p99_ms": 18.661,
+        "mean_ms": 8.046,
+        "throughput_per_s": 123.93
+      },
+      {
+        "concurrency": 10,
+        "requests": 25,
+        "p50_ms": 24.81,
+        "p90_ms": 28.66,
+        "p99_ms": 29.528,
+        "mean_ms": 21.508,
+        "throughput_per_s": 452.96
+      }
+    ],
+    "profile": {
+      "filter_ms": {
+        "median": 2.958,
+        "p95": 4.923,
+        "samples": 56
+      },
+      "default_segment_execution_ms": {
+        "median": 3.757,
+        "p95": 14.41,
+        "samples": 56
+      },
+      "segmented_ms": {
+        "median": 3.863,
+        "p95": 14.637,
+        "samples": 56
+      },
+      "queried_segments": [
+        5,
+        23
+      ]
+    }
+  }
+}

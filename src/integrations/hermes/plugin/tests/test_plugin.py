@@ -8,14 +8,18 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import __init__ as plugin
 from __init__ import (
     LintaiPlugin,
+    LintaiClient,
     WriteQueue,
     build_session_record,
+    build_subagent_start_record,
+    build_subagent_stop_record,
     build_tool_record,
     build_turn_record,
     format_recall_context,
@@ -45,6 +49,21 @@ class FakeCtx:
 
     def register_hook(self, name, fn):
         self.hooks.setdefault(name, []).append(fn)
+
+
+class LintaiClientRouteTest(unittest.TestCase):
+    def test_uses_provider_memory_http_routes(self):
+        client = LintaiClient("http://127.0.0.1:8080", "hermes")
+        client._post = Mock(side_effect=[{"data": [{"content": "hit"}]}, {"ok": True}])
+
+        self.assertEqual(client.search("needle", top_k=3), [{"content": "hit"}])
+        self.assertEqual(client._post.call_args_list[0].args[0], "/provider-memory/search")
+        self.assertEqual(client._post.call_args_list[0].args[1]["user_id"], "hermes")
+
+        batch = [{"request_id": "r1", "messages": [], "session_id": "s1"}]
+        client.add_batch(batch)
+        self.assertEqual(client._post.call_args_list[1].args[0], "/provider-memory/add/batch")
+        self.assertEqual(batch[0]["user_id"], "hermes")
 
 
 class TruncateTest(unittest.TestCase):
@@ -142,6 +161,60 @@ class SessionRecordTest(unittest.TestCase):
         self.assertEqual(c["request_id"], "hermes:session:s1:close")
         self.assertIn("session_start", s["messages"][0]["content"])
         self.assertIn("session_close", c["messages"][0]["content"])
+
+
+class SubagentRecordTest(unittest.TestCase):
+    def test_start_is_scoped_to_child_and_keeps_parent_link(self):
+        record = build_subagent_start_record(
+            parent_session_id="parent-session",
+            parent_turn_id="parent-turn",
+            parent_subagent_id="parent-child",
+            child_session_id="child-session",
+            child_subagent_id="child-1",
+            child_role="leaf",
+            child_goal="Inspect the parser",
+        )
+        self.assertEqual(record["request_id"], "hermes:subagent:start:child-1")
+        self.assertEqual(record["session_id"], "hermes:child-session")
+        content = record["messages"][0]["content"]
+        self.assertIn("parent_session_id=parent-session", content)
+        self.assertIn("parent_turn_id=parent-turn", content)
+        self.assertIn("parent_subagent_id=parent-child", content)
+        self.assertIn("Inspect the parser", content)
+
+    def test_stop_keeps_summary_and_only_safe_tool_metadata(self):
+        record = build_subagent_stop_record(
+            parent_session_id="parent-session",
+            parent_turn_id="parent-turn",
+            child_session_id="child-session",
+            child_subagent_id="child-1",
+            child_role="leaf",
+            child_summary="Parser bug is in the empty-input branch",
+            child_status="completed",
+            tool_call_history=[{
+                "tool_name": "read_file",
+                "tool_input": {"path": "/private/project.rs"},
+                "input_bytes": 42,
+                "output_bytes": 128,
+                "status": "success",
+            }],
+            duration_ms=1250,
+        )
+        self.assertEqual(record["request_id"], "hermes:subagent:stop:child-session")
+        self.assertEqual(record["session_id"], "hermes:child-session")
+        content = record["messages"][0]["content"]
+        self.assertIn("status=completed", content)
+        self.assertIn("duration_ms=1250", content)
+        self.assertIn("Parser bug is in the empty-input branch", content)
+        self.assertIn("input_bytes=42", content)
+        self.assertNotIn("/private/project.rs", content)
+
+    def test_missing_child_identity_is_ignored(self):
+        self.assertIsNone(build_subagent_start_record(
+            "parent", "turn", None, None, None, "leaf", "goal"))
+        self.assertIsNone(build_subagent_stop_record(
+            "parent", "turn", None, None, "leaf", "summary", "completed",
+            [], 10))
 
 
 class RecallFormatTest(unittest.TestCase):
@@ -294,11 +367,28 @@ class PluginHookTest(unittest.TestCase):
         plugin.register(ctx)
         for name in ("pre_llm_call", "post_tool_call", "post_llm_call",
                      "on_session_start", "on_session_finalize",
-                     "on_session_reset"):
+                     "on_session_reset", "subagent_start", "subagent_stop"):
             self.assertIn(name, ctx.hooks, name)
         # the naming-trap hook is deliberately NOT subscribed
         self.assertNotIn("on_session_end", ctx.hooks)
         self.assertNotIn("pre_tool_call", ctx.hooks)
+
+    def test_subagent_hooks_enqueue_parent_linked_records(self):
+        p = self._plugin()
+        p.on_subagent_start(
+            parent_session_id="parent", parent_turn_id="turn",
+            child_session_id="child", child_subagent_id="agent-1",
+            child_role="leaf", child_goal="Check cache behavior")
+        p.on_subagent_stop(
+            parent_session_id="parent", parent_turn_id="turn",
+            child_session_id="child", child_subagent_id="agent-1",
+            child_role="leaf", child_summary="Cache is refreshed once",
+            child_status="completed", tool_call_history=[], duration_ms=25)
+
+        records = self._drain_queue(p)
+        self.assertEqual(len(records), 2)
+        self.assertTrue(records[0]["request_id"].endswith(":start:agent-1"))
+        self.assertTrue(records[1]["request_id"].endswith(":stop:child"))
 
     def test_pre_llm_call_injects_context(self):
         p = self._plugin()

@@ -55,8 +55,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "different_subjects_coexist",
             description: "Different entities share a predicate; neither may retire the other.",
             writes: vec![
-                AuditWrite { session: "s1", content: "The bicycle is owned by Rossi.", timestamp_ms: Some(T1) },
-                AuditWrite { session: "s2", content: "The car is owned by Rossi.", timestamp_ms: Some(T2) },
+                AuditWrite {
+                    session: "s1",
+                    content: "The bicycle is owned by Rossi.",
+                    timestamp_ms: Some(T1),
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "The car is owned by Rossi.",
+                    timestamp_ms: Some(T2),
+                },
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
@@ -66,10 +74,19 @@ pub fn all_cases() -> Vec<AuditCase> {
         },
         AuditCase {
             name: "dateless_conflict_preserved",
-            description: "Same subject, no timestamps: conflict must not silently retire either fact.",
+            description:
+                "Same subject, no timestamps: conflict must not silently retire either fact.",
             writes: vec![
-                AuditWrite { session: "s1", content: "The bicycle is owned by Rossi.", timestamp_ms: None },
-                AuditWrite { session: "s2", content: "The bicycle is owned by Bianchi.", timestamp_ms: None },
+                AuditWrite {
+                    session: "s1",
+                    content: "The bicycle is owned by Rossi.",
+                    timestamp_ms: None,
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "The bicycle is owned by Bianchi.",
+                    timestamp_ms: None,
+                },
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
@@ -81,8 +98,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "cross_session_config_independent",
             description: "Same config key in different sessions are different authorities.",
             writes: vec![
-                AuditWrite { session: "s1", content: "timeout: 100", timestamp_ms: Some(T1) },
-                AuditWrite { session: "s2", content: "timeout: 150", timestamp_ms: Some(T2) },
+                AuditWrite {
+                    session: "s1",
+                    content: "timeout: 100",
+                    timestamp_ms: Some(T1),
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "timeout: 150",
+                    timestamp_ms: Some(T2),
+                },
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
@@ -94,8 +119,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "reaffirmation_keeps_both_current",
             description: "Re-asserting the same value confirms it; the earlier doc stays live.",
             writes: vec![
-                AuditWrite { session: "s1", content: "The bicycle is owned by Rossi.", timestamp_ms: Some(T1) },
-                AuditWrite { session: "s2", content: "The bicycle is owned by Rossi.", timestamp_ms: Some(T2) },
+                AuditWrite {
+                    session: "s1",
+                    content: "The bicycle is owned by Rossi.",
+                    timestamp_ms: Some(T1),
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "The bicycle is owned by Rossi.",
+                    timestamp_ms: Some(T2),
+                },
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
@@ -107,8 +140,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "backfill_preserves_newer",
             description: "Writing an older value later must not retire the current value.",
             writes: vec![
-                AuditWrite { session: "s1", content: "version: 2.0", timestamp_ms: Some(T2) },
-                AuditWrite { session: "s1", content: "version: 1.5", timestamp_ms: Some(T1) },
+                AuditWrite {
+                    session: "s1",
+                    content: "version: 2.0",
+                    timestamp_ms: Some(T2),
+                },
+                AuditWrite {
+                    session: "s1",
+                    content: "version: 1.5",
+                    timestamp_ms: Some(T1),
+                },
             ],
             must_stay_current: vec![0],
             must_be_superseded: vec![1],
@@ -120,8 +161,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "unrelated_predicate_untouched",
             description: "A claim about one predicate must not retire a claim about another.",
             writes: vec![
-                AuditWrite { session: "s1", content: "The bicycle is red.", timestamp_ms: Some(T1) },
-                AuditWrite { session: "s2", content: "The bicycle is owned by Bianchi.", timestamp_ms: Some(T2) },
+                AuditWrite {
+                    session: "s1",
+                    content: "The bicycle is red.",
+                    timestamp_ms: Some(T1),
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "The bicycle is owned by Bianchi.",
+                    timestamp_ms: Some(T2),
+                },
             ],
             must_stay_current: vec![0, 1],
             must_be_superseded: vec![],
@@ -133,8 +182,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "chronological_supersession_fires",
             description: "Control: same subject, strictly newer date DOES retire the old fact.",
             writes: vec![
-                AuditWrite { session: "s1", content: "The bicycle is owned by Rossi.", timestamp_ms: Some(T1) },
-                AuditWrite { session: "s2", content: "The bicycle is owned by Bianchi.", timestamp_ms: Some(T2) },
+                AuditWrite {
+                    session: "s1",
+                    content: "The bicycle is owned by Rossi.",
+                    timestamp_ms: Some(T1),
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "The bicycle is owned by Bianchi.",
+                    timestamp_ms: Some(T2),
+                },
             ],
             must_stay_current: vec![1],
             must_be_superseded: vec![0],
@@ -146,8 +203,16 @@ pub fn all_cases() -> Vec<AuditCase> {
             name: "correction_cue_supersedes",
             description: "Control: an explicit correction cue retires the corrected fact.",
             writes: vec![
-                AuditWrite { session: "s1", content: "We use Postgres for analytics.", timestamp_ms: Some(T1) },
-                AuditWrite { session: "s2", content: "We use MongoDB for analytics instead of Postgres.", timestamp_ms: Some(T1) },
+                AuditWrite {
+                    session: "s1",
+                    content: "We use Postgres for analytics.",
+                    timestamp_ms: Some(T1),
+                },
+                AuditWrite {
+                    session: "s2",
+                    content: "We use MongoDB for analytics instead of Postgres.",
+                    timestamp_ms: Some(T1),
+                },
             ],
             must_stay_current: vec![1],
             must_be_superseded: vec![0],
@@ -162,8 +227,7 @@ pub fn all_cases() -> Vec<AuditCase> {
 /// When `batched` is true, writes go through `add_batch` instead of
 /// sequential `add` calls.
 pub fn run_case(case: &AuditCase, case_idx: usize, batched: bool) -> AuditResult {
-    let mut service =
-        MemoryService::in_memory(crate::default_production_pipeline_options());
+    let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
     let mut doc_ids = Vec::with_capacity(case.writes.len());
     let requests: Vec<AddRequest> = case
         .writes
@@ -232,11 +296,7 @@ pub fn run_case(case: &AuditCase, case_idx: usize, batched: bool) -> AuditResult
             filters: None,
         })
         .expect("audit search failed");
-    let visible: Vec<&str> = response
-        .data
-        .iter()
-        .map(|m| m.content.as_str())
-        .collect();
+    let visible: Vec<&str> = response.data.iter().map(|m| m.content.as_str()).collect();
     for &idx in &case.must_be_visible {
         let needle = case.writes[idx].content;
         if !visible.iter().any(|c| c.contains(needle)) {
@@ -280,8 +340,7 @@ mod tests {
     #[test]
     fn no_true_fact_is_wrongly_retired() {
         let results = run_all();
-        let failed: Vec<&AuditResult> =
-            results.iter().filter(|r| !r.passed).collect();
+        let failed: Vec<&AuditResult> = results.iter().filter(|r| !r.passed).collect();
         for result in &failed {
             for failure in &result.failures {
                 eprintln!("AUDIT FAIL [{}]: {}", result.name, failure);

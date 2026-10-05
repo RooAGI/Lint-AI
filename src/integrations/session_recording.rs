@@ -27,6 +27,7 @@ pub enum RecordingProvider {
     Muse,
     OpenClaw,
     Hermes,
+    RooRuntime,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -397,6 +398,9 @@ fn run_provider_process(
                 // replay entry point, so recorded-session replay is unsupported.
                 anyhow::bail!("session replay is not supported for the Hermes provider")
             }
+            RecordingProvider::RooRuntime => {
+                anyhow::bail!("session replay is not supported for the Roo Runtime provider")
+            }
         };
         let mut child = command
             .current_dir(project_root)
@@ -643,6 +647,201 @@ pub fn lint_ai_enabled(provider: RecordingProvider, project_root: &Path) -> Resu
     )
 }
 
+/// Persist filesystem changes observed by a provider MCP watcher as shared
+/// workspace memories. Stable IDs deduplicate the same OS event when multiple
+/// provider MCP servers observe it.
+pub(crate) fn capture_workspace_file_changes(
+    provider: RecordingProvider,
+    project_root: &Path,
+    changes: Vec<crate::pipeline::WorkspaceChangeEvent>,
+) -> Result<()> {
+    if changes.is_empty() || !lint_ai_enabled(provider, project_root)? {
+        return Ok(());
+    }
+
+    let documents = changes
+        .into_iter()
+        .filter(|change| {
+            change.file_path != "<watcher-error>"
+                && !crate::pipeline::workspace_path_is_sensitive(Path::new(&change.file_path))
+                && (change.before.is_some() || change.after.is_some())
+                && change.before != change.after
+        })
+        .map(|change| {
+            let suffix = workspace_file_change_id(
+                &change.file_path,
+                change.before.as_deref(),
+                change.after.as_deref(),
+            );
+            let doc_id = format!("workspace-file-change:{suffix}");
+            let source = format!("lint-ai://workspace/file-change/{suffix}");
+            let mut filters = BTreeMap::new();
+            filters.insert(
+                "source_type".to_string(),
+                "workspace-file-change".to_string(),
+            );
+            filters.insert("file_path".to_string(), change.file_path.clone());
+            filters.insert("event".to_string(), change.event.clone());
+            filters.insert("captured_by".to_string(), provider.as_str().to_string());
+
+            let diff = workspace_file_diff(change.before.as_deref(), change.after.as_deref());
+            let content = format!(
+                "Workspace file change\nPath: {}\nEvent: {}\n\n{}",
+                change.file_path, change.event, diff
+            );
+            SourceDocument {
+                doc_id,
+                source,
+                concept: format!("File change: {}", change.file_path),
+                doc_length: content.len(),
+                content,
+                group_id: Some("workspace-file-changes".to_string()),
+                headings: vec!["Workspace file change".to_string()],
+                links: Vec::new(),
+                timestamp: Some(change.timestamp_ms.to_string()),
+                author_agent: None,
+                filters,
+                key_phrases: Vec::new(),
+                key_phrase_extraction_hash: String::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if documents.is_empty() {
+        return Ok(());
+    }
+    crate::memory_api::MemoryService::with_shared_memory(project_root, |store| {
+        for document in documents {
+            store.upsert(document);
+        }
+        store.refresh_index()
+    })
+}
+
+fn workspace_file_change_id(path: &str, before: Option<&str>, after: Option<&str>) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for part in [
+        path.as_bytes(),
+        before.unwrap_or("<unavailable>").as_bytes(),
+        after.unwrap_or("<unavailable>").as_bytes(),
+    ] {
+        for byte in part {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Render one bounded unified-style hunk. A missing snapshot is called out
+/// explicitly instead of being mistaken for an empty file.
+fn workspace_file_diff(before: Option<&str>, after: Option<&str>) -> String {
+    let raw = workspace_file_diff_raw(before, after);
+    static ASSIGNMENT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let assignment = ASSIGNMENT.get_or_init(|| regex::Regex::new(
+        r#"(?i)(password|passwd|api[_-]?key|access[_-]?token|client[_-]?secret|private[_-]?key|authorization)["']?\s*[:=]"#
+    ).expect("constant credential pattern"));
+    let mut private_block = false;
+    raw.split_inclusive('\n')
+        .map(|line| {
+            if line.contains("-----BEGIN ") {
+                private_block = true;
+            }
+            let redact = private_block
+                || contains_credential_material(line.trim_start_matches(['+', '-', ' ']))
+                || assignment.is_match(line);
+            if line.contains("-----END ") {
+                private_block = false;
+            }
+            if redact {
+                let prefix = line
+                    .chars()
+                    .next()
+                    .filter(|c| matches!(c, '+' | '-' | ' '))
+                    .unwrap_or(' ');
+                format!(
+                    "{prefix}[REDACTED]{}",
+                    if line.ends_with('\n') { "\n" } else { "" }
+                )
+            } else {
+                line.to_string()
+            }
+        })
+        .collect()
+}
+
+fn workspace_file_diff_raw(before: Option<&str>, after: Option<&str>) -> String {
+    match (before, after) {
+        (None, Some(after)) => {
+            let mut lines = vec!["Baseline unavailable; current file contents follow:".to_string()];
+            lines.extend(after.split_inclusive('\n').map(|line| format!("+{line}")));
+            return lines.join("");
+        }
+        (Some(before), None) => {
+            let mut lines =
+                vec!["Current snapshot unavailable; previous contents follow:".to_string()];
+            lines.extend(before.split_inclusive('\n').map(|line| format!("-{line}")));
+            return lines.join("");
+        }
+        (None, None) => return "Neither file snapshot was available.".to_string(),
+        (Some(_), Some(_)) => {}
+    }
+    let (Some(before), Some(after)) = (before, after) else {
+        unreachable!("the one-sided snapshot cases returned above")
+    };
+    let old = before.split_inclusive('\n').collect::<Vec<_>>();
+    let new = after.split_inclusive('\n').collect::<Vec<_>>();
+    let mut prefix = 0;
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < old.len().saturating_sub(prefix)
+        && suffix < new.len().saturating_sub(prefix)
+        && old[old.len() - suffix - 1] == new[new.len() - suffix - 1]
+    {
+        suffix += 1;
+    }
+
+    let context_start = prefix.saturating_sub(3);
+    let old_change_end = old.len() - suffix;
+    let new_change_end = new.len() - suffix;
+    let old_context_end = (old_change_end + 3).min(old.len());
+    let new_context_end = (new_change_end + 3).min(new.len());
+    let old_count = old_context_end - context_start;
+    let new_count = new_context_end - context_start;
+    let mut lines = vec![format!(
+        "@@ -{},{} +{},{} @@",
+        context_start + 1,
+        old_count,
+        context_start + 1,
+        new_count
+    )];
+    lines.extend(
+        old[context_start..prefix]
+            .iter()
+            .map(|line| format!(" {line}")),
+    );
+    lines.extend(
+        old[prefix..old_change_end]
+            .iter()
+            .map(|line| format!("-{line}")),
+    );
+    lines.extend(
+        new[prefix..new_change_end]
+            .iter()
+            .map(|line| format!("+{line}")),
+    );
+    lines.extend(
+        old[old_change_end..old_context_end]
+            .iter()
+            .map(|line| format!(" {line}")),
+    );
+    lines.join("")
+}
+
 pub fn record_event_if_enabled(
     provider: RecordingProvider,
     project_root: &Path,
@@ -714,6 +913,7 @@ impl RecordingProvider {
             Self::Muse => "muse",
             Self::OpenClaw => "openclaw",
             Self::Hermes => "hermes",
+            Self::RooRuntime => "rooagi_runtime",
         }
     }
 }
@@ -1213,6 +1413,58 @@ fn timestamp_compact() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory_api::MemoryService;
+
+    #[test]
+    fn workspace_file_capture_redacts_credentials() {
+        let root = temp_root("file-secrets");
+        capture_workspace_file_changes(RecordingProvider::RooRuntime, &root, vec![crate::pipeline::WorkspaceChangeEvent {
+            event: "file_modify".into(), file_path: "config.json".into(), timestamp_ms: 123,
+            before: Some("{\"password\":\"old-private-value\"}\nnormal setting\n".into()),
+            after: Some("{\"password\":\"new-private-value\"}\nghp_123456789012345678901234567890\nnormal setting updated\n".into()),
+        }]).unwrap();
+        MemoryService::with_shared_memory(&root, |service| {
+            let documents = service.source_documents();
+            assert_eq!(documents.len(), 1);
+            let content = &documents[0].content;
+            assert!(
+                !content.contains("old-private-value")
+                    && !content.contains("new-private-value")
+                    && !content.contains("ghp_123456"),
+                "file capture persisted credential material"
+            );
+            assert!(content.contains("normal setting updated"));
+            Ok(())
+        })
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_file_capture_skips_credential_files() {
+        let root = temp_root("credential-files");
+        capture_workspace_file_changes(
+            RecordingProvider::RooRuntime,
+            &root,
+            vec![crate::pipeline::WorkspaceChangeEvent {
+                event: "file_modify".into(),
+                file_path: ".env.production".into(),
+                timestamp_ms: 123,
+                before: None,
+                after: Some("PASSWORD=private-value\n".into()),
+            }],
+        )
+        .unwrap();
+        MemoryService::with_shared_memory(&root, |service| {
+            assert!(
+                service.source_documents().is_empty(),
+                "credential file became a shared memory document"
+            );
+            Ok(())
+        })
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn bounded_reader_truncates_but_drains_output() {

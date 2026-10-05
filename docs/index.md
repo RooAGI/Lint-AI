@@ -45,44 +45,46 @@ hide:
 </section>
 </div>
 
-## What’s new in v0.2.0 {.landing-heading}
+## What’s new in v0.3.0 {.landing-heading}
 
-Lint-AI v0.2.0 helps AI agents find useful project context faster, keep working
-while memory is updated, and use that memory more safely across different tools.
+Lint-AI v0.3.0 unifies memory access across Rust, Python, HTTP, and agent
+integrations. It adds conversation-aware retrieval, stronger correction and
+supersession handling, broader language support, and more agent integrations.
 
 <div class="feature-grid">
   <article>
     <span class="feature-number">01</span>
-    <h3>Find the right memory faster</h3>
-    <p>Projects are organized into searchable sections, so a query can start with
-    the most relevant context and expand its search when needed.</p>
+    <h3>One memory API</h3>
+    <p>Rust integrations use <code>MemoryService</code>, while Python clients use
+    <code>lint_ai.Memory</code> for both local and HTTP-backed memory.</p>
   </article>
   <article>
     <span class="feature-number">02</span>
-    <h3>Keep working during updates</h3>
-    <p>Agents can continue searching a trusted snapshot while new memories are
-    written and checked in the background.</p>
+    <h3>Conversation-aware search</h3>
+    <p>Session context carries across short-lived tools and helps resolve
+    follow-up questions with current project evidence.</p>
   </article>
   <article>
     <span class="feature-number">03</span>
-    <h3>Reliable memory, safer integrations</h3>
-    <p>Validated updates, duplicate protection, and project boundaries keep memory
-    dependable across Claude Code, Codex, Gemini CLI, and Antigravity CLI.</p>
+    <h3>Current facts, more agents</h3>
+    <p>Correction and supersession handling keeps stale claims from resurfacing
+    as current. Integrations include Claude Code, Codex, Gemini CLI, AGY, Muse,
+    Hermes, OpenClaw, and <code>rooagi_runtime</code>.</p>
   </article>
 </div>
 
-<p class="benchmark-note">Provider integrations remain opt-in. The default build stays lightweight, while <code>agent-integrations</code> enables all supported providers.</p>
+<p class="benchmark-note">Integrations are feature-gated. The default build enables the supported <code>agent-integrations</code> feature set; use individual feature flags for a smaller build.</p>
 
-[Read the full v0.2.0 release notes](releases/0.2.0.md)
+[Read the full v0.3.0 release notes](releases/0.3.0.md)
 
 <section class="proof-grid" aria-label="Lint-AI benchmark highlights">
   <div><strong>96.24%</strong><span>adaptive any-hit Recall@5</span></div>
   <div><strong>95.49%</strong><span>fixed any-hit Recall@5</span></div>
   <div><strong>1.25 ms</strong><span>fixed query latency</span></div>
-  <div><strong>1,512.31/s</strong><span>v0.2.0 routed HTTP at C=10</span></div>
+  <div><strong>2,246.69/s</strong><span>Tantivy 0.25.0 single-index HTTP at C=10</span></div>
 </section>
 
-<p class="benchmark-note">v0.2.0 segmented benchmark · 133 multi-session questions · adaptive routing reached 96.24% any-hit Recall@5; fixed routing reached 95.49% at 1.25 ms average latency · Latest throughput is the cold-start median of five runs over 23,366 records on macOS M5 Pro; results vary by hardware and index layout</p>
+<p class="benchmark-note">Retrieval quality and HTTP throughput are separate measurements. The 2,246.69 req/s figure is the Tantivy 0.25.0 median at C=10 from a five-run version comparison using 23,366 records, 1,000 measured requests and 100 warm-ups per run. The matching five-segment routed layout measured 888.86 req/s. The older 1,512.31 req/s figure is retained as a historical v0.2.0 result. See the <a href="comparison/">throughput notes and benchmark artifacts</a> for workload details and caveats.</p>
 
 ## See the dashboard {.landing-heading}
 

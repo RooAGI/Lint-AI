@@ -583,7 +583,11 @@ pub(crate) fn route_segments_with_temporal_context_and_corpus_stats(
                 .segment_positions
                 .get(&route.segment_id)
                 .and_then(|position| segments.get(*position))?;
-            if !segment_has_allowed_documents(segment, temporal.allowed_doc_ids) {
+            if !segment_has_allowed_documents(
+                segment,
+                temporal.allowed_doc_ids,
+                temporal.allowed_segment_doc_bitmaps,
+            ) {
                 return None;
             }
             let in_anchor_window = match anchor_window {
@@ -621,12 +625,18 @@ pub(crate) fn route_segments_with_temporal_context_and_corpus_stats(
 pub(crate) fn segment_has_allowed_documents(
     segment: &MemoryIndexSegment,
     allowed_doc_ids: Option<&HashSet<String>>,
+    allowed_segment_doc_bitmaps: Option<&HashMap<String, roaring::RoaringBitmap>>,
 ) -> bool {
-    allowed_doc_ids.is_none_or(|allowed| {
-        segment
+    if let Some(allowed) = allowed_doc_ids {
+        return segment
             .doc_ids
             .iter()
-            .any(|doc_id| allowed.contains(doc_id))
+            .any(|doc_id| allowed.contains(doc_id));
+    }
+    allowed_segment_doc_bitmaps.is_none_or(|bitmaps| {
+        bitmaps
+            .get(&segment.segment_id)
+            .is_some_and(|bitmap| !bitmap.is_empty())
     })
 }
 

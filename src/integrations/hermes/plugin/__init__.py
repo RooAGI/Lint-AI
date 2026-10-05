@@ -13,10 +13,13 @@ How it works
 * ``on_session_start`` -> session registry entry.
 * ``on_session_finalize`` / ``on_session_reset`` -> boundary markers
   (no transcript — per-turn accumulation is the authoritative record).
+* ``subagent_start`` / ``subagent_stop`` -> parent-linked delegation records.
+* ``agent_loop_stopped`` -> metadata-only marker for an interrupted run.
 
 Transport: the plugin is Python running inside Hermes' process, so it cannot call
 the Rust core in-process the way our Rust MCP adapters do. It talks to a running
-lint-ai server over HTTP keep-alive (``POST /search``, ``POST /add/batch``) —
+lint-ai server over HTTP keep-alive (``POST /provider-memory/search``,
+``POST /provider-memory/add/batch``) —
 the same pattern mem0's Hermes plugin uses. No Hermes changes, no Rust changes.
 
 Dedupe is stateless (no state file): turns key on ``(session_id, turn_id)``,
@@ -49,6 +52,7 @@ from datetime import datetime, timezone
 
 _DEFAULTS = {
     "server_url": "http://127.0.0.1:8080",
+    "server_token": "",
     "user_id": "hermes",
     "queue_max": 1000,
     "capture": True,
@@ -58,6 +62,7 @@ _DEFAULTS = {
 
 _ENV_MAP = {
     "LINTAI_SERVER_URL": "server_url",
+    "LINTAI_SERVER_TOKEN": "server_token",
     "LINTAI_USER_ID": "user_id",
     "LINTAI_QUEUE_MAX": "queue_max",
     "LINTAI_CAPTURE": "capture",
@@ -253,6 +258,93 @@ def build_session_record(session_id, model=None, platform=None,
     }
 
 
+def build_subagent_start_record(parent_session_id, parent_turn_id,
+                                parent_subagent_id, child_session_id,
+                                child_subagent_id, child_role, child_goal):
+    """Record a delegated child start under its own session scope."""
+    child_id = child_subagent_id or child_session_id
+    if not child_id:
+        return None
+    scope_id = child_session_id or child_id
+    content = (
+        "[subagent_start] parent_session_id=%s parent_turn_id=%s "
+        "parent_subagent_id=%s child_subagent_id=%s child_role=%s\n"
+        "goal:\n%s"
+    ) % (parent_session_id or "", parent_turn_id or "",
+         parent_subagent_id or "", child_id, child_role or "unknown",
+         truncate(child_goal, MAX_TURN_BYTES))
+    return {
+        "request_id": "hermes:subagent:start:%s" % child_id,
+        "user_id": None,
+        "session_id": _session_ns(scope_id),
+        "messages": [{"role": "user", "timestamp": None,
+                      "content": content}],
+    }
+
+
+def build_subagent_stop_record(parent_session_id, parent_turn_id,
+                               child_session_id, child_subagent_id,
+                               child_role, child_summary, child_status,
+                               tool_call_history, duration_ms):
+    """Record a child's bounded completion summary and safe tool metadata.
+
+    Hermes intentionally omits raw tool inputs and outputs from this hook.
+    Keep the stored metadata at that same privacy boundary.
+    """
+    child_id = child_session_id or child_subagent_id
+    if not child_id:
+        return None
+    history = []
+    for call in (tool_call_history or [])[:20]:
+        if not isinstance(call, dict):
+            continue
+        history.append("%s status=%s input_bytes=%s output_bytes=%s" % (
+            truncate(call.get("tool_name", ""), 100),
+            truncate(call.get("status", ""), 40),
+            call.get("input_bytes", ""),
+            call.get("output_bytes", ""),
+        ))
+    content = (
+        "[subagent_stop] parent_session_id=%s parent_turn_id=%s "
+        "child_session_id=%s child_subagent_id=%s child_role=%s "
+        "status=%s duration_ms=%s\nsummary:\n%s"
+    ) % (parent_session_id or "", parent_turn_id or "",
+         child_session_id or "", child_subagent_id or "",
+         child_role or "unknown", child_status or "unknown", duration_ms,
+         truncate(child_summary, MAX_TURN_BYTES // 2))
+    if history:
+        content += "\ntool_history_metadata:\n" + "\n".join(history)
+    content = truncate(content, MAX_TURN_BYTES)
+    return {
+        "request_id": "hermes:subagent:stop:%s" % child_id,
+        "user_id": None,
+        "session_id": _session_ns(child_session_id or child_id),
+        "messages": [{"role": "user", "timestamp": None,
+                      "content": content}],
+    }
+
+
+def build_agent_loop_stopped_record(session_key, platform, reason,
+                                    invalidation_reason):
+    """Record an interruption marker without retaining conversation text."""
+    if not session_key:
+        return None
+    content = (
+        "[agent_loop_stopped] platform=%s reason=%s invalidation_reason=%s"
+        % (truncate(platform or "", 100).replace("\n", " "),
+           truncate(reason or "", 200).replace("\n", " "),
+           truncate(invalidation_reason or "", 200).replace("\n", " ")))
+    return {
+        # The hook has no turn/event ID. A unique key prevents separate stops
+        # in one session from colliding in the server's idempotent write path.
+        "request_id": "hermes:agent_loop_stopped:%s" % time.time_ns(),
+        "user_id": None,
+        "session_id": _session_ns(session_key),
+        "messages": [{"role": "user", "timestamp": None,
+                      "content": content}],
+    }
+
+
 def format_recall_context(hits, max_hits=5):
     """Format /search hits into the context block injected via pre_llm_call."""
     lines = ["[lint-ai memory — recalled for this turn]"]
@@ -271,9 +363,10 @@ def format_recall_context(hits, max_hits=5):
 # --------------------------------------------------------------------------
 
 class LintaiClient:
-    def __init__(self, server_url, user_id, timeout_s=5.0):
+    def __init__(self, server_url, user_id, server_token="", timeout_s=5.0):
         self.server_url = server_url.rstrip("/")
         self.user_id = user_id
+        self.server_token = server_token
         self.timeout_s = timeout_s
         self._local = threading.local()
 
@@ -296,9 +389,11 @@ class LintaiClient:
         body = json.dumps(payload).encode("utf-8")
         try:
             conn = self._conn()
-            conn.request("POST", path, body,
-                         {"Content-Type": "application/json",
-                          "Content-Length": str(len(body))})
+            headers = {"Content-Type": "application/json",
+                       "Content-Length": str(len(body))}
+            if self.server_token:
+                headers["Authorization"] = "Bearer " + self.server_token
+            conn.request("POST", path, body, headers)
             resp = conn.getresponse()
             data = resp.read()
             if resp.status != 200:
@@ -310,7 +405,7 @@ class LintaiClient:
             raise
 
     def search(self, query, top_k=5):
-        resp = self._post("/search", {"query": query,
+        resp = self._post("/provider-memory/search", {"query": query,
                                      "user_id": self.user_id,
                                      "top_k": top_k})
         return resp.get("data", []) if isinstance(resp, dict) else []
@@ -318,7 +413,7 @@ class LintaiClient:
     def add_batch(self, requests):
         for req in requests:
             req["user_id"] = self.user_id
-        return self._post("/add/batch", requests)
+        return self._post("/provider-memory/add/batch", requests)
 
 
 # --------------------------------------------------------------------------
@@ -407,7 +502,8 @@ class LintaiPlugin:
     def __init__(self, config=None):
         self.config = config or load_config()
         self.client = LintaiClient(self.config["server_url"],
-                                   self.config["user_id"])
+                                   self.config["user_id"],
+                                   self.config["server_token"])
         self.writes = WriteQueue(self.client,
                                  maxsize=self.config["queue_max"])
         self._recall_cache = {}
@@ -501,6 +597,62 @@ class LintaiPlugin:
 
         return self._fail_open(_capture)
 
+    def on_subagent_start(self, **kwargs):
+        def _capture():
+            if not self.config["capture"]:
+                return None
+            record = build_subagent_start_record(
+                parent_session_id=kwargs.get("parent_session_id"),
+                parent_turn_id=kwargs.get("parent_turn_id"),
+                parent_subagent_id=kwargs.get("parent_subagent_id"),
+                child_session_id=kwargs.get("child_session_id"),
+                child_subagent_id=kwargs.get("child_subagent_id"),
+                child_role=kwargs.get("child_role"),
+                child_goal=kwargs.get("child_goal"),
+            )
+            if record:
+                self.writes.enqueue(record)
+            return None
+
+        return self._fail_open(_capture)
+
+    def on_subagent_stop(self, **kwargs):
+        def _capture():
+            if not self.config["capture"]:
+                return None
+            record = build_subagent_stop_record(
+                parent_session_id=kwargs.get("parent_session_id"),
+                parent_turn_id=kwargs.get("parent_turn_id"),
+                child_session_id=kwargs.get("child_session_id"),
+                child_subagent_id=kwargs.get("child_subagent_id"),
+                child_role=kwargs.get("child_role"),
+                child_summary=kwargs.get("child_summary"),
+                child_status=kwargs.get("child_status"),
+                tool_call_history=kwargs.get("tool_call_history"),
+                duration_ms=kwargs.get("duration_ms"),
+            )
+            if record:
+                self.writes.enqueue(record)
+            return None
+
+        return self._fail_open(_capture)
+
+    def on_agent_loop_stopped(self, **kwargs):
+        def _capture():
+            if not self.config["capture"]:
+                return None
+            record = build_agent_loop_stopped_record(
+                session_key=kwargs.get("session_key"),
+                platform=kwargs.get("platform"),
+                reason=kwargs.get("reason"),
+                invalidation_reason=kwargs.get("invalidation_reason"),
+            )
+            if record:
+                self.writes.enqueue(record)
+            return None
+
+        return self._fail_open(_capture)
+
     def _on_boundary(self, **kwargs):
         reason = kwargs.pop("reason", None)
 
@@ -535,4 +687,7 @@ def register(ctx):
     ctx.register_hook("on_session_start", plugin.on_session_start)
     ctx.register_hook("on_session_finalize", plugin.on_session_finalize)
     ctx.register_hook("on_session_reset", plugin.on_session_reset)
+    ctx.register_hook("subagent_start", plugin.on_subagent_start)
+    ctx.register_hook("subagent_stop", plugin.on_subagent_stop)
+    ctx.register_hook("agent_loop_stopped", plugin.on_agent_loop_stopped)
     return plugin

@@ -1,0 +1,155 @@
+{
+  "profile": "routed-multisegment-query-stage-timings",
+  "date": "2026-10-04",
+  "source_revision": "7d11bfbeb831b52cc57538f53070cd92769364c2",
+  "source_tree": "working tree modified",
+  "workload": {
+    "records": 23366,
+    "sessions_and_segments": 23,
+    "routed_segments": 5,
+    "query": "deployment configuration system decision",
+    "top_k": 20,
+    "requests_per_cell": 500,
+    "warmup_requests_per_cell": 250,
+    "concurrency": [
+      1,
+      10
+    ],
+    "instrumentation": "LINT_AI_QUERY_TIMINGS=1"
+  },
+  "timing_semantics": {
+    "query_terms_ms": "expanded query term preparation",
+    "route_scoring_ms": "focus-term preparation and segment route scoring",
+    "segment_execution_ms": "execution of selected segment index queries",
+    "coordinator_before_reduce_ms": "elapsed from query start through selected segment execution, before result reduction"
+  },
+  "stages": {
+    "c1": {
+      "query_terms_ms": {
+        "samples": 750,
+        "median_ms": 0.007,
+        "p95_ms": 0.008
+      },
+      "route_scoring_ms": {
+        "samples": 750,
+        "median_ms": 0.043,
+        "p95_ms": 0.048
+      },
+      "segment_execution_ms": {
+        "samples": 750,
+        "median_ms": 1.437,
+        "p95_ms": 1.573
+      },
+      "coordinator_before_reduce_ms": {
+        "samples": 750,
+        "median_ms": 1.496,
+        "p95_ms": 1.635
+      }
+    },
+    "c10": {
+      "query_terms_ms": {
+        "samples": 750,
+        "median_ms": 0.012,
+        "p95_ms": 0.02
+      },
+      "route_scoring_ms": {
+        "samples": 750,
+        "median_ms": 0.066,
+        "p95_ms": 0.088
+      },
+      "segment_execution_ms": {
+        "samples": 750,
+        "median_ms": 6.003,
+        "p95_ms": 7.832
+      },
+      "coordinator_before_reduce_ms": {
+        "samples": 750,
+        "median_ms": 6.101,
+        "p95_ms": 7.938
+      }
+    }
+  },
+  "throughput_uninstrumented": {
+    "1": {
+      "c1": {
+        "throughput_median_req_s": 392.81,
+        "p50_median_ms": 2.481,
+        "throughput_runs": [
+          392.81,
+          388.4,
+          415.59,
+          415.65,
+          388.09
+        ],
+        "p50_runs_ms": [
+          2.481,
+          2.52,
+          2.448,
+          2.442,
+          2.532
+        ]
+      },
+      "c10": {
+        "throughput_median_req_s": 2477.54,
+        "p50_median_ms": 3.726,
+        "throughput_runs": [
+          2448.35,
+          2532.84,
+          2477.54,
+          2509.6,
+          2227.48
+        ],
+        "p50_runs_ms": [
+          3.809,
+          3.723,
+          3.726,
+          3.713,
+          4.199
+        ]
+      }
+    },
+    "23": {
+      "c1": {
+        "throughput_median_req_s": 484.43,
+        "p50_median_ms": 2.035,
+        "throughput_runs": [
+          484.43,
+          489.63,
+          486.51,
+          471.58,
+          474.0
+        ],
+        "p50_runs_ms": [
+          2.035,
+          2.0,
+          2.017,
+          2.087,
+          2.064
+        ]
+      },
+      "c10": {
+        "throughput_median_req_s": 1274.95,
+        "p50_median_ms": 7.686,
+        "throughput_runs": [
+          1274.95,
+          1348.07,
+          1344.37,
+          1272.74,
+          1269.79
+        ],
+        "p50_runs_ms": [
+          7.686,
+          7.351,
+          7.391,
+          7.919,
+          8.023
+        ]
+      }
+    }
+  },
+  "notes": [
+    "Timing-enabled throughput is excluded; instrumentation adds overhead.",
+    "The older filter_ms timer measures document filtering, not route scoring.",
+    "The older default_segment_execution_ms label included coordinator setup and is superseded by the separate timings here."
+  ]
+}

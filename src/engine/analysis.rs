@@ -558,7 +558,34 @@ pub(crate) fn build_memory_index(
     lexical_dir: Option<&Path>,
 ) -> Result<MemoryIndex> {
     let source_docs = graph_to_source_documents(graph);
-    let options = crate::pipeline::PipelineOptions {
+    let options = memory_index_pipeline_options(
+        provider,
+        spacy_model,
+        ranker_kind,
+        chunk_strategy,
+        chunk_lines,
+        chunk_overlap,
+        chunk_target_tokens,
+        chunk_max_tokens,
+        lang,
+        lexical_dir,
+    );
+    crate::pipeline::build_query_snapshot(&source_docs, &options)
+}
+
+pub(crate) fn memory_index_pipeline_options(
+    provider: &Tier1NerProvider,
+    spacy_model: &str,
+    ranker_kind: &Tier1TermRankerKind,
+    chunk_strategy: &ChunkStrategy,
+    chunk_lines: usize,
+    chunk_overlap: usize,
+    chunk_target_tokens: usize,
+    chunk_max_tokens: usize,
+    lang: &crate::lang::Lang,
+    lexical_dir: Option<&Path>,
+) -> crate::pipeline::PipelineOptions {
+    crate::pipeline::PipelineOptions {
         ner_provider: provider.clone(),
         spacy_model: spacy_model.to_string(),
         lang: *lang,
@@ -581,6 +608,5 @@ pub(crate) fn build_memory_index(
         structured_fact_retrieval: true,
         key_phrase_enrichment: false,
         extractor_script: None,
-    };
-    crate::pipeline::build_query_snapshot(&source_docs, &options)
+    }
 }

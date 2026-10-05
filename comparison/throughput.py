@@ -20,6 +20,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--mode", choices=("single", "global", "segment"), required=True)
 parser.add_argument("--server-bin", type=Path, default=ROOT / "target/release/server")
 parser.add_argument("--records", type=int, default=23366)
+parser.add_argument("--sessions", type=int, default=1,
+                    help="seed records across this many session groups")
 parser.add_argument("--requests", type=int, default=100)
 parser.add_argument("--warmup-requests", type=int, default=0)
 parser.add_argument("--port", type=int, default=18080)
@@ -55,6 +57,8 @@ try:
             str(args.records),
             "--batch-size",
             "1024",
+            "--sessions",
+            str(args.sessions),
             "--bulk",
         ],
         check=True,
@@ -88,6 +92,7 @@ try:
     result = {
         "mode": args.mode,
         "records": args.records,
+        "seed_sessions": min(args.sessions, (args.records + 1023) // 1024),
         "requests_per_cell": args.requests,
         "warmup_requests_per_cell": args.warmup_requests,
         "server": str(args.server_bin),

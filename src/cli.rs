@@ -109,6 +109,17 @@ pub enum OpenClawHook {
     Shutdown,
 }
 
+#[cfg(feature = "roo-runtime")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum RooRuntimeHook {
+    RunStart,
+    AgentTurnStart,
+    AgentTurnEnd,
+    RunEnd,
+    PreToolUse,
+    PostToolUse,
+}
+
 #[cfg(feature = "agy")]
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum AgyHook {
@@ -381,6 +392,22 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "hermes")]
     pub hermes_skill_dir: Option<String>,
+    /// Install Roo Runtime lifecycle hooks in the user hooks configuration.
+    #[arg(long)]
+    #[cfg(feature = "roo-runtime")]
+    pub roo_runtime_install: bool,
+    /// Run the shared workspace memory MCP server over stdio for Roo Runtime.
+    #[arg(long)]
+    #[cfg(feature = "roo-runtime")]
+    pub roo_runtime_serve: bool,
+    /// Handle one Roo Runtime hook invocation from stdin.
+    #[arg(long, value_enum, hide = true)]
+    #[cfg(feature = "roo-runtime")]
+    pub roo_runtime_hook: Option<RooRuntimeHook>,
+    /// Override Roo Runtime's hooks.json path (default ~/.rooagi/hooks.json).
+    #[arg(long)]
+    #[cfg(feature = "roo-runtime")]
+    pub roo_runtime_config: Option<String>,
     /// Query the unified store (project documents and recorded memories) once
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
     #[arg(long)]

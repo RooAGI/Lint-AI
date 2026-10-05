@@ -150,13 +150,17 @@ pub fn recall(options: &RecallOptions<'_>) -> Result<RecallOutput> {
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
     };
-    let mut store =
-        crate::memory_api::MemoryService::open_workspace(&root, options.memory_name, &ignore_paths, || {
+    let mut store = crate::memory_api::MemoryService::open_workspace(
+        &root,
+        options.memory_name,
+        &ignore_paths,
+        || {
             let graph = build_project_graph(&input)?;
             let graph = apply_ignore_paths(graph, &ignore_paths);
             Ok(graph_to_source_documents(&graph))
-        })
-        .with_context(|| format!("unable to open the index for {}", root.display()))?;
+        },
+    )
+    .with_context(|| format!("unable to open the index for {}", root.display()))?;
 
     let results = store
         .query_plain(options.query, options.result_count)

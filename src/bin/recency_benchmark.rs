@@ -1,6 +1,6 @@
+use crate::{build_query_snapshot, PipelineOptions, SourceDocument};
 use anyhow::Result;
 use chrono::{Duration, Utc};
-use crate::{build_query_snapshot, PipelineOptions, SourceDocument};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::SystemTime;

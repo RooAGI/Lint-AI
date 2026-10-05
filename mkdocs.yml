@@ -48,6 +48,7 @@ nav:
   - Get started:
       - Quickstart: quickstart.md
       - HTTP server: server.md
+      - Telemetry: telemetry.md
       - MCP interface: mcp.md
   - Agents:
       - Agent integrations: agents.md
@@ -59,6 +60,7 @@ nav:
       - Muse Code: muse-code.md
       - OpenClaw: openclaw.md
       - Hermes: hermes.md
+      - Roo Runtime: roo-runtime.md
       - Other agent frameworks: agent-frameworks.md
   - Architecture:
       - Ingestion architecture: ingestion-architecture.md
@@ -83,6 +85,7 @@ nav:
       - Integration testing: integration-test-strategy.md
   - Benchmarks:
       - Overview: benchmark.md
+      - LongMemEval strategies: longmemeval-strategies.md
       - Comparison: comparison.md
       - Integration benchmark README: benchmark-integration.md
       - Codex performance: codex-performance-tests.md
@@ -91,6 +94,8 @@ nav:
   - Languages:
       - Korean: korean.md
   - Releases:
+      - 0.3.0: releases/0.3.0.md
+      - Tantivy upgrade verification: releases/tantivy-0.26.2-verification.md
       - 0.2.1: releases/0.2.1.md
       - 0.2.0: releases/0.2.0.md
       - 0.1.9: releases/0.1.9.md

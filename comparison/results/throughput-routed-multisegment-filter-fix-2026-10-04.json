@@ -1,0 +1,118 @@
+{
+  "benchmark": "routed-multisegment-filter-bottleneck-fix",
+  "date": "2026-10-04",
+  "records": 23366,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 3,
+  "cache": "server-default",
+  "server": "target/release/server",
+  "features": "agent-integrations",
+  "profile_env": "LINT_AI_QUERY_TIMINGS=1",
+  "host": "Darwin arm64 (exact model not recorded)",
+  "note": "Working-tree diagnostic, not a release benchmark. The prior baseline was collected in a separate 25-request, 3-warm-up single run; use as directional comparison only.",
+  "comparison": {
+    "one_segment": {
+      "seed_sessions": 1,
+      "throughput": {
+        "c1": {
+          "throughput_median_req_s": 308.09,
+          "p50_median_ms": 3.203,
+          "runs": [
+            {
+              "throughput_req_s": 308.72,
+              "p50_ms": 3.186
+            },
+            {
+              "throughput_req_s": 303.55,
+              "p50_ms": 3.249
+            },
+            {
+              "throughput_req_s": 308.09,
+              "p50_ms": 3.203
+            }
+          ]
+        },
+        "c10": {
+          "throughput_median_req_s": 1729.84,
+          "p50_median_ms": 5.029,
+          "runs": [
+            {
+              "throughput_req_s": 1886.67,
+              "p50_ms": 4.566
+            },
+            {
+              "throughput_req_s": 1729.84,
+              "p50_ms": 5.029
+            },
+            {
+              "throughput_req_s": 1645.82,
+              "p50_ms": 5.87
+            }
+          ]
+        }
+      },
+      "profile": {
+        "filter_ms_median": 0.034,
+        "filter_ms_samples": 660,
+        "segmented_ms_median": 2.718,
+        "segmented_ms_samples": 660,
+        "reported_total_queried_segments": [
+          0,
+          1
+        ]
+      }
+    },
+    "twenty_three_segments": {
+      "seed_sessions": 23,
+      "throughput": {
+        "c1": {
+          "throughput_median_req_s": 410.72,
+          "p50_median_ms": 2.407,
+          "runs": [
+            {
+              "throughput_req_s": 412.27,
+              "p50_ms": 2.407
+            },
+            {
+              "throughput_req_s": 410.72,
+              "p50_ms": 2.404
+            },
+            {
+              "throughput_req_s": 404.46,
+              "p50_ms": 2.449
+            }
+          ]
+        },
+        "c10": {
+          "throughput_median_req_s": 1041.78,
+          "p50_median_ms": 9.524,
+          "runs": [
+            {
+              "throughput_req_s": 1041.78,
+              "p50_ms": 8.836
+            },
+            {
+              "throughput_req_s": 1043.19,
+              "p50_ms": 9.719
+            },
+            {
+              "throughput_req_s": 976.8,
+              "p50_ms": 9.524
+            }
+          ]
+        }
+      },
+      "profile": {
+        "filter_ms_median": 0.046,
+        "filter_ms_samples": 660,
+        "segmented_ms_median": 2.32,
+        "segmented_ms_samples": 660,
+        "reported_total_queried_segments": [
+          5,
+          23
+        ]
+      }
+    }
+  }
+}

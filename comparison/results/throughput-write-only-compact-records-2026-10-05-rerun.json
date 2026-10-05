@@ -1,0 +1,295 @@
+{
+  "benchmark": "write-only-http-load",
+  "created_at_utc": "2026-10-05T16:57:59.009342+00:00",
+  "server_binary": "/Users/louis/sources/Lint-AI/target/release/server",
+  "server_binary_sha256": "1f2b388f7010a64202dbaa30a1554281d5b31001ea670bce4f61ecee5ab9d406",
+  "git_revision": "7d11bfbeb831b52cc57538f53070cd92769364c2",
+  "tantivy_version": "v0.25.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "records_before_each_cell": 23366,
+  "sessions": 23,
+  "writer_workers": 1,
+  "readers": 0,
+  "measured_seconds_per_cell": 8,
+  "warmup_requests_per_cell": 5,
+  "batch_sizes_add_requests": [
+    1,
+    8,
+    32,
+    128
+  ],
+  "repetitions": 3,
+  "summary": {
+    "1": {
+      "request_throughput_median_per_s": 3.91,
+      "record_throughput_median_per_s": 3.91,
+      "p50_latency_median_ms": 255.507,
+      "p95_latency_median_ms": 265.246,
+      "p99_latency_median_ms": 268.155
+    },
+    "8": {
+      "request_throughput_median_per_s": 1.78,
+      "record_throughput_median_per_s": 14.26,
+      "p50_latency_median_ms": 558.249,
+      "p95_latency_median_ms": 581.611,
+      "p99_latency_median_ms": 581.611
+    },
+    "32": {
+      "request_throughput_median_per_s": 0.81,
+      "record_throughput_median_per_s": 25.97,
+      "p50_latency_median_ms": 1228.398,
+      "p95_latency_median_ms": 1241.509,
+      "p99_latency_median_ms": 1241.509
+    },
+    "128": {
+      "request_throughput_median_per_s": 0.73,
+      "record_throughput_median_per_s": 94.03,
+      "p50_latency_median_ms": 1346.843,
+      "p95_latency_median_ms": 1436.007,
+      "p99_latency_median_ms": 1436.007
+    }
+  },
+  "runs": [
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 8.115,
+      "requests": 6,
+      "successful_requests": 6,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 768,
+      "request_throughput_per_s": 0.74,
+      "record_throughput_per_s": 94.64,
+      "latency_ms": {
+        "p50": 1346.843,
+        "p95": 1378.091,
+        "p99": 1378.091,
+        "mean": 1352.394
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 8.238,
+      "requests": 32,
+      "successful_requests": 32,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 32,
+      "request_throughput_per_s": 3.88,
+      "record_throughput_per_s": 3.88,
+      "latency_ms": {
+        "p50": 257.764,
+        "p95": 265.246,
+        "p99": 268.155,
+        "mean": 257.423
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 32,
+      "seed_records": 23366,
+      "measured_seconds": 8.65,
+      "requests": 7,
+      "successful_requests": 7,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 224,
+      "request_throughput_per_s": 0.81,
+      "record_throughput_per_s": 25.9,
+      "latency_ms": {
+        "p50": 1228.398,
+        "p95": 1289.8,
+        "p99": 1289.8,
+        "mean": 1235.73
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 8,
+      "seed_records": 23366,
+      "measured_seconds": 8.413,
+      "requests": 15,
+      "successful_requests": 15,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 120,
+      "request_throughput_per_s": 1.78,
+      "record_throughput_per_s": 14.26,
+      "latency_ms": {
+        "p50": 558.249,
+        "p95": 581.611,
+        "p99": 581.611,
+        "mean": 560.878
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 8,
+      "seed_records": 23366,
+      "measured_seconds": 8.1,
+      "requests": 14,
+      "successful_requests": 14,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 112,
+      "request_throughput_per_s": 1.73,
+      "record_throughput_per_s": 13.83,
+      "latency_ms": {
+        "p50": 574.322,
+        "p95": 618.509,
+        "p99": 618.509,
+        "mean": 578.541
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 32,
+      "seed_records": 23366,
+      "measured_seconds": 8.626,
+      "requests": 7,
+      "successful_requests": 7,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 224,
+      "request_throughput_per_s": 0.81,
+      "record_throughput_per_s": 25.97,
+      "latency_ms": {
+        "p50": 1232.481,
+        "p95": 1241.509,
+        "p99": 1241.509,
+        "mean": 1232.244
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 8.822,
+      "requests": 6,
+      "successful_requests": 6,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 768,
+      "request_throughput_per_s": 0.68,
+      "record_throughput_per_s": 87.06,
+      "latency_ms": {
+        "p50": 1372.378,
+        "p95": 1635.551,
+        "p99": 1635.551,
+        "mean": 1470.237
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 8.185,
+      "requests": 32,
+      "successful_requests": 32,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 32,
+      "request_throughput_per_s": 3.91,
+      "record_throughput_per_s": 3.91,
+      "latency_ms": {
+        "p50": 254.977,
+        "p95": 267.575,
+        "p99": 268.502,
+        "mean": 255.776
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 8.168,
+      "requests": 6,
+      "successful_requests": 6,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 768,
+      "request_throughput_per_s": 0.73,
+      "record_throughput_per_s": 94.03,
+      "latency_ms": {
+        "p50": 1343.472,
+        "p95": 1436.007,
+        "p99": 1436.007,
+        "mean": 1361.245
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 8.167,
+      "requests": 32,
+      "successful_requests": 32,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 32,
+      "request_throughput_per_s": 3.92,
+      "record_throughput_per_s": 3.92,
+      "latency_ms": {
+        "p50": 255.507,
+        "p95": 261.082,
+        "p99": 261.428,
+        "mean": 255.212
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 32,
+      "seed_records": 23366,
+      "measured_seconds": 8.321,
+      "requests": 7,
+      "successful_requests": 7,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 224,
+      "request_throughput_per_s": 0.84,
+      "record_throughput_per_s": 26.92,
+      "latency_ms": {
+        "p50": 1185.611,
+        "p95": 1203.992,
+        "p99": 1203.992,
+        "mean": 1188.695
+      },
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 8,
+      "seed_records": 23366,
+      "measured_seconds": 8.31,
+      "requests": 15,
+      "successful_requests": 15,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 120,
+      "request_throughput_per_s": 1.81,
+      "record_throughput_per_s": 14.44,
+      "latency_ms": {
+        "p50": 553.469,
+        "p95": 562.908,
+        "p99": 562.908,
+        "mean": 553.966
+      },
+      "last_written_record_searchable": true
+    }
+  ]
+}

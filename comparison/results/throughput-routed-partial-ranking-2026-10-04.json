@@ -1,0 +1,154 @@
+{
+  "benchmark": "routed-multisegment-partial-ranking-selection",
+  "date": "2026-10-04",
+  "records": 23366,
+  "segments": 23,
+  "routed_segments": 5,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 3,
+  "query_cache": "disabled",
+  "profile_env": "LINT_AI_QUERY_TIMINGS=1",
+  "server": "target/release/server, agent-integrations",
+  "before_full_sort": {
+    "throughput": {
+      "c1": {
+        "throughput_median_req_s": 408.33,
+        "p50_median_ms": 2.425,
+        "runs": [
+          {
+            "throughput_req_s": 408.33,
+            "p50_ms": 2.415
+          },
+          {
+            "throughput_req_s": 393.9,
+            "p50_ms": 2.506
+          },
+          {
+            "throughput_req_s": 410.86,
+            "p50_ms": 2.425
+          }
+        ]
+      },
+      "c10": {
+        "throughput_median_req_s": 1023.66,
+        "p50_median_ms": 9.803,
+        "runs": [
+          {
+            "throughput_req_s": 1023.66,
+            "p50_ms": 10.177
+          },
+          {
+            "throughput_req_s": 1009.4,
+            "p50_ms": 9.803
+          },
+          {
+            "throughput_req_s": 1030.9,
+            "p50_ms": 9.316
+          }
+        ]
+      }
+    },
+    "index_timing": {
+      "total": {
+        "median_ms": 0.741,
+        "samples": 3300
+      },
+      "rank": {
+        "median_ms": 0.075,
+        "samples": 3300
+      },
+      "graph": {
+        "median_ms": 0.0,
+        "samples": 3300
+      },
+      "entity_graph": {
+        "median_ms": 0.005,
+        "samples": 3300
+      },
+      "sequence": {
+        "median_ms": 0.011,
+        "samples": 3300
+      },
+      "accumulate": {
+        "median_ms": 0.176,
+        "samples": 3300
+      },
+      "group_build": {
+        "median_ms": 0.095,
+        "samples": 3300
+      }
+    }
+  },
+  "after_partial_sort": {
+    "throughput": {
+      "c1": {
+        "throughput_median_req_s": 425.71,
+        "p50_median_ms": 2.288,
+        "runs": [
+          {
+            "throughput_req_s": 416.32,
+            "p50_ms": 2.255
+          },
+          {
+            "throughput_req_s": 430.39,
+            "p50_ms": 2.288
+          },
+          {
+            "throughput_req_s": 425.71,
+            "p50_ms": 2.299
+          }
+        ]
+      },
+      "c10": {
+        "throughput_median_req_s": 1053.9,
+        "p50_median_ms": 8.872,
+        "runs": [
+          {
+            "throughput_req_s": 1053.9,
+            "p50_ms": 9.588
+          },
+          {
+            "throughput_req_s": 1050.91,
+            "p50_ms": 8.872
+          },
+          {
+            "throughput_req_s": 1086.59,
+            "p50_ms": 8.823
+          }
+        ]
+      }
+    },
+    "index_timing": {
+      "total": {
+        "median_ms": 0.617,
+        "samples": 3300
+      },
+      "rank": {
+        "median_ms": 0.017,
+        "samples": 3300
+      },
+      "graph": {
+        "median_ms": 0.0,
+        "samples": 3300
+      },
+      "entity_graph": {
+        "median_ms": 0.004,
+        "samples": 3300
+      },
+      "sequence": {
+        "median_ms": 0.01,
+        "samples": 3300
+      },
+      "accumulate": {
+        "median_ms": 0.174,
+        "samples": 3300
+      },
+      "group_build": {
+        "median_ms": 0.045,
+        "samples": 3300
+      }
+    }
+  },
+  "note": "Working-tree diagnostic. The only source change between builds was replacing full candidate sorts with partial selection of the existing top-100 and top-200 prefixes. Throughput comparisons use medians of three runs; query timings aggregate per-shard calls and are diagnostic."
+}

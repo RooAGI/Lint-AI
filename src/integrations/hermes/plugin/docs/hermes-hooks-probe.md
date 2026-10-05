@@ -26,7 +26,8 @@ Hooks receive exactly the kwargs from their fire sites. The dispatch layer adds 
 | `post_tool_call` | `agent/inline_tool_executors.py:29+` (`emit_terminal_post_tool_call`) | `function_name, function_args, result, session_id, task_id, turn_id, tool_call_id, duration_ms, status, error_type, error_message, middleware_trace` | One terminal emission per tool call, best-effort. |
 | `transform_llm_output` | (output path) | `session_id, response, model` | Can transform the final text. |
 | `on_session_start` | `agent/conversation_loop.py:861` | `session_id, model, platform` | Skipped for persistence-disabled forks (they share the parent's session id). |
-| `on_session_end` ⚠️ | `agent/turn_finalizer.py:769+` | `session_id, task_id, turn_id, completed, failed, interrupted, turn_exit_reason, model, platform` | **Misleading name: fires at the end of every turn**, not at session close. `turn_exit_reason` e.g. `"text_response(stop)"`. Also fired at shutdown/interrupt by `hermes_cli/cli_shutdown.py:183+` with `completed=False, interrupted=True, reason=...`. |
+| `on_session_end` ⚠️ | `agent/turn_finalizer.py:769+` | `session_id, task_id, turn_id, completed, failed, interrupted, turn_exit_reason, model, platform` | **Misleading name: fires at the end of every turn**, not at session close. `turn_exit_reason` e.g. `"text_response(stop)"`. |
+| `agent_loop_stopped` | gateway `_interrupt_and_clear_session` / TUI `session.interrupt` | `session_key, platform, reason, invalidation_reason` | Fires after a real running turn is interrupted; not emitted in plain CLI. Carries no message body. |
 | `on_session_finalize` | `hermes_cli/cli_session_mixin.py:427` (`_notify_session_boundary`) | `session_id, platform, reason="session_boundary"` | True session-boundary signal (e.g. before `/new`). **Carries no transcript.** |
 | `on_session_reset` | `hermes_cli/cli_session_mixin.py:427` | `session_id, platform, reason="new_session"` | Fires for the OLD session id; the new session then fires `on_session_start`. **No transcript, no new-session id in the payload.** |
 
@@ -43,7 +44,12 @@ Hooks receive exactly the kwargs from their fire sites. The dispatch layer adds 
 
 `pre_llm_call`, `post_llm_call`, `pre_tool_call`, `post_tool_call`, `transform_tool_result`, `transform_terminal_output`, `transform_llm_output`, `pre_api_request`, `post_api_request`, `api_request_error`, `transform_api_error_classification`, `pre_verify`, `pre_auxiliary_call`, `post_auxiliary_call`, `on_stream_start`, `on_stream_delta`, `on_stream_end`, `on_interim_message`, `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `on_skill_lifecycle`, `subagent_start`, `subagent_stop`, `pre_gateway_dispatch`, `agent_loop_stopped`, `pre_approval_request`, `post_approval_response`, `on_room_member_activity`, `pre_transcription`, `kanban_task_blocked`, `kanban_task_claimed`, `kanban_task_completed`, `on_kanban_task_updated`, `on_kanban_dispatch_tick`, `on_kanban_worker_spawned`, `on_kanban_worker_exited`, `on_kanban_worker_stale_claim`, `gateway_platform_event`, `pre_command`.
 
-Integration-relevant subset is the eight rows in the table above. The rest (streaming, kanban, gateway, approvals, subagents) are out of scope for memory capture/recall.
+The original live probe did not exercise the subagent hooks. The plugin now also
+subscribes to `subagent_start`, `subagent_stop`, and `agent_loop_stopped` using Hermes's documented
+callback contract: start captures parent/child identity and the delegated goal;
+stop captures the child summary, status, duration, and metadata-only tool history.
+The interruption hook stores only its session key and reason metadata. Other hooks
+(streaming, kanban, gateway, approvals) remain out of scope for memory.
 
 ## Hooks vs native `MemoryProvider` — verdict
 
@@ -71,7 +77,7 @@ The native provider lifecycle (`agent/memory_provider.py`, manager in `agent/mem
 3. **`on_session_finalize` / `on_session_reset` → boundary marker.** Mark the session closed in lint-ai; full content already captured incrementally. On reset, link old→new session ids temporally (new `on_session_start` follows); on resume, `pre_llm_call.parent_session_id` gives the true parent link.
 4. **`on_session_start` → session registry entry** (session_id, model, platform).
 5. **Capture path is async + bounded.** Hook callbacks enqueue to a local bounded queue flushed by a background thread; best-effort on shutdown (Hermes gives no reliable drain — same constraint as OpenClaw's 2s shared budget).
-6. **Install:** ship as a directory plugin `integrations/hermes-plugin-lintai/` in the lint-ai repo (`plugin.yaml` + provider class over the existing `/add/batch`, `/search`, `/delete` HTTP API — no Hermes changes, no Rust changes), installed via `hermes plugins install` or project plugins with `HERMES_ENABLE_PROJECT_PLUGINS=1`. This is the same shape as the mem0 precedent, but using hooks instead of the provider slot.
+6. **Install:** ship as a directory plugin `src/integrations/hermes/plugin/` in the lint-ai repo (`plugin.yaml` + provider class over the lint-ai provider-memory HTTP API — no Hermes changes), installed via `hermes plugins install` or project plugins with `HERMES_ENABLE_PROJECT_PLUGINS=1`. This is the same shape as the mem0 precedent, but using hooks instead of the provider slot.
 
 ## Open questions for Luyi
 

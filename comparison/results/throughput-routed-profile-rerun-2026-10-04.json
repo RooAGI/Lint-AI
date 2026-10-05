@@ -1,0 +1,256 @@
+{
+  "profile": "routed-multisegment-time-profiler-rerun",
+  "date": "2026-10-04",
+  "source_revision": "7d11bfbeb831b52cc57538f53070cd92769364c2",
+  "source_tree": "working tree modified",
+  "workload": {
+    "records": 23366,
+    "sessions_and_segments": 23,
+    "routed_segments": 5,
+    "query": "deployment configuration system decision",
+    "top_k": 20,
+    "concurrency": 10,
+    "warmup_requests": 250,
+    "duration_s": 20.009,
+    "requests": 23458,
+    "errors": 0,
+    "throughput_req_s": 1172.35,
+    "p50_ms": 8.592,
+    "p95_ms": 13.391,
+    "p99_ms": 16.366
+  },
+  "internal_query_timings": {
+    "instrumentation": "LINT_AI_QUERY_TIMINGS=1",
+    "requests": 500,
+    "coordinator": {
+      "filter_ms": {
+        "samples": 500,
+        "median_ms": 0.051,
+        "p95_ms": 0.066
+      },
+      "default_segment_execution_ms": {
+        "samples": 500,
+        "median_ms": 5.992,
+        "p95_ms": 8.367
+      },
+      "segmented_ms": {
+        "samples": 500,
+        "median_ms": 6.16,
+        "p95_ms": 8.507
+      },
+      "total_ms": {
+        "samples": 500,
+        "median_ms": 6.316,
+        "p95_ms": 8.863
+      }
+    },
+    "per_segment_index": {
+      "total": {
+        "samples": 2500,
+        "median_ms": 0.67,
+        "p95_ms": 0.899
+      },
+      "sparse": {
+        "samples": 2500,
+        "median_ms": 0.33,
+        "p95_ms": 0.411
+      },
+      "posting": {
+        "samples": 2500,
+        "median_ms": 0.221,
+        "p95_ms": 0.274
+      },
+      "accumulate": {
+        "samples": 2500,
+        "median_ms": 0.168,
+        "p95_ms": 0.286
+      },
+      "rank": {
+        "samples": 2500,
+        "median_ms": 0.017,
+        "p95_ms": 0.021
+      },
+      "group_build": {
+        "samples": 2500,
+        "median_ms": 0.047,
+        "p95_ms": 0.065
+      }
+    }
+  },
+  "instruments": {
+    "tool": "Instruments xctrace",
+    "template": "Time Profiler",
+    "trace": ".benchmark-tmp/lint-ai-routed-profile-rerun2-2026-10-04.trace",
+    "time_profile_rows": 225035,
+    "rows_with_stack_frames": 11379,
+    "trace_sample_window": {
+      "start": "00:00.702.574",
+      "end": "00:32.466.575"
+    },
+    "top_self_samples": [
+      {
+        "symbol": "<deduplicated_symbol>",
+        "samples": 357
+      },
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_lexical_hits_timed::h7e90f43a23cbf51f",
+        "samples": 346
+      },
+      {
+        "symbol": "_xzm_free",
+        "samples": 149
+      },
+      {
+        "symbol": "_$LT$core..hash..sip..Hasher$LT$S$GT$$u20$as$u20$core..hash..Hasher$GT$::write::haf36fd38196a45da",
+        "samples": 108
+      },
+      {
+        "symbol": "regex_automata::hybrid::search::find_fwd::h514b74ac039753c9",
+        "samples": 94
+      },
+      {
+        "symbol": "_xzm_xzone_malloc_tiny",
+        "samples": 90
+      },
+      {
+        "symbol": "core::slice::sort::stable::quicksort::quicksort::h207d85d15a8b814c",
+        "samples": 76
+      },
+      {
+        "symbol": "core::slice::sort::shared::smallsort::sort8_stable::he550e66de8b6ac5f",
+        "samples": 74
+      },
+      {
+        "symbol": "xzm_realloc",
+        "samples": 73
+      },
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_lexical_hits_timed::score_doc::h36d06b67c54c5f39",
+        "samples": 71
+      },
+      {
+        "symbol": "core::hash::BuildHasher::hash_one::hb3c0b436128b9ae1",
+        "samples": 69
+      },
+      {
+        "symbol": "rust_stemmers::snowball::algorithms::english::stem::h5d889fc25581e426",
+        "samples": 66
+      },
+      {
+        "symbol": "std::io::append_to_string::h3d3ebef0585144ad",
+        "samples": 66
+      },
+      {
+        "symbol": "_xzm_xzone_malloc",
+        "samples": 64
+      },
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_temporal_context_at_and_statistics_with_local_terms::h5cc1781f30215925",
+        "samples": 64
+      },
+      {
+        "symbol": "core::slice::sort::stable::quicksort::quicksort::h0afaa80fe3c683ce",
+        "samples": 63
+      },
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_lexical_hits_timed::score_doc::hebdc93b5fcac86f7",
+        "samples": 62
+      },
+      {
+        "symbol": "regex_automata::nfa::thompson::builder::Builder::build::h932d18d3b7857655",
+        "samples": 62
+      },
+      {
+        "symbol": "lint_ai::temporal::chinese_temporal_hits::he7d1da63ee7a0a22",
+        "samples": 62
+      },
+      {
+        "symbol": "regex_automata::nfa::thompson::compiler::Compiler::c::h2dfdd1ea8e7cedd8",
+        "samples": 61
+      }
+    ],
+    "top_inclusive_samples": [
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_lexical_hits_timed::h7e90f43a23cbf51f",
+        "samples": 408
+      },
+      {
+        "symbol": "<deduplicated_symbol>",
+        "samples": 387
+      },
+      {
+        "symbol": "_xzm_free",
+        "samples": 150
+      },
+      {
+        "symbol": "_$LT$core..hash..sip..Hasher$LT$S$GT$$u20$as$u20$core..hash..Hasher$GT$::write::haf36fd38196a45da",
+        "samples": 108
+      },
+      {
+        "symbol": "regex_automata::hybrid::search::find_fwd::h514b74ac039753c9",
+        "samples": 102
+      },
+      {
+        "symbol": "_xzm_xzone_malloc_tiny",
+        "samples": 90
+      },
+      {
+        "symbol": "rust_stemmers::snowball::algorithms::english::stem::h5d889fc25581e426",
+        "samples": 86
+      },
+      {
+        "symbol": "regex_automata::nfa::thompson::compiler::Compiler::c::h2dfdd1ea8e7cedd8",
+        "samples": 86
+      },
+      {
+        "symbol": "core::slice::sort::stable::quicksort::quicksort::h207d85d15a8b814c",
+        "samples": 85
+      },
+      {
+        "symbol": "lint_ai::temporal::resolve_temporal_target::hef503b4e28e208b4",
+        "samples": 82
+      },
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_temporal_context_at_and_statistics_with_local_terms::h5cc1781f30215925",
+        "samples": 81
+      },
+      {
+        "symbol": "lint_ai::temporal::chinese_temporal_hits::he7d1da63ee7a0a22",
+        "samples": 78
+      },
+      {
+        "symbol": "lint_ai::query_semantics::build_query_analysis::h8a591b0ae65c2038",
+        "samples": 76
+      },
+      {
+        "symbol": "regex_automata::nfa::thompson::builder::Builder::build::h932d18d3b7857655",
+        "samples": 75
+      },
+      {
+        "symbol": "lint_ai::index::query::_$LT$impl$u20$lint_ai..index..model..MemoryIndex$GT$::query_with_lexical_hits_timed::score_doc::h36d06b67c54c5f39",
+        "samples": 74
+      },
+      {
+        "symbol": "core::slice::sort::shared::smallsort::sort8_stable::he550e66de8b6ac5f",
+        "samples": 74
+      },
+      {
+        "symbol": "core::slice::sort::stable::quicksort::quicksort::h0afaa80fe3c683ce",
+        "samples": 74
+      },
+      {
+        "symbol": "xzm_realloc",
+        "samples": 73
+      },
+      {
+        "symbol": "core::hash::BuildHasher::hash_one::hb3c0b436128b9ae1",
+        "samples": 71
+      },
+      {
+        "symbol": "tantivy::query::term_query::term_weight::TermWeight::specialized_scorer::he7c7ae81f2aae44c",
+        "samples": 69
+      }
+    ],
+    "caveat": "Sample counts are profiler samples, not percentages or exclusive wall-time attribution."
+  }
+}

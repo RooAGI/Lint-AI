@@ -55,7 +55,7 @@ workspace.
 
 ## Level 2 — hooks plugin (automatic memory)
 
-The plugin lives at `integrations/hermes-plugin-lintai/` in the lint-ai
+The plugin lives at `src/integrations/hermes/plugin/` in the lint-ai
 repo: a Hermes directory plugin (`plugin.yaml` + `__init__.py`, stdlib-only
 Python, no dependencies). It deliberately does **not** use Hermes' native
 `MemoryProvider` slot — occupying it would evict your existing mem0/file
@@ -65,7 +65,7 @@ memory. Hooks coexist with everything.
 
 ```bash
 # from the lint-ai repo
-hermes plugins install ./integrations/hermes-plugin-lintai
+hermes plugins install ./src/integrations/hermes/plugin
 hermes plugins enable lintai
 ```
 
@@ -73,7 +73,7 @@ Or per-project, without a global install:
 
 ```bash
 mkdir -p .hermes/plugins
-cp -r /path/to/lint-ai/integrations/hermes-plugin-lintai .hermes/plugins/lintai
+cp -r /path/to/lint-ai/src/integrations/hermes/plugin .hermes/plugins/lintai
 HERMES_ENABLE_PROJECT_PLUGINS=1 hermes chat
 ```
 
@@ -102,6 +102,7 @@ background.
 | `pre_llm_call` | Recall + inject. Synchronous with a tight timeout, fail-open. |
 | `post_tool_call` | Structured tool-event capture (name, args, result, duration, status), deduplicated by `tool_call_id`. |
 | `post_llm_call` | Per-turn transcript capture, deduplicated by `(session_id, turn_id)`. |
+| `agent_loop_stopped` | Metadata-only interruption marker for gateway and TUI/desktop stops. Hermes does not emit it for plain CLI turns. |
 | `on_session_start` | Session registry entry. |
 | `on_session_finalize` / `on_session_reset` | Boundary markers (no transcript; per-turn accumulation is authoritative). |
 
@@ -121,6 +122,11 @@ background.
 | `LINTAI_RECALL` | `on` | `off` disables recall injection |
 | `LINTAI_RECALL_TOP_K` | `5` | search hits injected per turn |
 
+Hermes uses `POST /provider-memory/add/batch` for captures and
+`POST /provider-memory/search` for recall. Captures are stored in the shared
+`.lint-ai/memory/` provider store; recall searches it alongside the current
+workspace index. OpenClaw uses the same server and provider store.
+
 ## Troubleshooting
 
 - **No tools in Hermes:** re-run `lint-ai --hermes-install` and check the
@@ -137,6 +143,6 @@ background.
 
 The full hook inventory with live-verified payload schemas (probed against
 hermes-agent `@ e408d363`), the dedupe design, and the verification plan are
-in `integrations/hermes-plugin-lintai/DESIGN.md`. The plugin's own test
+in `src/integrations/hermes/plugin/DESIGN.md`. The plugin's own test
 suite runs with `python3 -m unittest discover -s tests` inside the plugin
 directory.

@@ -88,6 +88,25 @@ Evaluated on **LongMemEval-S** (500 questions), a public benchmark for long-cont
 
 The section below shows both the rust-bert POS/NER branch result and the default heuristic release result.
 
+### Latest standalone rerun (2026-10-04)
+
+A fresh release-mode run evaluated all 500 questions with the heuristic NER
+backend, a single index, no embeddings, and cutoffs 1, 3, 5, 10, and 20. The
+per-question report is saved at
+`comparison/results/retrieval-longmemeval-current-2026-10-04.json.gz`.
+
+| Metric | Result |
+|---|---:|
+| Fractional Recall@5 / @10 / @20 | 86.37% / 91.89% / 92.93% |
+| Any-hit Recall@5 / @10 / @20 | 94.2% / 96.8% / 97.6% |
+| MRR | 87.0% |
+| NDCG@10 | 85.11% |
+| Search latency, mean / p50 / p95 | 2.68 / 2.15 / 4.47 ms |
+
+Latency measures the `MemoryService::search` call and excludes per-question
+haystack indexing. The older published 13.0 ms value has a different timing
+scope and is not directly comparable.
+
 ### Rust-BERT POS/NER Branch
 
 **Aggregate (n=500):**
@@ -236,35 +255,53 @@ The comparison repository records the exact Lint-AI and AgentMemory artifacts
 and reports the resulting any-hit Recall@5/10/20, MRR, and NDCG@10. Do not
 compare a run that only requested top-10 with the top-20 headline.
 
-If you want segmented MemoryIndex experiment diagnostics, use the separate segmented benchmark. This keeps the existing scoped benchmark behavior unchanged:
+For a full 500-question segmented comparison, use the separate segmented
+benchmark. It evaluates segmented variants alongside a same-harness global
+single-index control:
 
 ```bash
 cargo run --release --features experimental --bin segment_scoped_benchmark -- \
   --longmemeval benchmark/data/longmemeval_s_raw.json \
-  --question-type multi-session \
   --segment-compare \
   --segment-top-n 5 \
+  --adaptive-segment-max-n 12 \
   --segment-router coverage-local \
-  --out benchmark/data/segment_scoped_multi_session_results.json
+  --ner-provider heuristic \
+  --k 1 --k 3 --k 5 --k 10 --k 20 \
+  --out comparison/results/segment-longmemeval-500-2026-10-04.json.gz
 ```
 
-The segmented benchmark reports the same scoped retrieval metrics plus experimental segment variants, segment-specific enrichment diagnostics, and router-miss failure analysis.
+The segmented benchmark reports experimental segment variants,
+segment-specific enrichment diagnostics, and router-miss failure analysis.
 
-The latest 133-query multi-session segment comparison produced:
+The 500-question run produced:
 
-| mode | candidates | recall_any@5 | recall_any@10 | MRR | average latency |
-|---|---|---:|---:|---:|---:|
-| segmented (fixed) | top-5 | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
-| segmented (adaptive) | 5 → 12 | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
-| single index | global search | 93.23% | 93.98% | 0.814 | 6.41 ms |
+| mode | candidates | recall_any@5 | recall_any@10 | fractional recall@5 | MRR | average latency |
+|---|---|---:|---:|---:|---:|---:|
+| segmented (fixed) | top-5 | 94.20% | 94.20% | **86.77%** | 0.880 | 4.08 ms |
+| segmented (adaptive, enriched) | 5 → 12 | 94.20% | **96.20%** | 85.64% | 0.869 | 7.05 ms |
+| intent baseline | intent | 94.20% | 96.20% | 85.54% | 0.863 | 0.77 ms |
+| fused adaptive + global | fused | 95.40% | 97.20% | 87.11% | 0.880 | 29.47 ms |
+| fused temporal + global | fused | **96.00%** | **97.80%** | **88.51%** | **0.885** | 26.98 ms |
+| single-index control | global search | **94.40%** | 96.60% | 86.41% | **0.872** | 14.34 ms |
 
-These are question-scoped multi-session results and are separate from the
-500-question aggregate heuristic headline above. This run explicitly selected
-top-5 (`--segment-top-n 5`); the benchmark CLI and server default to top-3.
-Adaptive routing trades additional latency for higher any-hit recall.
+Mean latency is measured per query and excludes haystack indexing. These
+direct-index timings use a different harness and scope from the standalone
+MemoryService latency above. Fused temporal + global has the strongest recall
+and MRR among the listed modes, with higher latency; the intent baseline is
+fastest. The prior 133-question multi-session comparison
+remains in `comparison/results/segment-multisession-v0.2.0.json`.
 
-The checked-in summary artifact is
-`comparison/results/segment-multisession-v0.2.0.json`.
+Full per-query output: `comparison/results/segment-longmemeval-500-2026-10-04.json.gz`.
+
+### Tantivy 0.26.2 segmented rerun (2026-10-05)
+
+With the experimental feature enabled, fixed top-5 scored 94.2% Any-hit@5,
+94.2% Any-hit@10, 86.77% Fractional@5 and 0.858 MRR (1.84 ms). Fused temporal
++ global scored 95.2%, 97.6%, 87.07% and 0.865 MRR (18.78 ms). The single-index
+control scored 92.6%, 96.2%, 82.89% and 0.837 MRR (13.28 ms). Compared with the
+October 4 Tantivy 0.25.0 run, MRR is lower for these strategies. Full artifact:
+[segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz](../comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz).
 
 ## Report Metrics
 

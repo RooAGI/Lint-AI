@@ -135,6 +135,9 @@ pub(crate) struct SemanticAggregate {
     pub claim_to_docs: HashMap<String, Vec<TermPosting>>,
     pub topic_to_docs: HashMap<String, Vec<String>>,
     pub doc_type_to_docs: HashMap<String, Vec<String>>,
+    pub pending_entity_posting_keys: HashSet<String>,
+    pub pending_term_posting_keys: HashSet<String>,
+    pub pending_claim_posting_keys: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -655,9 +655,10 @@ impl IndexStore {
         index
     }
 
-    fn build_compatibility_index(&self) -> MemoryIndex {
+    fn build_compatibility_index(&mut self) -> MemoryIndex {
         let mut records = self.records.values().cloned().collect::<Vec<_>>();
         records.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
+        self.semantic_aggregate.sort_pending_postings();
         MemoryIndex::from_records_with_semantic_aggregate(
             records,
             self.semantic_aggregate.clone(),

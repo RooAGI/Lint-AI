@@ -520,6 +520,15 @@ p99 above one second. All six cells had zero errors and passed the final search
 visibility check. See [the complete staged write results](comparison.md#staged-write-flow-2026-10-05)
 for the corrected mixed workload and measurement limits.
 
+A 65-second, three-repetition run using the default refresh schedule measured
+49.12 records/s for single adds and 304.13 records/s for batches of 128,
+including final flush time. Compared with the earlier long-run baseline,
+batch-128 published throughput rose from 204.06 to 293.56 records/s and p99
+fell from 2.85 to 2.06 seconds. Profiling traced the gain to skipping
+aggregate-wide removal scans for new documents and sorting changed semantic
+postings once before publication. Refresh still raises write p99 above one
+second. See the [sustained profile and raw measurements](comparison.md#sustained-staged-write-profile-and-rerun-2026-10-05).
+
 Memory lifecycle fields are optional on each `/add` message. Set
 `expires_at_ms` to hide a memory after a Unix-millisecond deadline. Set
 `supersedes_id` to mark an older memory as replaced. Lifecycle operations are

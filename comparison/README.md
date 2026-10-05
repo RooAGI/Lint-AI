@@ -122,6 +122,21 @@ The [follow-up profile](../docs/comparison.md#write-path-optimization-profile-20
 records the compact-persistence and receipt-journal changes. It preserves the
 documented lifecycle sidecar and includes a full three-repetition rerun.
 
+For sustained staged-write diagnostics, `write_only.py` accepts
+`--refresh-interval-ms`, `--refresh-batch-size`, and
+`--checkpoint-interval-seconds`. Defaults match the server: 250 ms, 512
+pending documents, and 30 seconds. The 65-second profile run used three
+repetitions to cross multiple periodic checkpoints. On the default schedule,
+the updated writer measured median acknowledged/published rates of 49.12/48.77
+records/s for single adds and 304.13/293.56 records/s for batches of 128.
+Details, the earlier baseline and raw results are in the
+[sustained staged-write profile](../docs/comparison.md#sustained-staged-write-profile-and-rerun-2026-10-05).
+
+```bash
+python3 comparison/write_only.py --batch-sizes 1 128 --seconds 65 --repetitions 3 \
+  --output comparison/results/throughput-write-only-staged-long-latest.json
+```
+
 #### 2026-10-04 mixed-load diagnostic
 
 Three paired 10-second runs used 23,366 seeded records, 10 readers, one writer,

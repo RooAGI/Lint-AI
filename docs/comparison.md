@@ -365,6 +365,58 @@ python3 comparison/mixed_load.py --seconds 10 --readers 10 --writers 1 \
   --output comparison/results/throughput-mixed-read-write-staged-latest.json
 ```
 
+#### Sustained staged-write profile and rerun (2026-10-05)
+
+We profiled the single mutable writer during a 65-second, one-writer/no-reader
+HTTP run on the same 23,366-record, 23-session corpus. The first profile showed
+`SemanticAggregate::remove_doc` consuming 5,119 of 8,367 writer-thread samples.
+Every changed document called it, including new documents absent from the
+aggregate; it scanned all posting maps even when there was nothing to remove.
+An early return when `doc_to_chunks` has no entry reduced this to one sample in
+the matched follow-up profile. The check also handles existing documents with
+zero chunks because insertion stores an empty `doc_to_chunks` entry.
+
+The next profile showed repeated per-document sorting while appending semantic
+postings. Inserts now append and mark changed keys; the immutable index builder
+sorts those posting lists once immediately before publication. The profile
+after this change no longer showed `insert_doc_state` sorting in the refresh
+stack. Segmented catalog and routing-summary refresh remain the largest sampled
+costs, so publication can still stall the single writer.
+
+The release-mode, three-repetition default-schedule run used Tantivy 0.25.0,
+five warm-up requests, 65 measured seconds per cell, a 250 ms refresh trigger,
+512 pending documents, and a 30-second checkpoint interval. Each run flushed
+after measurement and found its last record through search. The earlier
+baseline artifact used the same schedule and corpus but only one run per cell.
+
+| Add requests per HTTP batch | Earlier ack records/s | Earlier published records/s | Current ack records/s | Current published records/s | Current p50 | Current p95 | Current p99 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 44.99 | 44.71 | 49.12 | 48.77 | 3.955 ms | 4.181 ms | 1,066.625 ms |
+| 128 | 211.20 | 204.06 | 304.13 | 293.56 | 4.951 ms | 1,921.721 ms | 2,063.493 ms |
+
+At batch size 128, acknowledgement throughput improved 44% and published
+throughput improved 44%; p99 fell from 2,845.844 ms to 2,063.493 ms. Single
+adds improved by about 9%. The comparison is directional because the baseline
+has one repetition while the updated run has three. These remain local
+working-tree diagnostics, not release-capacity claims.
+
+A separate three-repetition diagnostic set the refresh threshold to 32,768
+documents to isolate amortized write cost while retaining the 30-second
+checkpoint. It measured 1,454.98 acknowledged and 1,299.84 published
+records/s for batches of 128, with 4,114.138 ms p99. This threshold is an
+experimental setting, not the production default; it trades publication
+frequency for longer visibility delays and larger refresh stalls.
+
+Raw reports: [default schedule](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-long-default-3rep-2026-10-05.json),
+[large-threshold diagnostic](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-long-batch32768-batched-sort-3rep-2026-10-05.json),
+and [earlier baseline](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-long-baseline-2026-10-05.json).
+Reproduce with the benchmark schedule flags:
+
+```bash
+python3 comparison/write_only.py --batch-sizes 1 128 --seconds 65 --repetitions 3 \
+  --output comparison/results/throughput-write-only-staged-long-latest.json
+```
+
 ### Reproduce the comparison
 
 See [`comparison/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/README.md)

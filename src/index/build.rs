@@ -79,11 +79,12 @@ impl MemoryIndex {
 
     pub(crate) fn from_records_with_semantic_aggregate(
         records: Vec<DocRecord>,
-        semantic_aggregate: SemanticAggregate,
+        mut semantic_aggregate: SemanticAggregate,
         text_rerank_ngram: bool,
         text_rerank_lcs: bool,
         claim_scoring: bool,
     ) -> Self {
+        semantic_aggregate.sort_pending_postings();
         Self::from_records_internal(
             records,
             None,

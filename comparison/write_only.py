@@ -59,7 +59,15 @@ def run_cell(args, repetition, batch_size):
         port = args.port + (repetition - 1) * len(args.batch_sizes) + args.batch_sizes.index(batch_size)
         bind = f"127.0.0.1:{port}"
         server = subprocess.Popen(
-            [str(args.server_bin), "--bind", bind, "--index", index_tmp], cwd=ROOT
+            [
+                str(args.server_bin),
+                "--bind", bind,
+                "--index", index_tmp,
+                "--refresh-interval-ms", str(args.refresh_interval_ms),
+                "--refresh-batch-size", str(args.refresh_batch_size),
+                "--checkpoint-interval-seconds", str(args.checkpoint_interval_seconds),
+            ],
+            cwd=ROOT,
         )
         try:
             health = f"http://{bind}/health"
@@ -170,11 +178,18 @@ def main():
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=[1, 8, 32, 128])
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--port", type=int, default=18100)
+    parser.add_argument("--refresh-interval-ms", type=int, default=250)
+    parser.add_argument("--refresh-batch-size", type=int, default=512)
+    parser.add_argument("--checkpoint-interval-seconds", type=int, default=30)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--wait-for-visibility", action="store_true")
     args = parser.parse_args()
-    if min(args.records, args.sessions, args.seconds, args.repetitions) < 1:
-        parser.error("records, sessions, seconds, and repetitions must be positive")
+    if min(
+        args.records, args.sessions, args.seconds, args.repetitions,
+        args.refresh_interval_ms, args.refresh_batch_size,
+        args.checkpoint_interval_seconds,
+    ) < 1:
+        parser.error("records, sessions, duration, repetitions, and refresh schedule values must be positive")
     if args.warmup_requests < 0 or any(size < 1 or size > 128 for size in args.batch_sizes):
         parser.error("warm-up must be nonnegative and batch sizes must be in 1..=128")
     if not args.server_bin.is_file():
@@ -231,6 +246,9 @@ def main():
         "measured_seconds_per_cell": args.seconds,
         "warmup_requests_per_cell": args.warmup_requests,
         "batch_sizes_add_requests": args.batch_sizes,
+        "refresh_interval_ms": args.refresh_interval_ms,
+        "refresh_batch_size_documents": args.refresh_batch_size,
+        "checkpoint_interval_seconds": args.checkpoint_interval_seconds,
         "repetitions": args.repetitions,
         "summary": summary,
         "runs": runs,

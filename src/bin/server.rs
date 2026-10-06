@@ -142,6 +142,9 @@ struct AppState {
     tenant_id: Option<Arc<str>>,
     telemetry: OperationalTelemetry,
     project_root: PathBuf,
+    #[cfg(test)]
+    writer_admission_signal:
+        Option<Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>>,
 }
 
 #[derive(serde::Serialize)]
@@ -310,6 +313,8 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             .map(|s| Arc::<str>::from(s.trim().to_owned())),
         telemetry: OperationalTelemetry::new(),
         project_root,
+        #[cfg(test)]
+        writer_admission_signal: None,
     };
     // Warm the Python daemon children in the background: the first query
     // that needs key-phrase backfill or structured relations then pays
@@ -1262,6 +1267,14 @@ async fn add(
         )
             .into_response();
     };
+    #[cfg(test)]
+    if let Some(signal) = &state.writer_admission_signal {
+        if let Ok(mut signal) = signal.lock() {
+            if let Some(signal) = signal.take() {
+                let _ = signal.send(());
+            }
+        }
+    }
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
@@ -2002,6 +2015,8 @@ mod tests {
             tenant_id: None,
             telemetry: OperationalTelemetry::new(),
             project_root: root.to_path_buf(),
+            #[cfg(test)]
+            writer_admission_signal: None,
         }
     }
 
@@ -2104,7 +2119,9 @@ mod tests {
     async fn cancelled_write_keeps_admission_until_worker_finishes() {
         use tower::ServiceExt;
         let root = security_test_root();
-        let state = provider_memory_test_state(&root);
+        let mut state = provider_memory_test_state(&root);
+        let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
+        state.writer_admission_signal = Some(Arc::new(std::sync::Mutex::new(Some(admitted_tx))));
         let read_guard = state.service.read().unwrap();
         let app = app_router(state.clone());
         let request = tokio::spawn(async move {
@@ -2112,18 +2129,20 @@ mod tests {
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(json!({"request_id":"cancel-test","session_id":"cancel-session","user_id":"alice","messages":[{"role":"user","timestamp":null,"content":"cancellation regression"}]}).to_string())).unwrap()).await
         });
-        let acquired = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            loop {
-                if state.writer_gate.try_lock().is_err() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .is_ok();
-        request.abort();
-        let _ = request.await;
+        let acquired = tokio::time::timeout(std::time::Duration::from_secs(10), admitted_rx)
+            .await
+            .is_ok_and(|result| result.is_ok());
+        let early_response = if !acquired && request.is_finished() {
+            request
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .map(|response| response.status().to_string())
+        } else {
+            request.abort();
+            let _ = request.await;
+            None
+        };
         let remains_locked = state.writer_gate.try_lock().is_err();
         drop(read_guard);
         // Let the unabortable blocking worker finish before asserting or cleaning up.
@@ -2135,7 +2154,10 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(acquired, "request never acquired writer admission");
+        assert!(
+            acquired,
+            "request never acquired writer admission; early response: {early_response:?}"
+        );
         assert!(
             remains_locked,
             "request cancellation released admission while its writer was still running"
@@ -2663,6 +2685,8 @@ mod tests {
             tenant_id: None,
             telemetry: OperationalTelemetry::new(),
             project_root: std::env::current_dir().unwrap(),
+            #[cfg(test)]
+            writer_admission_signal: None,
         };
         // Reads take the shared lock and see the write with no re-publish step.
         let response = state

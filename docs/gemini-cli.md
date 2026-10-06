@@ -1,48 +1,53 @@
-# Gemini CLI integration
+# Use Lint-AI with Gemini CLI
 
-Lint-AI can integrate with Gemini CLI through its command hooks. Gemini sends
-structured JSON to the hook process, so Lint-AI can record session events and
-inject relevant project memory without wrapping or replacing the Gemini CLI.
+Connect Lint-AI to a project so Gemini CLI can find earlier decisions and
+save useful outcomes as work continues. Project memory is stored in
+`.lint-ai/memory/` and can be shared with other connected agents.
 
-## Install
+## 1. Install Lint-AI
 
-Build with the Gemini feature and install the project hooks:
+On macOS or Linux, download and verify the official release with:
 
-```sh
-cargo install --path . --features gemini-cli
+```bash
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh
+```
+
+On Windows, download `lint-ai-windows-x86_64.exe` from the
+[release page](https://github.com/RooAGI/Lint-AI/releases/latest).
+
+## 2. Enable Lint-AI for this project
+
+Open a terminal in the project folder and run:
+
+```bash
 lint-ai --gemini-cli-install .
 ```
 
-The installer updates `~/.gemini/settings.json`, preserving unrelated settings
-and hooks. It registers both the `lint-ai` MCP server and lifecycle hooks. Use
-`--gemini-cli-config` or `--gemini-cli-settings` to target explicit files.
-Re-running the installer is safe and replaces only Lint-AI's own entries.
+This enables Gemini CLI to use Lint-AI in the project. It configures the MCP connection and hooks and preserves your other Gemini settings.
 
-The installed hooks cover `SessionStart`, `BeforeAgent`, `AfterAgent`,
-`BeforeModel`, `BeforeToolSelection`, `BeforeTool`, `AfterTool`, `PreCompress`,
-and `SessionEnd`.
+On Windows, run this in PowerShell from the project folder (adjust the path if
+you saved the executable elsewhere):
 
-## Recording and memory
-
-Gemini session events are stored under:
-
-```text
-.lint-ai/gemini-cli-sessions/
+```powershell
+.\lint-ai-windows-x86_64.exe --gemini-cli-install .
 ```
 
-The Gemini memory index is `.lint-ai/memory/`. The shared recording
-controls work with `--session-provider gemini` for promotion and replay. Hook
-execution is fail-open: recording, indexing, or retrieval failures are
-reported diagnostically and do not block Gemini CLI from continuing its
-session. Sensitive payloads use the same redaction and size limits as Claude
-and Codex recordings.
+Restart Gemini CLI and open the project so it loads the new settings.
 
-Gemini CLI's hook protocol does not guarantee token usage in every lifecycle
-payload. Token metrics should therefore be treated as available only when the
-CLI supplies usage metadata or telemetry for that event.
+## 3. Try it
 
-## MCP note
+Ask Gemini CLI to look up a decision from earlier work, or continue work in a
+new session. Lint-AI can bring relevant project memory into the conversation
+and save useful outcomes as sessions finish.
 
-The Gemini MCP server exposes `search`, `info`, `record_session`,
-`enable_lint_ai`, `disable_lint_ai`, and `lint_ai_status`. It uses the shared
-JSON-RPC transport and persistent memory/session-control components.
+## 4. If memory is not available
+
+Restart Gemini CLI and make sure you opened the project where you installed
+Lint-AI. You can check the MCP connection with:
+
+```bash
+lint-ai --gemini-cli-verify-mcp .
+```
+
+For details, see [all agent integrations](agents.md) and
+[session recording](session-recording-design.md).

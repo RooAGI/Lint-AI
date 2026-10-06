@@ -34,14 +34,14 @@ def percentile(values, p):
     return round(ordered[min(len(ordered) - 1, math.ceil(p * len(ordered)) - 1)], 3)
 
 
-def add_requests(batch_size, sequence, session_count):
+def add_requests(batch_size, sequence, session_count, writer_session_group=None):
     requests = []
     for offset in range(batch_size):
         item = sequence + offset
         requests.append({
             "request_id": f"write-only-{item}",
             "user_id": "write-bench-user",
-            "session_id": f"bench-session-{item % session_count}",
+            "session_id": writer_session_group or f"bench-session-{item % session_count}",
             "messages": [{
                 "role": "user",
                 "content": f"Writeonlyunique{item} benchmark record: persistent memory write throughput.",
@@ -88,10 +88,14 @@ def run_cell(args, repetition, batch_size):
                 "--batch-size", "1024", "--sessions", str(args.sessions), "--bulk",
             ], check=True, cwd=ROOT, stdout=subprocess.DEVNULL)
 
-            write_url = f"http://{bind}/add/batch" + ("?wait_for_visibility=true" if args.wait_for_visibility else "")
+            write_path = "/add" if args.endpoint == "add" else "/add/batch"
+            write_url = f"http://{bind}{write_path}" + ("?wait_for_visibility=true" if args.wait_for_visibility else "")
             sequence = (repetition - 1) * 10_000_000 + args.batch_sizes.index(batch_size) * 1_000_000
             for _ in range(args.warmup_requests):
-                post(write_url, add_requests(batch_size, sequence, args.sessions))
+                payload = add_requests(
+                    batch_size, sequence, args.sessions, args.writer_session_group
+                )
+                post(write_url, payload[0] if args.endpoint == "add" else payload)
                 sequence += batch_size
 
             post(f"http://{bind}/v1/memories/refresh", {})
@@ -101,10 +105,14 @@ def run_cell(args, repetition, batch_size):
             measurement_started = time.monotonic()
             deadline = measurement_started + args.seconds
             while time.monotonic() < deadline:
-                payload = add_requests(batch_size, sequence, args.sessions)
+                payload = add_requests(
+                    batch_size, sequence, args.sessions, args.writer_session_group
+                )
                 started = time.monotonic()
                 try:
-                    status, _ = post(write_url, payload)
+                    status, _ = post(
+                        write_url, payload[0] if args.endpoint == "add" else payload
+                    )
                 except urllib.error.HTTPError as exc:
                     status = exc.code
                     exc.read()
@@ -173,6 +181,16 @@ def main():
     parser.add_argument("--server-bin", type=Path, default=ROOT / "target/release/server")
     parser.add_argument("--records", type=int, default=23366)
     parser.add_argument("--sessions", type=int, default=23)
+    parser.add_argument(
+        "--writer-session-group",
+        help="pin writes to this existing session segment instead of distributing them",
+    )
+    parser.add_argument(
+        "--endpoint",
+        choices=["add", "add/batch"],
+        default="add/batch",
+        help="measured HTTP endpoint; /add supports batch size 1 only",
+    )
     parser.add_argument("--seconds", type=int, default=8)
     parser.add_argument("--warmup-requests", type=int, default=5)
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=[1, 8, 32, 128])
@@ -192,6 +210,8 @@ def main():
         parser.error("records, sessions, duration, repetitions, and refresh schedule values must be positive")
     if args.warmup_requests < 0 or any(size < 1 or size > 128 for size in args.batch_sizes):
         parser.error("warm-up must be nonnegative and batch sizes must be in 1..=128")
+    if args.endpoint == "add" and any(size != 1 for size in args.batch_sizes):
+        parser.error("/add endpoint can only measure batch size 1")
     if not args.server_bin.is_file():
         parser.error(f"server binary not found: {args.server_bin}")
 
@@ -241,6 +261,11 @@ def main():
         "processor": platform.processor(),
         "records_before_each_cell": args.records,
         "sessions": args.sessions,
+        "writer_session_group": args.writer_session_group,
+        "writer_session_distribution": (
+            "concentrated" if args.writer_session_group else "round-robin"
+        ),
+        "write_endpoint": f"/{args.endpoint}",
         "writer_workers": 1,
         "readers": 0,
         "measured_seconds_per_cell": args.seconds,

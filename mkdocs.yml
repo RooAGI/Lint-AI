@@ -41,27 +41,32 @@ theme:
 
 nav:
   - Home: index.md
-  - Agent memory:
-      - Overview: agent-memory.md
-      - Stale agent memory: stale-memory.md
-      - MCP memory server: mcp-memory-server.md
   - Get started:
       - Quickstart: quickstart.md
+      - Connect your AI agents:
+          - Codex: codex.md
+          - Claude Code: claude-code.md
+          - Gemini CLI: gemini-cli.md
+          - Antigravity CLI: agy.md
+          - Muse Code: muse-code.md
+          - OpenClaw: openclaw.md
+          - Hermes: hermes.md
+          - RooAGI AgentFlow: roo-runtime.md
+          - Other agent frameworks: agent-frameworks.md
+      - MCP memory server: mcp-memory-server.md
       - HTTP server: server.md
-      - Telemetry: telemetry.md
+      - Docker: docker.md
       - MCP interface: mcp.md
   - Agents:
-      - Agent integrations: agents.md
-      - Session recording: session-recording-design.md
-      - Codex: codex.md
-      - Claude Code: claude-code.md
-      - Gemini CLI: gemini-cli.md
-      - Antigravity CLI: agy.md
-      - Muse Code: muse-code.md
-      - OpenClaw: openclaw.md
-      - Hermes: hermes.md
-      - Roo Runtime: roo-runtime.md
-      - Other agent frameworks: agent-frameworks.md
+      - Overview: connect-agent.md
+      - How Lint-AI remembers: agent-memory.md
+      - Agent Integration: agents.md
+      - Stale Agent Memory: stale-memory.md
+      - Session Recording: session-recording-design.md
+  - Observability:
+      - Dashboard: observability.md
+      - Prometheus: prometheus.md
+      - Telemetry details: telemetry.md
   - Architecture:
       - Ingestion architecture: ingestion-architecture.md
       - How indexing works: tier0-ingestion.md
@@ -75,6 +80,7 @@ nav:
       - Integration glossary: integration-glossary.md
       - Chunk strategy: chunk-strategy.md
       - Index concurrency: index-concurrency.md
+      - Write publication plan: write-publication-plan.md
       - Distributed query architecture: distributed-query-architecture.md
       - Distributed segment index: distributed-segment-index.md
       - Remote query contract: remote-query-contract.md
@@ -85,6 +91,7 @@ nav:
       - Integration testing: integration-test-strategy.md
   - Benchmarks:
       - Overview: benchmark.md
+      - HTTP server benchmarks: http-server-benchmarks.md
       - LongMemEval strategies: longmemeval-strategies.md
       - Comparison: comparison.md
       - Integration benchmark README: benchmark-integration.md

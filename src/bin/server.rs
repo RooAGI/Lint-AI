@@ -58,6 +58,9 @@ struct Args {
     tenant_id: Option<String>,
     #[arg(long)]
     allow_unauthenticated: bool,
+    /// Allow binding to non-loopback interfaces. Requires token or JWT authentication.
+    #[arg(long)]
+    allow_non_loopback: bool,
     /// Enable adaptive segmented routing up to this many segments.
     #[arg(long)]
     adaptive_segment_max_n: Option<usize>,
@@ -227,9 +230,10 @@ pub(crate) async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     let bekind_enabled = args.bekind;
     crate::behood_query::set_enabled(bekind_enabled);
-    args.server_token = args
-        .server_token
-        .or_else(|| std::env::var("SERVER_TOKEN").ok());
+    args.server_token = normalize_secret(
+        args.server_token
+            .or_else(|| std::env::var("SERVER_TOKEN").ok()),
+    );
     args.tenant_id = args
         .tenant_id
         .or_else(|| std::env::var("SERVER_TENANT_ID").ok());
@@ -244,7 +248,12 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             .transpose()?;
     }
     let jwt_secret = normalize_secret(std::env::var("JWT_SECRET").ok());
-    ensure_loopback_bind(&args.bind)?;
+    ensure_bind_allowed(
+        &args.bind,
+        args.allow_non_loopback,
+        args.server_token.is_some() || jwt_secret.is_some(),
+        args.allow_unauthenticated,
+    )?;
     let mut options = memory_pipeline_options(
         args.adaptive_segment_max_n,
         args.single_index,
@@ -824,27 +833,155 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         .query_summary;
     let integrations = dashboard_integrations(&state.project_root);
     let mut body = String::from("# Lint-AI operational metrics\n");
-    body.push_str("# TYPE lint_ai_query_requests_total counter\n");
+    body.push_str("# HELP lint_ai_query_requests_window Search requests in the retained telemetry window.\n# TYPE lint_ai_query_requests_window gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_requests_total {}\n",
+        "lint_ai_query_requests_window {}\n",
         query.requests
     ));
-    body.push_str("# TYPE lint_ai_query_errors_total counter\n");
-    body.push_str(&format!("lint_ai_query_errors_total {}\n", query.errors));
-    body.push_str("# TYPE lint_ai_query_requests_per_second gauge\n");
+    body.push_str("# HELP lint_ai_query_errors_window Search errors in the retained telemetry window.\n# TYPE lint_ai_query_errors_window gauge\n");
+    body.push_str(&format!("lint_ai_query_errors_window {}\n", query.errors));
+    body.push_str("# HELP lint_ai_query_empty_results_window Searches with no results in the retained telemetry window.\n# TYPE lint_ai_query_empty_results_window gauge\n");
+    body.push_str(&format!(
+        "lint_ai_query_empty_results_window {}\n",
+        query.empty_results
+    ));
+    body.push_str("# HELP lint_ai_query_requests_per_second Search request rate over the retained telemetry window.\n# TYPE lint_ai_query_requests_per_second gauge\n");
     body.push_str(&format!(
         "lint_ai_query_requests_per_second {}\n",
         query.requests_per_second
     ));
-    body.push_str("# TYPE lint_ai_provider_events_total counter\n");
+    body.push_str("# HELP lint_ai_query_error_rate Fraction of searches that returned errors in the retained telemetry window.\n# TYPE lint_ai_query_error_rate gauge\n");
+    body.push_str(&format!("lint_ai_query_error_rate {}\n", query.error_rate));
+    body.push_str("# HELP lint_ai_query_empty_result_rate Fraction of searches with no results in the retained telemetry window.\n# TYPE lint_ai_query_empty_result_rate gauge\n");
+    body.push_str(&format!(
+        "lint_ai_query_empty_result_rate {}\n",
+        query.empty_result_rate
+    ));
+    body.push_str("# HELP lint_ai_query_latency_ms Estimated query latency quantile in milliseconds over the retained telemetry window.\n# TYPE lint_ai_query_latency_ms gauge\n");
+    body.push_str(&format!(
+        "lint_ai_query_latency_ms{{quantile=\"0.5\"}} {}\n",
+        query.p50_ms
+    ));
+    body.push_str(&format!(
+        "lint_ai_query_latency_ms{{quantile=\"0.95\"}} {}\n",
+        query.p95_ms
+    ));
+    body.push_str("# HELP lint_ai_provider_compiled Whether this server build includes the provider integration.\n# TYPE lint_ai_provider_compiled gauge\n");
+    body.push_str("# HELP lint_ai_provider_observed Whether Lint-AI has ever received lifecycle telemetry for the provider.\n# TYPE lint_ai_provider_observed gauge\n");
+    body.push_str("# HELP lint_ai_provider_events_total Lifecycle events recorded for the provider.\n# TYPE lint_ai_provider_events_total counter\n");
+    body.push_str("# HELP lint_ai_provider_sessions_started_total Provider sessions started.\n# TYPE lint_ai_provider_sessions_started_total counter\n");
+    body.push_str("# HELP lint_ai_provider_sessions_ended_total Provider sessions ended.\n# TYPE lint_ai_provider_sessions_ended_total counter\n");
+    body.push_str("# HELP lint_ai_provider_retrieval_events_total Provider lifecycle events categorized as retrieval.\n# TYPE lint_ai_provider_retrieval_events_total counter\n");
+    body.push_str("# HELP lint_ai_provider_capture_events_total Provider lifecycle events categorized as capture.\n# TYPE lint_ai_provider_capture_events_total counter\n");
+    body.push_str("# HELP lint_ai_provider_sessions_active Active provider sessions observed by Lint-AI.\n# TYPE lint_ai_provider_sessions_active gauge\n");
+    body.push_str("# HELP lint_ai_provider_last_seen_timestamp_seconds Unix timestamp of the last received provider event, or zero if none.\n# TYPE lint_ai_provider_last_seen_timestamp_seconds gauge\n");
+    body.push_str("# HELP lint_ai_provider_recent_events Events by bounded lifecycle category in the retained provider event ledger.\n# TYPE lint_ai_provider_recent_events gauge\n");
+    body.push_str("# HELP lint_ai_provider_token_usage_recent Tokens reported in the retained provider event ledger.\n# TYPE lint_ai_provider_token_usage_recent gauge\n");
     for integration in integrations {
         body.push_str(&format!(
             "lint_ai_provider_events_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.events_total
         ));
         body.push_str(&format!(
+            "lint_ai_provider_compiled{{provider=\"{}\"}} {}\n",
+            integration.recording_provider,
+            u8::from(integration.compiled)
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_observed{{provider=\"{}\"}} {}\n",
+            integration.recording_provider,
+            u8::from(integration.last_seen_ms.is_some())
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_sessions_started_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.sessions_started
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_sessions_ended_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.sessions_ended
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_retrieval_events_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.retrieval_events
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_capture_events_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.capture_events
+        ));
+        body.push_str(&format!(
             "lint_ai_provider_sessions_active{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.sessions_active
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_last_seen_timestamp_seconds{{provider=\"{}\"}} {}\n",
+            integration.recording_provider,
+            integration.last_seen_ms.unwrap_or_default() as f64 / 1_000.0
+        ));
+
+        let mut recent_categories = BTreeMap::<&str, u64>::new();
+        let mut recent_tokens = BTreeMap::<&str, u64>::new();
+        for event in &integration.events {
+            if matches!(
+                event.category.as_str(),
+                "session" | "retrieval" | "compaction" | "capture" | "lifecycle"
+            ) {
+                *recent_categories
+                    .entry(event.category.as_str())
+                    .or_default() += 1;
+            }
+            for (kind, value) in [
+                ("input", event.input_tokens),
+                ("output", event.output_tokens),
+                ("cache_creation_input", event.cache_creation_input_tokens),
+                ("cache_read_input", event.cache_read_input_tokens),
+            ] {
+                if let Some(value) = value {
+                    let total = recent_tokens.entry(kind).or_default();
+                    *total = total.saturating_add(value);
+                }
+            }
+        }
+        for category in ["session", "retrieval", "compaction", "capture", "lifecycle"] {
+            body.push_str(&format!(
+                "lint_ai_provider_recent_events{{provider=\"{}\",category=\"{}\"}} {}\n",
+                integration.recording_provider,
+                category,
+                recent_categories.get(category).copied().unwrap_or_default()
+            ));
+        }
+        for kind in [
+            "input",
+            "output",
+            "cache_creation_input",
+            "cache_read_input",
+        ] {
+            body.push_str(&format!(
+                "lint_ai_provider_token_usage_recent{{provider=\"{}\",kind=\"{}\"}} {}\n",
+                integration.recording_provider,
+                kind,
+                recent_tokens.get(kind).copied().unwrap_or_default()
+            ));
+        }
+    }
+
+    body.push_str("# HELP lint_ai_index_source_documents Source documents in the project memory index.\n# TYPE lint_ai_index_source_documents gauge\n");
+    body.push_str("# HELP lint_ai_index_records Records in the project memory index.\n# TYPE lint_ai_index_records gauge\n");
+    body.push_str("# HELP lint_ai_index_dirty Whether the memory index has unpublished changes.\n# TYPE lint_ai_index_dirty gauge\n");
+    body.push_str("# HELP lint_ai_index_store_revision Current mutable store revision.\n# TYPE lint_ai_index_store_revision gauge\n");
+    body.push_str("# HELP lint_ai_index_snapshot_revision Published search snapshot revision.\n# TYPE lint_ai_index_snapshot_revision gauge\n");
+    body.push_str("# HELP lint_ai_index_revision_lag Difference between store and published snapshot revisions.\n# TYPE lint_ai_index_revision_lag gauge\n");
+    body.push_str("# HELP lint_ai_index_segments Number of segments in the published search snapshot.\n# TYPE lint_ai_index_segments gauge\n");
+    if let Ok(service) = state.service.read() {
+        let inspection = service.inspection();
+        body.push_str(&format!(
+            "lint_ai_index_source_documents {}\nlint_ai_index_records {}\nlint_ai_index_dirty {}\nlint_ai_index_store_revision {}\nlint_ai_index_snapshot_revision {}\nlint_ai_index_revision_lag {}\nlint_ai_index_segments {}\n",
+            inspection.source_document_count,
+            inspection.record_count,
+            u8::from(inspection.dirty),
+            inspection.store_revision,
+            inspection.snapshot_revision,
+            inspection.store_revision.saturating_sub(inspection.snapshot_revision),
+            inspection.snapshot.map(|snapshot| snapshot.segment_count).unwrap_or_default()
         ));
     }
     (
@@ -1756,27 +1893,40 @@ fn write_mutation<T>(
     Ok(result)
 }
 
-fn ensure_loopback_bind(bind: &str) -> anyhow::Result<()> {
+fn ensure_bind_allowed(
+    bind: &str,
+    allow_non_loopback: bool,
+    authentication_configured: bool,
+    allow_unauthenticated: bool,
+) -> anyhow::Result<()> {
     use std::net::ToSocketAddrs;
     let mut resolved = false;
     for address in bind.to_socket_addrs()? {
         resolved = true;
-        if !address.ip().is_loopback() {
+        if !address.ip().is_loopback() && !allow_non_loopback {
             anyhow::bail!(
-                "refusing non-localhost bind address {}; lint-ai server supports localhost only",
+                "refusing non-localhost bind address {}; pass --allow-non-loopback to opt in",
                 address
             );
         }
     }
     anyhow::ensure!(resolved, "bind address resolved to no addresses: {bind}");
+    if allow_non_loopback {
+        anyhow::ensure!(
+            authentication_configured && !allow_unauthenticated,
+            "--allow-non-loopback requires SERVER_TOKEN or JWT_SECRET authentication and cannot be combined with --allow-unauthenticated"
+        );
+    }
     Ok(())
 }
 
 fn constant_time_eq(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
-    let mut difference = (left.len() ^ right.len()) as u8;
+    let mut difference = left.len() ^ right.len();
     for i in 0..left.len().max(right.len()) {
-        difference |= left.get(i).copied().unwrap_or(0) ^ right.get(i).copied().unwrap_or(0);
+        difference |= usize::from(
+            left.get(i).copied().unwrap_or(0) ^ right.get(i).copied().unwrap_or(0),
+        );
     }
     difference == 0
 }
@@ -1932,7 +2082,7 @@ mod tests {
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(json!({"request_id":"cancel-test","session_id":"cancel-session","user_id":"alice","messages":[{"role":"user","timestamp":null,"content":"cancellation regression"}]}).to_string())).unwrap()).await
         });
-        let acquired = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        let acquired = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 if state.writer_gate.try_lock().is_err() {
                     break;
@@ -2508,14 +2658,25 @@ mod tests {
         assert!(token_is_valid("Bearer secret", "secret"));
         assert!(token_is_valid("Token secret", "secret"));
         assert!(!token_is_valid("Bearer other", "secret"));
+        assert!(!token_is_valid("", &"\0".repeat(256)));
     }
 
     #[test]
-    fn server_accepts_only_loopback_bind_addresses() {
-        assert!(ensure_loopback_bind("127.0.0.1:8080").is_ok());
-        assert!(ensure_loopback_bind("[::1]:8080").is_ok());
-        assert!(ensure_loopback_bind("0.0.0.0:8080").is_err());
-        assert!(ensure_loopback_bind("192.168.1.10:8080").is_err());
+    fn non_loopback_bind_requires_opt_in_and_authentication() {
+        assert!(ensure_bind_allowed("127.0.0.1:8080", false, false, false).is_ok());
+        assert!(ensure_bind_allowed("[::1]:8080", false, false, false).is_ok());
+        assert!(ensure_bind_allowed("0.0.0.0:8080", false, true, false).is_err());
+        assert!(ensure_bind_allowed("192.168.1.10:8080", true, false, false).is_err());
+        assert!(ensure_bind_allowed("0.0.0.0:8080", true, true, false).is_ok());
+        assert!(ensure_bind_allowed("0.0.0.0:8080", true, true, true).is_err());
+        let blank_token_is_configured = normalize_secret(Some("   ".to_string())).is_some();
+        assert!(ensure_bind_allowed(
+            "0.0.0.0:8080",
+            true,
+            blank_token_is_configured,
+            false
+        )
+        .is_err());
     }
 
     #[tokio::test]

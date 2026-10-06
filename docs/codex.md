@@ -1,229 +1,54 @@
-# Codex Integration
+# Use Lint-AI with Codex
 
-Lint-AI can run as a Codex memory layer and provide persistent, segmented
-project memory through Codex lifecycle hooks.
+Connect Lint-AI to a project so Codex can find earlier decisions and save
+useful outcomes as work continues. Codex memory is stored with the project in
+`.lint-ai/memory/` and can be shared with other connected agents.
 
-Codex support is isolated behind a non-default Cargo feature. Build a local
-integration-enabled binary with:
+## 1. Install Lint-AI
 
-```bash
-cargo build --release --features codex
-```
-
-The default core library and binary do not expose Codex-specific protocol
-types, commands, or configuration behavior. Published standalone CLI release
-assets can enable the feature explicitly.
-
-## Install
-
-From the repository root:
+On macOS or Linux, download and verify the official release with:
 
 ```bash
-./lint-ai --codex-install /path/to/repo
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh
 ```
 
-By default this should:
+On Windows, download `lint-ai-windows-x86_64.exe` from the
+[release page](https://github.com/RooAGI/Lint-AI/releases/latest).
 
-- merge a disabled `mcp_servers.lint-ai` entry into `~/.codex/config.toml`
-- write a project-scoped `mcp_servers.lint-ai` entry to
-  `<project>/.codex/config.toml`, with its working directory set to that repo
-- enable Codex's stable `[features].hooks = true` gate while preserving other
-  feature flags
-- merge Lint-AI commands into `~/.codex/hooks.json` for the supported Codex
-  lifecycle events
-- merge the Lint-AI memory policy into the project's `AGENTS.md`, which Codex
-  uses for standing project instructions
-- preserve unrelated MCP servers, hooks, and settings
+## 2. Enable Lint-AI for this project
 
-The user-global MCP entry is disabled, so projects without an installed and
-trusted project config cannot accidentally query another repository's memory.
-The project-scoped entry sets the MCP process working directory to the
-installed repository. Separate projects therefore get separate roots, while
-multiple Codex sessions in one project share that project's memory store.
-Codex loads project config only for trusted projects; the project's `.codex/`
-settings must be trusted in Codex.
-
-Codex's built-in TUI status line currently accepts only Codex-defined item
-identifiers, so installation does not inject an unsupported custom item. The
-Lint-AI state is available inside Codex through
-`mcp__lint-ai__lint_ai_status`, which returns both memory and recording state
-plus compact display text such as `Lint-AI:ON | Record:OFF`. External
-terminal/status-bar integrations can use the provider-owned
-`--codex-statusline` command.
-
-Codex project memory should be persisted under:
-
-```text
-<project>/.lint-ai/memory/
-```
-
-Hook execution is fail-open: recording, indexing, or retrieval failures are
-reported diagnostically and do not block Codex from continuing its session.
-
-After installation, restart Codex Desktop so its app-server reloads
-`config.toml` and `hooks.json`. Desktop versions that enforce hook trust may
-also require approving the installed commands before they become runnable.
-
-`SessionStart`, `UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`,
-`PostToolUse`, and `SubagentStart` retrieve context.
-`PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, and `SubagentStop` capture
-bounded session memory. A new session segment is created lazily by the first
-capture hook, not by `SessionStart`.
-
-Supported Codex hooks:
-
-Hook execution is fail-open and bounded by a 2-second budget by default. Set
-`LINT_AI_HOOK_TIMEOUT_MS` to tune it; values are clamped to 100–30,000 ms.
-Timeouts are reported on stderr while the provider receives valid fallback JSON.
-
-- `SessionStart`
-- `UserPromptSubmit`
-- `PreToolUse`
-- `PostToolUse`
-- `UserPromptExpansion`
-- `PreCompact`
-- `PostCompact`
-- `Stop`
-- `SessionEnd`
-- `SubagentStart`
-- `SubagentStop`
-
-Durable captures should be compact structured records rather than raw
-conversation transcripts. Retrieved records should include capture/current Git
-revisions and an exact, ancestor, diverged, or unknown revision status.
-
-Retrieval should inject at most one preferred document per session and use
-bounded query-relevant excerpts instead of complete records.
-
-## Runtime controls and session recording
-
-The Codex MCP server exposes the same provider-neutral control tools as the
-Claude integration:
-
-| Tool | Purpose |
-|---|---|
-| `record_session` | Start, stop, or inspect local capture-only recording |
-| `enable_lint_ai` | Enable memory retrieval/capture and recording by default |
-| `disable_lint_ai` | Disable Lint-AI memory behavior without changing recording |
-| `lint_ai_status` | Return `Lint-AI:ON/OFF` and `Record:ON/OFF` |
-
-Inside Codex, call `mcp__lint-ai__record_session` with `start`, `stop`, or
-`status`:
-
-```json
-{"action":"start"}
-```
-
-Recording is independent from retrieval, remains local to the current project,
-and is not promoted into durable memory automatically. Codex does not
-currently provide an arbitrary custom TUI status-line item. The state is
-available through `mcp__lint-ai__lint_ai_status` and the external renderer:
+Open a terminal in the project folder and run:
 
 ```bash
-lint-ai --codex-statusline
+lint-ai --codex-install .
 ```
 
-## Replay and A/B comparison
+This enables Codex to use Lint-AI in the project. It configures the MCP connection and hooks, adds the project memory instructions, and preserves your other Codex settings.
 
-Run the same recorded Codex prompts with Lint-AI disabled and enabled:
+On Windows, run this in PowerShell from the project folder (adjust the path if
+you saved the executable elsewhere):
+
+```powershell
+.\lint-ai-windows-x86_64.exe --codex-install .
+```
+
+If Codex asks whether to trust the project's configuration or hooks, approve them so the integration can run.
+
+## 3. Try it
+
+Ask Codex to look up a decision from earlier work, or continue work in a new
+session. Lint-AI can bring relevant project memory into the conversation and
+save useful outcomes at session boundaries.
+
+## 4. If memory is not available
+
+Check that the project is trusted in Codex and start a new session. You can
+check the MCP connection with:
 
 ```bash
-lint-ai --replay-session <session-id> \
-  --session-provider codex \
-  --replay-disable-lint-ai
-
-lint-ai --replay-session <session-id> \
-  --session-provider codex \
-  --replay-enable-lint-ai
+lint-ai --codex-verify-mcp .
 ```
 
-Each replay creates a fresh recorded `replay-*` session. Codex starts a new
-conversation for the first prompt and resumes it for subsequent prompts. The
-baseline archive is not modified. Use `--promote-session` to load selected
-recorded events into `.lint-ai/memory/`.
-
-Generate a report from a session archive, or compare baseline and replay:
-
-```bash
-python3 metrics/generate_session_metric_report.py \
-  --session .lint-ai/codex-sessions/<session-id> \
-  --compare-session .lint-ai/codex-sessions/<replay-id> \
-  --output metrics/reports/codex-comparison.json
-```
-
-The report covers quality, token usage, duration, time to first response,
-tool calls, repeated exploration, hook/MCP overhead, memory retrieval, and
-recording completeness. Baseline/replay reports also expose token, latency,
-and quality deltas.
-
-## Performance expectations
-
-The Codex benchmark measures task success, expected-fact accuracy, parent and
-all-model token usage, end-to-end latency, hook and MCP latency, context bytes,
-tool activity, and subagent usage. Results are specific to the
-provider/model/repository/revision under test. Missing Codex usage telemetry
-is represented as unavailable, not zero. See [Codex Performance Test
-Design](codex-performance-tests.md) for the controlled comparison matrix and
-measured run artifacts.
-
-## Inspect Memory
-
-Inspect the persisted store summary:
-
-```bash
-lint-ai --inspect-index .lint-ai/memory
-```
-
-Inspect the documents at each indexing stage:
-
-```bash
-lint-ai --inspect-index .lint-ai/memory --inspect-view source-documents
-lint-ai --inspect-index .lint-ai/memory --inspect-view records
-lint-ai --inspect-index .lint-ai/memory --inspect-view segments
-```
-
-- `source-documents` should show the reconstructed public ingestion objects.
-- `records` should show enriched `DocRecord` values used to build the query
-  index.
-- `segments` should show segment IDs, document membership, and profile sizes.
-
-All views should emit JSON and can be filtered with `jq`.
-
-## Serve
-
-Run the Codex integration server directly:
-
-```bash
-./lint-ai --codex-serve /path/to/repo
-```
-
-The server should expose two tools:
-
-- `search`: run a corpus query and return ranked results plus diagnostics
-- `info`: return basic workspace information
-
-## Verify Installation
-
-After installation, verify that the configured MCP process can start and
-complete both the MCP initialize and tool-list handshakes:
-
-```bash
-LINT_AI_MCP_HEALTH_PATH=/tmp/lint-ai-codex-mcp-health.json \
-  ./lint-ai --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
-```
-
-The command emits JSON with startup and handshake timings, protocol version,
-tool count, and captured server diagnostics. A healthy result has
-`"status": "healthy"`. Use a longer timeout for the first run on a large
-repository because the persistent index may need to be built.
-
-## Notes
-
-- The integration uses Codex's documented lifecycle and hook/config layering
-  rather than inventing a separate memory system.
-- Hook failures should fail open and not block normal Codex execution.
-- Captured transcript input should be bounded and should exclude tool-use
-  blocks.
-- The server should use the existing Rust retrieval stack and the current
-  workspace path as its index root.
-- Existing Codex config entries should be preserved when the installer runs.
+For details, see [all agent integrations](agents.md),
+[Codex performance measurements](codex-performance-tests.md), and
+[session recording](session-recording-design.md).

@@ -1,240 +1,98 @@
-# Quickstart
+# Get started
 
-This guide gives you the shortest path to try Lint-AI on a local repository,
-notes, or an agent-memory corpus. Choose the interface that fits your use case:
+Download Lint-AI, save a few things you want your assistant to remember, and
+ask questions in plain language. You do not need to build the project or learn
+special memory syntax.
 
-- **CLI** for a one-off local scan or query.
-- **Python** for scripting and notebook workflows.
-- **Docker** for a containerized HTTP server.
-- **HTTP server** for an application or service integration.
-- **MCP** for an MCP-capable agent client. See the [MCP interface guide](mcp.md).
+## 1. Download Lint-AI
 
-## Fastest path
+Get the latest published version from the
+[Lint-AI releases page](https://github.com/RooAGI/Lint-AI/releases/latest).
+Choose the download for your computer:
 
-From the repository root, these three commands build Lint-AI, index a corpus,
-and run a query:
+| Computer | Release download |
+|---|---|
+| Mac with Apple silicon | `lint-ai-macos-aarch64` |
+| Mac with Intel | `lint-ai-macos-x86_64` |
+| Linux, 64-bit | `lint-ai-linux-x86_64` |
+| Windows, 64-bit | `lint-ai-windows-x86_64.exe` |
 
-```bash
-cargo build --release
-cargo run --release -- /path/to/repo
-cargo run --release -- --query "your question" /path/to/repo
-```
-
-For an application integration, jump directly to the [Docker](#run-with-docker),
-[HTTP server](server.md),
-[MCP interface](mcp.md), or [other agent frameworks](agent-frameworks.md)
-guide below.
-
-## 1. Build or install
+On macOS or Linux, you can instead run the installer, which downloads the
+official release and checks its SHA-256 checksum:
 
 ```bash
-cargo build --release
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh
 ```
 
-Run the compiled binary directly:
+On Windows, download `lint-ai-windows-x86_64.exe` from the releases page. In
+PowerShell, run it from the download folder; in the commands below, use
+`.\lint-ai-windows-x86_64.exe` instead of `lint-ai`. You can create, edit, and
+remove memory files with Notepad or File Explorer.
+
+Open a new terminal if needed, then confirm it is ready:
 
 ```bash
-target/release/lint-ai --help
+lint-ai --version
 ```
 
-Or install it on your `PATH`:
+## 2. Add something to remember
+
+Create a folder for your memories. Save each thing you want to remember in a
+plain text or Markdown file. Write naturally; Lint-AI searches the words and
+ideas in the file.
 
 ```bash
-cargo install --path .
-lint-ai --help
+mkdir -p ~/my-assistant-memory
+cat > ~/my-assistant-memory/preferences.md <<'EOF'
+I prefer concise answers with a short summary first.
+When explaining code, include a small example.
+EOF
 ```
 
-Tier-1 entity extraction uses spaCy (`en_core_web_sm`) by default when it is
-available, and falls back to the built-in heuristic ranker otherwise (for
-example, when the spaCy model is not installed). Pass
-`--tier1-ner-provider heuristic` to use the heuristic ranker explicitly.
-The rust-bert POS/NER path is experimental and not part of the audited release dependency graph.
+You can add another memory by creating another file or editing an existing one.
+These files stay on your computer unless you choose to connect them to another
+service.
 
-## 2. Lint or index a corpus
+## 3. Ask a question
 
-Point Lint-AI at a repository or memory corpus directory:
+Ask Lint-AI a question about the memories in that folder:
 
 ```bash
-cargo run --release -- /path/to/repo
+lint-ai --query "How do I prefer answers to be written?" ~/my-assistant-memory
 ```
 
-If the repository has a `docs/` folder, the tool will usually scope itself there automatically.
-
-Lint-AI discovers `lint-ai.json` beside the target corpus, or accepts an
-explicit file with `--config PATH`. A malformed configuration prints a warning
-and falls back to defaults. Use `--strict-config` in CI or production when a
-missing, oversized, or malformed configuration must fail the command instead.
-
-## 3. Inspect the corpus
-
-Show the derived inventory:
+To print a short answer context that you can paste into an AI assistant, use
+`--llm-context`:
 
 ```bash
-cargo run --release -- /path/to/repo/docs --show-concepts
-cargo run --release -- /path/to/repo/docs --show-headings
+lint-ai --llm-context "How do I prefer answers to be written?" ~/my-assistant-memory
 ```
 
-Show the entity and term views:
+Ask a new question whenever you want to look something up. To show more
+matches, add `--result-count 10`.
+
+## 4. Change or forget a memory
+
+Edit a file to change what it says. Run your question again to search the
+updated memory. To forget a memory, remove its file:
 
 ```bash
-cargo run --release -- /path/to/repo --show-tier0
-cargo run --release -- /path/to/repo --show-tier1-entities
-cargo run --release -- /path/to/repo --show-tier1-terms --tier1-term-ranker yake
+rm ~/my-assistant-memory/preferences.md
 ```
 
-If you want heuristic entity extraction instead of the spaCy default:
+You can also keep a memory by moving its file outside the memory folder. Each
+file is one piece of information, so it is easy to update or remove just that
+memory.
 
-```bash
-cargo run --release -- /path/to/repo --show-tier1-entities \
-  --tier1-ner-provider heuristic
-```
+## Use Lint-AI inside an AI tool
 
-## 4. Query the corpus
+Lint-AI connects to Codex, Claude Code, Gemini CLI, Antigravity CLI, OpenClaw,
+Hermes, Muse Code, and RooAGI AgentFlow. Choose your agent in the
+[agent setup guide](connect-agent.md) for the right installation steps.
 
-Ask a simple memory retrieval question:
+## More ways to use Lint-AI
 
-```bash
-cargo run --release -- --query "docker install linux" /path/to/repo/docs
-```
-
-Ask for LLM-ready retrieval context:
-
-```bash
-cargo run --release -- --llm-context "docker install linux" /path/to/repo/docs
-```
-
-## Run with Docker
-
-The repository includes a Compose configuration. Set a token, then build and
-start the server from the repository root:
-
-```bash
-export SERVER_TOKEN=local-dev-token
-docker compose up --build -d
-```
-
-The service uses a named Docker volume for the persistent index. Verify that it
-is ready:
-
-```bash
-curl http://127.0.0.1:8080/health
-```
-
-To stop it:
-
-```bash
-docker compose down
-```
-
-The image runs the release HTTP server on `0.0.0.0:8080` and stores its
-file-backed index under `/data/index`. For a one-off container without Compose,
-see the [HTTP server guide](server.md).
-
-## 6. Run the HTTP server
-
-Use the standalone server when another application will add and search
-memories over HTTP:
-
-```bash
-cargo run --release --bin server -- \
-  --bind 127.0.0.1:8080 \
-  --index .lint-ai/memory-index
-```
-
-Check that it is ready:
-
-```bash
-curl http://127.0.0.1:8080/health
-```
-
-See the [HTTP server guide](server.md) for the request contract,
-authentication, lifecycle operations, and performance measurements.
-
-## 7. Connect an agent with MCP
-
-MCP is for agent clients that support the Model Context Protocol. Install and
-configure the provider-specific adapter, then restart the client so it loads
-Lint-AI's MCP server and hooks. Start with the [agent integrations guide](agents.md)
-or the [MCP interface guide](mcp.md). HTTP and MCP are optional; the CLI and
-Rust library work without an agent client.
-
-## 8. Use it from Python
-
-The Python extension exposes the application-facing `Memory` service with
-`add`, `search`, `get`, `list`, `update`, `delete`, and `refresh` methods. Build
-it locally with [uv](https://docs.astral.sh/uv/) and
-[maturin](https://www.maturin.rs/):
-
-```bash
-uv venv --python 3.10
-source .venv/bin/activate
-uv pip install "maturin>=1.9.4,<2"
-maturin develop --release --uv
-```
-
-The active uv environment selects the Python interpreter, and Maturin handles
-the extension-module linker configuration. To build a wheel for distribution,
-run `maturin build --release`; it writes the wheel under `target/wheels/`.
-
-Then use it from Python:
-
-```python
-import lint_ai
-
-memory = lint_ai.Memory(path="./memory-index")
-memory.add(
-    "request-1",
-    "user-1",
-    "session-1",
-    [{"role": "user", "content": "Docker runs on Ubuntu hosts"}],
-)
-print(memory.search("docker ubuntu", "user-1", 5))
-```
-
-For a server-backed client, use `lint_ai.Memory(base_url=url, api_key=key)`
-with the same lifecycle methods. Pass `base_url` by keyword; the first positional
-argument is the local index path.
-
-The Python `IndexStore` binding was removed in 0.3.0. Use `Memory` for Python
-applications and `MemoryService` for Rust memory access. See
-`docs/python-migration-0.3.0.md` for the migration guide.
-
-## 9. Use it as a Rust library
-
-Use `MemoryService` for all memory access. Its supporting data types are
-available at the crate root; stores, indexes, snapshots, and builders are internal.
-
-```rust
-use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
-use std::collections::BTreeMap;
-
-fn main() -> anyhow::Result<()> {
-    let mut memory = MemoryService::in_memory(PipelineOptions::default());
-    memory.upsert(SourceDocument::with_stable_doc_id_from_source(
-        "artifact://artifact-1".into(),
-        "Docker install guide for Linux hosts".into(),
-        "docker install".into(),
-        None, vec!["Overview".into()], vec![], None, None,
-    ));
-    memory.refresh()?;
-    let results = memory.search_with_filters(
-        "docker install", "artifacts", None, 5, &BTreeMap::new(),
-    )?;
-    println!("{}", serde_json::to_string_pretty(&results)?);
-    Ok(())
-}
-```
-
-For persistence, construct the service with an explicit store root:
-
-```rust
-use lint_ai::{MemoryService, PipelineOptions};
-
-let memory = MemoryService::at_path(
-    "/path/to/corpus/.lint-ai/memory", PipelineOptions::default(),
-)?;
-# Ok::<(), anyhow::Error>(())
-```
-
-Use `add` and `add_batch` for user/session memories. See the
-[API migration guide](memory-service-api.md) for changes from direct index access.
+The command line is the simplest way to try personal memory. Developers can
+connect applications through the [HTTP API](server.md), [MCP](mcp.md),
+[Python](python-migration-0.3.0.md), or [Rust](memory-service-api.md)
+interfaces.

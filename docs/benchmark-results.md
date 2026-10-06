@@ -29,11 +29,11 @@ different metric from the comparison headline), see
 The rust-bert POS/NER branch is reported separately in
 [`benchmark/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/README.md).
 
-### Latest standalone rerun (2026-10-04)
+### Previous standalone rerun (2026-10-04)
 
 The 500-question release run used the heuristic NER backend, single-index
-mode, no embeddings, and cutoffs 1, 3, 5, 10, and 20. Its detailed report is
-`comparison/results/retrieval-longmemeval-current-2026-10-04.json.gz`.
+mode, no embeddings, and cutoffs 1, 3, 5, 10, and 20. It is retained here as
+the previous measurement for comparison.
 
 | Metric | Result |
 |---|---:|
@@ -41,26 +41,46 @@ mode, no embeddings, and cutoffs 1, 3, 5, 10, and 20. Its detailed report is
 | Any-hit Recall@5 / @10 / @20 | 94.2% / 96.8% / 97.6% |
 | MRR | 87.0% |
 | NDCG@10 | 85.11% |
-| Search latency, mean / p50 / p95 | 2.68 / 2.15 / 4.47 ms |
+| Search latency, mean | 2.68 ms |
 
 The latency measures the `MemoryService::search` call and excludes indexing the
 question's haystack. The older published 13.0 ms latency uses a different
 timing scope, so it should not be compared directly.
 
+### Current Tantivy 0.25.0 rerun (2026-10-05)
+
+This is the latest 500-question single-index run after the staged-write work.
+It used a release profile, heuristic backend, and no embeddings. The source
+tree contained local changes, so this is a working-tree result, not a tagged
+release measurement. Retrieval quality matches the previous run at the
+displayed precision; mean search latency is 2.58 ms.
+
+| Metric | Result |
+|---|---:|
+| Fractional Recall@5 / @10 / @20 | 86.37% / 91.89% / 92.93% |
+| Any-hit Recall@5 / @10 / @20 | 94.2% / 96.8% / 97.6% |
+| MRR | 86.97% |
+| NDCG@10 | 85.11% |
+| Mean search latency | 2.58 ms |
+
+Report: [latest 500-question run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz).
+
 ## Segmented-index comparison (500 questions)
 
-The 2026-10-04 segmented benchmark evaluated all 500 eligible LongMemEval-S
-questions. These variants share the same dataset and harness, including a
-single-index control:
+The latest segmented benchmark evaluated all 500 eligible LongMemEval-S
+questions using Tantivy 0.25.0 and the experimental segmented feature. These
+variants share the same dataset and harness, including a single-index control.
+The source tree contained local changes, so this is a working-tree result.
 
 | Mode | Any-hit Recall@5 | Any-hit Recall@10 | Fractional Recall@5 | MRR | Average latency |
 |---|---:|---:|---:|---:|---:|
-| Segmented (fixed top-5) | 94.20% | 94.20% | **86.77%** | 0.880 | 4.08 ms |
-| Segmented (adaptive 5→12, enriched) | 94.20% | 96.20% | 85.64% | 0.869 | 7.05 ms |
-| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.77 ms |
-| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 29.47 ms |
-| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 26.98 ms |
-| Single-index control | 94.40% | 96.60% | 86.41% | **0.872** | 14.34 ms |
+| Segmented (fixed top-5) | 94.20% | 94.20% | 86.77% | 0.880 | 2.49 ms |
+| Segmented (enriched + reranked) | 94.20% | 94.20% | 86.77% | 0.881 | 3.85 ms |
+| Adaptive (enriched + reranked) | 94.00% | 96.00% | 86.30% | 0.884 | 7.26 ms |
+| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.71 ms |
+| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 61.84 ms |
+| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 28.05 ms |
+| Single-index control | 94.40% | 96.60% | 86.41% | 0.872 | 13.45 ms |
 
 The run used the heuristic backend, fixed top-5 routing, adaptive expansion to
 12 segments, and the `coverage-local` router. Latency is per-query benchmark
@@ -69,10 +89,10 @@ to the standalone MemoryService timing in the 500-question headline above.
 Fused temporal + global had the strongest recall and MRR among these listed
 variants, with higher latency; the intent baseline was the fastest listed.
 
-Full report: [`segment-longmemeval-500-2026-10-04.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-04.json.gz).
+Full report: [`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 
-### Tantivy 0.26.2 segmented rerun (2026-10-05)
+### Historical Tantivy 0.26.2 segmented rerun (2026-10-05)
 
 The same 500-question segmented comparison was rerun with Tantivy 0.26.2 and
 the experimental feature. Compared with the October 4 Tantivy 0.25.0 run,

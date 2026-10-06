@@ -2,6 +2,18 @@
 use super::*;
 use std::io::Write;
 
+pub(super) struct PendingPublication {
+    receiver: Mutex<std::sync::mpsc::Receiver<anyhow::Result<PublicationResult>>>,
+    changed: HashSet<String>,
+}
+
+struct PublicationResult {
+    view: Box<MemoryService>,
+    receipts: HashMap<(String, String), WriteAdjudicationReceipt>,
+    checkpoint_prefix: Option<u64>,
+    checkpoint: Option<crate::pipeline::PreparedCheckpoint>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StagedAddResponse {
     pub success: bool,
@@ -14,18 +26,240 @@ pub struct StagedAddResponse {
 
 impl MemoryService {
     pub(crate) fn published_read_view(&self) -> Self {
+        self.read_view_with_store(self.store.published_read_view())
+    }
+
+    fn read_view_with_store(&self, store: IndexStore) -> Self {
         Self {
-            store: self.store.published_read_view(),
+            store,
             superseded_ids: self.superseded_ids.clone(),
             request_fingerprints: HashMap::new(),
             request_receipts: HashMap::new(),
             receipts_path: None,
             pending_adds: HashMap::new(),
+            publication: None,
             conversation_states: Arc::clone(&self.conversation_states),
             relations_cache: Mutex::new(RelationsCache::default()),
             enrichment: Arc::new(Mutex::new(KeyPhraseEnrichment::default())),
             board_state: Mutex::new(BoardState::default()),
         }
+    }
+
+    pub(crate) fn publication_in_flight(&self) -> bool {
+        self.publication.is_some()
+    }
+
+    /// Begin one owned build. Pending adds remain counted until completion.
+    pub(crate) fn begin_publication(&mut self) -> anyhow::Result<()> {
+        self.begin_publication_build(|| {})
+    }
+
+    pub(crate) fn begin_checkpoint_publication(&mut self) -> anyhow::Result<()> {
+        self.begin_publication_job(true, || {})
+    }
+
+    pub(crate) fn publication_revisions(&self) -> (u64, u64, u64) {
+        (
+            self.store.store_revision(),
+            self.store.snapshot_revision(),
+            self.store.checkpoint_revision(),
+        )
+    }
+
+    pub(crate) fn completed_add_responses(
+        &self,
+        requests: &[AddRequest],
+    ) -> anyhow::Result<Vec<AddResponse>> {
+        requests
+            .iter()
+            .map(|request| {
+                let key = (request.user_id.clone(), request.request_id.clone());
+                let receipt = self
+                    .request_receipts
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| self.rebuild_receipt(&key));
+                anyhow::ensure!(
+                    !self.pending_adds.contains_key(&key),
+                    "request has not been published"
+                );
+                Ok(AddResponse {
+                    success: true,
+                    request_id: request.request_id.clone(),
+                    user_id: request.user_id.clone(),
+                    session_id: request.session_id.clone(),
+                    adjudication: receipt,
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn begin_publication_paused(
+        &mut self,
+        gate: std::sync::mpsc::Receiver<()>,
+    ) -> anyhow::Result<()> {
+        self.begin_publication_build(move || gate.recv().unwrap())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn begin_checkpoint_publication_paused(
+        &mut self,
+        gate: std::sync::mpsc::Receiver<()>,
+    ) -> anyhow::Result<()> {
+        self.begin_publication_job(true, move || gate.recv().unwrap())
+    }
+
+    fn begin_publication_build(
+        &mut self,
+        before_build: impl FnOnce() + Send + 'static,
+    ) -> anyhow::Result<()> {
+        self.begin_publication_job(false, before_build)
+    }
+
+    fn begin_publication_job(
+        &mut self,
+        checkpoint: bool,
+        before_build: impl FnOnce() + Send + 'static,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(self.publication.is_none(), "publication already in flight");
+        self.drain_enrichment_inbox();
+        let store = self.store.publication_build_view()?;
+        let changed = self.store.pending_snapshot_changes();
+        let mut view = self.read_view_with_store(store);
+        let pending = self.pending_adds.clone();
+        let prepare_checkpoint = checkpoint && self.store.store_paths.semantic_dir.is_some();
+        // Captured under the mutable owner, after the corresponding record
+        // state. Later journal appends are not covered by this checkpoint.
+        let checkpoint_prefix = if checkpoint {
+            Some(match self.staged_journal_path() {
+                Some(path) if path.exists() => {
+                    crate::pipeline::persistence::ensure_safe_output_path(&path)?;
+                    std::fs::metadata(path)?.len()
+                }
+                _ => 0,
+            })
+        } else {
+            None
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("memory-publisher".into())
+            .spawn(move || {
+                before_build();
+                let result = (|| -> anyhow::Result<PublicationResult> {
+                    view.store.build_prepared_snapshot()?;
+                    let prepared_checkpoint = if prepare_checkpoint {
+                        Some(view.store.prepare_checkpoint()?)
+                    } else {
+                        None
+                    };
+                    let receipts = pending
+                        .into_iter()
+                        .map(|(key, documents)| {
+                            let receipt =
+                                view.build_adjudication_receipt(key.1.clone(), &documents);
+                            (key, receipt)
+                        })
+                        .collect();
+                    Ok(PublicationResult {
+                        view: Box::new(view),
+                        receipts,
+                        checkpoint_prefix,
+                        checkpoint: prepared_checkpoint,
+                    })
+                })();
+                let _ = sender.send(result);
+            })?;
+        self.publication = Some(PendingPublication {
+            receiver: Mutex::new(receiver),
+            changed,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn poll_publication(&mut self) -> anyhow::Result<Option<Self>> {
+        let Some(pending) = self.publication.as_ref() else {
+            return Ok(None);
+        };
+        let result = match pending
+            .receiver
+            .lock()
+            .map_err(|_| anyhow::anyhow!("publication receiver poisoned"))?
+            .try_recv()
+        {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(None),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err(anyhow::anyhow!("publication builder disconnected"))
+            }
+        };
+        let pending = self.publication.take().expect("publication present");
+        self.complete_publication(result?, &pending.changed)
+    }
+
+    fn wait_publication(&mut self) -> anyhow::Result<()> {
+        let Some(pending) = self.publication.take() else {
+            return Ok(());
+        };
+        let result = pending
+            .receiver
+            .into_inner()
+            .map_err(|_| anyhow::anyhow!("publication receiver poisoned"))?
+            .recv()
+            .map_err(|_| anyhow::anyhow!("publication builder disconnected"))??;
+        self.complete_publication(result, &pending.changed)?;
+        Ok(())
+    }
+
+    fn complete_publication(
+        &mut self,
+        result: PublicationResult,
+        changed: &HashSet<String>,
+    ) -> anyhow::Result<Option<Self>> {
+        if let Some(prefix) = result.checkpoint_prefix {
+            self.store
+                .checkpoint_publication_view(&result.view.store, result.checkpoint.as_ref())?;
+            self.reclaim_journal_prefix(prefix)?;
+            self.store
+                .complete_checkpoint(result.view.store.snapshot_revision());
+        }
+        let accepted = self
+            .store
+            .accept_publication_view(&result.view.store, changed);
+        if !accepted && result.view.store.snapshot_revision() < self.store.snapshot_revision() {
+            return Ok(None);
+        }
+        let keys = result.receipts.keys().cloned().collect::<Vec<_>>();
+        self.request_receipts.extend(result.receipts);
+        self.persist_receipts(&keys);
+        for key in keys {
+            self.pending_adds.remove(&key);
+        }
+        Ok(Some(*result.view))
+    }
+
+    fn reclaim_journal_prefix(&self, prefix: u64) -> anyhow::Result<()> {
+        let Some(path) = self.staged_journal_path() else {
+            return Ok(());
+        };
+        if !path.exists() {
+            anyhow::ensure!(prefix == 0, "checkpoint journal disappeared");
+            return Ok(());
+        }
+        crate::pipeline::persistence::ensure_safe_output_path(&path)?;
+        let bytes = std::fs::read(&path)?;
+        let offset = usize::try_from(prefix)?;
+        anyhow::ensure!(
+            offset <= bytes.len(),
+            "checkpoint journal prefix exceeds file length"
+        );
+        anyhow::ensure!(
+            offset == 0 || bytes[offset - 1] == b'\n',
+            "checkpoint prefix is not a transaction boundary"
+        );
+        let remaining = std::str::from_utf8(&bytes[offset..])?;
+        crate::pipeline::persistence::write_private_text_file_atomic(&path, remaining)
     }
     fn staged_journal_path(&self) -> Option<std::path::PathBuf> {
         self.receipts_path
@@ -130,6 +364,9 @@ impl MemoryService {
     }
 
     fn finish_publication(&mut self, checkpoint: bool) -> anyhow::Result<()> {
+        // Synchronous mutations and flush barriers wait for the one builder,
+        // then include any later writes. Never build two generations at once.
+        self.wait_publication()?;
         self.drain_enrichment_inbox();
         if checkpoint {
             self.store.refresh()?;
@@ -159,6 +396,10 @@ impl MemoryService {
             }
         }
         self.pending_adds.clear();
+        if checkpoint {
+            self.store
+                .complete_checkpoint(self.store.snapshot_revision());
+        }
         Ok(())
     }
 
@@ -260,6 +501,154 @@ mod tests {
             filters: None,
         }
     }
+    #[test]
+    fn background_build_accepts_later_writes_and_completes_only_covered_receipts() {
+        for layout in [
+            crate::MemoryIndexLayout::Single,
+            crate::MemoryIndexLayout::Segmented {
+                query_top_n: 8,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::SparseOverlap,
+            },
+        ] {
+            let mut service = MemoryService::in_memory(crate::PipelineOptions {
+                memory_index_layout: layout,
+                ..options()
+            });
+            service.stage_add(request("r1")).unwrap();
+            let (release, gate) = std::sync::mpsc::channel();
+            service
+                .begin_publication_build(move || gate.recv().unwrap())
+                .unwrap();
+            assert!(service.publication_in_flight());
+            assert!(service.begin_publication().is_err());
+            // The builder is explicitly blocked. Acceptance must still work.
+            service.stage_add(request("r2")).unwrap();
+            assert_eq!(service.pending_document_count(), 2);
+            assert!(!service.stage_add(request("r1")).unwrap().published);
+            release.send(()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let view = loop {
+                if let Some(view) = service.poll_publication().unwrap() {
+                    break view;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            };
+            assert_eq!(view.search_cached(query()).unwrap().data.len(), 1);
+            assert_eq!(service.pending_document_count(), 1);
+            assert!(service.stage_add(request("r1")).unwrap().published);
+            assert!(!service.stage_add(request("r2")).unwrap().published);
+            assert!(service
+                .request_receipts
+                .contains_key(&("alice".into(), "r1".into())));
+            assert!(!service
+                .request_receipts
+                .contains_key(&("alice".into(), "r2".into())));
+            service.flush().unwrap();
+            assert_eq!(service.search_cached(query()).unwrap().data.len(), 2);
+            assert_eq!(view.search_cached(query()).unwrap().data.len(), 1);
+            assert!(service.stage_add(request("r2")).unwrap().published);
+        }
+    }
+
+    #[test]
+    fn checkpoint_keeps_journal_suffix_for_writes_accepted_during_build() {
+        let path = root();
+        let mut service = MemoryService::at_path(&path, options()).unwrap();
+        service.stage_add(request("r1")).unwrap();
+        let target = service.publication_revisions().0;
+        let (release, gate) = std::sync::mpsc::channel();
+        service.begin_checkpoint_publication_paused(gate).unwrap();
+        service.stage_add(request("r2")).unwrap();
+        assert!(service.publication_revisions().2 < target);
+        release.send(()).unwrap();
+        service.wait_publication().unwrap();
+        assert_eq!(service.publication_revisions().2, target);
+        assert_eq!(service.pending_document_count(), 1);
+        let journal = std::fs::read_to_string(path.join("pending-adds.jsonl")).unwrap();
+        let transactions = journal
+            .lines()
+            .map(|line| serde_json::from_str::<Vec<AddRequest>>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0][0].request_id, "r2");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(path.join("pending-adds.jsonl"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        drop(service);
+        let recovered = MemoryService::at_path(&path, options()).unwrap();
+        assert_eq!(recovered.search_cached(query()).unwrap().data.len(), 2);
+        drop(recovered);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn failed_checkpoint_does_not_advance_barrier_or_reclaim_journal() {
+        let path = root();
+        let mut service = MemoryService::at_path(&path, options()).unwrap();
+        service.stage_add(request("r1")).unwrap();
+        let before = std::fs::read(path.join("pending-adds.jsonl")).unwrap();
+        std::fs::create_dir_all(path.join("semantic/core.bin")).unwrap();
+        service.begin_checkpoint_publication().unwrap();
+        assert!(service.wait_publication().is_err());
+        assert_eq!(service.publication_revisions().2, 0);
+        assert_eq!(service.pending_document_count(), 1);
+        assert_eq!(
+            std::fs::read(path.join("pending-adds.jsonl")).unwrap(),
+            before
+        );
+        std::fs::remove_dir(path.join("semantic/core.bin")).unwrap();
+        service.flush().unwrap();
+        assert_eq!(service.search_cached(query()).unwrap().data.len(), 1);
+        drop(service);
+        let recovered = MemoryService::at_path(&path, options()).unwrap();
+        assert_eq!(recovered.search_cached(query()).unwrap().data.len(), 1);
+        drop(recovered);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn disconnected_background_builder_retains_work_for_retry() {
+        let mut service = MemoryService::in_memory(options());
+        service.stage_add(request("r1")).unwrap();
+        service
+            .begin_publication_build(|| panic!("injected builder failure"))
+            .unwrap();
+        assert!(service.wait_publication().is_err());
+        assert!(!service.publication_in_flight());
+        assert_eq!(service.pending_document_count(), 1);
+        service.flush().unwrap();
+        assert_eq!(service.search_cached(query()).unwrap().data.len(), 1);
+        assert!(service.stage_add(request("r1")).unwrap().published);
+    }
+
+    #[test]
+    fn restart_recovers_writes_accepted_during_an_unfinished_background_build() {
+        let path = root();
+        let mut service = MemoryService::at_path(&path, options()).unwrap();
+        service.stage_add(request("r1")).unwrap();
+        let (release, gate) = std::sync::mpsc::channel();
+        service
+            .begin_publication_build(move || gate.recv().unwrap())
+            .unwrap();
+        service.stage_add(request("r2")).unwrap();
+        drop(service);
+        release.send(()).unwrap();
+        let recovered = MemoryService::at_path(&path, options()).unwrap();
+        assert_eq!(recovered.search_cached(query()).unwrap().data.len(), 2);
+        drop(recovered);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     #[test]
     fn staged_add_is_durable_without_publication_and_flush_completes_receipt() {
         let path = root();

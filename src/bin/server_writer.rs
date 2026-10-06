@@ -28,6 +28,220 @@ enum Command {
     Flush(Reply),
 }
 
+struct BarrierReply {
+    target: u64,
+    requests: Option<Vec<AddRequest>>,
+    reply: Reply,
+}
+
+fn fail_barriers(barriers: &mut Vec<BarrierReply>, message: &str) {
+    for barrier in barriers.drain(..) {
+        let _ = barrier.reply.send(Err(anyhow::anyhow!("{message}")));
+    }
+}
+
+fn run_writer(
+    service: Arc<RwLock<MemoryService>>,
+    published: Arc<RwLock<Arc<MemoryService>>>,
+    receiver: mpsc::Receiver<Command>,
+    schedule: WriteSchedule,
+) {
+    let mut first_pending: Option<Instant> = None;
+    let mut last_checkpoint = Instant::now();
+    let mut checkpoint_build = false;
+    let mut retry_after: Option<Instant> = None;
+    let mut barriers = Vec::<BarrierReply>::new();
+    loop {
+        let building = service
+            .read()
+            .map(|s| s.publication_in_flight())
+            .unwrap_or(false);
+        let timeout = if building || !barriers.is_empty() {
+            Duration::from_millis(10)
+        } else {
+            first_pending
+                .map(|first| schedule.refresh_interval.saturating_sub(first.elapsed()))
+                .unwrap_or(schedule.refresh_interval)
+        };
+        match receiver.recv_timeout(timeout) {
+            Ok(Command::Add(requests, wait, reply)) => {
+                let result = (|| -> anyhow::Result<(Value, u64)> {
+                    anyhow::ensure!(!wait || barriers.len() < QUEUE_CAPACITY, PendingWriteLimit);
+                    let mut owner = service
+                        .write()
+                        .map_err(|_| anyhow::anyhow!("memory writer poisoned"))?;
+                    if owner.pending_document_count()
+                        + requests.iter().map(|r| r.messages.len()).sum::<usize>()
+                        > MAX_PENDING_DOCUMENTS
+                    {
+                        return Err(PendingWriteLimit.into());
+                    }
+                    let responses = owner.stage_add_batch(requests.clone())?;
+                    if owner.pending_add_count() > 0 && first_pending.is_none() {
+                        first_pending = Some(Instant::now());
+                    }
+                    Ok((
+                        serde_json::to_value(responses)?,
+                        owner.publication_revisions().0,
+                    ))
+                })();
+                match result {
+                    Ok((_, target)) if wait => barriers.push(BarrierReply {
+                        target,
+                        requests: Some(requests),
+                        reply,
+                    }),
+                    Ok((value, _)) => {
+                        let _ = reply.send(Ok(value));
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                    }
+                }
+            }
+            Ok(Command::Flush(reply)) => {
+                if barriers.len() >= QUEUE_CAPACITY {
+                    let _ = reply.send(Err(PendingWriteLimit.into()));
+                } else {
+                    match service.read() {
+                        Ok(owner) => barriers.push(BarrierReply {
+                            target: owner.publication_revisions().0,
+                            requests: None,
+                            reply,
+                        }),
+                        Err(_) => {
+                            let _ = reply.send(Err(anyhow::anyhow!("memory writer poisoned")));
+                        }
+                    }
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                let result = flush(&service, &published, true);
+                match result {
+                    Ok(()) => {
+                        if let Ok(owner) = service.read() {
+                            for barrier in barriers.drain(..) {
+                                let response = match barrier.requests {
+                                    Some(requests) => owner
+                                        .completed_add_responses(&requests)
+                                        .and_then(|responses| Ok(serde_json::to_value(responses)?)),
+                                    None => Ok(Value::Null),
+                                };
+                                let _ = barrier.reply.send(response);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("memory writer shutdown checkpoint failed: {error:#}");
+                        fail_barriers(&mut barriers, &format!("{error:#}"));
+                    }
+                }
+                break;
+            }
+        }
+        let completion = service
+            .write()
+            .map_err(|_| anyhow::anyhow!("memory writer poisoned"))
+            .and_then(|mut owner| owner.poll_publication());
+        match completion {
+            Ok(Some(view)) => {
+                if checkpoint_build {
+                    last_checkpoint = Instant::now();
+                }
+                checkpoint_build = false;
+                if let Err(error) = publish_view(&published, view) {
+                    fail_barriers(&mut barriers, &format!("{error:#}"));
+                }
+                first_pending = if service.read().is_ok_and(|s| s.pending_add_count() > 0) {
+                    first_pending.or_else(|| Some(Instant::now()))
+                } else {
+                    None
+                };
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("memory publication failed; durable journal retained: {error:#}");
+                fail_barriers(&mut barriers, &format!("{error:#}"));
+                checkpoint_build = false;
+                retry_after = Some(Instant::now() + schedule.refresh_interval);
+                first_pending = Some(Instant::now());
+            }
+        }
+        if let Ok(owner) = service.read() {
+            let (_, revision, durable) = owner.publication_revisions();
+            let visible = published
+                .read()
+                .map(|view| view.inspection().snapshot_revision)
+                .unwrap_or(0);
+            let mut index = 0;
+            while index < barriers.len() {
+                if barriers[index].target <= durable
+                    && barriers[index].target <= revision
+                    && barriers[index].target <= visible
+                {
+                    let barrier = barriers.remove(index);
+                    let response = match barrier.requests {
+                        Some(requests) => owner
+                            .completed_add_responses(&requests)
+                            .and_then(|responses| Ok(serde_json::to_value(responses)?)),
+                        None => Ok(Value::Null),
+                    };
+                    let _ = barrier.reply.send(response);
+                } else {
+                    index += 1;
+                }
+            }
+        }
+        let (pending, enrichment_ready, building) = service
+            .read()
+            .map(|s| {
+                (
+                    s.pending_document_count(),
+                    s.enrichment_ready(),
+                    s.publication_in_flight(),
+                )
+            })
+            .unwrap_or((MAX_PENDING_DOCUMENTS, false, false));
+        let due = first_pending.is_some_and(|first| first.elapsed() >= schedule.refresh_interval);
+        let checkpoint =
+            !barriers.is_empty() || last_checkpoint.elapsed() >= schedule.checkpoint_interval;
+        let can_retry = retry_after.is_none_or(|deadline| Instant::now() >= deadline);
+        if !building
+            && can_retry
+            && ((pending > 0 && (due || pending >= schedule.batch_size))
+                || checkpoint
+                || enrichment_ready)
+        {
+            let result = service
+                .write()
+                .map_err(|_| anyhow::anyhow!("memory writer poisoned"))
+                .and_then(|mut owner| {
+                    if checkpoint {
+                        owner.begin_checkpoint_publication()
+                    } else {
+                        owner.begin_publication()
+                    }
+                });
+            match result {
+                Ok(()) => {
+                    first_pending = None;
+                    checkpoint_build = checkpoint;
+                    retry_after = None;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "memory publication capture failed; durable journal retained: {error:#}"
+                    );
+                    fail_barriers(&mut barriers, &format!("{error:#}"));
+                    retry_after = Some(Instant::now() + schedule.refresh_interval);
+                    first_pending = Some(Instant::now());
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct StagedWriter {
     sender: SyncSender<Command>,
@@ -67,60 +281,9 @@ impl StagedWriter {
             sender,
             published: published.clone(),
         };
-        std::thread::Builder::new().name("memory-writer".into()).spawn(move || {
-            let mut first_pending: Option<Instant> = None;
-            let mut last_checkpoint = Instant::now();
-            loop {
-                let timeout = first_pending.map(|first| schedule.refresh_interval.saturating_sub(first.elapsed())).unwrap_or(schedule.refresh_interval);
-                match receiver.recv_timeout(timeout) {
-                    Ok(Command::Add(requests, wait, reply)) => {
-                        let result = (|| -> anyhow::Result<Value> {
-                            let mut owner = service.write().map_err(|_| anyhow::anyhow!("memory writer poisoned"))?;
-                            if owner.pending_document_count()
-                                + requests.iter().map(|r| r.messages.len()).sum::<usize>() > MAX_PENDING_DOCUMENTS {
-                                return Err(PendingWriteLimit.into());
-                            }
-                            if wait {
-                                let responses = owner.add_batch(requests)?;
-                                publish(&published, &owner)?;
-                                first_pending = None;
-                                last_checkpoint = Instant::now();
-                                Ok(serde_json::to_value(responses)?)
-                            } else {
-                                let responses = owner.stage_add_batch(requests)?;
-                                if owner.pending_add_count() > 0 && first_pending.is_none() { first_pending = Some(Instant::now()); }
-                                Ok(serde_json::to_value(responses)?)
-                            }
-                        })();
-                        // Cancellation of a caller cannot cancel an accepted mutation.
-                        let _ = reply.send(result);
-                    }
-                    Ok(Command::Flush(reply)) => {
-                        let result = flush(&service, &published, true);
-                        if result.is_ok() { first_pending = None; last_checkpoint = Instant::now(); }
-                        let _ = reply.send(result.map(|_| Value::Null));
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
-                        if let Err(error) = flush(&service, &published, true) { eprintln!("memory writer shutdown checkpoint failed: {error:#}"); }
-                        break;
-                    }
-                }
-                let (pending, enrichment_ready) = service.read().map(|s| (s.pending_document_count(), s.enrichment_ready())).unwrap_or((MAX_PENDING_DOCUMENTS, false));
-                let due = first_pending.is_some_and(|first| first.elapsed() >= schedule.refresh_interval);
-                let checkpoint = last_checkpoint.elapsed() >= schedule.checkpoint_interval;
-                if (pending > 0 && (due || pending >= schedule.batch_size)) || checkpoint || enrichment_ready {
-                    match flush(&service, &published, checkpoint) {
-                        Ok(()) => { first_pending = None; if checkpoint { last_checkpoint = Instant::now(); } }
-                        Err(error) => {
-                            eprintln!("memory publication failed; durable journal retained: {error:#}");
-                            // Bound retry frequency while retaining pending writes.
-                            first_pending = Some(Instant::now());
-                        }
-                    }
-                }
-            }
-        })?;
+        std::thread::Builder::new()
+            .name("memory-writer".into())
+            .spawn(move || run_writer(service, published, receiver, schedule))?;
         Ok(worker)
     }
 
@@ -152,10 +315,10 @@ impl StagedWriter {
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
             .map_err(|error| {
-                eprintln!("staged mutation failed: {error:#}");
                 if error.is::<PendingWriteLimit>() {
                     StatusCode::TOO_MANY_REQUESTS
                 } else {
+                    eprintln!("staged mutation failed: {error:#}");
                     StatusCode::INTERNAL_SERVER_ERROR
                 }
             })
@@ -172,7 +335,13 @@ impl StagedWriter {
         receive
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            .map_err(|error| {
+                if error.is::<PendingWriteLimit>() {
+                    StatusCode::TOO_MANY_REQUESTS
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            })?;
         Ok(())
     }
 }
@@ -193,6 +362,17 @@ fn publish(published: &RwLock<Arc<MemoryService>>, owner: &MemoryService) -> any
     *published
         .write()
         .map_err(|_| anyhow::anyhow!("published view poisoned"))? = next;
+    Ok(())
+}
+
+fn publish_view(published: &RwLock<Arc<MemoryService>>, view: MemoryService) -> anyhow::Result<()> {
+    let next = Arc::new(view);
+    let mut current = published
+        .write()
+        .map_err(|_| anyhow::anyhow!("published view poisoned"))?;
+    if next.inspection().snapshot_revision > current.inspection().snapshot_revision {
+        *current = next;
+    }
     Ok(())
 }
 
@@ -282,6 +462,197 @@ mod tests {
         }
         worker.flush().await.unwrap();
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deferred_visibility_barriers_are_bounded_before_accepting_extra_write() {
+        let owner = owner();
+        let worker = StagedWriter::start(owner.clone()).unwrap();
+        worker.add(vec![request(0)], false).await.unwrap();
+        let (release, gate) = mpsc::channel();
+        owner
+            .write()
+            .unwrap()
+            .begin_publication_paused(gate)
+            .unwrap();
+        let mut tasks = Vec::new();
+        for id in 1..=QUEUE_CAPACITY {
+            let writer = worker.clone();
+            tasks.push(tokio::spawn(async move {
+                writer.add(vec![request(id)], true).await
+            }));
+            // Wait for acceptance, so the command queue itself does not fill.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if owner.read().unwrap().pending_document_count() == id + 1 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            worker.add(vec![request(1000)], true).await.unwrap_err(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            owner.read().unwrap().pending_document_count(),
+            QUEUE_CAPACITY + 1
+        );
+        release.send(()).unwrap();
+        for task in tasks {
+            tokio::time::timeout(Duration::from_secs(10), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+        worker.flush().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flush_barrier_allows_later_acceptance_and_only_waits_for_target() {
+        let owner = owner();
+        let worker = StagedWriter::start_with_schedule(
+            owner.clone(),
+            WriteSchedule {
+                refresh_interval: Duration::from_secs(30),
+                batch_size: 10000,
+                checkpoint_interval: Duration::from_secs(60),
+            },
+        )
+        .unwrap();
+        worker.add(vec![request(1)], false).await.unwrap();
+        let target = owner.read().unwrap().publication_revisions().0;
+        let (release, gate) = mpsc::channel();
+        owner
+            .write()
+            .unwrap()
+            .begin_checkpoint_publication_paused(gate)
+            .unwrap();
+        let (reply, mut receive) = oneshot::channel();
+        worker.sender.try_send(Command::Flush(reply)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), worker.add(vec![request(2)], false))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(receive.try_recv().is_err());
+        assert_eq!(owner.read().unwrap().pending_document_count(), 2);
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), receive)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner.read().unwrap().publication_revisions().2, target);
+        assert_eq!(owner.read().unwrap().pending_document_count(), 1);
+        assert_eq!(
+            worker
+                .read_view()
+                .unwrap()
+                .search_cached(query())
+                .unwrap()
+                .data
+                .len(),
+            1
+        );
+        worker.flush().await.unwrap();
+        assert_eq!(
+            worker
+                .read_view()
+                .unwrap()
+                .search_cached(query())
+                .unwrap()
+                .data
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn completed_old_view_cannot_replace_a_newer_synchronous_publication() {
+        let owner = owner();
+        let worker = StagedWriter::start(owner.clone()).unwrap();
+        worker.add(vec![request(1)], true).await.unwrap();
+        let old = owner.read().unwrap().published_read_view();
+        worker.add(vec![request(2)], true).await.unwrap();
+        let revision = worker.read_view().unwrap().inspection().snapshot_revision;
+        publish_view(&worker.published, old).unwrap();
+        assert_eq!(
+            worker.read_view().unwrap().inspection().snapshot_revision,
+            revision
+        );
+        assert_eq!(
+            worker
+                .read_view()
+                .unwrap()
+                .search_cached(query())
+                .unwrap()
+                .data
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acknowledgements_continue_while_publisher_is_paused() {
+        let owner = owner();
+        let worker = StagedWriter::start_with_schedule(
+            owner.clone(),
+            WriteSchedule {
+                refresh_interval: Duration::from_secs(30),
+                batch_size: 10000,
+                checkpoint_interval: Duration::from_secs(60),
+            },
+        )
+        .unwrap();
+        worker.add(vec![request(1)], false).await.unwrap();
+        let (release, gate) = mpsc::channel();
+        owner
+            .write()
+            .unwrap()
+            .begin_publication_paused(gate)
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), worker.add(vec![request(2)], false))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner.read().unwrap().pending_document_count(), 2);
+        assert!(owner.read().unwrap().publication_in_flight());
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if owner.read().unwrap().pending_document_count() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            worker
+                .read_view()
+                .unwrap()
+                .search_cached(query())
+                .unwrap()
+                .data
+                .len(),
+            1
+        );
+        worker.flush().await.unwrap();
+        assert_eq!(
+            worker
+                .read_view()
+                .unwrap()
+                .search_cached(query())
+                .unwrap()
+                .data
+                .len(),
+            2
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn continuous_adds_cannot_postpone_interval_publication() {
         let owner = owner();

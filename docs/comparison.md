@@ -9,6 +9,33 @@ The complete scripts and machine-readable artifacts live in the repository's
 [`comparison/`](https://github.com/RooAGI/Lint-AI/tree/main/comparison)
 directory.
 
+For a dedicated breakdown of the current `POST /search`, `POST /add`,
+`POST /add/batch`, and mixed read/write server measurements, see
+[HTTP server benchmarks](http-server-benchmarks.md).
+
+## Current HTTP throughput at a glance (2026-10-05)
+
+These are three different workloads and their rates are not interchangeable.
+Read throughput counts completed `POST /search` requests against a seeded
+corpus. Write acknowledgement throughput counts records accepted by the durable
+staging journal. Completed write throughput includes the final flush, so it
+accounts for accepted work that became searchable before the run ended.
+
+| Workload | Endpoint and load | Observed median rate | What the rate means |
+|---|---|---:|---|
+| Read only | `POST /search`, C=10, 23,366 seeded records | 2,246.69 searches/s | Five-run Tantivy 0.25.0 single-index measurement; no concurrent writes. |
+| Single-record write | `POST /add`, one writer | 222.52 accepted records/s; 212.36 completed records/s | Latest direct-endpoint run: three 65-second repetitions, no 429 responses. Ack p50/p95/p99: 3.996/4.336/6.964 ms. |
+| Batched write | `POST /add/batch`, 128 records per call | 2,528.46 accepted records/s; 1,977.12 completed records/s | Latest default-schedule batch run: three 65-second repetitions; 19.75 successful calls/s. It rejected about 25,500–26,700 requests per run, so the accepted rate is a burst result, not sustainable capacity. |
+| Sparse mixed load | Ten search workers and one `/add` per second | 1,248.69 searches/s during writes; 1,209.01 without writes | Latest concentrated-write run; three paired repetitions, 65 writes per run, no 429s, and final writes searchable. |
+
+The read-only, single-write, batch-write, and mixed-load figures are different
+workloads and should not be compared as if they ran together. The batch rate is
+not sustainable because admission rejected excess requests. Raw artifacts:
+[read layout/version run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json),
+[direct `/add` run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json),
+[128-record default-schedule run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json),
+and [concentrated sparse mixed-load run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json).
+
 ## System selection and scope
 
 We select comparison systems using four requirements:
@@ -416,6 +443,152 @@ Reproduce with the benchmark schedule flags:
 python3 comparison/write_only.py --batch-sizes 1 128 --seconds 65 --repetitions 3 \
   --output comparison/results/throughput-write-only-staged-long-latest.json
 ```
+
+#### Background publication diagnostic (2026-10-05)
+
+After moving index preparation and checkpoint serialization to the background
+publisher, we ran three 65-second repetitions per HTTP batch size against the
+same seeded corpus. This release binary was built from working-tree changes on
+revision `a1907ffe66ae8fb26e082845986a0b29b53b4096`, with Tantivy 0.25.0, one
+writer, no readers, a 250 ms refresh trigger, 512-document refresh batches,
+and a 30-second checkpoint interval.
+
+| Add requests per batch | Accepted records/s (median) | Completed records/s including final flush (median) | p50 | p95 | p99 | Final flush |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 221.05 | 212.30 | 3.996 ms | 4.643 ms | 5.945 ms | 2.68 s |
+| 128 | 2,528.43 | 1,983.57 | 1.480 ms | 3.855 ms | 6.168 ms | 17.86 s |
+
+The batch-128 load exceeded publisher capacity: each run accepted 164,352
+records, then returned 25,478–25,766 HTTP 429 responses as the pending-write
+limit applied. Its acknowledgement rate is therefore burst throughput, not a
+sustainable no-rejection rate. Publication lagged acceptance, and the final
+flush took about 18 seconds. Single-add runs had no 429 responses. Every run
+returned a successful flush and the benchmark found its last accepted record
+through search, but it does not yet verify every accepted ID. Treat these as
+local diagnostics, not a capacity guarantee or a like-for-like historical
+comparison.
+
+The complete raw report records the binary SHA-256, seed size, latency values,
+errors, and each repetition: [background publication write-only report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-long-2026-10-05.json).
+
+The runner's completed-work rate is accepted records divided by measurement
+duration plus final-flush duration. It is useful for comparing the full run and
+drain, but it is not a direct measurement of the background publisher's steady
+service rate. The reports do not yet expose per-generation build throughput or
+the pending-document high-water mark.
+
+#### Copy-on-write capture rerun (2026-10-05)
+
+After sharing the source-document, record, and chunk-lifecycle maps across
+publication capture, we repeated the same three 65-second cells with a rebuilt
+release binary (SHA-256 `969f7ad50da09656cb7a8b29caf3ec4a41f737d81fff398396e89cd8ffac0d02`).
+Single-add throughput measured 225.21 accepted and 215.46 completed records/s
+at the median, versus 221.05 and 212.30 before the map-sharing change. Median
+p50/p95/p99 latency was 3.995/4.257/6.024 ms. All three single-add runs had no
+429s, successful flushes, and searchable final writes. The observed throughput
+gain is small and should be treated as within local run variation until paired
+repetitions confirm it.
+
+With 128 records per request, the median remained 2,528 accepted records/s,
+while median completed-work throughput was 1,927.65 records/s. This saturated the
+pending-write limit, with 24,992–27,110 rejected requests per run and final
+flushes of 17.0–23.8 seconds. It remains a burst measurement, not a sustainable
+write rate. [Copy-on-write rerun report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-cow-long-2026-10-05.json)
+contains all repetitions and per-run outcomes.
+
+The completed-work rate is accepted records divided by measurement time plus
+final-flush time. It does not directly measure publisher service capacity.
+
+#### Temporal append and coalescing diagnostics (2026-10-05)
+
+An append-only temporal-fact path avoids sorting and rebuilding existing facts
+when new records follow the corpus date/document order. Replacements, deletes,
+and out-of-order writes keep the full-rebuild fallback. Three 65-second release
+runs measured 224.37 accepted / 217.54 completed single records/s, effectively
+unchanged from the copy-on-write run. Batch-128 median was 2,528.46 accepted /
+1,977.12 completed records/s, with 25,501–26,673 rejected requests. The temporal
+rebuild was not the dominant write bottleneck for this benchmark. [Temporal
+append report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json)
+contains the binary hash and per-run results.
+
+We then raised the publication trigger from 250 ms / 512 documents to 1 second
+/ 4,096 documents for three 65-second batch-128 runs. Median accepted rate was
+2,583.54 records/s; completed-work rate was 2,077.75 records/s. Final flushes
+took 14.5–16.3 seconds, and each run still rejected 26,760–27,128 requests.
+Coalescing reduced rebuild overhead modestly but did not eliminate saturation.
+All flushes succeeded and the final accepted write was searchable. This is a
+diagnostic schedule, not a new default. [Coalescing report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-coalesced-2026-10-05.json)
+records the schedule and binary hash.
+
+The write-only harness uses the production segmented layout and seeds 23
+session segments. Its default writer round-robins records across those same 23
+sessions, so a 128-request publication touches every segment. A paired
+three-run, 15-second probe compared that pattern with writes pinned to the
+existing `bench-session-0` segment. Round-robin measured 6,058 accepted / 3,531
+completed records/s; concentrated writes measured 5,683 / 3,945. These short
+cells still saturated admission (about 9,000 and 6,700–6,800 rejections per
+run respectively), and corpus growth makes them directional only. The completed
+rate includes final flush. Both reports contain raw run data:
+[round-robin](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-distribution-probe-2026-10-05.json)
+and [concentrated](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-concentrated-probe-2026-10-05.json).
+The write-only runner now accepts `--writer-session-group` for this comparison.
+
+#### Direct `/add` endpoint (2026-10-05)
+
+The earlier 225 records/s single-write measurement used `/add/batch` with one
+request per HTTP call. We repeated the same 65-second, three-repetition load
+against the actual `/add` endpoint using the same release binary. `/add`
+measured 222.52 accepted records/s and 212.36 completed-work records/s at the
+median, with 3.996 ms p50, 4.336 ms p95, and 6.964 ms p99 acknowledgement
+latency. There were no 429s; every flush succeeded and the last accepted record
+was searchable. Both routes use the same durable staged writer, so this
+confirms the single-add API itself accepts about 220 writes/s under this local
+configuration. Acknowledgement means the journal was synced; search visibility
+is provided by later publication/flush. [Direct `/add` report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json)
+includes the binary hash and per-run results.
+
+#### Read-heavy mixed-load checks (2026-10-05)
+
+To model an infrequently changing corpus, we paired three 65-second read-only
+phases with three phases using ten search workers and one writer submitting one
+single-document add per second. Each pair used the same seeded 23,366-record
+corpus and fresh server process. Read throughput medians were 1,171 searches/s
+without writes and 1,118 searches/s with sparse writes; the median paired
+change was about -2%. Median search p99 changed from 16.953 ms to 17.965 ms.
+All 195 writes were accepted, there were no 429s, each flush completed in
+0.261–0.298 seconds, and the final accepted record was searchable in every run.
+The per-run read throughput varied, so treat this as a directional local
+measurement.
+
+We also ran one intentionally saturated probe with ten readers and an
+unrestricted batch-8 writer. Search throughput fell from 1,277 to 305
+searches/s, 13,803 write requests were rejected with 429, and the explicit
+flush hit the server's 30-second HTTP timeout (408); the last accepted record
+was not yet searchable when checked. That overload result is not representative
+of one write per second, but it shows the bounded publisher correctly applies
+backpressure while heavy writers compete with searches.
+
+Raw reports: [sparse mixed load](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-sparse-2026-10-05.json)
+and [saturated probe](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-probe-2026-10-05.json).
+The mixed-load runner supports `--write-interval-ms` to reproduce sparse rates.
+
+After adding a fixed writer-session option, we repeated the same paired
+three-repetition run on the current release binary with one single-document
+write per second pinned to the existing `bench-session-0` segment. Median
+read throughput was 1,209 searches/s in control and 1,249 searches/s with
+writes; median search p99 changed from 17.445 to 18.352 ms. All 195 writes were
+accepted with no 429s, flushes took 0.212–0.215 seconds, and every final write
+was searchable. This measured no meaningful read-throughput loss for sparse,
+concentrated writes. [Concentrated mixed-load report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json)
+records the paired data, writer-segment distribution, and binary hash.
+
+The write-path changes also passed a retrieval control: a release-mode,
+single-index rerun on the same 500 LongMemEval questions with `k=1,3,5,10,20`
+matched the Tantivy 0.25.0 control's top-10 session ranking for all 500
+questions. Recall@5/10/20 was 94.2%/96.8%/97.6%, MRR 0.86965, and NDCG@10
+0.85115 in both reports. The rerun and control are available as [write-path
+rerun](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz)
+and [Tantivy 0.25.0 control](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 ### Reproduce the comparison
 

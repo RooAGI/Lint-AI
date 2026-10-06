@@ -7,9 +7,9 @@ to combine ranked lists). The benchmark is an experimental comparison; these
 labels do not imply that every variant is a server default.
 
 For commands and the complete score tables, see the
-[benchmark overview](benchmark.md#segmented-index-comparison). The per-query
-data is in
-[`segment-longmemeval-500-2026-10-04.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-04.json.gz).
+[benchmark overview](benchmark.md#segmented-index-comparison). The latest
+per-query data is in
+[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 ## Routing: choosing segments
 
@@ -86,19 +86,21 @@ segments costs more time.
 
 ## What the 500-question results show
 
-The run used LongMemEval-S, the heuristic NER backend, no embeddings,
-`coverage-local` routing, five initial routed segments, and an adaptive maximum
-of twelve. Latency is the benchmark's per-query measurement and excludes
-question haystack indexing.
+The latest run used LongMemEval-S, Tantivy 0.25.0, the heuristic NER backend,
+no embeddings, `coverage-local` routing, five initial routed segments, and an
+adaptive maximum of twelve. It used the experimental segmented feature and a
+working tree with local changes. Latency is the benchmark's per-query
+measurement and excludes question haystack indexing.
 
 | Strategy | Any-hit @5 | Any-hit @10 | Fractional @5 | MRR | Avg. latency |
 |---|---:|---:|---:|---:|---:|
-| Fixed top-5 | 94.2% | 94.2% | 86.77% | 0.880 | 4.08 ms |
-| Adaptive 5→12, enriched | 94.2% | 96.2% | 85.64% | 0.869 | 7.05 ms |
-| Intent with adaptive fallback | 94.2% | 96.2% | 85.54% | 0.863 | 0.77 ms |
-| Fused adaptive + global | 95.4% | 97.2% | 87.11% | 0.880 | 29.47 ms |
-| Fused temporal + global | **96.0%** | **97.8%** | **88.51%** | **0.885** | 26.98 ms |
-| Single-index control | 94.4% | 96.6% | 86.41% | 0.872 | 14.34 ms |
+| Fixed top-5 | 94.2% | 94.2% | 86.77% | 0.880 | 2.49 ms |
+| Enriched + reranked | 94.2% | 94.2% | 86.77% | 0.881 | 3.85 ms |
+| Adaptive + enrichment + reranking | 94.0% | 96.0% | 86.30% | 0.884 | 7.26 ms |
+| Intent with adaptive fallback | 94.2% | 96.2% | 85.54% | 0.863 | 0.71 ms |
+| Fused adaptive + global | 95.4% | 97.2% | 87.11% | 0.880 | 61.84 ms |
+| Fused temporal + global | **96.0%** | **97.8%** | **88.51%** | **0.885** | 28.05 ms |
+| Single-index control | 94.4% | 96.6% | 86.41% | 0.872 | 13.45 ms |
 
 In this run, temporal fusion had the strongest listed recall and MRR. The
 intent path was fastest, but its score includes adaptive fallback behavior and

@@ -297,7 +297,10 @@ body {
 .solution-intro .hero__actions { margin-top: 1.8rem; }
 
 .proof-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 0; border-radius: 1rem; background: linear-gradient(120deg, #122e42, #225679 42%, #7a3169 78%, #421a38); box-shadow: 0 1.8rem 4rem var(--theme-shadow-strong); overflow: hidden; }
-.proof-grid div { padding: 2rem 1rem; border-right: 1px solid rgba(255,255,255,.18); }
+.proof-grid--six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.proof-grid div { padding: 2rem 1rem; border-right: 1px solid rgba(255,255,255,.18); border-bottom: 1px solid rgba(255,255,255,.18); }
+.proof-grid div:nth-child(3n) { border-right: 0; }
+.proof-grid--six div:nth-last-child(-n+3) { border-bottom: 0; }
 .proof-grid div:last-child { border-right: 0; }
 .proof-grid strong, .proof-grid div:nth-child(n) strong { display: block; color: #fff; font-size: clamp(1.8rem, 4vw, 3rem); line-height: 1; letter-spacing: -.05em; }
 .proof-grid span { display: block; margin-top: .6rem; color: #badefb; font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; }
@@ -372,7 +375,11 @@ body {
   .scenario { margin-block: -2.5rem 5rem; margin-inline: .65rem; }
   .proof-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .proof-grid div:nth-child(2) { border-right: 0; }
-  .proof-grid div:nth-child(-n+2) { border-bottom: 1px solid rgba(255,255,255,.18); }
+  .proof-grid--six div:nth-child(3n) { border-right: 1px solid rgba(255,255,255,.18); }
+  .proof-grid--six div:nth-child(2n) { border-right: 0; }
+  .proof-grid--six div:nth-last-child(-n+3) { border-bottom: 1px solid rgba(255,255,255,.18); }
+  .proof-grid--six div:nth-last-child(-n+2) { border-bottom: 0; }
+  .proof-grid:not(.proof-grid--six) div:nth-child(-n+2) { border-bottom: 1px solid rgba(255,255,255,.18); }
   .feature-grid, .integration-grid { grid-template-columns: 1fr; }
   .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 1.5rem; }
   .scenario { grid-template-columns: 1fr; }

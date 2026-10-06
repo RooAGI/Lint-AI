@@ -1,148 +1,114 @@
-# Tutorial: add Lint-AI memory to your Hermes Agent setup
+# Set up Lint-AI with Hermes
 
-This guide is for people already running Hermes Agent. It covers two levels:
-first the MCP adapter (memory the agent calls when it chooses), then the
-hooks plugin (automatic capture and recall on every turn).
+The basic setup lets Hermes search and manage Lint-AI memories when it needs
+them. It uses the Lint-AI release binary and does not require a separate
+server to stay running.
 
-## What you get
+If you also want Hermes to recall memories automatically before each model
+call and save turns in the background, follow the optional setup at the end.
+That feature needs a small Lint-AI server to keep running on your computer.
 
-- **Level 1 — MCP adapter.** Seven memory tools (`search`, `info`,
-  `list_memories`, `record_session`, `enable_lint_ai`, `disable_lint_ai`,
-  `lint_ai_status`) surfaced to the agent as `mcp__lint-ai__*`.
-- **Level 2 — hooks plugin.** Recall injected before every model call, plus
-  automatic capture of every turn and tool call — no tool calls required.
+Lint-AI works alongside Hermes' own notes and memory. It does not replace
+Hermes' existing memory provider.
 
-Lint-AI is separate from Hermes' own memory (the built-in provider's notes
-and skills): Hermes' memory holds conversation notes, while Lint-AI indexes
-the project workspace and carries decisions, outcomes, and supersessions
-across sessions.
+## Basic setup
 
-## Level 1 — MCP adapter
+### 1. Install Lint-AI
 
-### Step 1 — Install the lint-ai binary
+On macOS or Linux, install the latest release:
 
 ```bash
-cargo install --path . --features hermes
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh
 ```
 
-### Step 2 — Register the MCP server
+For Windows or another download option, use the
+[Lint-AI releases page](https://github.com/RooAGI/Lint-AI/releases/latest).
+
+### 2. Connect Hermes to your project
+
+Open a terminal in your project folder and run:
 
 ```bash
-lint-ai --hermes-install /path/to/project
+lint-ai --hermes-install .
 ```
 
-This merges the stdio MCP server entry into `~/.hermes/config.yaml` under
-`mcp_servers` (as `lint-ai`) and installs the `lint-ai-memory` skill.
-Installation is idempotent and preserves your existing configuration,
-including a non-lint-ai `memory.provider` setting.
+This adds the Lint-AI connection to Hermes and installs a memory skill that
+explains when Hermes should look up project memories. It leaves your other
+Hermes settings and memory provider in place.
 
-### Step 3 — Verify
+### 3. Restart Hermes and check the connection
+
+Restart Hermes so it loads the new connection, then check it:
 
 ```bash
 lint-ai --hermes-verify-mcp
 hermes mcp test
 ```
 
-`hermes mcp test` should report Connected with all seven tools enabled.
+The Hermes check should show Lint-AI as connected. Start a new conversation
+in the project and ask Hermes to look up a decision from earlier work.
 
-### Step 4 — Use it
+With this basic setup, Hermes can use Lint-AI's memory tools when needed. It
+does not automatically save every turn. The optional setup below adds that.
 
-Ask the agent something only a past session would know, e.g. *"Why did we
-pick this retry policy?"* The agent calls `mcp__lint-ai__search` before
-reading files. Use `mcp__lint-ai__record_session` (`start`/`stop`) to capture
-a work session deliberately. Recording is capture-only: it never changes the
-workspace.
+## Optional: automatic recall and capture
 
-## Level 2 — hooks plugin (automatic memory)
+Add this if you want Lint-AI to look up context before each model call and
+save useful turns and tool results as you work. This option needs both the
+Hermes plugin and the running Lint-AI server.
 
-The plugin lives at `src/integrations/hermes/plugin/` in the lint-ai
-repo: a Hermes directory plugin (`plugin.yaml` + `__init__.py`, stdlib-only
-Python, no dependencies). It deliberately does **not** use Hermes' native
-`MemoryProvider` slot — occupying it would evict your existing mem0/file
-memory. Hooks coexist with everything.
+### 1. Get the plugin files
 
-### Step 1 — Install the plugin
+The plugin is included in the Lint-AI source repository. If you already have
+the repository, use its path. Otherwise:
 
 ```bash
-# from the lint-ai repo
-hermes plugins install ./src/integrations/hermes/plugin
+git clone --depth 1 https://github.com/RooAGI/Lint-AI.git
+```
+
+### 2. Install and enable the plugin
+
+From the directory containing the `Lint-AI` folder, run:
+
+```bash
+hermes plugins install ./Lint-AI/src/integrations/hermes/plugin
 hermes plugins enable lintai
 ```
 
-Or per-project, without a global install:
+If your repository is elsewhere, replace the path with its location.
+
+### 3. Start the local Lint-AI server
+
+In a separate terminal, run:
 
 ```bash
-mkdir -p .hermes/plugins
-cp -r /path/to/lint-ai/src/integrations/hermes/plugin .hermes/plugins/lintai
-HERMES_ENABLE_PROJECT_PLUGINS=1 hermes chat
+lint-ai serve
 ```
 
-### Step 2 — Start the lint-ai server
+Keep this terminal open while using Hermes with automatic recall and capture.
+The plugin connects to the local server at `http://127.0.0.1:8080`. If the
+server is stopped, Hermes continues to work, but automatic recall and capture
+pause until the server is available again.
 
-The plugin is Python running inside the Hermes process, so it cannot call
-the Rust core in-process — it talks HTTP to a running server instead (the
-same pattern mem0's own Hermes plugin uses). In a separate terminal:
+### 4. Try it
 
-```bash
-lint-ai serve   # listens on 127.0.0.1:8080
-```
+Start a new Hermes conversation and work for a turn. Then ask Hermes to recall
+something from that turn. Lint-AI can add relevant memories before later model
+calls and save useful turns in the background.
 
-### Step 3 — Check it working
+## Where memories are stored
 
-Chat with the agent for a turn or two, then ask it to recall something from
-an earlier turn. Recall is injected before every model call (`pre_llm_call`
-returns `{"context": ...}` which Hermes stamps into the user message);
-turns, tool calls, and session boundaries are captured automatically in the
-background.
+Project memories are stored under `.lint-ai/memory/`. Other connected agents
+for the same project can use those memories too.
 
-## How the plugin behaves
+## If something does not work
 
-| Hook | Behavior |
-| --- | --- |
-| `pre_llm_call` | Recall + inject. Synchronous with a tight timeout, fail-open. |
-| `post_tool_call` | Structured tool-event capture (name, args, result, duration, status), deduplicated by `tool_call_id`. |
-| `post_llm_call` | Per-turn transcript capture, deduplicated by `(session_id, turn_id)`. |
-| `agent_loop_stopped` | Metadata-only interruption marker for gateway and TUI/desktop stops. Hermes does not emit it for plain CLI turns. |
-| `on_session_start` | Session registry entry. |
-| `on_session_finalize` / `on_session_reset` | Boundary markers (no transcript; per-turn accumulation is authoritative). |
+- If `hermes mcp test` cannot connect, run `lint-ai --hermes-install .`
+  again from the project folder, restart Hermes, and retry the check.
+- If Hermes has the memory skill but no Lint-AI tools, check the MCP connection
+  in `~/.hermes/config.yaml` and restart Hermes. The skill gives Hermes
+  instructions; the MCP connection provides the callable tools.
+- If automatic recall or capture is missing, confirm the plugin is enabled
+  and `lint-ai serve` is still running.
 
-- **Fail-open, always.** If the server is unreachable, there is no injection
-  and no capture — Hermes keeps working normally.
-- **Bounded and batched.** Writes go through an async bounded queue
-  (drop-oldest when full); a background thread batches them to the server.
-- **Tunable** via environment variables (each beats
-  `$HERMES_HOME/lintai.json`, which beats the defaults):
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `LINTAI_SERVER_URL` | `http://127.0.0.1:8080` | lint-ai server base URL |
-| `LINTAI_USER_ID` | `hermes` | tenant/user id for reads and writes |
-| `LINTAI_QUEUE_MAX` | `1000` | write queue size |
-| `LINTAI_CAPTURE` | `on` | `off` disables capture hooks |
-| `LINTAI_RECALL` | `on` | `off` disables recall injection |
-| `LINTAI_RECALL_TOP_K` | `5` | search hits injected per turn |
-
-Hermes uses `POST /provider-memory/add/batch` for captures and
-`POST /provider-memory/search` for recall. Captures are stored in the shared
-`.lint-ai/memory/` provider store; recall searches it alongside the current
-workspace index. OpenClaw uses the same server and provider store.
-
-## Troubleshooting
-
-- **No tools in Hermes:** re-run `lint-ai --hermes-install` and check the
-  `mcp_servers` section of `~/.hermes/config.yaml`; indentation matters in
-  YAML.
-- **Plugin installed but no memory:** confirm `lint-ai serve` is running and
-  reachable at `LINTAI_SERVER_URL`; the plugin fails open, so a dead server
-  looks like "no memory" rather than an error.
-- **Verify the data:** captured turns, tool events, and session records land
-  in the shared store (`.lint-ai/memory/`) under the `hermes` provider, so
-  they are also searchable from the MCP adapter and other providers.
-
-## Reference
-
-The full hook inventory with live-verified payload schemas (probed against
-hermes-agent `@ e408d363`), the dedupe design, and the verification plan are
-in `src/integrations/hermes/plugin/DESIGN.md`. The plugin's own test
-suite runs with `python3 -m unittest discover -s tests` inside the plugin
-directory.
+For setup with another agent, see [Connect your AI agent](connect-agent.md).

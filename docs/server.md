@@ -88,33 +88,19 @@ the router comparison in `docs/benchmark-results.md`:
 The default is the measured best recall-per-latency trade-off from the
 full 500-question comparison; the other values exist for controlled
 comparisons.
-The server is intentionally localhost-only. `--bind` may select a loopback
-address and port, such as `127.0.0.1:8080` or `[::1]:8080`, but non-loopback
-addresses are rejected at startup. Authentication remains available for
-defense in depth; `--allow-unauthenticated` is intended for the local dashboard.
+By default the server binds only to localhost, such as `127.0.0.1:8080` or
+`[::1]:8080`. To bind a container or another network interface, explicitly pass
+`--allow-non-loopback` and configure `SERVER_TOKEN` or `JWT_SECRET`. This option
+cannot be combined with `--allow-unauthenticated`. Keep the host port private
+or place remote access behind an authenticated, encrypted proxy. See
+[Run Lint-AI with Docker](docker.md) for a localhost-only Compose setup.
 
 For a single-tenant deployment, also set `--tenant-id TENANT` (or
 `SERVER_TENANT_ID`). Requests whose `user_id` does not match this configured
 tenant are rejected; this prevents a bearer token from being used to select
 another tenant by changing the request body.
 
-### Run the local dashboard
-
-For local Claude Code and Codex development, build the corresponding provider
-features and let the server discover all provider indexes from the project root:
-
-```bash
-cargo run --release --bin server --features claude-code,codex -- \
-  --project-root /Users/louis/sources/Lint-AI \
-  --bind 127.0.0.1:8080 \
-  --allow-unauthenticated
-```
-
-Then open <http://127.0.0.1:8080/dashboard>. The server discovers indexes under
-`/Users/louis/sources/Lint-AI/.lint-ai/`, while the dashboard separates provider
-stores into tabs. The HTTP API uses the selected primary index; the dashboard
-can inspect the other provider stores without starting additional servers.
-
+For dashboard startup and use, see the [Observability guide](observability.md).
 The server intentionally speaks plain HTTP because it is restricted to
 localhost. Do not forward the port through a public or network-facing proxy.
 
@@ -155,59 +141,15 @@ composed with the workspace index. OpenClaw lifecycle callbacks use
 `/integrations/openclaw/hooks/{kind}` when the server is built with the
 `openclaw` feature; captures also land in `.lint-ai/memory/`. Both plugins use
 `LINTAI_SERVER_URL` and `LINTAI_SERVER_TOKEN` to configure their HTTP
-connection. The server remains loopback-only and plain HTTP; remote agents
-should connect through a separately secured tunnel.
+connection. The server uses plain HTTP. Keep it on loopback for local agent
+setups; for remote agents, use a separately secured tunnel or proxy.
 
-## Dashboard
+## Dashboard and observability
 
-Open `http://127.0.0.1:8080/dashboard` for a read-only operational view of
-the running IndexStore. The page shows index freshness, revisions, segment
-counts, rolling query rate, p50/p95 latency, error and empty-result rates, and
-the compiled/provider integration state. It polls every five seconds and keeps
-only bounded aggregate telemetry; query text, identifiers, and memory content
-are never recorded.
-
-The dashboard page and static assets are public so they can load before an API
-token is entered. The data endpoints use the same authentication as the rest
-of the server. The provider workspace is organized into provider tabs; each tab
-shows session history, the latest live session, tool-call frequency cards, and
-filterable tool-call history with bounded argument previews:
-
-* `GET /api/status` returns index state, query summary, and integration cards.
-* `GET /api/timeseries` returns five-second IndexStore query aggregates over
-  the last ten minutes, shared by HTTP and provider MCP processes.
-* `GET /api/integrations` returns provider readiness details.
-* `GET /api/sessions` returns recent sessions and their sanitized lifecycle
-  event counts.
-* `GET /api/events` returns the latest sanitized provider lifecycle events.
-* `GET /api/sessions/:session_key/events` filters that event history by the
-  one-way session key returned by `/api/sessions`.
-* `GET /api/metrics` returns machine-readable query and provider aggregates.
-* `GET /metrics` exposes the same core counters in Prometheus text format.
-
-Provider hooks write a bounded history of the last 500 lifecycle events per
-provider. Events contain only the provider, event name, category, timestamp,
-and a one-way session key. Claude Code and Codex subagent events additionally
-include bounded `agent_id`, `agent_type`, and `turn_id` fields when supplied by
-the provider. Tool events additionally include the tool name and a small
-redacted argument preview. Prompt, tool-response, and final-response events use
-the same bounded preview format; raw provider payloads are not copied into the
-telemetry ledger. Provider cards report `not_observed` until a
-provider hook or MCP process sends explicit lifecycle telemetry. IndexStore
-The HTTP server keeps query aggregates in memory for a low-overhead request
-path. Provider MCP processes persist their query aggregates to
-`.lint-ai/query-telemetry.json`, allowing the dashboard to observe queries
-executed by separate MCP processes. This server does not infer agent
-connectivity from IndexStore health.
-
-An observed provider is `active` when its latest event arrived within the last
-minute and `idle` otherwise. Lifecycle telemetry is local-first: each provider
-uses a bounded JSON ledger under `.lint-ai/provider-telemetry`, so an operator
-can inspect recent sessions and event ordering without retaining provider
-content. Token usage is normalized from provider lifecycle payloads or
-transcripts when available; cost and productivity accounting still require
-provider-specific contracts. See [Telemetry](telemetry.md) for provider-by-
-provider coverage and the complete storage and retention model.
+The dashboard is a read-only operational view of index health, search behavior,
+and observed provider activity. Its telemetry and metrics endpoints are
+documented in the [Observability guide](observability.md); provider coverage,
+retention, and privacy details are in [Telemetry details](telemetry.md).
 
 Search requests retain an independently published immutable generation. A
 single mutable owner serializes writes and refreshes, while searches continue
@@ -513,21 +455,17 @@ The current read path uses independently published immutable snapshots;
 mutation work is serialized through the mutable owner and only the final snapshot swap
 briefly needs the reader-facing write lock.
 
-The staged-write rerun completed 42.53 records/s for single adds and 259.98
-records/s for batches of 128, including final flush time. Durable acknowledgement
-p50 was 3.990 ms and 4.959 ms respectively; refresh work still caused write
-p99 above one second. All six cells had zero errors and passed the final search
-visibility check. See [the complete staged write results](comparison.md#staged-write-flow-2026-10-05)
-for the corrected mixed workload and measurement limits.
+An initial 8-second staged-write check completed 42.53 records/s for single
+adds and 259.98 records/s for batches of 128, including final flush time. This
+short run has since been superseded by longer runs and later writer changes.
+See [HTTP server benchmarks](http-server-benchmarks.md) for the latest
+`/search`, `/add`, `/add/batch`, and mixed-load measurements.
 
 A 65-second, three-repetition run using the default refresh schedule measured
 49.12 records/s for single adds and 304.13 records/s for batches of 128,
-including final flush time. Compared with the earlier long-run baseline,
-batch-128 published throughput rose from 204.06 to 293.56 records/s and p99
-fell from 2.85 to 2.06 seconds. Profiling traced the gain to skipping
-aggregate-wide removal scans for new documents and sorting changed semantic
-postings once before publication. Refresh still raises write p99 above one
-second. See the [sustained profile and raw measurements](comparison.md#sustained-staged-write-profile-and-rerun-2026-10-05).
+including final flush time. This was an earlier writer revision; subsequent
+measurements and optimizations are listed in the
+[HTTP server benchmark page](http-server-benchmarks.md).
 
 Memory lifecycle fields are optional on each `/add` message. Set
 `expires_at_ms` to hide a memory after a Unix-millisecond deadline. Set
@@ -561,10 +499,10 @@ The server token accepts `X-Api-Key`, `Authorization: Bearer <token>`, or the
 raw token in `Authorization`. It can also be supplied through
 `SERVER_TOKEN`.
 
-If no token is configured, the server refuses to start on any non-loopback
-bind address (anything other than `127.0.0.1`/`::1`). Pass
-`--allow-unauthenticated` is available for the single-user localhost mode;
-non-loopback binds are rejected regardless of authentication settings.
+Non-loopback binds require the explicit `--allow-non-loopback` option and
+configured token or JWT authentication. The option is rejected when combined
+with `--allow-unauthenticated`. `--allow-unauthenticated` is intended for
+single-user localhost use only.
 
 The server limits request bodies to 16 MiB and concurrent in-flight requests to
 128. Requests time out after 30 seconds.

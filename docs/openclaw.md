@@ -1,119 +1,118 @@
-# Tutorial: add Lint-AI memory to your OpenClaw setup
+# Set up Lint-AI with OpenClaw
 
-This guide is for people already running OpenClaw. In about ten minutes you
-will give your OpenClaw agents long-term project memory: relevant memories
-injected at the start of every agent run, and automatic capture of outcomes
-and session summaries.
+Connect Lint-AI to an OpenClaw project so your agents can use useful
+information from earlier work. Lint-AI can bring relevant memories into a run
+and save outcomes for later.
 
-## What you get
+## 1. Install Lint-AI
 
-- **Recall on every run.** When an agent starts (`agent:bootstrap`), Lint-AI
-  recalls relevant project memories and injects them, so the agent knows
-  prior decisions and earlier work without being told.
-- **Automatic capture.** When a run ends (`agent_end`), its outcome is
-  recorded; when a session closes (`before_reset`), a session summary is
-  captured from the full transcript.
-- **An MCP server** with `search`, `record_session`, board, and memory tools
-  the agent can call directly.
-
-Lint-AI is separate from OpenClaw's own memory (the daily logs and
-`MEMORY.md` in `~/.openclaw/workspace/`): OpenClaw's memory holds
-conversation notes, while Lint-AI indexes the project workspace and carries
-decisions, outcomes, and supersessions across sessions.
-
-## Step 1 — Install the lint-ai binary
+On macOS or Linux, install the latest release with:
 
 ```bash
-cargo install --path . --features openclaw
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh
 ```
 
-This builds the `lint-ai` binary with the OpenClaw adapter. (A release
-binary works too — the rest of this guide only needs the binary on your
-`PATH`, next to where the OpenClaw Gateway runs, since the MCP server runs
-over stdio.)
+On Windows, download the latest `lint-ai-windows-x86_64.exe` from the
+[releases page](https://github.com/RooAGI/Lint-AI/releases/latest). Run it as
+`lint-ai-windows-x86_64.exe` in the commands below.
 
-## Step 2 — Run the installer
+## 2. Connect it to your project
+
+Open a terminal in your project folder and run:
 
 ```bash
-lint-ai --openclaw-install /path/to/project
+lint-ai --openclaw-install .
 ```
 
-This one command wires everything up, idempotently (safe to re-run; existing
-configuration is preserved):
+This adds Lint-AI to OpenClaw and installs its memory skill. It preserves your
+other OpenClaw settings, and it is safe to run again if you need to update the
+setup.
 
-- registers the MCP server in `~/.openclaw/openclaw.json`
-  (`mcp.servers.lint-ai`, running `lint-ai --openclaw-serve <project-root>`),
-- installs the recall hook into `<stateDir>/hooks/lint-ai/` (`~/.openclaw`
-  by default, `OPENCLAW_STATE_DIR` overrides it),
-- installs the capture plugin into `<configDir>/extensions/lint-ai/`,
-- installs the `lint-ai-memory` skill into
-  `~/.openclaw/skills/lint-ai-memory/SKILL.md` (a user-modified skill is
-  left alone unless you pass `--openclaw-force-skill`).
+## 3. Restart OpenClaw and check the connection
 
-## Step 3 — Restart the Gateway
-
-Restart your OpenClaw Gateway so it picks up the new MCP server entry, then
-verify the handshake:
+Restart your OpenClaw Gateway so it loads the new settings, then run:
 
 ```bash
 lint-ai --openclaw-verify-mcp
 ```
 
-## Step 4 — Check it working
+This checks that the Lint-AI server starts and offers its MCP tools. The
+`lint-ai-memory` skill is separate: it gives OpenClaw instructions for using
+memory, but does not provide callable tools by itself. OpenClaw must load the
+enabled `lint-ai` MCP server for those tools to appear in a conversation.
 
-Start any agent run in your project. Lint-AI injects recalled memories at
-bootstrap automatically — you don't need to change your prompts. To see the
-memory tools in action, ask the agent something only a past session would
-know, e.g. *"What did we decide about the API layout last week?"* The agent
-calls the MCP `search` tool before reading files.
+Check the connection from OpenClaw as well:
 
-To capture the current session deliberately, the agent can use the
-`record_session` tool (`start` at the beginning of a work session, `stop` at
-the end). Recording is capture-only: it never changes the workspace.
+```bash
+openclaw mcp status --verbose
+openclaw mcp probe lint-ai
+```
 
-## How it behaves
+If the server is enabled but the tools are missing from a conversation, first
+check that OpenClaw's tool rules allow them. In the active conversation, open
+**+ → Connectors → Tool access** and look for the Lint-AI tools. OpenClaw's
+agent profile, allow/deny rules, or sandbox settings can hide tools even when
+the server is connected. For sandboxed runs, OpenClaw's sandbox tool allowlist
+must also allow MCP tools.
 
-- **Stateless hooks.** There is no hook-side state file. The project root is
-  baked into the installed hook at install time, and the event's
-  `workspaceDir` takes precedence when present.
-- **Idempotent.** Stable document IDs mean a retried hook never duplicates a
-  memory, and repeated bootstrap firings replace rather than pile up the
-  injected file.
-- **Fail-open.** A hook failure never blocks the agent turn; if Lint-AI is
-  unreachable, the agent simply runs without injected memory.
+Lint-AI provides callable MCP tools, such as `lint-ai__search`; it does not
+currently publish MCP resources. An empty resource catalog is therefore
+expected and does not mean the Lint-AI connection failed.
 
-## Troubleshooting
+After changing connection or tool settings, reload the MCP connection and
+start a new conversation:
 
-- **No memories injected:** run `lint-ai --openclaw-verify-mcp` to check the
-  server handshake, and confirm the Gateway was restarted after install.
-- **Hook not firing:** check `<stateDir>/hooks/lint-ai/handler.js` exists
-  and that `OPENCLAW_STATE_DIR` matches the state dir your Gateway uses.
-- **Wrong project root:** the event's `workspaceDir` wins; otherwise the
-  install-time root is used. Re-run the installer with the right path if the
-  project moved.
+```bash
+openclaw mcp reload
+```
 
-## Reference
+Start an agent run in the project and ask about a previous decision or outcome.
+You can also ask the agent to save an important result for later. Lint-AI's
+memory tools are available to the agent after setup.
 
-The seven MCP tools: `search`, `info`, `list_memories`, `record_session`,
-`enable_lint_ai`, `disable_lint_ai`, `lint_ai_status`, plus board tools
-(`board_open`, `board_post`, `board_read`, …). Board and memory writes go
-through the persistent shared store (`.lint-ai/memory/`) under a
-cross-process write lock, so they survive the MCP process and are visible to
-hooks and other providers.
+### Screens that show setup is ready
 
-### Lifecycle hooks
+The OpenClaw menus can look different between versions. These screenshots
+show the expected Lint-AI entries. Open each one to see the full image.
 
-All hook schemas below were verified against live OpenClaw 2026.9.6
-payloads before shipping.
+??? note "1. Find Lint-AI memory in the Plugins catalog"
 
-| Hook | Kind | Lint-AI behavior |
-| --- | --- | --- |
-| `agent:bootstrap` | internal hook | Recalls relevant memories and injects them as `bootstrapFiles` (`LINTAI.md` appended, replacing any stale entry so repeated firings stay idempotent). |
-| `message:received` | internal hook | Remembers the latest user text per session so the bootstrap query targets the actual request. |
-| `agent_end` | typed plugin | Captures the run's outcome. |
-| `before_reset` | typed plugin | Captures an authoritative `SessionSummary` from the full departing transcript before OpenClaw wipes the session. |
-| `session_start` / `session_end` | typed plugin | Records session lifecycle links. |
+    ![Lint-AI memory listed in the OpenClaw Plugins catalog](assets/openclaw-plugin-catalog.png)
 
-Compaction capture is intentionally not wired: the compaction hooks were not
-observed on a live host. Every hook is fail-open — a hook failure never
-blocks the agent turn.
+??? note "2. Confirm the Lint-AI plugin is installed"
+
+    ![Installed Lint-AI memory plugin in OpenClaw](assets/openclaw-plugin-installed.png)
+
+??? note "3. Confirm the Lint-AI memory skill is enabled"
+
+    ![Lint-AI memory skill enabled in OpenClaw](assets/openclaw-memory-skill-enabled.png)
+
+??? note "4. Confirm the lint-ai MCP server is enabled"
+
+    ![lint-ai MCP server enabled in OpenClaw](assets/openclaw-mcp-server-enabled.png)
+
+## What setup adds
+
+Lint-AI adds three things to OpenClaw:
+
+- **Memory lookup:** relevant project memories can be added when an agent run
+  starts.
+- **Memory capture:** useful outcomes and session summaries can be saved as
+  work finishes.
+- **Memory tools:** the agent can search and manage memories when needed.
+
+These additions work alongside OpenClaw's own notes and memory files. Lint-AI
+stores project memories in `.lint-ai/memory/`, shared with other connected
+agents in the same project.
+
+## If it does not work
+
+- If the verification command fails, confirm `lint-ai` is installed and on
+  your `PATH`, then run `lint-ai --openclaw-install .` again.
+- If the agent does not recall memories, make sure the OpenClaw Gateway was
+  restarted after installation and that you started the agent from the project
+  where you installed Lint-AI.
+- If OpenClaw uses a custom state directory, make sure the Gateway and the
+  installer are using the same directory.
+
+For setup with other agents, see [Connect your AI agent](connect-agent.md).

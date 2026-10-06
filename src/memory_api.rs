@@ -243,6 +243,7 @@ pub struct MemoryService {
     /// Where receipts persist across restarts. None for in-memory services.
     receipts_path: Option<std::path::PathBuf>,
     pending_adds: HashMap<(String, String), Vec<String>>,
+    publication: Option<staged::PendingPublication>,
     conversation_states:
         std::sync::Arc<std::sync::Mutex<crate::conversation_state::ConversationStateStore>>,
     /// Lazily-built dependency-parse relation index for the structured-fact
@@ -922,6 +923,7 @@ impl MemoryService {
             request_receipts: HashMap::new(),
             receipts_path: None,
             pending_adds: HashMap::new(),
+            publication: None,
             conversation_states: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::conversation_state::ConversationStateStore::new(None),
             )),

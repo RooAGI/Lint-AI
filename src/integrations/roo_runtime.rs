@@ -288,7 +288,12 @@ pub(crate) fn search_results_with_evidence(
 }
 
 fn memory_session_id(project: &str, input: &HookInvocation) -> String {
-    let session = input.payload.get("sessionId").and_then(Value::as_str).filter(|id| !id.trim().is_empty()).unwrap_or(&input.run_id);
+    let session = input
+        .payload
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or(&input.run_id);
     format!("rooagi_runtime:{project}:{session}")
 }
 
@@ -364,8 +369,15 @@ fn capture(root: &Path, input: &HookInvocation, kind: &str) -> Result<()> {
         ("run_id".to_string(), input.run_id.clone()),
         ("capture_type".to_string(), kind.to_string()),
     ]);
-    if let Some(session_id) = input.payload.get("sessionId").and_then(Value::as_str).filter(|id| !id.trim().is_empty()) {
-        document.filters.insert("session_id".into(), session_id.to_owned());
+    if let Some(session_id) = input
+        .payload
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    {
+        document
+            .filters
+            .insert("session_id".into(), session_id.to_owned());
     }
     if let Some(id) = input.payload.get("turnId").and_then(Value::as_str) {
         document
@@ -462,8 +474,15 @@ fn capture_tool_event(root: &Path, input: &HookInvocation, kind: &str) -> Result
         }
         .to_string(),
     );
-    if let Some(session_id) = input.payload.get("sessionId").and_then(Value::as_str).filter(|id| !id.trim().is_empty()) {
-        document.filters.insert("session_id".into(), session_id.to_owned());
+    if let Some(session_id) = input
+        .payload
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    {
+        document
+            .filters
+            .insert("session_id".into(), session_id.to_owned());
     }
     if let Some(turn_id) = input.payload.get("turnId").and_then(Value::as_str) {
         document
@@ -787,14 +806,26 @@ mod tests {
         capture_tool_event(&root, &session_input, "tool_result").unwrap();
         MemoryService::with_shared_memory(&root, |memory| {
             let documents = memory.source_documents();
-            let attributed: Vec<_> = documents.iter().filter(|doc| doc.filters.get("session_id").map(String::as_str) == Some("conversation-42")).collect();
+            let attributed: Vec<_> = documents
+                .iter()
+                .filter(|doc| {
+                    doc.filters.get("session_id").map(String::as_str) == Some("conversation-42")
+                })
+                .collect();
             assert_eq!(attributed.len(), 2);
             assert_eq!(attributed[0].group_id, attributed[1].group_id);
-            assert_eq!(attributed[0].group_id.as_deref(), Some(memory_session_id(root.to_str().unwrap(), &session_input).as_str()));
-            assert_ne!(attributed[0].filters["run_id"], attributed[1].filters["run_id"]);
+            assert_eq!(
+                attributed[0].group_id.as_deref(),
+                Some(memory_session_id(root.to_str().unwrap(), &session_input).as_str())
+            );
+            assert_ne!(
+                attributed[0].filters["run_id"],
+                attributed[1].filters["run_id"]
+            );
             assert_ne!(attributed[0].doc_id, attributed[1].doc_id);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         fs::remove_dir_all(base).unwrap();
     }
 

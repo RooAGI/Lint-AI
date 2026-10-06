@@ -246,6 +246,93 @@ impl SegmentedMemoryIndex {
         })
     }
 
+    /// Refresh using a complete change set, including removed documents.
+    /// Unlike `refresh_incremental`, this path does not regroup the corpus.
+    /// Membership of unchanged documents comes from the previous generation.
+    pub(crate) fn refresh_changed(
+        previous: &Self,
+        records: &HashMap<String, DocRecord>,
+        changed_doc_ids: &HashSet<String>,
+        generation: u64,
+    ) -> Result<Self, String> {
+        let mut affected = HashSet::new();
+        let mut additions: HashMap<&str, Vec<&str>> = HashMap::new();
+        for doc_id in changed_doc_ids {
+            for segment in &previous.segments {
+                if segment.index.docs.contains_key(doc_id) {
+                    affected.insert(segment.segment_id.as_str());
+                }
+            }
+            if let Some(record) = records.get(doc_id) {
+                let segment_id = record.group_id.as_deref().unwrap_or("ungrouped");
+                if segment_id.trim().is_empty() {
+                    return Err("segment id must not be empty".to_string());
+                }
+                affected.insert(segment_id);
+                additions.entry(segment_id).or_default().push(doc_id);
+            }
+        }
+        let mut segments = Vec::with_capacity(previous.segments.len() + additions.len());
+        for segment in &previous.segments {
+            if !affected.contains(segment.segment_id.as_str()) {
+                segments.push(MemoryIndexSegment {
+                    segment_id: segment.segment_id.clone(),
+                    doc_ids: segment.doc_ids.clone(),
+                    index: Arc::clone(&segment.index),
+                    record_dates: std::sync::OnceLock::new(),
+                });
+                continue;
+            }
+            let mut segment_records = Vec::with_capacity(segment.doc_ids.len());
+            for doc_id in &segment.doc_ids {
+                if !changed_doc_ids.contains(doc_id) {
+                    segment_records.push(records.get(doc_id).cloned().ok_or_else(|| {
+                        format!("unchanged document missing from records: {doc_id}")
+                    })?);
+                }
+            }
+            for doc_id in additions
+                .remove(segment.segment_id.as_str())
+                .unwrap_or_default()
+            {
+                segment_records.push(records[doc_id].clone());
+            }
+            if !segment_records.is_empty() {
+                segments.push(build_memory_index_segment(
+                    segment.segment_id.clone(),
+                    segment_records,
+                ));
+            }
+        }
+        for (segment_id, doc_ids) in additions {
+            let segment_records = doc_ids.into_iter().map(|id| records[id].clone()).collect();
+            segments.push(build_memory_index_segment(
+                segment_id.to_string(),
+                segment_records,
+            ));
+        }
+        segments.sort_unstable_by(|a, b| a.segment_id.cmp(&b.segment_id));
+        // The previous snapshot is validated at construction. Changed IDs are
+        // removed from their old membership before being inserted exactly once.
+        // No full-corpus structural validation is needed for this delta path.
+        let catalog = SegmentCatalog::refresh_incremental(
+            &previous.catalog,
+            &previous.segments,
+            &segments,
+            generation,
+        );
+        let global_statistics = GlobalBm25Statistics::from_indexes_with_generation(
+            segments.iter().map(|segment| segment.index.as_ref()),
+            generation,
+        );
+        Ok(Self {
+            segments,
+            catalog,
+            global_statistics,
+            generation,
+        })
+    }
+
     pub fn manifest(&self) -> SegmentManifest {
         SegmentManifest {
             generation: self.generation,

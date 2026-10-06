@@ -76,20 +76,22 @@ fractional recall measures how much of the relevant evidence it found.
 | Any-hit Recall@5 | 94.2% |
 | Any-hit Recall@10 | 96.8% |
 | Any-hit Recall@20 | 97.6% |
-| Fractional Recall@5 | 85.6% |
-| Fractional Recall@10 | 92.0% |
-| Fractional Recall@20 | 93.1% |
-| MRR | 87.0% |
-| NDCG@10 | 85.0% |
+| Fractional Recall@5 | 86.37% |
+| Fractional Recall@10 | 91.89% |
+| Fractional Recall@20 | 92.93% |
+| MRR | 86.97% |
+| NDCG@10 | 85.11% |
 
-Lint-AI's fractional recall is 85.6% at 5, 92.0% at 10, and 93.1% at 20.
+These headline values are from the current 500-question Tantivy 0.25.0
+LongMemEval-S run.
 
-### Latest standalone rerun (2026-10-04)
+### Latest standalone rerun (2026-10-05)
 
-A fresh release-mode run evaluated all 500 questions with the heuristic NER
-backend, a single index, and no embeddings. It used cutoffs 1, 3, 5, 10, and
-20. The detailed per-question report is saved at
-`comparison/results/retrieval-longmemeval-current-2026-10-04.json.gz`.
+A fresh release-profile run evaluated all 500 questions with the heuristic NER
+backend, a single index, and no embeddings. It used Tantivy 0.25.0 and cutoffs
+1, 3, 5, 10, and 20. The code tree contained local changes, so this is a
+working-tree benchmark rather than a tagged-release result. The latest report
+is [`retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz).
 
 | Metric | Result |
 |---|---:|
@@ -97,15 +99,12 @@ backend, a single index, and no embeddings. It used cutoffs 1, 3, 5, 10, and
 | Fractional Recall@5 / @10 / @20 | 86.37% / 91.89% / 92.93% |
 | MRR | 87.0% |
 | NDCG@10 | 85.11% |
-| Search latency, mean / p50 / p95 | 2.68 / 2.15 / 4.47 ms |
+| Search latency, mean | 2.58 ms |
 
 Latency here is measured around each `MemoryService::search` call. It excludes
 the per-question haystack indexing performed before the query. The previous
 13.0 ms figure below comes from the earlier published report and has a
 different timing scope, so the two latency values are not directly comparable.
-Retrieval quality is close to the published result: any-hit recall and MRR are
-unchanged at the displayed precision, while fractional Recall@5 is 0.8
-percentage points higher.
 
 | Question type | n | Any-hit @5 | Any-hit @10 | Any-hit @20 | MRR | NDCG@10 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -116,10 +115,11 @@ percentage points higher.
 | Temporal reasoning | 133 | 89.5% | 94.0% | 96.2% | 82.5% | 80.0% |
 | Multi-session | 133 | 94.7% | 97.0% | 97.0% | 84.9% | 78.4% |
 
-### IndexStore duplicate-index refactor rerun (2026-10-05)
+### Historical Tantivy 0.26.2 IndexStore refactor experiment (2026-10-05)
 
-After removing the unused `IndexStore` lexical writer, the same release-mode
-500-question scoped benchmark returned identical aggregate retrieval metrics
+During the temporary Tantivy 0.26.2 upgrade, after removing the unused
+`IndexStore` lexical writer, the same release-profile 500-question scoped
+benchmark returned identical aggregate retrieval metrics
 to the pre-refactor Tantivy 0.26.2 result. Two queries had tie-order changes
 within the returned IDs; both retained the same per-query MRR and NDCG. The
 measured average search latency was
@@ -143,7 +143,7 @@ that latency difference as directional only. The raw report is
 | Embeddings | Disabled |
 | Cutoffs | 5, 10, and 20 |
 | Published-run average query latency | 13.0 ms |
-| Latest rerun command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 1 --k 3 --k 5 --k 10 --k 20 --ner-provider heuristic --out comparison/results/retrieval-longmemeval-current-2026-10-04.json.gz` |
+| Latest rerun command | `cargo run --release --bin haystack_scoped_benchmark -- --longmemeval benchmark/data/longmemeval_s_raw.json --k 1 --k 3 --k 5 --k 10 --k 20 --ner-provider heuristic --out comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json` |
 
 The published numbers above used heuristic Tier1 NER. Note: this benchmark's
 query loop (`analyze_query` → lexical search → aggregation) never invokes
@@ -160,17 +160,20 @@ spaCy-NER teacher votes the heuristic backend deliberately does not invent.
 ### Segmented-index comparison
 
 The latest segmented benchmark covers all 500 eligible LongMemEval-S
-questions. The single-index control and segment modes use the same query set,
-heuristic backend, and harness:
+questions. It used Tantivy 0.25.0, the heuristic backend, and the experimental
+segmented feature. The single-index control and segment modes use the same
+query set and harness. The source tree had local changes, so treat it as a
+working-tree result rather than a tagged-release measurement.
 
 | Mode | Any-hit Recall@5 | Any-hit Recall@10 | Fractional Recall@5 | MRR | Average latency |
 |---|---:|---:|---:|---:|---:|
-| Segmented (fixed top-5) | 94.20% | 94.20% | **86.77%** | 0.880 | 4.08 ms |
-| Segmented (adaptive 5→12, enriched) | 94.20% | 96.20% | 85.64% | 0.869 | 7.05 ms |
-| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.77 ms |
-| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 29.47 ms |
-| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 26.98 ms |
-| Single-index control | 94.40% | 96.60% | 86.41% | **0.872** | 14.34 ms |
+| Segmented (fixed top-5) | 94.20% | 94.20% | 86.77% | 0.880 | 2.49 ms |
+| Segmented (enriched + reranked) | 94.20% | 94.20% | 86.77% | 0.881 | 3.85 ms |
+| Adaptive (enriched + reranked) | 94.00% | 96.00% | 86.30% | 0.884 | 7.26 ms |
+| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.71 ms |
+| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 61.84 ms |
+| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 28.05 ms |
+| Single-index control | 94.40% | 96.60% | 86.41% | 0.872 | 13.45 ms |
 
 The run used `--segment-top-n 5`, `--adaptive-segment-max-n 12`, and the
 `coverage-local` router. Latency is the benchmark's average per-query time for
@@ -180,7 +183,7 @@ global has the strongest recall and MRR in this table, with higher latency.
 The intent baseline is fastest among the listed modes.
 
 Full per-query report:
-[`segment-longmemeval-500-2026-10-04.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-04.json.gz).
+[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
 The historical 133-query multi-session result remains at
 [`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).
 

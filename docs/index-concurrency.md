@@ -3,6 +3,10 @@
 This note captures the recommended concurrency model for large Lint-AI
 deployments.
 
+The [write publication implementation and verification plan](write-publication-plan.md)
+tracks the incremental refresh and proposed background builder. The staged
+writer behavior below describes the current implementation.
+
 ## Current Model
 
 `IndexStore` is the mutable owner of the corpus state:
@@ -32,8 +36,9 @@ flowchart LR
     Q --> W[Single writer]
     W --> J[Append and sync journal]
     J --> M[Mutable IndexStore]
-    M --> R[Refresh accumulated changes]
-    R --> S[Published immutable generation]
+    M --> R[Freeze accumulated changes]
+    R --> B[One background builder]
+    B --> S[Published immutable generation]
     Search --> S
     M --> C[Periodic or explicit checkpoint]
     C --> D[Persist records and core]
@@ -48,22 +53,29 @@ mutable store. They do not refresh for each add. The default response includes
 Publication starts 250 ms after the first pending add, or after 512 pending
 documents. These are scheduling triggers, not latency guarantees: rebuilds,
 checkpoints and queued writes take additional time. The deadline is not reset
-by incoming writes. The writer builds one generation at a time. Requests arriving
-during a refresh wait in a queue of 32 commands; full admission returns `429`.
+by incoming writes. One background builder creates a frozen generation while
+the writer continues accepting staged adds. The admission queue holds 32
+commands; full admission returns `429`. Snapshot capture and checkpoints still
+hold the mutable owner and can delay acknowledgements.
 Unpublished document accumulation is also bounded at 32,768 documents and returns
 `429` when admission would exceed it. In-memory services have the same publication
 contract but cannot promise restart durability.
 
 Full checkpoints run every 30 seconds and on explicit flush. Publication can
 reuse unchanged segments without rewriting the full persisted corpus each time.
-The journal remains available until a successful checkpoint has synced records,
-lifecycle state and the binary core. Startup replays complete transaction lines
+Checkpoint builds capture a journal boundary and matching records and index.
+After syncing that generation, the owner atomically retains only journal
+transactions after its captured boundary. Writes accepted during the build
+remain recoverable. Startup replays complete transaction lines
 idempotently and drops an interrupted final line. A remaining journal forces a
 rebuild, including when a crash left newer records alongside an older core.
 Committed journal corruption fails startup instead of silently dropping writes.
 
-`POST /flush` and `POST /v1/memories/refresh` publish and checkpoint all previously
-accepted queued writes. SIGINT and SIGTERM drain HTTP requests and flush before
+`POST /flush` and `POST /v1/memories/refresh` capture a target revision and wait
+until it is published and checkpointed. The writer continues accepting later
+adds while building that generation. Deferred flush and visibility replies are
+bounded at 32; exceeding that limit returns `429` before accepting another write.
+SIGINT and SIGTERM drain HTTP requests and flush before
 shutdown. A killed process recovers acknowledged writes from its journal.
 Cancelling an HTTP request does not cancel a command already admitted to the writer.
 
@@ -86,9 +98,12 @@ All values must be positive. Disk-backed staging requires a single process
 owner of the index root. It is not a distributed writer protocol; direct writes
 from a second process to the same root are unsupported. Use a dedicated `--index`
 root for the primary HTTP ingestion server and route its writes through that server.
-Metadata is cloned once per publication, so retained generations consume memory
-and publication cost still grows with corpus size. Full refresh work can delay
-write acknowledgements even though searches keep using the previous generation.
+Source-document, record, and chunk-lifecycle maps are shared with copy-on-write
+between generations; temporal facts and semantic-relation metadata are still
+cloned at capture. Searches keep using the previous generation during a
+background build. Checkpoint serialization and file commits still hold the
+owner and can delay acceptance. Synchronous library/provider mutations wait
+for the active builder and checkpoint before returning.
 
 ## Recommended Rule
 

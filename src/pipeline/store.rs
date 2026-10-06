@@ -21,9 +21,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::Arc;
 use tantivy::doc;
 #[derive(Debug, Clone)]
 pub struct StorePaths {
@@ -231,22 +229,30 @@ pub(crate) fn key_phrase_content_hash(content: &str) -> String {
 pub struct IndexStore {
     options: PipelineOptions,
     pub(crate) store_paths: StorePaths,
-    source_docs: HashMap<String, SourceDocument>,
-    records: HashMap<String, DocRecord>,
+    source_docs: Arc<HashMap<String, SourceDocument>>,
+    records: Arc<HashMap<String, DocRecord>>,
     semantic_docs: HashMap<String, SemanticDocState>,
     semantic_aggregate: SemanticAggregate,
-    chunk_lifecycle: HashMap<String, ChunkLifecycleMeta>,
+    chunk_lifecycle: Arc<HashMap<String, ChunkLifecycleMeta>>,
     chunk_latest_by_lineage: HashMap<String, String>,
     temporal_facts: TemporalFactStore,
     semantic_relations: SemanticRelationStore,
     dirty_docs: HashSet<String>,
+    /// Prepared record changes not yet incorporated into a successful snapshot.
+    /// Retained across failed builds, including when content hashes skip NLP.
+    pending_snapshot_changes: HashSet<String>,
     tombstones: HashSet<String>,
     snapshot: Option<Arc<MemoryIndexSnapshot>>,
     snapshot_revision: u64,
+    checkpoint_revision: u64,
     store_revision: u64,
-    background_refresh: Option<BackgroundRefresh>,
     dirty: bool,
     checkpoint_pending: bool,
+}
+
+pub(crate) struct PreparedCheckpoint {
+    semantic: super::PreparedSemanticState,
+    manifest: Option<String>,
 }
 
 /// Group members visible to the conversational rerank: documents in `group_id`
@@ -301,11 +307,6 @@ impl RerankDocSource for IndexStore {
     ) -> Vec<String> {
         filtered_group_member_ids(&self.source_docs, group_id, filters)
     }
-}
-
-struct BackgroundRefresh {
-    target_revision: u64,
-    receiver: Mutex<Receiver<Result<MemoryIndexSnapshot>>>,
 }
 
 fn build_memory_index_snapshot(
@@ -365,8 +366,109 @@ impl IndexStore {
         self.snapshot = None;
         self.dirty = true;
     }
-    /// Detached read view. Shares the immutable indexes and captures the
-    /// metadata used by visibility filters and reranking in the same generation.
+
+    /// Capture an owned build input. The detached store cannot persist files
+    /// and shares only immutable indexes with the mutable owner.
+    pub(crate) fn publication_build_view(&mut self) -> Result<Self> {
+        if self.dirty || self.snapshot.is_none() {
+            self.prepare_pending_changes()?;
+            self.pending_snapshot_changes
+                .extend(self.tombstones.iter().cloned());
+        }
+        let mut view = self.published_read_view();
+        view.store_revision = self.store_revision;
+        view.pending_snapshot_changes = self.pending_snapshot_changes.clone();
+        if matches!(self.options.memory_index_layout, MemoryIndexLayout::Single) {
+            view.semantic_aggregate = self.semantic_aggregate.clone();
+        }
+        view.dirty = self.dirty;
+        Ok(view)
+    }
+
+    /// Adopt a completed generation without replacing mutable records that
+    /// may already contain newer writes. Synchronous mutations can supersede it.
+    pub(crate) fn accept_publication_view(
+        &mut self,
+        view: &Self,
+        changed: &HashSet<String>,
+    ) -> bool {
+        if view.snapshot_revision <= self.snapshot_revision {
+            return false;
+        }
+        assert!(view.snapshot_revision <= self.store_revision);
+        self.snapshot = view.snapshot.clone();
+        self.snapshot_revision = view.snapshot_revision;
+        for id in changed {
+            self.pending_snapshot_changes.remove(id);
+        }
+        self.dirty = self.store_revision != self.snapshot_revision;
+        self.checkpoint_pending = self.snapshot_revision > self.checkpoint_revision;
+        true
+    }
+
+    pub(crate) fn pending_snapshot_changes(&self) -> HashSet<String> {
+        self.pending_snapshot_changes.clone()
+    }
+
+    pub(crate) fn checkpoint_revision(&self) -> u64 {
+        self.checkpoint_revision
+    }
+
+    /// Persist matching index and records from the captured generation.
+    /// The MemoryService owner serializes all persistence operations.
+    pub(crate) fn checkpoint_publication_view(
+        &self,
+        view: &Self,
+        prepared: Option<&PreparedCheckpoint>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            view.snapshot_revision >= self.checkpoint_revision,
+            "checkpoint revision would regress"
+        );
+        persist_store_metadata(&self.store_paths, &self.options)?;
+        if let Some(prepared) = prepared {
+            super::persist_prepared_semantic_state(&self.store_paths, &prepared.semantic)?;
+            if let Some(manifest) = &prepared.manifest {
+                let path = self
+                    .store_paths
+                    .semantic_dir
+                    .as_ref()
+                    .expect("checkpoint semantic dir")
+                    .join(SEGMENT_MANIFEST_FILE);
+                super::write_text_file_atomic(&path, manifest)?;
+            }
+        } else {
+            anyhow::ensure!(
+                self.store_paths.semantic_dir.is_none(),
+                "disk checkpoint has no prepared payload"
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_checkpoint(&self) -> Result<PreparedCheckpoint> {
+        let snapshot = self
+            .snapshot
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("checkpoint has no snapshot"))?;
+        let (single, manifest) = match snapshot {
+            MemoryIndexSnapshot::Single(index) => (Some(index), None),
+            MemoryIndexSnapshot::Segmented(index) => {
+                (None, Some(serde_json::to_string_pretty(&index.manifest())?))
+            }
+        };
+        Ok(PreparedCheckpoint {
+            semantic: super::prepare_semantic_state(single, &self.records, &self.chunk_lifecycle)?,
+            manifest,
+        })
+    }
+
+    pub(crate) fn complete_checkpoint(&mut self, revision: u64) {
+        self.checkpoint_revision = self.checkpoint_revision.max(revision);
+        self.checkpoint_pending = self.snapshot_revision > self.checkpoint_revision;
+    }
+    /// Detached read view. Shares immutable indexes and copy-on-write corpus
+    /// maps, keeping visibility and reranking metadata on one generation.
     pub(crate) fn published_read_view(&self) -> Self {
         Self {
             options: PipelineOptions {
@@ -388,15 +490,24 @@ impl IndexStore {
             temporal_facts: self.temporal_facts.clone(),
             semantic_relations: self.semantic_relations.clone(),
             dirty_docs: HashSet::new(),
+            pending_snapshot_changes: HashSet::new(),
             tombstones: HashSet::new(),
             snapshot: self.snapshot.clone(),
             snapshot_revision: self.snapshot_revision,
+            checkpoint_revision: self.checkpoint_revision,
             store_revision: self.snapshot_revision,
-            background_refresh: None,
             dirty: false,
             checkpoint_pending: false,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn publication_maps_shared_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.source_docs, &other.source_docs)
+            && Arc::ptr_eq(&self.records, &other.records)
+            && Arc::ptr_eq(&self.chunk_lifecycle, &other.chunk_lifecycle)
+    }
+
     /// Wrap a prebuilt single-index query snapshot in the service-owned store
     /// state used by `MemoryService`. This lets adapters that already have a
     /// cached snapshot use the canonical service search path without rebuilding
@@ -481,13 +592,16 @@ impl IndexStore {
         }
 
         let IndexStore {
-            mut source_docs,
-            mut records,
-            mut chunk_lifecycle,
+            source_docs,
+            records,
+            chunk_lifecycle,
             snapshot: workspace_snapshot,
             options,
             ..
         } = workspace;
+        let mut source_docs = Arc::unwrap_or_clone(source_docs);
+        let mut records = Arc::unwrap_or_clone(records);
+        let mut chunk_lifecycle = Arc::unwrap_or_clone(chunk_lifecycle);
         let mut segments = take_segmented_snapshot(workspace_snapshot, "workspace")?;
 
         if let Some(provider_memory) = provider_memory {
@@ -504,9 +618,21 @@ impl IndexStore {
                 snapshot: provider_snapshot,
                 ..
             } = provider_memory;
-            merge_composed_map(&mut source_docs, provider_docs, "source document")?;
-            merge_composed_map(&mut records, provider_records, "record")?;
-            merge_composed_map(&mut chunk_lifecycle, provider_lifecycle, "chunk lifecycle")?;
+            merge_composed_map(
+                &mut source_docs,
+                Arc::unwrap_or_clone(provider_docs),
+                "source document",
+            )?;
+            merge_composed_map(
+                &mut records,
+                Arc::unwrap_or_clone(provider_records),
+                "record",
+            )?;
+            merge_composed_map(
+                &mut chunk_lifecycle,
+                Arc::unwrap_or_clone(provider_lifecycle),
+                "chunk lifecycle",
+            )?;
             segments.extend(take_segmented_snapshot(provider_snapshot, "provider")?);
         }
 
@@ -542,20 +668,21 @@ impl IndexStore {
                 semantic_dir: None,
                 metadata_path: None,
             },
-            source_docs,
-            records,
+            source_docs: Arc::new(source_docs),
+            records: Arc::new(records),
             semantic_docs,
             semantic_aggregate,
-            chunk_lifecycle,
+            chunk_lifecycle: Arc::new(chunk_lifecycle),
             chunk_latest_by_lineage,
             temporal_facts,
             semantic_relations,
             dirty_docs: HashSet::new(),
+            pending_snapshot_changes: HashSet::new(),
             tombstones: HashSet::new(),
             snapshot_revision: usize::from(snapshot.is_some()) as u64,
+            checkpoint_revision: 0,
             store_revision: usize::from(snapshot.is_some()) as u64,
             snapshot,
-            background_refresh: None,
             dirty: false,
             checkpoint_pending: false,
         })
@@ -628,20 +755,21 @@ impl IndexStore {
         Ok(Self {
             options,
             store_paths,
-            source_docs,
-            records,
+            source_docs: Arc::new(source_docs),
+            records: Arc::new(records),
             semantic_docs,
             semantic_aggregate,
-            chunk_lifecycle,
+            chunk_lifecycle: Arc::new(chunk_lifecycle),
             chunk_latest_by_lineage,
             temporal_facts,
             semantic_relations,
             dirty_docs: HashSet::new(),
+            pending_snapshot_changes: HashSet::new(),
             tombstones: HashSet::new(),
             snapshot: snapshot.map(Arc::new),
             snapshot_revision: 0,
+            checkpoint_revision: 0,
             store_revision: 0,
-            background_refresh: None,
             dirty: false,
             checkpoint_pending: false,
         })
@@ -669,24 +797,20 @@ impl IndexStore {
     }
 
     fn persist_compatibility_state(&self) -> Result<()> {
-        if self.store_paths.semantic_dir.is_none() {
+        self.persist_compatibility_state_to(&self.store_paths)
+    }
+
+    fn persist_compatibility_state_to(&self, paths: &StorePaths) -> Result<()> {
+        if paths.semantic_dir.is_none() {
             return Ok(());
         }
         match self.snapshot.as_deref().expect("snapshot should exist") {
-            MemoryIndexSnapshot::Single(index) => persist_semantic_state(
-                &self.store_paths,
-                Some(index),
-                &self.records,
-                &self.chunk_lifecycle,
-            ),
+            MemoryIndexSnapshot::Single(index) => {
+                persist_semantic_state(paths, Some(index), &self.records, &self.chunk_lifecycle)
+            }
             MemoryIndexSnapshot::Segmented(segmented) => {
-                persist_semantic_state(
-                    &self.store_paths,
-                    None,
-                    &self.records,
-                    &self.chunk_lifecycle,
-                )?;
-                persist_segment_manifest(&self.store_paths, &segmented.manifest())
+                persist_semantic_state(paths, None, &self.records, &self.chunk_lifecycle)?;
+                persist_segment_manifest(paths, &segmented.manifest())
             }
         }
     }
@@ -800,20 +924,21 @@ impl IndexStore {
         Ok(Self {
             options,
             store_paths,
-            source_docs,
-            records,
+            source_docs: Arc::new(source_docs),
+            records: Arc::new(records),
             semantic_docs,
             semantic_aggregate,
-            chunk_lifecycle,
+            chunk_lifecycle: Arc::new(chunk_lifecycle),
             chunk_latest_by_lineage,
             temporal_facts,
             semantic_relations,
             dirty_docs: HashSet::new(),
+            pending_snapshot_changes: HashSet::new(),
             tombstones: HashSet::new(),
             snapshot: Some(Arc::new(snapshot)),
             snapshot_revision: 1,
+            checkpoint_revision: 0,
             store_revision: 1,
-            background_refresh: None,
             dirty: false,
             checkpoint_pending: false,
         })
@@ -822,7 +947,7 @@ impl IndexStore {
     pub fn upsert(&mut self, doc: SourceDocument) {
         let doc_id = doc.doc_id.clone();
         self.tombstones.remove(&doc_id);
-        self.source_docs.insert(doc_id.clone(), doc);
+        Arc::make_mut(&mut self.source_docs).insert(doc_id.clone(), doc);
         self.dirty_docs.insert(doc_id);
         self.store_revision = self.store_revision.saturating_add(1);
         self.dirty = true;
@@ -851,7 +976,7 @@ impl IndexStore {
         if !current_matches {
             return;
         }
-        if let Some(doc) = self.source_docs.get_mut(doc_id) {
+        if let Some(doc) = Arc::make_mut(&mut self.source_docs).get_mut(doc_id) {
             doc.key_phrases = key_phrases;
             // Stamp the content this extraction ran against: an empty phrase
             // list with a matching stamp is a completed extraction, not a
@@ -864,9 +989,9 @@ impl IndexStore {
     }
 
     pub fn remove(&mut self, doc_id: &str) -> Option<SourceDocument> {
-        let removed = self.source_docs.remove(doc_id);
+        let removed = Arc::make_mut(&mut self.source_docs).remove(doc_id);
         if removed.is_some() {
-            self.records.remove(doc_id);
+            Arc::make_mut(&mut self.records).remove(doc_id);
             self.semantic_docs.remove(doc_id);
             self.semantic_aggregate.remove_doc(doc_id);
             self.dirty_docs.remove(doc_id);
@@ -938,7 +1063,7 @@ impl IndexStore {
     /// persisted record (written before hashing existed).
     #[cfg(test)]
     pub(crate) fn clear_record_content_hash_for_test(&mut self, doc_id: &str) {
-        if let Some(record) = self.records.get_mut(doc_id) {
+        if let Some(record) = Arc::make_mut(&mut self.records).get_mut(doc_id) {
             record.content_hash.clear();
         }
     }
@@ -1064,14 +1189,27 @@ impl IndexStore {
     }
 
     fn refresh_internal(&mut self, checkpoint: bool) -> Result<()> {
-        self.poll_background_refresh()?;
         if self.dirty || self.snapshot.is_none() {
-            // Only documents whose content actually changed get fresh
-            // records (see prepare_pending_changes), so only segments
-            // containing one of the returned ids must be rebuilt.
-            let reprocessed_doc_ids = self.prepare_pending_changes()?;
-            // The incremental path borrows the record map and never clones
-            // it; only the full-rebuild fallback materializes a sorted Vec.
+            self.prepare_pending_changes()?;
+            self.pending_snapshot_changes
+                .extend(self.tombstones.iter().cloned());
+            self.build_prepared_snapshot()?;
+        }
+        if checkpoint && self.checkpoint_pending {
+            persist_store_metadata(&self.store_paths, &self.options)?;
+            self.persist_compatibility_state()?;
+            self.checkpoint_pending = false;
+        }
+        Ok(())
+    }
+
+    /// Build a frozen input whose records and semantic metadata were already
+    /// prepared by the owner. Do not repeat corpus preparation in the worker.
+    pub(crate) fn build_prepared_snapshot(&mut self) -> Result<()> {
+        if self.dirty || self.snapshot.is_none() {
+            let reprocessed_doc_ids = &self.pending_snapshot_changes;
+            // The delta path uses previous membership and explicit changes;
+            // only the full-rebuild fallback groups the entire corpus.
             let incremental = {
                 let snapshot = &mut self.snapshot;
                 let records = &self.records;
@@ -1099,13 +1237,9 @@ impl IndexStore {
                 )));
             }
             self.snapshot_revision = self.store_revision;
+            self.pending_snapshot_changes.clear();
             self.checkpoint_pending = true;
             self.dirty = false;
-        }
-        if checkpoint && self.checkpoint_pending {
-            persist_store_metadata(&self.store_paths, &self.options)?;
-            self.persist_compatibility_state()?;
-            self.checkpoint_pending = false;
         }
         Ok(())
     }
@@ -1117,9 +1251,8 @@ impl IndexStore {
     /// hold their index behind `Arc` — so there is no ownership dance and no
     /// silent fallback: a concurrent reader simply keeps the old snapshot.
     ///
-    /// Takes the record map by reference and never clones it: grouping and
-    /// the reuse check work on borrowed ids, and only rebuilt segments
-    /// materialize owned records.
+    /// Takes the record map by reference. Changed IDs identify the affected
+    /// segments; only rebuilt segments materialize owned records.
     fn try_refresh_incremental(
         snapshot: &mut Option<Arc<MemoryIndexSnapshot>>,
         records: &HashMap<String, DocRecord>,
@@ -1137,7 +1270,7 @@ impl IndexStore {
             Some(MemoryIndexSnapshot::Segmented(previous)) => previous,
             _ => return Ok(false),
         };
-        let next = SegmentedMemoryIndex::refresh_incremental(
+        let next = SegmentedMemoryIndex::refresh_changed(
             previous,
             records,
             reprocessed_doc_ids,
@@ -1146,50 +1279,6 @@ impl IndexStore {
         .map_err(|error| anyhow::anyhow!("incremental segment refresh failed: {error}"))?;
         *snapshot = Some(Arc::new(MemoryIndexSnapshot::Segmented(next)));
         Ok(true)
-    }
-
-    #[allow(dead_code)]
-    fn refresh_async(&mut self) -> Result<()> {
-        self.poll_background_refresh()?;
-        if self.background_refresh.is_some() {
-            return Ok(());
-        }
-        if !self.dirty && self.snapshot.is_some() {
-            return Ok(());
-        }
-        self.prepare_pending_changes()?;
-        let target_revision = self.store_revision;
-        let mut records = self.records.values().cloned().collect::<Vec<DocRecord>>();
-        records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-        let (sender, receiver) = mpsc::channel();
-        let semantic_aggregate = self.semantic_aggregate.clone();
-        let text_rerank_ngram = self.options.text_rerank_ngram;
-        let text_rerank_lcs = self.options.text_rerank_lcs;
-        let claim_extraction = self.options.claim_extraction;
-        let memory_index_layout = self.options.memory_index_layout.clone();
-        thread::spawn(move || {
-            let global_index =
-                matches!(memory_index_layout, MemoryIndexLayout::Single).then(|| {
-                    MemoryIndex::from_records_with_semantic_aggregate(
-                        records.clone(),
-                        semantic_aggregate,
-                        text_rerank_ngram,
-                        text_rerank_lcs,
-                        claim_extraction,
-                    )
-                });
-            let _ = sender.send(Ok(build_memory_index_snapshot(
-                records,
-                global_index,
-                &memory_index_layout,
-                target_revision,
-            )));
-        });
-        self.background_refresh = Some(BackgroundRefresh {
-            target_revision,
-            receiver: Mutex::new(receiver),
-        });
-        Ok(())
     }
 
     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
@@ -1350,6 +1439,7 @@ impl IndexStore {
         // Pass 3: per-doc bookkeeping (semantic aggregate, chunk lifecycle)
         // with the precomputed NER entities.
         let mut reprocessed_doc_ids = HashSet::new();
+        let mut temporal_requires_rebuild = !self.tombstones.is_empty();
         for (doc_id, tier1_doc) in rebuild_ids.iter().zip(tier1_inputs.iter()) {
             let source_doc = self
                 .source_docs
@@ -1363,19 +1453,35 @@ impl IndexStore {
             self.semantic_aggregate.insert_doc_state(&semantic_state);
             self.semantic_docs.insert(doc_id.clone(), semantic_state);
             let previous = self.records.get(doc_id).cloned();
-            self.records.insert(doc_id.clone(), record);
+            temporal_requires_rebuild |= previous.is_some();
+            Arc::make_mut(&mut self.records).insert(doc_id.clone(), record);
             if let Some(current) = self.records.get(doc_id).cloned() {
                 self.update_chunk_lifecycle_for_doc(doc_id, previous.as_ref(), &current);
             }
             self.dirty_docs.remove(doc_id);
             reprocessed_doc_ids.insert(doc_id.clone());
+            self.pending_snapshot_changes.insert(doc_id.clone());
         }
         let tombstoned = self.tombstones.iter().cloned().collect::<Vec<_>>();
         for doc_id in tombstoned {
             self.remove_chunk_lifecycle_for_doc(&doc_id);
         }
-        self.temporal_facts =
-            TemporalFactStore::from_records(self.records.values(), &self.chunk_lifecycle);
+        if !reprocessed_doc_ids.is_empty() || !self.tombstones.is_empty() {
+            let appended = if temporal_requires_rebuild {
+                false
+            } else {
+                let added_records = reprocessed_doc_ids
+                    .iter()
+                    .filter_map(|doc_id| self.records.get(doc_id))
+                    .collect::<Vec<_>>();
+                self.temporal_facts
+                    .append_records_if_ordered(added_records, &self.chunk_lifecycle)
+            };
+            if !appended {
+                self.temporal_facts =
+                    TemporalFactStore::from_records(self.records.values(), &self.chunk_lifecycle);
+            }
+        }
         // Incremental semantic update: only reprocessed documents get fresh
         // claims and only their canonical-claim neighborhoods get rebuilt
         // relations. Tombstoned documents drop their claims. Untouched
@@ -1396,37 +1502,6 @@ impl IndexStore {
         Ok(reprocessed_doc_ids)
     }
 
-    fn poll_background_refresh(&mut self) -> Result<()> {
-        let Some(background) = self.background_refresh.as_ref() else {
-            return Ok(());
-        };
-        let result = background
-            .receiver
-            .lock()
-            .map_err(|_| anyhow::anyhow!("background refresh lock poisoned"))?
-            .try_recv();
-        match result {
-            Ok(result) => {
-                let target_revision = background.target_revision;
-                self.background_refresh = None;
-                let snapshot = result?;
-                if target_revision == self.store_revision {
-                    self.snapshot = Some(Arc::new(snapshot));
-                    self.snapshot_revision = target_revision;
-                    persist_store_metadata(&self.store_paths, &self.options)?;
-                    self.persist_compatibility_state()?;
-                    self.dirty = false;
-                }
-                Ok(())
-            }
-            Err(TryRecvError::Empty) => Ok(()),
-            Err(TryRecvError::Disconnected) => {
-                self.background_refresh = None;
-                anyhow::bail!("background semantic refresh disconnected")
-            }
-        }
-    }
-
     fn update_chunk_lifecycle_for_doc(
         &mut self,
         doc_id: &str,
@@ -1439,7 +1514,9 @@ impl IndexStore {
             let lineage_key = chunk_lineage_key(doc_id, chunk);
             current_lineage_keys.insert(lineage_key.clone());
 
-            if let Some(existing) = self.chunk_lifecycle.get_mut(&chunk.chunk_id) {
+            if let Some(existing) =
+                Arc::make_mut(&mut self.chunk_lifecycle).get_mut(&chunk.chunk_id)
+            {
                 existing.doc_id = doc_id.to_string();
                 existing.lineage_key = lineage_key.clone();
                 existing.is_latest = true;
@@ -1452,7 +1529,9 @@ impl IndexStore {
             let previous_latest_chunk_id = self.chunk_latest_by_lineage.get(&lineage_key).cloned();
             let (version, supersedes_chunk_id) =
                 if let Some(prev_chunk_id) = previous_latest_chunk_id {
-                    if let Some(prev_meta) = self.chunk_lifecycle.get_mut(&prev_chunk_id) {
+                    if let Some(prev_meta) =
+                        Arc::make_mut(&mut self.chunk_lifecycle).get_mut(&prev_chunk_id)
+                    {
                         prev_meta.is_latest = false;
                         prev_meta.updated_at_ms = now;
                         (
@@ -1466,7 +1545,7 @@ impl IndexStore {
                     (1, None)
                 };
 
-            self.chunk_lifecycle.insert(
+            Arc::make_mut(&mut self.chunk_lifecycle).insert(
                 chunk.chunk_id.clone(),
                 ChunkLifecycleMeta {
                     chunk_id: chunk.chunk_id.clone(),
@@ -1487,7 +1566,9 @@ impl IndexStore {
             for chunk in &previous_record.section_chunks {
                 let lineage_key = chunk_lineage_key(doc_id, chunk);
                 if !current_lineage_keys.contains(&lineage_key) {
-                    if let Some(meta) = self.chunk_lifecycle.get_mut(&chunk.chunk_id) {
+                    if let Some(meta) =
+                        Arc::make_mut(&mut self.chunk_lifecycle).get_mut(&chunk.chunk_id)
+                    {
                         meta.is_latest = false;
                         meta.updated_at_ms = now;
                     }
@@ -1505,7 +1586,7 @@ impl IndexStore {
             .map(|meta| meta.chunk_id.clone())
             .collect::<Vec<_>>();
         for chunk_id in chunk_ids {
-            if let Some(meta) = self.chunk_lifecycle.remove(&chunk_id) {
+            if let Some(meta) = Arc::make_mut(&mut self.chunk_lifecycle).remove(&chunk_id) {
                 if self
                     .chunk_latest_by_lineage
                     .get(&meta.lineage_key)

@@ -9,6 +9,7 @@ and write records accepted.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import platform
@@ -30,6 +31,14 @@ def percentile(values, p):
         return None
     ordered = sorted(values)
     return round(ordered[min(len(ordered) - 1, math.ceil(p * len(ordered)) - 1)], 3)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def post(url, payload):
@@ -64,7 +73,10 @@ def summarize(name, started, ended, samples, statuses, records_per_success=0):
     }
 
 
-def run_phase(name, seconds, readers, writers, write_batch, bind, user_id):
+def run_phase(
+    name, seconds, readers, writers, write_batch, write_interval_ms, bind, user_id,
+    writer_session_group,
+):
     deadline = time.monotonic() + seconds
     gate = threading.Barrier(readers + writers + 1)
     lock = threading.Lock()
@@ -108,6 +120,7 @@ def run_phase(name, seconds, readers, writers, write_batch, bind, user_id):
     def writer(worker):
         nonlocal sequence
         gate.wait()
+        next_write_at = time.monotonic()
         while time.monotonic() < deadline:
             with lock:
                 start_id = sequence
@@ -118,7 +131,7 @@ def run_phase(name, seconds, readers, writers, write_batch, bind, user_id):
                 requests.append({
                     "request_id": f"mixed-{name}-{worker}-{item}",
                     "user_id": user_id,
-                    "session_id": f"mixed-session-{worker}-{item}",
+                    "session_id": writer_session_group or f"mixed-session-{worker}-{item}",
                     "messages": [{
                         "role": "user",
                         "content": f"Mixedloadunique{item} record: deployment configuration system decision",
@@ -136,6 +149,9 @@ def run_phase(name, seconds, readers, writers, write_batch, bind, user_id):
             if 200 <= status < 300:
                 with lock:
                     visible_candidates.append(requests[-1]["messages"][0]["content"])
+            if write_interval_ms:
+                next_write_at += write_interval_ms / 1000
+                time.sleep(max(0, next_write_at - time.monotonic()))
 
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=readers + writers) as pool:
@@ -147,7 +163,15 @@ def run_phase(name, seconds, readers, writers, write_batch, bind, user_id):
     ended = time.monotonic()
 
     flush_started = time.monotonic()
-    flush_status, _ = post(f"http://{bind}/v1/memories/refresh", {})
+    flush_error = None
+    try:
+        flush_status, _ = post(f"http://{bind}/v1/memories/refresh", {})
+    except urllib.error.HTTPError as exc:
+        flush_status = exc.code
+        flush_error = exc.read().decode(errors="replace")
+    except Exception as exc:
+        flush_status = 0
+        flush_error = str(exc)
     flush_seconds = time.monotonic() - flush_started
     visibility = None
     if visible_candidates:
@@ -179,12 +203,14 @@ def run_phase(name, seconds, readers, writers, write_batch, bind, user_id):
         "writer_user_id": user_id,
         "writer_workers": writers,
         "write_batch_records": write_batch,
+        "write_interval_ms": write_interval_ms,
         "search": summarize("search", started, ended, samples["search"], statuses["search"]),
         "write": summarize(
             "write", started, ended, samples["write"], statuses["write"], write_batch
         ),
         "flush_seconds": round(flush_seconds, 3),
         "flush_status": flush_status,
+        "flush_error": flush_error,
         "published_write_records_per_second": round(sum(200 <= s < 300 for s in statuses["write"]) * write_batch / (ended - started + flush_seconds), 2),
         "post_write_visibility": visibility,
     }
@@ -221,13 +247,15 @@ def run_once(args, repetition):
             ], check=True, cwd=ROOT)
 
             control = run_phase(
-                "read-only-control", args.seconds, args.readers, 0,
-                args.write_batch, bind, "mixed-bench-user",
+                "read-only-control", args.control_seconds or args.seconds, args.readers, 0,
+                args.write_batch, args.write_interval_ms, bind, "mixed-bench-user",
+                args.writer_session_group,
             )
             time.sleep(1)
             mixed = run_phase(
                 "concurrent-read-write", args.seconds, args.readers, args.writers,
-                args.write_batch, bind, "mixed-bench-user",
+                args.write_batch, args.write_interval_ms, bind, "mixed-bench-user",
+                args.writer_session_group,
             )
             return {
                 "repetition": repetition,
@@ -236,7 +264,13 @@ def run_once(args, repetition):
                 "readers": args.readers,
                 "writers": args.writers,
                 "write_batch_records": args.write_batch,
+                "write_interval_ms": args.write_interval_ms,
+                "writer_session_group": args.writer_session_group,
+                "writer_session_distribution": (
+                    "concentrated" if args.writer_session_group else "unique-per-write"
+                ),
                 "configured_phase_seconds": args.seconds,
+                "configured_control_seconds": args.control_seconds or args.seconds,
                 "phases": [control, mixed],
             }
         finally:
@@ -253,9 +287,15 @@ def main():
     parser.add_argument("--records", type=int, default=23366)
     parser.add_argument("--sessions", type=int, default=23)
     parser.add_argument("--seconds", type=int, default=15, help="duration of each phase")
+    parser.add_argument("--control-seconds", type=int,
+                        help="read-only control duration; defaults to --seconds")
     parser.add_argument("--readers", type=int, default=10)
     parser.add_argument("--writers", type=int, default=1)
     parser.add_argument("--write-batch", type=int, default=8)
+    parser.add_argument("--write-interval-ms", type=int, default=0,
+                        help="minimum delay between write batches per worker; zero saturates")
+    parser.add_argument("--writer-session-group",
+                        help="pin writes to this existing session segment")
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--port", type=int, default=18081)
     parser.add_argument("--output", type=Path)
@@ -265,6 +305,10 @@ def main():
         parser.error("records, sessions, seconds, readers, write-batch, and repetitions must be positive")
     if args.writers < 0:
         parser.error("writers cannot be negative")
+    if args.write_interval_ms < 0:
+        parser.error("write-interval-ms cannot be negative")
+    if args.control_seconds is not None and args.control_seconds < 1:
+        parser.error("control-seconds must be positive")
     if args.write_batch > 128:
         parser.error("write-batch cannot exceed /add/batch's 128-request limit")
 
@@ -282,18 +326,26 @@ def main():
             "processor": platform.processor(),
         },
         "server": str(args.server_bin),
+        "server_binary_sha256": file_sha256(args.server_bin),
         "records_before_load": args.records,
         "readers": args.readers,
         "writers": args.writers,
         "write_batch_records": args.write_batch,
+        "write_interval_ms": args.write_interval_ms,
+        "writer_session_group": args.writer_session_group,
+        "writer_session_distribution": (
+            "concentrated" if args.writer_session_group else "unique-per-write"
+        ),
         "configured_phase_seconds": args.seconds,
+        "configured_control_seconds": args.control_seconds or args.seconds,
         "repetitions": args.repetitions,
         "runs": runs,
         "notes": [
             "Each repetition uses a fresh server process and temporary index.",
             "Read-only control and mixed phases are paired on one server and corpus per repetition.",
             "Search queries vary by nonce to prevent repeated-query cache reuse in either phase.",
-            "Write requests are /add/batch calls with distinct request IDs and session IDs.",
+            "Write requests are /add/batch calls with distinct request IDs.",
+            "Each writer can optionally wait between write batches to model sparse update rates.",
             "HTTP 429 responses are counted as rejected writes, not retried.",
             "Each mixed phase searches for a record from a successfully accepted write after load ends.",
         ],

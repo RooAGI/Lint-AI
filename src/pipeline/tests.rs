@@ -592,6 +592,24 @@ fn refresh_is_idempotent_when_no_documents_change() {
 }
 
 #[test]
+fn publication_view_shares_corpus_maps_and_copy_on_write_keeps_it_frozen() {
+    let mut store = IndexStore::in_memory(PipelineOptions::default());
+    store.upsert(sample_doc("first", "initial published content"));
+    store.refresh().unwrap();
+
+    let view = store.published_read_view();
+    assert!(store.publication_maps_shared_with(&view));
+
+    store.upsert(sample_doc("second", "new mutable content"));
+    store.refresh().unwrap();
+
+    assert!(store.source_document_by_id("second").is_some());
+    assert!(view.source_document_by_id("second").is_none());
+    assert!(store.record_by_id("second").is_some());
+    assert!(view.record_by_id("second").is_none());
+}
+
+#[test]
 fn incremental_refresh_matches_full_rebuild() {
     fn segmented_options() -> PipelineOptions {
         PipelineOptions {
@@ -757,6 +775,52 @@ fn incremental_refresh_matches_full_rebuild() {
             "two identical rebuilds diverged for {query:?}"
         );
     }
+}
+
+#[test]
+fn failed_segment_build_retains_prepared_changes_for_retry() {
+    let options = PipelineOptions {
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: 8,
+            routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+        },
+        ..PipelineOptions::default()
+    };
+    let mut store = IndexStore::new(options);
+    store.upsert(sample_doc("initial", "initial stable memory"));
+    store.refresh().unwrap();
+    let mut valid = sample_doc("valid", "quartz successful new memory");
+    valid.group_id = Some("valid-group".into());
+    store.upsert(valid);
+    let mut invalid = sample_doc("invalid", "invalid segment memory");
+    invalid.group_id = Some(String::new());
+    store.upsert(invalid.clone());
+    assert!(store.refresh().is_err());
+    // Preparation succeeded, but no generation was published. Only fix the
+    // invalid record: the already prepared valid record must still be included.
+    invalid.group_id = Some("fixed-group".into());
+    store.upsert(invalid);
+    store.refresh().unwrap();
+    let Some(MemoryIndexSnapshot::Segmented(snapshot)) = store.memory_index_snapshot() else {
+        panic!("expected segmented snapshot");
+    };
+    let ids = snapshot
+        .segments
+        .iter()
+        .flat_map(|s| s.doc_ids.iter().cloned())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        ids,
+        ["initial", "valid", "invalid"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    );
+    assert!(store
+        .query("quartz", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.doc_id == "valid"));
 }
 
 #[test]

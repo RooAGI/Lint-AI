@@ -1,6 +1,6 @@
-# `rooagi_runtime`
+# RooAGI AgentFlow integration
 
-Lint-AI integrates with Roo Runtime through Roo's external process hook protocol. The adapter is part of the `lint-ai` binary and persists through `MemoryService` into the workspace's shared `.lint-ai/memory` store.
+Lint-AI integrates with RooAGI AgentFlow through its external process hook protocol. The adapter is part of the `lint-ai` binary and saves memories through `MemoryService` into the workspace's shared `.lint-ai/memory` store.
 
 ## Install
 
@@ -12,13 +12,13 @@ lint-ai --roo-runtime-install
 
 This installs user-level hooks in `~/.rooagi/hooks.json`. Set `ROO_CONFIG_HOME` or pass `--roo-runtime-config /path/to/hooks.json` to use another location. Existing hooks are preserved; reinstalling replaces only Lint-AI's own registrations.
 
-The installer registers `run_start`, `agent_turn_start`, `agent_turn_end`, `run_end`, `pre_tool_use`, and `post_tool_use`. Turn start retrieves up to five relevant memories and returns bounded `additionalContext`. Turn end stores the bounded user prompt and assistant response. Pre-tool and post-tool hooks store bounded, redacted tool inputs and results in the shared memory store, scoped by project, run, and tool call. Run start does no memory work. Run end stores its status only if Roo includes `workspaceRoot` in the payload; the current Roo Runtime projection omits it, so run-end capture is skipped. Failed hook calls fail open and return `{}`.
+The installer registers `run_start`, `agent_turn_start`, `agent_turn_end`, `run_end`, `pre_tool_use`, and `post_tool_use`. Turn start retrieves up to five relevant memories and returns bounded `additionalContext`. Turn end stores the bounded user prompt and assistant response. Pre-tool and post-tool hooks store bounded, redacted tool inputs and results in the shared memory store, scoped by project, run, and tool call. Run start does no memory work. Run end stores its status only if AgentFlow includes `workspaceRoot` in the payload; the current AgentFlow event projection omits it, so run-end capture is skipped. Failed hook calls fail open and return `{}`.
 
-Roo Runtime's process hook executes the configured absolute `lint-ai` binary directly. The hook reads the workspace path and turn data from Roo's JSON invocation. Capture is attributed to the `rooagi_runtime` provider and deduplicated by stable source IDs. Disable memory for a project by writing `{"enabled": false}` to `.lint-ai/rooagi_runtime-state/integration.json`; the integration follows Lint-AI's shared provider enablement convention.
+AgentFlow's process hook executes the configured absolute `lint-ai` binary directly. The hook reads the workspace path and turn data from AgentFlow's JSON invocation. Capture is attributed internally to the `rooagi_runtime` provider and deduplicated by stable source IDs. Disable memory for a project by writing `{"enabled": false}` to `.lint-ai/rooagi_runtime-state/integration.json`; the integration follows Lint-AI's shared provider enablement convention.
 
 Inline hook input is capped by Lint-AI's standard 8 MiB limit. Roo keeps its stdin envelope within 64 KiB and transports larger trusted tool fields through temporary sanitized JSON files under `.roo/hook-payloads`. Lint-AI verifies their workspace path, byte size and SHA-256 hash before reading them. Each referenced field may contain up to 128 MiB; larger fields fail capture explicitly. Roo removes the files after the hook completes. Stored prompt and response fields and returned recall context are bounded. Hook output contains only Roo's JSON response; diagnostics go to stderr.
 
-If Roo Runtime has a global `sandboxPolicy` configured in `hooks.json`, its data allowlist must include `run_identity`, `workspace_identity`, `conversation_bounded`, and `tool_metadata` for event identity, workspace path, turn text, and tool inputs/results to reach Lint-AI. The policy's filesystem grants must also allow the configured process to read and write the workspace's `.lint-ai` directory. The installer leaves an existing policy unchanged.
+If AgentFlow has a global `sandboxPolicy` configured in `hooks.json`, its data allowlist must include `run_identity`, `workspace_identity`, `conversation_bounded`, and `tool_metadata` for event identity, workspace path, turn text, and tool inputs/results to reach Lint-AI. The policy's filesystem grants must also allow the configured process to read and write the workspace's `.lint-ai` directory. The installer leaves an existing policy unchanged.
 
 ## Build without default provider integrations
 

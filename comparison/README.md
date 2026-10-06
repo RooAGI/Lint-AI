@@ -1,7 +1,25 @@
 # Comparison: Lint-AI and AgentMemory
 
-This directory contains reproducible retrieval and HTTP latency comparisons.
-The measurements were taken on 2026-09-01 on the same local machine.
+This directory contains reproducible retrieval and HTTP throughput comparisons.
+Each artifact records its date, workload, and environment; older comparison
+results remain below as historical measurements.
+
+## Current HTTP throughput summary
+
+Keep the read and write workloads separate when quoting throughput:
+
+| Workload | Endpoint | Median rate | Conditions |
+|---|---|---:|---|
+| Read only | `/search` | 2,246.69 searches/s | C=10, 23,366 records, Tantivy 0.25.0; five-run measurement. |
+| Single-record write | `/add` | 222.52 accepted / 212.36 completed records/s | Latest direct-endpoint run: three 65-second repetitions, no 429s. |
+| Batched write | `/add/batch`, 128 records/call | 2,528.46 accepted / 1,977.12 completed records/s | Three 65-second repetitions; rejected 25.5k–26.7k requests per run, so this is burst throughput. |
+| Sparse mixed load | 10 readers, one `/add` per second | 1,248.69 searches/s during writes; 1,209.01 without writes | Three paired runs; all writes visible after flush, no 429s. |
+
+“Accepted” means the durable journal acknowledged the record. “Completed”
+includes final flush time. The batch result is not a sustainable rate because
+the bounded pending-write queue rejected excess load. Full workload details,
+latencies, mixed read/write results, and artifacts are in the
+[throughput documentation](../docs/comparison.md#http-throughput-at-a-glance-2026-10-05).
 
 ## Latency comparison
 
@@ -103,6 +121,10 @@ sessions. Batch size is the number of add requests sent in each `/add/batch`
 HTTP call, up to the server limit of 128. The run uses a release server, five
 warm-up calls, an eight-second timed phase, and three repetitions per batch
 size. A final search checks that the last added record is visible.
+
+For a direct single-record endpoint check, use `--endpoint add --batch-sizes 1`.
+The default `add/batch` mode with batch size 1 wraps one request in a JSON array;
+both routes use the same durable staged writer.
 
 ```bash
 mkdir -p .benchmark-tmp

@@ -696,47 +696,68 @@ pub(crate) fn load_semantic_state(
     Ok((source_docs, records, chunk_lifecycle, snapshot))
 }
 
-pub(crate) fn persist_semantic_state(
-    store_paths: &StorePaths,
+pub(crate) struct PreparedSemanticState {
+    records: String,
+    lifecycle: String,
+    core: Option<Vec<u8>>,
+}
+
+/// Serialize a matching generation without touching the filesystem.
+pub(crate) fn prepare_semantic_state(
     snapshot: Option<&MemoryIndex>,
     records_map: &HashMap<String, DocRecord>,
     chunk_lifecycle_map: &HashMap<String, ChunkLifecycleMeta>,
-) -> Result<()> {
-    let Some(semantic_dir) = store_paths.semantic_dir.as_ref() else {
-        return Ok(());
-    };
-    fs::create_dir_all(semantic_dir)?;
-    let records_path = semantic_records_path(store_paths)
-        .expect("records path should exist when semantic dir exists");
+) -> Result<PreparedSemanticState> {
     let mut records = records_map.values().cloned().collect::<Vec<_>>();
     records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
     let payload = PersistedSemanticRecords {
         schema_version: STORE_SCHEMA_VERSION,
         layout_version: STORE_LAYOUT_VERSION.to_string(),
         records: records.into_iter().map(PersistedDocRecord::from).collect(),
-        chunk_lifecycle: chunk_lifecycle_map
-            .values()
-            .cloned()
-            .collect::<Vec<ChunkLifecycleMeta>>(),
+        chunk_lifecycle: chunk_lifecycle_map.values().cloned().collect(),
     };
-    // Keep persisted semantic files compact. Both files are rewritten on each
-    // refresh, so pretty-printing adds size and serialization work without
-    // changing the persisted data.
-    write_text_file_atomic(&records_path, &serde_json::to_string(&payload)?)?;
-    if let Some(lifecycle_path) = chunk_lifecycle_path(store_paths) {
-        let mut lifecycle = chunk_lifecycle_map
-            .values()
-            .cloned()
-            .collect::<Vec<ChunkLifecycleMeta>>();
-        lifecycle.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
-        write_text_file_atomic(&lifecycle_path, &serde_json::to_string(&lifecycle)?)?;
-    }
-    if let Some(snapshot) = snapshot {
-        let core_path = semantic_core_path(store_paths)
-            .expect("core path should exist when persisting a single index");
-        save_binary_core_atomic(snapshot, &core_path)?;
+    let mut lifecycle = chunk_lifecycle_map.values().cloned().collect::<Vec<_>>();
+    lifecycle.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
+    Ok(PreparedSemanticState {
+        records: serde_json::to_string(&payload)?,
+        lifecycle: serde_json::to_string(&lifecycle)?,
+        core: snapshot.map(MemoryIndex::to_bytes).transpose()?,
+    })
+}
+
+pub(crate) fn persist_prepared_semantic_state(
+    paths: &StorePaths,
+    prepared: &PreparedSemanticState,
+) -> Result<()> {
+    let Some(semantic_dir) = paths.semantic_dir.as_ref() else {
+        return Ok(());
+    };
+    fs::create_dir_all(semantic_dir)?;
+    write_text_file_atomic(
+        &semantic_records_path(paths).expect("records path"),
+        &prepared.records,
+    )?;
+    write_text_file_atomic(
+        &chunk_lifecycle_path(paths).expect("lifecycle path"),
+        &prepared.lifecycle,
+    )?;
+    if let Some(core) = &prepared.core {
+        write_bytes_file_atomic(&semantic_core_path(paths).expect("core path"), core)?;
     }
     Ok(())
+}
+
+pub(crate) fn persist_semantic_state(
+    paths: &StorePaths,
+    snapshot: Option<&MemoryIndex>,
+    records: &HashMap<String, DocRecord>,
+    lifecycle: &HashMap<String, ChunkLifecycleMeta>,
+) -> Result<()> {
+    if paths.semantic_dir.is_none() {
+        return Ok(());
+    }
+    let prepared = prepare_semantic_state(snapshot, records, lifecycle)?;
+    persist_prepared_semantic_state(paths, &prepared)
 }
 
 pub(crate) fn ensure_safe_output_path(path: &Path) -> Result<()> {
@@ -803,6 +824,30 @@ fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
 }
 
 pub(crate) fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+    write_text_file_atomic_with_permissions(path, content, false)
+}
+
+pub(crate) fn write_private_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+    write_text_file_atomic_with_permissions(path, content, true)
+}
+
+fn write_text_file_atomic_with_permissions(
+    path: &Path,
+    content: &str,
+    private: bool,
+) -> Result<()> {
+    write_bytes_file_atomic_with_permissions(path, content.as_bytes(), private)
+}
+
+pub(crate) fn write_bytes_file_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    write_bytes_file_atomic_with_permissions(path, content, false)
+}
+
+fn write_bytes_file_atomic_with_permissions(
+    path: &Path,
+    content: &[u8],
+    private: bool,
+) -> Result<()> {
     ensure_safe_output_path(path)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -811,30 +856,19 @@ pub(crate) fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
     }
     let temp_path = atomic_temp_path(path)?;
     {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)?;
-        file.write_all(content.as_bytes())?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut file = options.open(&temp_path)?;
+        file.write_all(content)?;
         file.sync_all()?;
     }
-    fs::rename(&temp_path, path)?;
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        fs::File::open(parent)?.sync_all()?;
-    }
-    Ok(())
-}
-
-fn save_binary_core_atomic(snapshot: &MemoryIndex, path: &Path) -> Result<()> {
-    ensure_safe_output_path(path)?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    let temp_path = atomic_temp_path(path)?;
-    snapshot.save_binary_core(&temp_path)?;
-    fs::File::open(&temp_path)?.sync_all()?;
     fs::rename(&temp_path, path)?;
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::File::open(parent)?.sync_all()?;

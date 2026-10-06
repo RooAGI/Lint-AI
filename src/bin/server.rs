@@ -1924,9 +1924,8 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
     let mut difference = left.len() ^ right.len();
     for i in 0..left.len().max(right.len()) {
-        difference |= usize::from(
-            left.get(i).copied().unwrap_or(0) ^ right.get(i).copied().unwrap_or(0),
-        );
+        difference |=
+            usize::from(left.get(i).copied().unwrap_or(0) ^ right.get(i).copied().unwrap_or(0));
     }
     difference == 0
 }
@@ -2670,13 +2669,9 @@ mod tests {
         assert!(ensure_bind_allowed("0.0.0.0:8080", true, true, false).is_ok());
         assert!(ensure_bind_allowed("0.0.0.0:8080", true, true, true).is_err());
         let blank_token_is_configured = normalize_secret(Some("   ".to_string())).is_some();
-        assert!(ensure_bind_allowed(
-            "0.0.0.0:8080",
-            true,
-            blank_token_is_configured,
-            false
-        )
-        .is_err());
+        assert!(
+            ensure_bind_allowed("0.0.0.0:8080", true, blank_token_is_configured, false).is_err()
+        );
     }
 
     #[tokio::test]

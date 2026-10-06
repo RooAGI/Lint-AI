@@ -312,21 +312,8 @@ impl ConversationStateStore {
             .create(true)
             .truncate(false)
             .open(path.with_extension("lock"))?;
-        let started = std::time::Instant::now();
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Some(file)),
-                Err(std::fs::TryLockError::WouldBlock)
-                    if started.elapsed() < std::time::Duration::from_secs(1) =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(std::fs::TryLockError::WouldBlock) => {
-                    return Err(std::io::ErrorKind::TimedOut.into())
-                }
-                Err(std::fs::TryLockError::Error(error)) => return Err(error),
-            }
-        }
+        file.lock()?;
+        Ok(Some(file))
     }
 
     fn remove_expired_file(&self, user_id: &str, session_id: &str, now_ms: u64) -> bool {
@@ -541,6 +528,38 @@ mod tests {
                 .unwrap()
                 .turn_count,
             1 + (WRITERS * 4) as u64
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn disk_session_observe_is_not_dropped_when_lock_is_busy() {
+        let dir = pointer_test_dir("busy-lock-update");
+        let mut seed = ConversationStateStore::new(Some(dir.clone()));
+        seed.observe("user", "session", "initial", &[], &[], None, ms());
+
+        let locker = ConversationStateStore::new(Some(dir.clone()));
+        let held_lock = locker.session_lock("user", "session").unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker_dir = dir.clone();
+        let worker = std::thread::spawn(move || {
+            let mut store = ConversationStateStore::new(Some(worker_dir));
+            started_tx.send(()).unwrap();
+            store.observe("user", "session", "queued update", &[], &[], None, ms() + 1);
+        });
+        started_rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        drop(held_lock);
+        worker.join().unwrap();
+
+        let mut reopened = ConversationStateStore::new(Some(dir.clone()));
+        assert_eq!(
+            reopened
+                .get("user", "session", ms() + 2)
+                .unwrap()
+                .turn_count,
+            2,
+            "an update was discarded while waiting for the session lock"
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -10,8 +10,8 @@ Search can find the right topic. Lint-AI helps an agent answer the harder questi
 
 [Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
 
-**Current benchmark:** 500-question aggregate · 85.6% fractional Recall@5 ·
-96.8% any-hit Recall@10 · 13.0 ms average query latency · single CPU · no GPU
+**Current benchmark:** 500 questions · 86.37% fractional Recall@5 ·
+96.8% any-hit Recall@10 · 2.58 ms mean search time · single CPU · no GPU
 
 ---
 
@@ -207,23 +207,29 @@ segmented routing—not a second overall headline.
 Because the scopes and query mix differ, their recall and latency values must
 not be compared as a time series or combined into one score.
 
-The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 question-scoped queries through the heuristic release backend, and uses no embedding vectors.
+The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 question-scoped queries through the heuristic backend, and uses no embedding vectors. This latest result is a working-tree run with Tantivy 0.25.0, not a tagged-release measurement.
 
-**500 questions · heuristic release backend · single CPU · no GPU**
+**500 questions · heuristic backend · single CPU · no GPU**
 
 | Metric | Result |
 |---|---:|
-| Fractional Recall@5 | **85.6%** |
-| Fractional Recall@10 | **92.0%** |
-| Fractional Recall@20 | **93.1%** |
+| Fractional Recall@5 | **86.37%** |
+| Fractional Recall@10 | **91.89%** |
+| Fractional Recall@20 | **92.93%** |
 | Any-hit Recall@5 | **94.2%** |
 | Any-hit Recall@10 | **96.8%** |
 | Any-hit Recall@20 | **97.6%** |
-| MRR | **87.0%** |
-| NDCG@10 | **85.0%** |
-| Average query latency | **13.0 ms** |
+| MRR | **86.97%** |
+| NDCG@10 | **85.11%** |
+| Mean search latency | **2.58 ms** |
 
 `Fractional Recall@k` is the average fraction of all correct answer sessions recovered in the top *k*. `Any-hit Recall@k` counts a query as successful when any correct answer session appears in the top *k*.
+
+Search latency measures the `MemoryService::search` call and excludes indexing
+the question's haystack. The older published 13.0 ms figure used a different
+timing scope and is not directly comparable. See the
+[latest 500-question report](comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz)
+and [benchmark results](docs/benchmark-results.md) for details.
 
 The repository keeps the dataset downloader, production-style benchmark binary, shared AgentMemory scorer, comparison workflow, and temporal-reasoning experiment harnesses so results can be reproduced and changes can be evaluated without silently changing the query path.
 
@@ -231,25 +237,28 @@ See [benchmark methodology](docs/benchmark.md), [benchmark results](docs/benchma
 
 ### Latest segmented-index comparison
 
-The latest 133-query multi-session comparison measures the three supported
-retrieval modes on the same corpus and CPU-only host. This run explicitly used
-five initial segments; adaptive routing is opt-in and may expand that candidate
-set from 5 to 12 segments. The server and benchmark CLI default to fixed top-3.
+The latest segmented comparison uses all 500 eligible LongMemEval-S questions
+with Tantivy 0.25.0. It is an experimental working-tree result. Fixed routing
+uses five segments; adaptive routing may expand the candidate set to 12. The
+server and benchmark CLI default to fixed top-3.
 
-| Mode | Routing / candidates | Any-hit Recall@5 | Any-hit Recall@10 | MRR | Avg. query latency |
-|---|---|---:|---:|---:|---:|
-| Segmented (fixed) | top-5 | **95.49%** | 95.49% | **0.859** | **1.25 ms** |
-| Segmented (adaptive) | 5 → 12 | **96.24%** | **96.24%** | 0.839 | 4.36 ms |
-| Single index | global search | 93.23% | 93.98% | 0.814 | 6.41 ms |
+| Mode | Any-hit Recall@5 | Any-hit Recall@10 | Fractional Recall@5 | MRR | Avg. query latency |
+|---|---:|---:|---:|---:|---:|
+| Segmented (fixed top-5) | 94.20% | 94.20% | 86.77% | 0.880 | 2.49 ms |
+| Segmented (enriched + reranked) | 94.20% | 94.20% | 86.77% | 0.881 | 3.85 ms |
+| Adaptive (enriched + reranked) | 94.00% | 96.00% | 86.30% | 0.884 | 7.26 ms |
+| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.71 ms |
+| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 61.84 ms |
+| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 28.05 ms |
+| Single-index control | 94.40% | 96.60% | 86.41% | 0.872 | 13.45 ms |
 
-Adaptive routing improves any-hit Recall@5 and any-hit Recall@10 by 0.75
-percentage points over
-fixed routing, with a latency trade-off. The fixed segmented mode remains the
-recommended default for predictable latency. See the
-[segmented-index design](docs/distributed-segment-index.md) and
-`segment_scoped_benchmark` for the full command and conditions. The exact
-summary is checked in as
-[`segment-multisession-v0.2.0.json`](comparison/results/segment-multisession-v0.2.0.json).
+Fused temporal + global has the highest recall and MRR in this comparison, with
+higher latency. These segmented timing numbers exclude question-haystack
+indexing and are not comparable to the standalone MemoryService latency above.
+See [benchmark results](docs/benchmark-results.md) and the
+[segmented-index design](docs/distributed-segment-index.md) for conditions and
+the full report:
+[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 <details>
 <summary><strong>Experimental rust-bert POS/NER branch</strong></summary>

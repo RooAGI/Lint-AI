@@ -13,6 +13,9 @@ using the same capture, indexing, and retrieval model.
 | Gemini CLI | [Gemini CLI](gemini-cli.md) | `.lint-ai/memory` |
 | Antigravity CLI | [Antigravity CLI](agy.md) | `.lint-ai/memory` |
 | Muse Code | [Muse Code](muse-code.md) | `.lint-ai/memory` |
+| OpenClaw | [OpenClaw](openclaw.md) | `.lint-ai/memory` |
+| Hermes | [Hermes](hermes.md) | `.lint-ai/memory` |
+| RooAGI AgentFlow | [RooAGI AgentFlow](roo-runtime.md) | `.lint-ai/memory` |
 
 All agents share the single project store at `.lint-ai/memory/` — a decision
 recorded by Claude is visible to Codex, and vice versa. Provider attribution

@@ -1,0 +1,40 @@
+{
+  "benchmark": "single-segment-throughput-after-metadata-iteration-revert",
+  "date": "2026-10-04",
+  "mode": "segment",
+  "records": 23366,
+  "segments": 1,
+  "seed_sessions": 1,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 3,
+  "build": "release, agent-integrations feature",
+  "metadata_iteration": "restored candidate ID vector and candidate map relookup",
+  "timing_instrumentation": "LINT_AI_QUERY_TIMINGS and LINT_AI_QUERY_METADATA_TIMINGS unset",
+  "cache_note": "LINT_AI_DISABLE_QUERY_CACHE was set by the runner, but current source does not read this variable; results use default runtime cache behavior.",
+  "summary": {
+    "c1": {
+      "throughput_median_req_s": 370.91,
+      "p50_median_ms": 2.666
+    },
+    "c10": {
+      "throughput_median_req_s": 1849.97,
+      "p50_median_ms": 4.764
+    }
+  },
+  "runs": [
+    {
+      "c1": {"throughput_req_s": 372.63, "p50_ms": 2.657},
+      "c10": {"throughput_req_s": 1849.97, "p50_ms": 4.764}
+    },
+    {
+      "c1": {"throughput_req_s": 370.91, "p50_ms": 2.666},
+      "c10": {"throughput_req_s": 2030.75, "p50_ms": 4.649}
+    },
+    {
+      "c1": {"throughput_req_s": 367.52, "p50_ms": 2.667},
+      "c10": {"throughput_req_s": 1768.72, "p50_ms": 4.953}
+    }
+  ],
+  "interpretation": "The C10 median of 1849.97 req/s is within the observed run range of 1768.72–2030.75 req/s; the prior 1916 req/s result falls within this range. Earlier 356/1916 and 360/1773 figures were collected with LINT_AI_QUERY_TIMINGS enabled and are profile runs, not clean uninstrumented baselines."
+}

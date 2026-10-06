@@ -1,0 +1,56 @@
+{
+  "benchmark": "lint-ai-http-global-segmented-throughput-diagnostic",
+  "date": "2026-10-03",
+  "timezone": "America/Los_Angeles",
+  "source_revision": "274b5c18aa6bf65fca62c6e036cee76fdbe6998b",
+  "source_tree": "working tree had uncommitted changes",
+  "release_artifact": false,
+  "records": 23366,
+  "endpoint": "POST /search",
+  "query": "deployment configuration system decision",
+  "user_id": "bench-user",
+  "top_k": 20,
+  "layout": "segmented snapshot containing exactly one global segment",
+  "features": "not recorded for the pre-fix server binary",
+  "bekind": "disabled (default)",
+  "cache": "disabled via LINT_AI_DISABLE_QUERY_CACHE=1",
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 1,
+  "segments": 1,
+  "runner": "comparison/throughput.py",
+  "command": "LINT_AI_DISABLE_QUERY_CACHE=1 TMPDIR=$PWD/.benchmark-tmp python3 comparison/throughput.py --server-bin target/release/server --mode global --records 23366 --requests 100 --warmup-requests 10 --port 18315",
+  "machine": {
+    "os": "Darwin 25.6.0",
+    "architecture": "arm64",
+    "hardware_model": "not captured"
+  },
+  "measurements": [
+    {
+      "concurrency": 1,
+      "requests": 100,
+      "p50_ms": 8.553,
+      "p90_ms": 9.216,
+      "p99_ms": 9.387,
+      "mean_ms": 8.633,
+      "throughput_per_s": 115.61
+    },
+    {
+      "concurrency": 10,
+      "requests": 100,
+      "p50_ms": 11.536,
+      "p90_ms": 14.595,
+      "p99_ms": 23.462,
+      "mean_ms": 12.259,
+      "throughput_per_s": 786.29
+    }
+  ],
+  "notes": [
+    "One run only; use as a working-tree diagnostic, not a stable release claim.",
+    "The benchmark seeder assigns all records one session_id, so the segmented snapshot has one segment for this run.",
+    "Pre-fix result: the one-segment segmented filter path materialized an unnecessary document-ID allow-list; see docs/server.md.",
+    "The hardware model was not recorded, so do not claim this is the same machine as prior M5 Pro runs based only on architecture.",
+    "The 10 warm-up requests are excluded from each 100-request measurement cell.",
+    "The standalone HTTP benchmark does not initialize provider MCP watchers."
+  ]
+}

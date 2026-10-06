@@ -1,8 +1,8 @@
+use crate::index::DocRecord;
+use crate::{build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use crate::index::DocRecord;
-use crate::{build_query_snapshot, parse_temporal_date, PipelineOptions, SourceDocument};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;

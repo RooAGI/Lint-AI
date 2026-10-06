@@ -28,6 +28,33 @@ fn lexical_content_text(doc: &DocRecord) -> String {
         .join("\n")
 }
 
+fn build_doc_scoring_tokens(
+    docs: &HashMap<String, DocRecord>,
+    doc_id_to_u32: &HashMap<String, u32>,
+    doc_count: usize,
+    claim_scoring: bool,
+) -> (Vec<Vec<String>>, Vec<Vec<String>>, Vec<Vec<Vec<String>>>) {
+    let mut topics = vec![Vec::new(); doc_count];
+    let mut doc_types = vec![Vec::new(); doc_count];
+    let mut claims = vec![Vec::new(); doc_count];
+    for (doc_id, doc) in docs {
+        let Some(&doc_u32) = doc_id_to_u32.get(doc_id) else {
+            continue;
+        };
+        let idx = doc_u32 as usize;
+        if let Some(topic) = doc.probable_topic.as_deref() {
+            topics[idx] = tokenize_query_terms(topic);
+        }
+        if let Some(doc_type) = doc.doc_type_guess.as_deref() {
+            doc_types[idx] = tokenize_query_terms(doc_type);
+        }
+        if claim_scoring {
+            claims[idx] = doc.top_claims.iter().map(claim_tokens).collect();
+        }
+    }
+    (topics, doc_types, claims)
+}
+
 impl MemoryIndex {
     pub fn from_records(records: Vec<DocRecord>) -> Self {
         Self::from_records_with_lexical_dir(records, None, false, false, false)
@@ -52,11 +79,12 @@ impl MemoryIndex {
 
     pub(crate) fn from_records_with_semantic_aggregate(
         records: Vec<DocRecord>,
-        semantic_aggregate: SemanticAggregate,
+        mut semantic_aggregate: SemanticAggregate,
         text_rerank_ngram: bool,
         text_rerank_lcs: bool,
         claim_scoring: bool,
     ) -> Self {
+        semantic_aggregate.sort_pending_postings();
         Self::from_records_internal(
             records,
             None,
@@ -403,6 +431,9 @@ impl MemoryIndex {
             }
         };
 
+        let (doc_topic_tokens, doc_type_tokens, doc_claim_tokens) =
+            build_doc_scoring_tokens(&docs, &doc_id_to_u32, doc_u32_to_id.len(), claim_scoring);
+
         Self {
             docs,
             entity_to_docs,
@@ -431,6 +462,9 @@ impl MemoryIndex {
             doc_key_entities,
             doc_rerank_texts,
             doc_rerank_tokens,
+            doc_topic_tokens,
+            doc_type_tokens,
+            doc_claim_tokens,
             doc_has_number,
             claim_scoring,
             text_rerank_ngram,
@@ -595,6 +629,12 @@ impl MemoryIndex {
                     .insert(doc_u32);
             }
         }
+        let (doc_topic_tokens, doc_type_tokens, doc_claim_tokens) = build_doc_scoring_tokens(
+            &docs,
+            &core.doc_id_to_u32,
+            core.doc_u32_to_id.len(),
+            claim_scoring,
+        );
         Ok(Self {
             docs,
             entity_to_docs: core.entity_to_docs,
@@ -627,6 +667,9 @@ impl MemoryIndex {
             doc_key_entities,
             doc_rerank_texts,
             doc_rerank_tokens,
+            doc_topic_tokens,
+            doc_type_tokens,
+            doc_claim_tokens,
             doc_has_number,
             claim_scoring,
             text_rerank_ngram: false,

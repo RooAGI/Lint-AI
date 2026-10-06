@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
-use clap::Parser;
 use crate::query_plan::PreparedQuery;
 use crate::{
     build_index_store, ChunkStrategy, PipelineOptions, SearchResult, SourceDocument,
     Tier1NerProvider, Tier1TermRankerKind,
 };
+use anyhow::{Context, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;

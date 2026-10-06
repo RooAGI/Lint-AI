@@ -1,0 +1,13 @@
+apiVersion: v2
+name: lint-ai
+description: Persistent memory service for AI agents
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+home: https://www.rooagi.com
+sources:
+  - https://github.com/RooAGI/Lint-AI
+keywords:
+  - agent-memory
+  - memory
+  - ai

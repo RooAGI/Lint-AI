@@ -66,3 +66,16 @@ benchmark/agy/results/*
 benchmark/data/
 benchmark/claude_code/results/*
 !benchmark/claude_code/results/.gitkeep
+
+# Local data and scratch output from memory and benchmark runs
+data/memory-index/
+.benchmark-tmp/
+.codex-build/
+.codex-output/
+.lint-ai-agy-live.*/
+metrics-sess-*/
+# Keep raw copies of published LongMemEval reports out of Git; commit the .json.gz artifacts.
+comparison/results/retrieval-longmemeval-current-*.json
+comparison/results/segment-longmemeval-500-2026-10-*.json
+comparison/results/retrieval-longmemeval-route-width-*-100-2026-10-04.json
+comparison/results/segment-multisession-2026-10-04.json

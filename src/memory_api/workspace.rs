@@ -170,6 +170,7 @@ const LEGACY_PROVIDERS: &[RecordingProvider] = &[
     RecordingProvider::Agy,
     RecordingProvider::Muse,
     RecordingProvider::OpenClaw,
+    RecordingProvider::RooRuntime,
 ];
 
 /// Directory name (under `.lint-ai/`) of the legacy per-provider memory silo
@@ -587,6 +588,55 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn shared_memory_lock_preserves_concurrent_provider_writes() {
+        const WRITERS: usize = 6;
+        let root = board_test_root("provider-memory-race");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
+
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    with_shared_memory_service(&root, |service| {
+                        let id = format!("provider-memory-{writer}");
+                        let content = format!("concurrent provider capture {writer}");
+                        service.upsert(document(
+                            &id,
+                            &format!("provider://session/{writer}"),
+                            &content,
+                        ));
+                        service.refresh_index()
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        with_shared_memory_service(&root, |service| {
+            for writer in 0..WRITERS {
+                let id = format!("provider-memory-{writer}");
+                let document = service
+                    .source_document_by_id(&id)
+                    .unwrap_or_else(|| panic!("concurrent write {id} was lost"));
+                assert_eq!(
+                    document.content,
+                    format!("concurrent provider capture {writer}")
+                );
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn document(doc_id: &str, source: &str, content: &str) -> SourceDocument {
         SourceDocument {
             doc_id: doc_id.to_string(),
@@ -803,13 +853,16 @@ mod tests {
     }
 
     fn write_lock_test_root(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "lint-ai-{name}-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
+        std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join(format!(
+                "lint-ai-{name}-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
     }
 
     /// A second writer must time out instead of hanging forever when the

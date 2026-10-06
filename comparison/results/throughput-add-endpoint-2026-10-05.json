@@ -1,0 +1,108 @@
+{
+  "benchmark": "write-only-http-load",
+  "write_acknowledgement": "durable-staged",
+  "created_at_utc": "2026-10-05T22:43:13.961435+00:00",
+  "server_binary": "/Users/louis/sources/Lint-AI/target/release/server",
+  "server_binary_sha256": "f998cb70bf51f44b938f925ccf5091ea55367fccb57c3e9e3deb82f15aeb68f4",
+  "git_revision": "a1907ffe66ae8fb26e082845986a0b29b53b4096",
+  "tantivy_version": "v0.25.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "records_before_each_cell": 23366,
+  "sessions": 23,
+  "writer_session_group": null,
+  "writer_session_distribution": "round-robin",
+  "write_endpoint": "/add",
+  "writer_workers": 1,
+  "readers": 0,
+  "measured_seconds_per_cell": 65,
+  "warmup_requests_per_cell": 5,
+  "batch_sizes_add_requests": [
+    1
+  ],
+  "refresh_interval_ms": 250,
+  "refresh_batch_size_documents": 512,
+  "checkpoint_interval_seconds": 30,
+  "repetitions": 3,
+  "summary": {
+    "1": {
+      "request_throughput_median_per_s": 222.52,
+      "published_record_throughput_median_per_s": 212.36,
+      "record_throughput_median_per_s": 222.52,
+      "p50_latency_median_ms": 3.996,
+      "p95_latency_median_ms": 4.336,
+      "p99_latency_median_ms": 6.964
+    }
+  },
+  "runs": [
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 65.0,
+      "requests": 14464,
+      "successful_requests": 14464,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 14464,
+      "request_throughput_per_s": 222.52,
+      "record_throughput_per_s": 222.52,
+      "latency_ms": {
+        "p50": 3.996,
+        "p95": 4.336,
+        "p99": 6.964,
+        "mean": 4.491
+      },
+      "flush_seconds": 3.11,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 212.36,
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 65.004,
+      "requests": 14531,
+      "successful_requests": 14531,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 14531,
+      "request_throughput_per_s": 223.54,
+      "record_throughput_per_s": 223.54,
+      "latency_ms": {
+        "p50": 3.996,
+        "p95": 4.291,
+        "p99": 6.074,
+        "mean": 4.471
+      },
+      "flush_seconds": 2.35,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 215.74,
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 3,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 65.048,
+      "requests": 13910,
+      "successful_requests": 13910,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 13910,
+      "request_throughput_per_s": 213.84,
+      "record_throughput_per_s": 213.84,
+      "latency_ms": {
+        "p50": 4.009,
+        "p95": 5.036,
+        "p99": 11.07,
+        "mean": 4.674
+      },
+      "flush_seconds": 2.045,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 207.32,
+      "last_written_record_searchable": true
+    }
+  ]
+}

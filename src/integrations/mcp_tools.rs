@@ -98,7 +98,8 @@ pub(crate) fn search_session_id(arguments: &Value) -> Result<Option<String>, Str
     feature = "codex",
     feature = "gemini-cli",
     feature = "agy",
-    feature = "muse-code"
+    feature = "muse-code",
+    feature = "roo-runtime"
 ))]
 pub(crate) fn resolve_search_session_id(
     arguments: &Value,
@@ -1162,14 +1163,17 @@ mod tests {
     ))]
     #[test]
     fn resolve_search_session_id_prefers_explicit_over_pointer() {
-        let dir = std::env::temp_dir().join(format!(
-            "lint-ai-resolve-session-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_nanos())
-                .unwrap_or(0),
-        ));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join(format!(
+                "lint-ai-resolve-session-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or(0),
+            ));
         let service =
             MemoryService::at_path(&dir, PipelineOptions::default()).expect("service opens");
         service.note_active_session("claude", "hook-session");
@@ -1207,15 +1211,18 @@ mod tests {
     }
 
     fn test_root(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "lint-ai-{}-{}-{}",
-            name,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_nanos())
-                .unwrap_or(0),
-        ));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join(format!(
+                "lint-ai-{}-{}-{}",
+                name,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or(0),
+            ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

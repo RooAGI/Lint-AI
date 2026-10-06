@@ -124,6 +124,18 @@ impl SemanticRelationStore {
     pub fn is_empty(&self) -> bool {
         self.relations.is_empty() && self.document_states.is_empty()
     }
+
+    pub(crate) fn has_superseded_documents(&self) -> bool {
+        self.document_states
+            .values()
+            .any(|state| state.status == Some(SemanticStatus::Superseded))
+    }
+
+    pub(crate) fn superseded_document_ids(&self) -> impl Iterator<Item = &str> {
+        self.document_states.iter().filter_map(|(doc_id, state)| {
+            (state.status == Some(SemanticStatus::Superseded)).then_some(doc_id.as_str())
+        })
+    }
     pub fn from_documents<'a, I>(documents: I, options: SupersessionOptions) -> Self
     where
         I: IntoIterator<Item = &'a SourceDocument>,
@@ -647,19 +659,17 @@ fn push_chain_pair_relation(
     // correction cue itself must determine direction: the doc bearing the cue
     // ("instead of X") is the corrector and must be the relation source.
     // Without this, cue-driven supersession is a coin flip on same-day writes.
-    let (claim, previous, source_doc, target_doc) =
-        if claim_date(claim) == claim_date(previous) {
-            let claim_has_cue = source_doc.is_some_and(|doc| has_correction_cue(&doc.content));
-            let previous_has_cue =
-                target_doc.is_some_and(|doc| has_correction_cue(&doc.content));
-            if previous_has_cue && !claim_has_cue {
-                (previous, claim, target_doc, source_doc)
-            } else {
-                (claim, previous, source_doc, target_doc)
-            }
+    let (claim, previous, source_doc, target_doc) = if claim_date(claim) == claim_date(previous) {
+        let claim_has_cue = source_doc.is_some_and(|doc| has_correction_cue(&doc.content));
+        let previous_has_cue = target_doc.is_some_and(|doc| has_correction_cue(&doc.content));
+        if previous_has_cue && !claim_has_cue {
+            (previous, claim, target_doc, source_doc)
         } else {
             (claim, previous, source_doc, target_doc)
-        };
+        }
+    } else {
+        (claim, previous, source_doc, target_doc)
+    };
     let direct_correction = source_doc.is_some_and(|doc| has_correction_cue(&doc.content));
     // A cue that names a specific old value only corrects the claim with
     // that value ("instead of Postgres" retires Postgres, not SQLite).
@@ -713,14 +723,7 @@ fn push_chain_pair_relation(
         )]
     };
     push_relation(
-        relations,
-        seen,
-        claim,
-        previous,
-        kind,
-        confidence,
-        method,
-        evidence,
+        relations, seen, claim, previous, kind, confidence, method, evidence,
     );
 }
 
@@ -762,7 +765,13 @@ fn build_chain_relations(
                     if prev.source_doc_id != claim.source_doc_id
                         && normalize(&prev.object) == named_norm
                     {
-                        push_chain_pair_relation(&mut relations, &mut seen, claim, prev, docs_by_id);
+                        push_chain_pair_relation(
+                            &mut relations,
+                            &mut seen,
+                            claim,
+                            prev,
+                            docs_by_id,
+                        );
                         break;
                     }
                 }
@@ -1424,7 +1433,10 @@ fn find_cue_word(haystack: &str, needle: &str) -> Option<usize> {
     while let Some(pos) = haystack[start..].find(needle) {
         let abs = start + pos;
         let before_ok = abs == 0
-            || !haystack[..abs].chars().last().is_some_and(|c| c.is_alphanumeric());
+            || !haystack[..abs]
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_alphanumeric());
         let after_ok = haystack[abs + needle.len()..]
             .chars()
             .next()
@@ -1489,10 +1501,7 @@ fn cue_reference(content: &str) -> CueReference {
                 continue;
             }
             // Skip an opening quote: `instead of "Postgres"` names Postgres.
-            if let Some(stripped) = rest
-                .strip_prefix('"')
-                .or_else(|| rest.strip_prefix('\''))
-            {
+            if let Some(stripped) = rest.strip_prefix('"').or_else(|| rest.strip_prefix('\'')) {
                 rest = stripped.trim_start();
             }
             let end = rest
@@ -2243,7 +2252,11 @@ mod scalar_configuration_supersession_tests {
         // The cue-bearing doc must be treated as the corrector regardless of
         // hash order. Use doc IDs whose hash order is adversarial: "zz-new"
         // sorts after "aa-old".
-        let mut old = scalar_doc("aa-old", "user: We use Postgres for analytics.", "2023-11-14");
+        let mut old = scalar_doc(
+            "aa-old",
+            "user: We use Postgres for analytics.",
+            "2023-11-14",
+        );
         old.group_id = Some("s1".to_string());
         let mut new = scalar_doc(
             "zz-new",
@@ -2384,7 +2397,6 @@ mod scalar_configuration_supersession_tests {
         ));
     }
 
-
     #[test]
     fn supersedes_cue_names_value_not_general() {
         // "This supersedes Postgres." must NOT retire a SQLite doc.
@@ -2417,10 +2429,8 @@ mod scalar_configuration_supersession_tests {
         let mut old_pg = scalar_doc("d1", "user: We use Postgres for analytics.", "2023-11-14");
         old_pg.group_id = Some("s1".to_string());
         old_pg.concept = "note".to_string();
-        let store = SemanticRelationStore::from_documents(
-            [&old_pg, &new],
-            SupersessionOptions::default(),
-        );
+        let store =
+            SemanticRelationStore::from_documents([&old_pg, &new], SupersessionOptions::default());
         assert_eq!(
             store.document_state("d1").status,
             Some(SemanticStatus::Superseded),
@@ -2445,10 +2455,8 @@ mod scalar_configuration_supersession_tests {
         );
         d3.group_id = Some("s3".to_string());
         d3.concept = "note".to_string();
-        let store = SemanticRelationStore::from_documents(
-            [&d1, &d2, &d3],
-            SupersessionOptions::default(),
-        );
+        let store =
+            SemanticRelationStore::from_documents([&d1, &d2, &d3], SupersessionOptions::default());
         // d3 supersedes d1 via lookback (cue names Postgres).
         assert_eq!(
             store.document_state("d1").status,
@@ -2473,7 +2481,6 @@ mod scalar_configuration_supersession_tests {
         );
     }
 
-
     #[test]
     fn quoted_cue_value_still_directs_correction() {
         // `instead of "Postgres"` must retire the Postgres doc...
@@ -2487,10 +2494,8 @@ mod scalar_configuration_supersession_tests {
         );
         new.group_id = Some("s3".to_string());
         new.concept = "note".to_string();
-        let store = SemanticRelationStore::from_documents(
-            [&old_pg, &new],
-            SupersessionOptions::default(),
-        );
+        let store =
+            SemanticRelationStore::from_documents([&old_pg, &new], SupersessionOptions::default());
         assert_eq!(
             store.document_state("d1").status,
             Some(SemanticStatus::Superseded),

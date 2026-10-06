@@ -1,0 +1,363 @@
+{
+  "benchmark": "http-mixed-read-write-load",
+  "created_at_utc": "2026-10-05T21:19:08.870625+00:00",
+  "source_revision": "a1907ffe66ae8fb26e082845986a0b29b53b4096",
+  "source_tree": "working tree",
+  "host": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm"
+  },
+  "server": "/Users/louis/sources/Lint-AI/target/release/server",
+  "records_before_load": 23366,
+  "readers": 10,
+  "writers": 1,
+  "write_batch_records": 1,
+  "write_interval_ms": 1000,
+  "configured_phase_seconds": 65,
+  "repetitions": 3,
+  "runs": [
+    {
+      "repetition": 1,
+      "records_before_load": 23366,
+      "seed_sessions": 23,
+      "readers": 10,
+      "writers": 1,
+      "write_batch_records": 1,
+      "write_interval_ms": 1000,
+      "configured_phase_seconds": 65,
+      "phases": [
+        {
+          "phase": "read-only-control",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 0,
+          "write_batch_records": 1,
+          "write_interval_ms": 1000,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 65.003,
+            "requests": 76136,
+            "successful_requests": 76136,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1171.26,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 8.565,
+              "p95": 13.201,
+              "p99": 15.961,
+              "mean": 8.536
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 65.003,
+            "requests": 0,
+            "successful_requests": 0,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 0.0,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "mean": null
+            }
+          },
+          "flush_seconds": 0.003,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 0.0,
+          "post_write_visibility": null
+        },
+        {
+          "phase": "concurrent-read-write",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 1,
+          "write_batch_records": 1,
+          "write_interval_ms": 1000,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 65.007,
+            "requests": 74651,
+            "successful_requests": 74651,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1148.36,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 8.676,
+              "p95": 13.603,
+              "p99": 17.24,
+              "mean": 8.705
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 65.007,
+            "requests": 65,
+            "successful_requests": 65,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1.0,
+            "records_accepted": 65,
+            "latency_ms": {
+              "p50": 6.399,
+              "p95": 8.642,
+              "p99": 15.558,
+              "mean": 6.425
+            }
+          },
+          "flush_seconds": 0.262,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 1.0,
+          "post_write_visibility": {
+            "checked": true,
+            "http_status": 200,
+            "written_record_visible": true,
+            "query": "Mixedloadunique64"
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "records_before_load": 23366,
+      "seed_sessions": 23,
+      "readers": 10,
+      "writers": 1,
+      "write_batch_records": 1,
+      "write_interval_ms": 1000,
+      "configured_phase_seconds": 65,
+      "phases": [
+        {
+          "phase": "read-only-control",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 0,
+          "write_batch_records": 1,
+          "write_interval_ms": 1000,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 65.006,
+            "requests": 77389,
+            "successful_requests": 77389,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1190.49,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 8.266,
+              "p95": 13.458,
+              "p99": 16.953,
+              "mean": 8.397
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 65.006,
+            "requests": 0,
+            "successful_requests": 0,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 0.0,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "mean": null
+            }
+          },
+          "flush_seconds": 0.001,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 0.0,
+          "post_write_visibility": null
+        },
+        {
+          "phase": "concurrent-read-write",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 1,
+          "write_batch_records": 1,
+          "write_interval_ms": 1000,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 65.008,
+            "requests": 72652,
+            "successful_requests": 72652,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1117.59,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 8.764,
+              "p95": 14.343,
+              "p99": 17.965,
+              "mean": 8.945
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 65.008,
+            "requests": 65,
+            "successful_requests": 65,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1.0,
+            "records_accepted": 65,
+            "latency_ms": {
+              "p50": 5.907,
+              "p95": 10.511,
+              "p99": 25.198,
+              "mean": 6.487
+            }
+          },
+          "flush_seconds": 0.261,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 1.0,
+          "post_write_visibility": {
+            "checked": true,
+            "http_status": 200,
+            "written_record_visible": true,
+            "query": "Mixedloadunique64"
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "records_before_load": 23366,
+      "seed_sessions": 23,
+      "readers": 10,
+      "writers": 1,
+      "write_batch_records": 1,
+      "write_interval_ms": 1000,
+      "configured_phase_seconds": 65,
+      "phases": [
+        {
+          "phase": "read-only-control",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 0,
+          "write_batch_records": 1,
+          "write_interval_ms": 1000,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 65.004,
+            "requests": 68691,
+            "successful_requests": 68691,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1056.71,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 9.374,
+              "p95": 14.884,
+              "p99": 17.897,
+              "mean": 9.461
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 65.004,
+            "requests": 0,
+            "successful_requests": 0,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 0.0,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "mean": null
+            }
+          },
+          "flush_seconds": 0.002,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 0.0,
+          "post_write_visibility": null
+        },
+        {
+          "phase": "concurrent-read-write",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 1,
+          "write_batch_records": 1,
+          "write_interval_ms": 1000,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 65.006,
+            "requests": 68122,
+            "successful_requests": 68122,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1047.94,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 9.379,
+              "p95": 14.93,
+              "p99": 18.457,
+              "mean": 9.54
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 65.006,
+            "requests": 65,
+            "successful_requests": 65,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 1.0,
+            "records_accepted": 65,
+            "latency_ms": {
+              "p50": 5.686,
+              "p95": 11.16,
+              "p99": 14.376,
+              "mean": 6.34
+            }
+          },
+          "flush_seconds": 0.298,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 1.0,
+          "post_write_visibility": {
+            "checked": true,
+            "http_status": 200,
+            "written_record_visible": true,
+            "query": "Mixedloadunique64"
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Each repetition uses a fresh server process and temporary index.",
+    "Read-only control and mixed phases are paired on one server and corpus per repetition.",
+    "Search queries vary by nonce to prevent repeated-query cache reuse in either phase.",
+    "Write requests are /add/batch calls with distinct request IDs and session IDs.",
+    "HTTP 429 responses are counted as rejected writes, not retried.",
+    "Each mixed phase searches for a record from a successfully accepted write after load ends."
+  ],
+  "server_binary_sha256": "2c7ab548a208889c9ac7c1117e0b5786abc961ae76ee3158e7bd53b27b2ead35"
+}

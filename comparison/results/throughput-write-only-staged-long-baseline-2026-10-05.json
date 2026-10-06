@@ -1,0 +1,88 @@
+{
+  "benchmark": "write-only-http-load",
+  "write_acknowledgement": "durable-staged",
+  "created_at_utc": "2026-10-05T19:07:45.393730+00:00",
+  "server_binary": "/Users/louis/sources/Lint-AI/target/release/server",
+  "server_binary_sha256": "dd0a701d85e6cd14ff56144dd4b28b645b47bd6c9e0ca267a4f00803377dca65",
+  "git_revision": "7d11bfbeb831b52cc57538f53070cd92769364c2",
+  "tantivy_version": "v0.25.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "records_before_each_cell": 23366,
+  "sessions": 23,
+  "writer_workers": 1,
+  "readers": 0,
+  "measured_seconds_per_cell": 65,
+  "warmup_requests_per_cell": 5,
+  "batch_sizes_add_requests": [
+    1,
+    128
+  ],
+  "repetitions": 1,
+  "summary": {
+    "1": {
+      "request_throughput_median_per_s": 44.99,
+      "published_record_throughput_median_per_s": 44.71,
+      "record_throughput_median_per_s": 44.99,
+      "p50_latency_median_ms": 3.987,
+      "p95_latency_median_ms": 4.967,
+      "p99_latency_median_ms": 1137.774
+    },
+    "128": {
+      "request_throughput_median_per_s": 1.65,
+      "published_record_throughput_median_per_s": 204.06,
+      "record_throughput_median_per_s": 211.2,
+      "p50_latency_median_ms": 5.364,
+      "p95_latency_median_ms": 2694.359,
+      "p99_latency_median_ms": 2845.844
+    }
+  },
+  "runs": [
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 67.273,
+      "requests": 111,
+      "successful_requests": 111,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 14208,
+      "request_throughput_per_s": 1.65,
+      "record_throughput_per_s": 211.2,
+      "latency_ms": {
+        "p50": 5.364,
+        "p95": 2694.359,
+        "p99": 2845.844,
+        "mean": 606.012
+      },
+      "flush_seconds": 2.354,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 204.06,
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 1,
+      "seed_records": 23366,
+      "measured_seconds": 65.863,
+      "requests": 2963,
+      "successful_requests": 2963,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 2963,
+      "request_throughput_per_s": 44.99,
+      "record_throughput_per_s": 44.99,
+      "latency_ms": {
+        "p50": 3.987,
+        "p95": 4.967,
+        "p99": 1137.774,
+        "mean": 22.225
+      },
+      "flush_seconds": 0.406,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 44.71,
+      "last_written_record_searchable": true
+    }
+  ]
+}

@@ -1,0 +1,394 @@
+{
+  "benchmark": "layout-throughput-harness",
+  "records": 23366,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 0,
+  "repetitions": 5,
+  "cache": "default",
+  "server": "/Users/louis/sources/Lint-AI/target/release/server",
+  "summary": {
+    "single": {
+      "c1": {
+        "throughput_median_req_s": 278.45,
+        "p50_median_ms": 2.676
+      },
+      "c10": {
+        "throughput_median_req_s": 1965.62,
+        "p50_median_ms": 4.661
+      }
+    },
+    "global": {
+      "c1": {
+        "throughput_median_req_s": 280.72,
+        "p50_median_ms": 2.66
+      },
+      "c10": {
+        "throughput_median_req_s": 2028.06,
+        "p50_median_ms": 4.43
+      }
+    },
+    "segment": {
+      "c1": {
+        "throughput_median_req_s": 280.58,
+        "p50_median_ms": 2.645
+      },
+      "c10": {
+        "throughput_median_req_s": 1940.99,
+        "p50_median_ms": 4.526
+      }
+    }
+  },
+  "runs": {
+    "single": [
+      {
+        "run": 1,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.682,
+            "p90_ms": 2.889,
+            "p99_ms": 89.44,
+            "mean_ms": 3.58,
+            "throughput_per_s": 278.45
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.487,
+            "p90_ms": 7.411,
+            "p99_ms": 9.165,
+            "mean_ms": 4.802,
+            "throughput_per_s": 2001.51
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.676,
+            "p90_ms": 2.985,
+            "p99_ms": 89.871,
+            "mean_ms": 3.607,
+            "throughput_per_s": 276.27
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.897,
+            "p90_ms": 7.407,
+            "p99_ms": 8.844,
+            "mean_ms": 5.093,
+            "throughput_per_s": 1869.28
+          }
+        ]
+      },
+      {
+        "run": 3,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.644,
+            "p90_ms": 2.842,
+            "p99_ms": 89.927,
+            "mean_ms": 3.553,
+            "throughput_per_s": 280.55
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.492,
+            "p90_ms": 7.379,
+            "p99_ms": 9.667,
+            "mean_ms": 4.871,
+            "throughput_per_s": 1970.12
+          }
+        ]
+      },
+      {
+        "run": 4,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.676,
+            "p90_ms": 2.908,
+            "p99_ms": 89.342,
+            "mean_ms": 3.58,
+            "throughput_per_s": 278.38
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.661,
+            "p90_ms": 6.703,
+            "p99_ms": 9.087,
+            "mean_ms": 4.902,
+            "throughput_per_s": 1965.62
+          }
+        ]
+      },
+      {
+        "run": 5,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.666,
+            "p90_ms": 2.875,
+            "p99_ms": 87.726,
+            "mean_ms": 3.554,
+            "throughput_per_s": 280.5
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.774,
+            "p90_ms": 8.382,
+            "p99_ms": 10.226,
+            "mean_ms": 5.287,
+            "throughput_per_s": 1805.89
+          }
+        ]
+      }
+    ],
+    "global": [
+      {
+        "run": 1,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.685,
+            "p90_ms": 2.919,
+            "p99_ms": 89.572,
+            "mean_ms": 3.596,
+            "throughput_per_s": 277.18
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 5.028,
+            "p90_ms": 7.483,
+            "p99_ms": 11.243,
+            "mean_ms": 5.106,
+            "throughput_per_s": 1873.57
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.646,
+            "p90_ms": 2.775,
+            "p99_ms": 90.561,
+            "mean_ms": 3.55,
+            "throughput_per_s": 280.72
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.945,
+            "p90_ms": 7.933,
+            "p99_ms": 9.848,
+            "mean_ms": 5.309,
+            "throughput_per_s": 1811.74
+          }
+        ]
+      },
+      {
+        "run": 3,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.66,
+            "p90_ms": 2.866,
+            "p99_ms": 84.765,
+            "mean_ms": 3.513,
+            "throughput_per_s": 283.65
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.219,
+            "p90_ms": 6.193,
+            "p99_ms": 8.849,
+            "mean_ms": 4.398,
+            "throughput_per_s": 2142.0
+          }
+        ]
+      },
+      {
+        "run": 4,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.638,
+            "p90_ms": 2.875,
+            "p99_ms": 89.049,
+            "mean_ms": 3.535,
+            "throughput_per_s": 282.04
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.218,
+            "p90_ms": 6.657,
+            "p99_ms": 9.595,
+            "mean_ms": 4.584,
+            "throughput_per_s": 2091.89
+          }
+        ]
+      },
+      {
+        "run": 5,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.666,
+            "p90_ms": 2.861,
+            "p99_ms": 90.651,
+            "mean_ms": 3.581,
+            "throughput_per_s": 278.32
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.43,
+            "p90_ms": 6.631,
+            "p99_ms": 9.801,
+            "mean_ms": 4.673,
+            "throughput_per_s": 2028.06
+          }
+        ]
+      }
+    ],
+    "segment": [
+      {
+        "run": 1,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 3.065,
+            "p90_ms": 4.01,
+            "p99_ms": 100.096,
+            "mean_ms": 4.171,
+            "throughput_per_s": 238.78
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.705,
+            "p90_ms": 7.006,
+            "p99_ms": 9.997,
+            "mean_ms": 4.897,
+            "throughput_per_s": 1940.99
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.642,
+            "p90_ms": 2.824,
+            "p99_ms": 90.252,
+            "mean_ms": 3.553,
+            "throughput_per_s": 280.58
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.362,
+            "p90_ms": 5.841,
+            "p99_ms": 8.372,
+            "mean_ms": 4.464,
+            "throughput_per_s": 2130.53
+          }
+        ]
+      },
+      {
+        "run": 3,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.645,
+            "p90_ms": 2.836,
+            "p99_ms": 88.952,
+            "mean_ms": 3.532,
+            "throughput_per_s": 282.1
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.526,
+            "p90_ms": 7.241,
+            "p99_ms": 9.119,
+            "mean_ms": 4.855,
+            "throughput_per_s": 1959.02
+          }
+        ]
+      },
+      {
+        "run": 4,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.623,
+            "p90_ms": 2.797,
+            "p99_ms": 89.819,
+            "mean_ms": 3.533,
+            "throughput_per_s": 282.14
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 4.353,
+            "p90_ms": 8.728,
+            "p99_ms": 9.59,
+            "mean_ms": 5.139,
+            "throughput_per_s": 1867.23
+          }
+        ]
+      },
+      {
+        "run": 5,
+        "measurements": [
+          {
+            "concurrency": 1,
+            "requests": 100,
+            "p50_ms": 2.688,
+            "p90_ms": 3.793,
+            "p99_ms": 86.768,
+            "mean_ms": 3.768,
+            "throughput_per_s": 264.45
+          },
+          {
+            "concurrency": 10,
+            "requests": 100,
+            "p50_ms": 5.23,
+            "p90_ms": 7.862,
+            "p99_ms": 10.932,
+            "mean_ms": 5.541,
+            "throughput_per_s": 1760.1
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -17,6 +17,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -30,6 +31,18 @@ const DAEMON_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a serve failure suppresses respawn attempts. The backend does
 /// not heal in milliseconds; fallbacks cover the gap.
 const SERVE_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
+
+// Bekind is an optional enrichment. Keep it disabled unless the application
+// explicitly opts in (the server exposes this as --bekind).
+static BEKIND_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_enabled(enabled: bool) {
+    BEKIND_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+fn is_enabled() -> bool {
+    BEKIND_ENABLED.load(Ordering::Relaxed)
+}
 
 /// A (text, kind) pair judged by behood at query time.
 #[derive(Debug, Clone)]
@@ -125,7 +138,9 @@ impl BekindDaemon {
     /// Start the child now so the first real query does not pay the spawn
     /// cost. Best-effort: failures are silent; queries fall back.
     pub fn prewarm(&self) {
-        self.daemon.prewarm();
+        if is_enabled() {
+            self.daemon.prewarm();
+        }
     }
 
     /// Judge raw texts: one JSON line through the daemon, one Response JSON
@@ -133,6 +148,9 @@ impl BekindDaemon {
     /// `None` on any failure (including lock contention — the daemon is a
     /// fast path, never a queue); the caller fails open.
     fn judge_texts(&self, texts: &[(String, &str, bool)]) -> Option<Vec<FusedTextResult>> {
+        if !is_enabled() {
+            return None;
+        }
         if !self.cooldown.gate() {
             return None;
         }
@@ -142,9 +160,8 @@ impl BekindDaemon {
             }).collect::<Vec<_>>(),
         });
         let line = serde_json::to_string(&request).ok()?;
-        // Luyi 2026-09-30: distinguish lock contention (Busy) from daemon
-        // failure (Failed). Contention is normal under concurrent load —
-        // the caller falls back to a one-shot subprocess. Only actual
+        // Distinguish a saturated daemon deadline from an actual backend
+        // failure. Both fail open at the search layer, but only backend
         // failures trigger the cooldown.
         let response = match self.daemon.query_with_status(&line, DAEMON_TIMEOUT) {
             Ok(response) => response,
@@ -357,7 +374,7 @@ pub struct ScopeVerdict {
 /// Fail-open: any daemon failure yields an empty vec, and the caller
 /// emits no tags. Search never breaks because of scope verdicts.
 pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
-    if texts.is_empty() {
+    if texts.is_empty() || !is_enabled() {
         return Vec::new();
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -405,7 +422,7 @@ pub struct KindVerdict {
 /// Fail-open: any daemon failure yields an empty vec, and the caller
 /// emits no kind tags. Search never breaks because of kind verdicts.
 pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
-    if texts.is_empty() {
+    if texts.is_empty() || !is_enabled() {
         return Vec::new();
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -591,12 +608,13 @@ for line in sys.stdin:
     fn fused_daemon_returns_per_text_verdicts() {
         let dir = unique_temp_dir("fused");
         let daemon = test_judge_daemon(write_fake_fused_bekind(&dir));
-        let results = daemon
-            .judge_texts(&[
-                ("q".to_string(), "weekend cilantro?", true),
-                ("k:0".to_string(), "cilantro", false),
-            ])
-            .expect("fused judge should answer");
+        set_enabled(true);
+        let results = daemon.judge_texts(&[
+            ("q".to_string(), "weekend cilantro?", true),
+            ("k:0".to_string(), "cilantro", false),
+        ]);
+        set_enabled(false);
+        let results = results.expect("fused judge should answer");
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, "q");
         assert_eq!(

@@ -24,6 +24,12 @@
 //!
 //! This is benchmark scaffolding, not part of the shipped product.
 
+use crate::memory_api::MemoryService;
+use crate::question_focus::identify_focus;
+use crate::segments::relations::{
+    analyze_fact_question, extract_relations_via_spacy, RelationTurn,
+};
+use crate::{default_production_pipeline_options, search_results, SourceDocument};
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},
@@ -33,12 +39,6 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use crate::memory_api::MemoryService;
-use crate::question_focus::identify_focus;
-use crate::segments::relations::{
-    analyze_fact_question, extract_relations_via_spacy, RelationTurn,
-};
-use crate::{default_production_pipeline_options, search_results, SourceDocument};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};

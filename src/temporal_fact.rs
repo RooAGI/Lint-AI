@@ -116,6 +116,8 @@ pub struct TemporalFactStore {
     facts: Vec<TemporalFact>,
     #[serde(skip)]
     latest_by_key: HashMap<String, usize>,
+    #[serde(skip)]
+    last_record_order: Option<(Option<NaiveDate>, String)>,
 }
 
 impl TemporalFactStore {
@@ -145,6 +147,7 @@ impl TemporalFactStore {
 
         let mut store = Self::default();
         for record in ordered {
+            store.last_record_order = Some(record_order_key(record));
             let (source_chunk_id, source_chunk_version, chunk_timestamp) =
                 best_source_chunk(record, chunk_lifecycle);
             for claim in &record.top_claims {
@@ -158,6 +161,48 @@ impl TemporalFactStore {
             }
         }
         store
+    }
+
+    /// Append new records without visiting existing facts when their ordering
+    /// follows the current corpus ordering. Replacements, removals, and
+    /// out-of-order records must use `from_records` so historical validity
+    /// windows remain identical to a full rebuild.
+    pub(crate) fn append_records_if_ordered<'a, I>(
+        &mut self,
+        records: I,
+        chunk_lifecycle: &HashMap<String, ChunkLifecycleMeta>,
+    ) -> bool
+    where
+        I: IntoIterator<Item = &'a DocRecord>,
+    {
+        let mut ordered = records.into_iter().collect::<Vec<_>>();
+        if ordered.is_empty() {
+            return true;
+        }
+        ordered.sort_by(|a, b| record_order_key(a).cmp(&record_order_key(b)));
+        if self
+            .last_record_order
+            .as_ref()
+            .is_some_and(|last| record_order_key(ordered[0]) <= *last)
+        {
+            return false;
+        }
+
+        for record in ordered {
+            self.last_record_order = Some(record_order_key(record));
+            let (source_chunk_id, source_chunk_version, chunk_timestamp) =
+                best_source_chunk(record, chunk_lifecycle);
+            for claim in &record.top_claims {
+                self.ingest_claim(
+                    record,
+                    claim,
+                    source_chunk_id.as_deref(),
+                    source_chunk_version,
+                    chunk_timestamp.as_deref(),
+                );
+            }
+        }
+        true
     }
 
     pub fn facts(&self) -> &[TemporalFact] {
@@ -410,6 +455,16 @@ impl TemporalFactStore {
     }
 }
 
+fn record_order_key(record: &DocRecord) -> (Option<NaiveDate>, String) {
+    (
+        record
+            .timestamp
+            .as_deref()
+            .and_then(|value| parse_temporal_date(Some(value))),
+        record.doc_id.clone(),
+    )
+}
+
 fn normalize_range(start: &str, end: &str) -> Option<(NaiveDate, NaiveDate)> {
     let start = parse_temporal_date(Some(start))?;
     let end = parse_temporal_date(Some(end))?;
@@ -535,6 +590,96 @@ mod tests {
             },
             content_hash: String::new(),
         }
+    }
+
+    #[test]
+    fn ordered_temporal_additions_match_full_rebuild() {
+        let first = sample_record(
+            "doc-a",
+            Some("2024-01-01"),
+            vec![Claim {
+                subject: "Alice".into(),
+                predicate: "works_at".into(),
+                object: "Acme".into(),
+                confidence: 0.9,
+            }],
+        );
+        let second = sample_record(
+            "doc-b",
+            Some("2024-02-01"),
+            vec![Claim {
+                subject: "Alice".into(),
+                predicate: "works_at".into(),
+                object: "Beta".into(),
+                confidence: 0.95,
+            }],
+        );
+        let third = sample_record(
+            "doc-c",
+            Some("2024-03-01"),
+            vec![Claim {
+                subject: "Alice".into(),
+                predicate: "works_at".into(),
+                object: "Gamma".into(),
+                confidence: 0.97,
+            }],
+        );
+        let lifecycle = HashMap::new();
+        let mut incremental = TemporalFactStore::from_records([&first, &second], &lifecycle);
+        assert!(incremental.append_records_if_ordered([&third], &lifecycle));
+        let rebuilt = TemporalFactStore::from_records([&first, &second, &third], &lifecycle);
+        assert_eq!(incremental.facts(), rebuilt.facts());
+        assert_eq!(
+            incremental
+                .timeline("alice")
+                .iter()
+                .map(|fact| (
+                    fact.object.as_deref(),
+                    fact.valid_to.as_deref(),
+                    fact.is_latest
+                ))
+                .collect::<Vec<_>>(),
+            rebuilt
+                .timeline("alice")
+                .iter()
+                .map(|fact| (
+                    fact.object.as_deref(),
+                    fact.valid_to.as_deref(),
+                    fact.is_latest
+                ))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn out_of_order_temporal_addition_leaves_store_unchanged_for_rebuild_fallback() {
+        let current = sample_record(
+            "doc-z",
+            Some("2024-03-01"),
+            vec![Claim {
+                subject: "Alice".into(),
+                predicate: "works_at".into(),
+                object: "Gamma".into(),
+                confidence: 0.97,
+            }],
+        );
+        let older = sample_record(
+            "doc-a",
+            Some("2024-01-01"),
+            vec![Claim {
+                subject: "Alice".into(),
+                predicate: "works_at".into(),
+                object: "Acme".into(),
+                confidence: 0.9,
+            }],
+        );
+        let lifecycle = HashMap::new();
+        let mut incremental = TemporalFactStore::from_records([&current], &lifecycle);
+        let before = incremental.facts().to_vec();
+        assert!(!incremental.append_records_if_ordered([&older], &lifecycle));
+        assert_eq!(incremental.facts(), before);
+        let rebuilt = TemporalFactStore::from_records([&current, &older], &lifecycle);
+        assert_eq!(rebuilt.timeline("alice")[0].object.as_deref(), Some("Acme"));
     }
 
     #[test]

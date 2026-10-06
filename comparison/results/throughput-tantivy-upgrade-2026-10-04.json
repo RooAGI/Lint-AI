@@ -1,0 +1,1030 @@
+{
+  "binary_sha256": {
+    "0.25.0": "13c49c62f00ba2f6d84f3a9298d4c7acb5387b6c5bf15c93e463e4572dce1708",
+    "0.26.2": "26389dfd9e9163e0996e8c163e9b3bcfa4f04b0fed9293707325a635169305c7"
+  },
+  "records": 23366,
+  "sessions": 5,
+  "requests_per_cell": 1000,
+  "repetitions": 5,
+  "warmup_requests": 100,
+  "runs": [
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 0,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.627,
+          "p90_ms": 2.905,
+          "p99_ms": 4.432,
+          "mean_ms": 2.685,
+          "throughput_per_s": 371.02
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 3.861,
+          "p90_ms": 5.318,
+          "p99_ms": 8.444,
+          "mean_ms": 4.137,
+          "throughput_per_s": 2398.73
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 0,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 1.632,
+          "p90_ms": 1.808,
+          "p99_ms": 2.016,
+          "mean_ms": 1.652,
+          "throughput_per_s": 601.71
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 3.596,
+          "p90_ms": 5.802,
+          "p99_ms": 7.358,
+          "mean_ms": 3.873,
+          "throughput_per_s": 2562.51
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 1,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 1.645,
+          "p90_ms": 1.891,
+          "p99_ms": 2.245,
+          "mean_ms": 1.703,
+          "throughput_per_s": 583.83
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 3.468,
+          "p90_ms": 5.7,
+          "p99_ms": 8.726,
+          "mean_ms": 3.77,
+          "throughput_per_s": 2630.78
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 1,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.569,
+          "p90_ms": 2.84,
+          "p99_ms": 4.0,
+          "mean_ms": 2.644,
+          "throughput_per_s": 376.7
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 4.153,
+          "p90_ms": 6.0,
+          "p99_ms": 8.543,
+          "mean_ms": 4.379,
+          "throughput_per_s": 2268.49
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 2,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.765,
+          "p90_ms": 3.459,
+          "p99_ms": 4.667,
+          "mean_ms": 2.897,
+          "throughput_per_s": 343.65
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 4.101,
+          "p90_ms": 6.407,
+          "p99_ms": 8.304,
+          "mean_ms": 4.419,
+          "throughput_per_s": 2246.69
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 2,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 1.672,
+          "p90_ms": 1.883,
+          "p99_ms": 2.342,
+          "mean_ms": 1.712,
+          "throughput_per_s": 580.8
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 3.403,
+          "p90_ms": 5.254,
+          "p99_ms": 6.7,
+          "mean_ms": 3.587,
+          "throughput_per_s": 2769.53
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 3,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 1.554,
+          "p90_ms": 1.743,
+          "p99_ms": 1.965,
+          "mean_ms": 1.598,
+          "throughput_per_s": 622.53
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 3.269,
+          "p90_ms": 5.12,
+          "p99_ms": 7.038,
+          "mean_ms": 3.525,
+          "throughput_per_s": 2816.87
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 3,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.575,
+          "p90_ms": 2.759,
+          "p99_ms": 3.046,
+          "mean_ms": 2.607,
+          "throughput_per_s": 382.22
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 4.155,
+          "p90_ms": 6.197,
+          "p99_ms": 8.96,
+          "mean_ms": 4.515,
+          "throughput_per_s": 2200.75
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 4,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.539,
+          "p90_ms": 2.831,
+          "p99_ms": 3.32,
+          "mean_ms": 2.612,
+          "throughput_per_s": 381.44
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 4.249,
+          "p90_ms": 6.107,
+          "p99_ms": 9.19,
+          "mean_ms": 4.585,
+          "throughput_per_s": 2166.76
+        }
+      ]
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 4,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 1.594,
+          "p90_ms": 1.73,
+          "p99_ms": 1.874,
+          "mean_ms": 1.627,
+          "throughput_per_s": 610.76
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 3.398,
+          "p90_ms": 5.189,
+          "p99_ms": 6.735,
+          "mean_ms": 3.582,
+          "throughput_per_s": 2773.19
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 0,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.961,
+          "p90_ms": 3.267,
+          "p99_ms": 3.71,
+          "mean_ms": 2.992,
+          "throughput_per_s": 332.79
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 12.288,
+          "p90_ms": 18.128,
+          "p99_ms": 26.407,
+          "mean_ms": 12.193,
+          "throughput_per_s": 815.7
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 0,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.761,
+          "p90_ms": 3.105,
+          "p99_ms": 3.585,
+          "mean_ms": 2.805,
+          "throughput_per_s": 354.91
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 11.176,
+          "p90_ms": 16.106,
+          "p99_ms": 24.568,
+          "mean_ms": 11.013,
+          "throughput_per_s": 901.29
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 1,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.721,
+          "p90_ms": 3.063,
+          "p99_ms": 3.384,
+          "mean_ms": 2.738,
+          "throughput_per_s": 363.55
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 12.584,
+          "p90_ms": 20.326,
+          "p99_ms": 29.365,
+          "mean_ms": 12.905,
+          "throughput_per_s": 770.61
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 1,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 3.157,
+          "p90_ms": 3.559,
+          "p99_ms": 4.123,
+          "mean_ms": 3.201,
+          "throughput_per_s": 310.99
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 10.864,
+          "p90_ms": 16.57,
+          "p99_ms": 24.641,
+          "mean_ms": 11.21,
+          "throughput_per_s": 889.85
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 2,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.786,
+          "p90_ms": 3.052,
+          "p99_ms": 3.321,
+          "mean_ms": 2.825,
+          "throughput_per_s": 352.49
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 11.729,
+          "p90_ms": 16.463,
+          "p99_ms": 24.323,
+          "mean_ms": 11.527,
+          "throughput_per_s": 865.19
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 2,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.92,
+          "p90_ms": 3.284,
+          "p99_ms": 3.661,
+          "mean_ms": 2.942,
+          "throughput_per_s": 338.46
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 10.475,
+          "p90_ms": 15.86,
+          "p99_ms": 21.949,
+          "mean_ms": 10.453,
+          "throughput_per_s": 951.33
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 3,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.828,
+          "p90_ms": 3.143,
+          "p99_ms": 3.581,
+          "mean_ms": 2.863,
+          "throughput_per_s": 347.84
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 11.382,
+          "p90_ms": 15.745,
+          "p99_ms": 22.122,
+          "mean_ms": 11.115,
+          "throughput_per_s": 894.85
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 3,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.929,
+          "p90_ms": 3.293,
+          "p99_ms": 3.755,
+          "mean_ms": 2.939,
+          "throughput_per_s": 338.74
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 11.456,
+          "p90_ms": 16.817,
+          "p99_ms": 22.675,
+          "mean_ms": 11.191,
+          "throughput_per_s": 888.86
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 4,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 3.001,
+          "p90_ms": 3.332,
+          "p99_ms": 3.772,
+          "mean_ms": 3.009,
+          "throughput_per_s": 330.88
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 10.747,
+          "p90_ms": 16.056,
+          "p99_ms": 23.321,
+          "mean_ms": 10.924,
+          "throughput_per_s": 912.79
+        }
+      ]
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 4,
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 1000,
+          "p50_ms": 2.539,
+          "p90_ms": 2.847,
+          "p99_ms": 3.638,
+          "mean_ms": 2.602,
+          "throughput_per_s": 382.52
+        },
+        {
+          "concurrency": 10,
+          "requests": 1000,
+          "p50_ms": 11.17,
+          "p90_ms": 15.451,
+          "p99_ms": 20.302,
+          "mean_ms": 10.866,
+          "throughput_per_s": 916.53
+        }
+      ]
+    }
+  ],
+  "compatibility": [
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 0,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 26.707569122314453
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 26.70786476135254
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 26.707759857177734
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 0,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 13.433784484863281
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 13.433900833129883
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 13.433849334716797
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 1,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 13.433784484863281
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 13.433900833129883
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 13.433849334716797
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 1,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 26.707569122314453
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 26.70786476135254
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 26.707759857177734
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 2,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 26.707569122314453
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 26.70786476135254
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 26.707759857177734
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 2,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 13.433784484863281
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 13.433900833129883
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 13.433849334716797
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 3,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 13.433784484863281
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 13.433900833129883
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 13.433849334716797
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 3,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 26.707569122314453
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 26.70786476135254
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 26.707759857177734
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.25.0",
+      "run": 4,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 26.707569122314453
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 26.70786476135254
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 27.98775863647461
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "single",
+      "version": "0.26.2",
+      "run": 4,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 26.707569122314453,
+          "observed": 13.433784484863281
+        },
+        "memory record 123": {
+          "old": 26.70786476135254,
+          "observed": 13.433900833129883
+        },
+        "system decision 23365": {
+          "old": 26.707759857177734,
+          "observed": 13.433849334716797
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 0,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 27.348613739013672
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 29.15441131591797
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 28.04587173461914
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 0,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 14.074806213378906
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 15.880363464355469
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 14.771894454956055
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 1,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 14.074806213378906
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 15.880363464355469
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 16.69189453125
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 1,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 27.348613739013672
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 29.15441131591797
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 28.04587173461914
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 2,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 27.348613739013672
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 29.15441131591797
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 28.04587173461914
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 2,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 14.074806213378906
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 17.160362243652344
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 14.771894454956055
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 3,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 14.074806213378906
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 15.880300521850586
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 16.69189453125
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 3,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 27.348613739013672
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 29.15426254272461
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 28.04587173461914
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.25.0",
+      "run": 4,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 27.348613739013672
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 29.15426254272461
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 29.325870513916016
+        }
+      },
+      "correct_search_results": true
+    },
+    {
+      "layout": "segment",
+      "version": "0.26.2",
+      "run": 4,
+      "responses_identical": false,
+      "lexical_files_unchanged": true,
+      "targeted_top_ids_preserved": true,
+      "missing_term_empty": true,
+      "targeted_scores": {
+        "decision 42": {
+          "old": 27.348613739013672,
+          "observed": 14.074806213378906
+        },
+        "memory record 123": {
+          "old": 29.15441131591797,
+          "observed": 15.880300521850586
+        },
+        "system decision 23365": {
+          "old": 28.04587173461914,
+          "observed": 14.771894454956055
+        }
+      },
+      "correct_search_results": true
+    }
+  ],
+  "summary": {
+    "single": {
+      "1": {
+        "median_req_s": {
+          "0.25.0": 376.7,
+          "0.26.2": 601.71
+        },
+        "change_percent": 59.73188213432441
+      },
+      "10": {
+        "median_req_s": {
+          "0.25.0": 2246.69,
+          "0.26.2": 2769.53
+        },
+        "change_percent": 23.271568396173926
+      }
+    },
+    "segment": {
+      "1": {
+        "median_req_s": {
+          "0.25.0": 332.79,
+          "0.26.2": 354.91
+        },
+        "change_percent": 6.64683433997415
+      },
+      "10": {
+        "median_req_s": {
+          "0.25.0": 888.86,
+          "0.26.2": 901.29
+        },
+        "change_percent": 1.3984204486645835
+      }
+    }
+  },
+  "acceptance": "verified for tested old indexes, targeted retrieval and varied corpus rankings; numeric scores and tied ordering are not stable across versions"
+}

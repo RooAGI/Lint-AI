@@ -6,160 +6,107 @@ hide:
 
 <div class="hero-stack">
 <section class="hero">
-  <div class="hero__eyebrow">LINT-AI · RELIABLE MEMORY &amp; INSIGHTS</div>
-  <h1>Agent memory that knows what is still true.</h1>
-  <p class="hero__lede"><strong>Memory and insights for AI agents.</strong> Lint-AI turns project history — sessions, documents, decisions, traces, and code — into current, evidence-backed context, while showing what changed, what was superseded, and where the answer came from.</p>
-</section>
-
-<section class="scenario" aria-label="Example of an agent retrieving a superseded decision">
-  <div class="scenario__timeline">
-    <article class="scenario-card scenario-card--complete">
-      <div><span>OLDER EVIDENCE</span><time>ONCE RELEVANT</time></div>
-      <p>“Increase retries to recover from the intermittent timeout.”</p>
-      <small>Topically relevant · no longer current</small>
-    </article>
-    <div class="scenario__connector"><span>SUPERSEDED</span></div>
-    <article class="scenario-card scenario-card--empty">
-      <div><span>CURRENT STATE</span><time>SUPPORTED BY NEWER EVIDENCE</time></div>
-      <p>“Retries amplify load. Cap attempts and fix the token clock skew.”</p>
-      <small>Source-linked · time-aware · current</small>
-    </article>
-  </div>
-  <div class="failure-points" aria-label="Signals needed to retrieve the right memory">
-    <span>Finding a relevant passage is not enough.</span>
-    <ol>
-      <li><b>01</b> Relevance</li>
-      <li><b>02</b> Recency</li>
-      <li><b>03</b> Supersession</li>
-      <li><b>04</b> Evidence</li>
-    </ol>
-  </div>
-  <div class="scenario__outcome">
-    <span>WITHOUT LINT-AI</span>
-    <p>Ordinary retrieval can surface an old recommendation as current because it is still topically relevant.</p>
-  </div>
-  <div class="scenario__outcome scenario__outcome--good">
-    <span>WITH LINT-AI</span>
-    <p>The current state ranks first. Older guidance remains useful as history without quietly becoming today’s answer.</p>
-  </div>
+  <div class="hero__eyebrow">THE MEMORY LAYER FOR AI AGENTS</div>
+  <h1>Give your AI a memory that lasts.</h1>
+  <p class="hero__lede"><strong>Context that persists. Built for production.</strong> Lint-AI helps an assistant remember useful preferences, decisions, and history across interactions, then brings the right context back when it matters.</p>
+  <p><a class="md-button md-button--primary" href="quickstart/">Get started</a> <a class="md-button" href="agent-memory/">Explore agent memory</a></p>
 </section>
 </div>
 
-## What’s new in v0.2.0 {.landing-heading}
+## From one conversation to a lasting relationship {.landing-heading}
 
-Lint-AI v0.2.0 helps AI agents find useful project context faster, keep working
-while memory is updated, and use that memory more safely across different tools.
+On its own, an AI model only has the context it can see right now. Lint-AI adds
+a memory that stays between conversations. As an agent saves new information or
+feedback, that memory can be updated and used in future interactions. The model
+does not need to be retrained; it gets better context to work with.
 
 <div class="feature-grid">
   <article>
     <span class="feature-number">01</span>
-    <h3>Find the right memory faster</h3>
-    <p>Projects are organized into searchable sections, so a query can start with
-    the most relevant context and expand its search when needed.</p>
+    <h3>Remember the person and the work</h3>
+    <p>Carry useful preferences, ongoing tasks, and past decisions from one
+    interaction to the next. Your assistant can pick up where you left off
+    instead of asking you to start over.</p>
   </article>
   <article>
     <span class="feature-number">02</span>
-    <h3>Keep working during updates</h3>
-    <p>Agents can continue searching a trusted snapshot while new memories are
-    written and checked in the background.</p>
+    <h3>Learn from what changes</h3>
+    <p>When new information or feedback updates a memory, future conversations
+    can use it. Lint-AI keeps the earlier history too, so an old answer does not
+    quietly become the current one.</p>
   </article>
   <article>
     <span class="feature-number">03</span>
-    <h3>Reliable memory, safer integrations</h3>
-    <p>Validated updates, duplicate protection, and project boundaries keep memory
-    dependable across Claude Code, Codex, Gemini CLI, and Antigravity CLI.</p>
+    <h3>Add memory without building it all yourself</h3>
+    <p>Lint-AI handles saving, updating, and finding memories through one
+    persistent service. Use the integrations and APIs to add memory to an agent
+    without building a separate memory system from scratch.</p>
   </article>
 </div>
 
-<p class="benchmark-note">Provider integrations remain opt-in. The default build stays lightweight, while <code>agent-integrations</code> enables all supported providers.</p>
+## What lasting memory makes possible {.landing-heading}
 
-[Read the full v0.2.0 release notes](releases/0.2.0.md)
-
-<section class="proof-grid" aria-label="Lint-AI benchmark highlights">
-  <div><strong>96.24%</strong><span>adaptive any-hit Recall@5</span></div>
-  <div><strong>95.49%</strong><span>fixed any-hit Recall@5</span></div>
-  <div><strong>1.25 ms</strong><span>fixed query latency</span></div>
-  <div><strong>1,512.31/s</strong><span>v0.2.0 routed HTTP at C=10</span></div>
-</section>
-
-<p class="benchmark-note">v0.2.0 segmented benchmark · 133 multi-session questions · adaptive routing reached 96.24% any-hit Recall@5; fixed routing reached 95.49% at 1.25 ms average latency · Latest throughput is the cold-start median of five runs over 23,366 records on macOS M5 Pro; results vary by hardware and index layout</p>
-
-## See the dashboard {.landing-heading}
-
-The local dashboard gives operators a live view of project indexes, segment layout, query activity, latency, errors, and provider telemetry across the agent integrations.
-
-<section class="dashboard-slideshow" data-dashboard-slideshow aria-label="Lint-AI dashboard screenshots">
-  <div class="dashboard-slideshow__stage">
-    <div class="dashboard-slideshow__track">
-      <figure class="dashboard-slide is-active" data-dashboard-slide>
-        <img src="assets/lint-ai-dashboard-overview.png" alt="Lint-AI dashboard overview showing project health and query activity" loading="eager">
-        <figcaption><strong>Overall</strong><span>Project health, query activity, and recent events</span></figcaption>
-      </figure>
-      <figure class="dashboard-slide" data-dashboard-slide>
-        <img src="assets/lint-ai-dashboard-index.png" alt="Lint-AI dashboard topology showing the routed project segments" loading="lazy">
-        <figcaption><strong>Topology</strong><span>Segment routing and document distribution</span></figcaption>
-      </figure>
-      <figure class="dashboard-slide" data-dashboard-slide>
-        <img src="assets/lint-ai-dashboard-providers.png" alt="Lint-AI dashboard provider telemetry showing Codex activity and token usage" loading="lazy">
-        <figcaption><strong>Provider</strong><span>Provider activity, sessions, and token usage</span></figcaption>
-      </figure>
-    </div>
-  </div>
-  <div class="dashboard-slideshow__controls">
-    <button type="button" data-dashboard-prev aria-label="Previous dashboard screenshot">←</button>
-    <div class="dashboard-slideshow__dots" role="tablist" aria-label="Dashboard screenshot views">
-      <button type="button" class="is-active" data-dashboard-dot="0" role="tab" aria-selected="true">Overall</button>
-      <button type="button" data-dashboard-dot="1" role="tab" aria-selected="false">Topology</button>
-      <button type="button" data-dashboard-dot="2" role="tab" aria-selected="false">Provider</button>
-    </div>
-    <button type="button" data-dashboard-next aria-label="Next dashboard screenshot">→</button>
-  </div>
-</section>
-
-## Prevent confident staleness {.landing-heading}
-
-Agent context is not a pile of text. Decisions supersede older decisions. Terms drift. Ownership changes. The right answer often depends on *when* something was true and *where* the evidence came from.
+Connect Lint-AI to the experience you are building:
 
 <div class="feature-grid">
   <article>
-    <span class="feature-number">01</span>
-    <h3>Know what is current</h3>
-    <p>Rank current evidence ahead of older guidance and preserve historical answers when a question depends on the past.</p>
+    <h3>AI assistants</h3>
+    <p>Remember preferences and past conversations to make each new interaction
+    feel more personal and consistent.</p>
   </article>
   <article>
-    <span class="feature-number">02</span>
-    <h3>Show why it is current</h3>
-    <p>Return source, time, and relationship signals with the context so an agent or reviewer can inspect the basis for an answer.</p>
+    <h3>Customer support</h3>
+    <p>Bring relevant case history and past resolutions into the next support
+    conversation, so people do not have to repeat themselves.</p>
   </article>
   <article>
-    <span class="feature-number">03</span>
-    <h3>Make drift visible</h3>
-    <p>Surface contradictions, stale claims, terminology drift, orphan pages, and missing links before they become confident answers.</p>
+    <h3>Autonomous systems</h3>
+    <p>Carry goals, task progress, and previous outcomes across runs, so an agent
+    can continue work with the state it has already built.</p>
   </article>
 </div>
 
-## Keep your sources. Add a current-state memory layer. {.landing-heading}
+The same memory layer can support productivity tools and other applications
+that benefit from remembering user preferences and past activity. Connect these
+applications through the [HTTP API](server.md), [MCP](mcp.md),
+[Python](python-migration-0.3.0.md), or [Rust](memory-service-api.md) interface.
 
-Lint-AI does not ask you to discard your existing project knowledge. It indexes the sessions, notes, documents, and decisions you already have, then makes their relationships and history usable at retrieval time. Each provider gets isolated, project-scoped agent memory, lifecycle capture, and shared MCP controls.
+## Memory where your agents already work {.landing-heading}
+
+Use the same project memory inside supported agent tools. Information captured
+in one can be available to the others, so people can keep using the tools they
+already know.
 
 <div class="integration-grid">
-  <a href="codex/"><strong>Codex</strong><span>Hooks, MCP, replay, project memory →</span></a>
-  <a href="claude-code/"><strong>Claude Code</strong><span>Hooks, MCP, status line, replay →</span></a>
-  <a href="gemini-cli/"><strong>Gemini CLI</strong><span>JSON hooks and shared MCP tools →</span></a>
-  <a href="agy/"><strong>Antigravity CLI</strong><span>Gemini-compatible lifecycle protocol →</span></a>
+  <a href="claude-code/"><strong>Claude Code</strong><span>Memory and lifecycle hooks →</span></a>
+  <a href="codex/"><strong>Codex</strong><span>Memory, hooks, and MCP →</span></a>
+  <a href="gemini-cli/"><strong>Gemini CLI</strong><span>Memory and lifecycle integration →</span></a>
+  <a href="agents/"><strong>More integrations</strong><span>AGY, Muse Code, OpenClaw, Hermes, and RooAGI AgentFlow →</span></a>
 </div>
 
-## From corpus to grounded context {.landing-heading}
+## Built for dependable use {.landing-heading}
 
-<div class="pipeline" role="list" aria-label="Lint-AI processing pipeline">
-  <div role="listitem"><span>01</span><strong>Ingest</strong><small>Sessions · docs · code · traces</small></div>
-  <div role="listitem"><span>02</span><strong>Understand</strong><small>Facts · entities · symbols · time</small></div>
-  <div role="listitem"><span>03</span><strong>Connect</strong><small>Links · ownership · co-occurrence</small></div>
-  <div role="listitem"><span>04</span><strong>Retrieve</strong><small>Ranked, sourced, current context</small></div>
-</div>
+Lint-AI keeps memory in a persistent store and provides a shared service for
+agents and applications. It supports user and session scoping, durable writes,
+and retrieval that can account for newer corrections while preserving history.
+Run it locally or connect through its HTTP and MCP servers. A dashboard helps
+you inspect memory and agent activity.
+
+<h3>Benchmark highlights</h3>
+
+<section class="proof-grid proof-grid--six" aria-label="Lint-AI benchmark highlights">
+  <div><strong>96.0%</strong><span>fused temporal any-hit Recall@5 · 500 questions</span></div>
+  <div><strong>94.2%</strong><span>routed top-5 any-hit Recall@5</span></div>
+  <div><strong>2.63 ms</strong><span>single-index mean search latency</span></div>
+  <div><strong>2,246.69/s</strong><span>read-only searches · C=10 · Oct 4</span></div>
+  <div><strong>212.36/s</strong><span>single records published · <code>/add</code></span></div>
+  <div><strong>1,977.12/s</strong><span>batch records published · 128 per call</span></div>
+</section>
+
+<p class="benchmark-note">Retrieval scores use 500 LongMemEval-S questions with Tantivy 0.25.0. In an experimental route comparison, fused temporal + global reached 96.0% any-hit Recall@5; routed top-5 reached 94.2%. Mean single-index search time was 2.58 ms. Read throughput is a separate C=10 read-only run on 23,366 records from October 4. Published write rates include final flush: <code>/add</code> completed 212.36 records/s; batches of 128 completed 1,977.12 records/s. The batch run was saturated and rejected about 25,500–26,700 requests per repetition, so its rate is a burst result. In the October 5 sparse mixed-load check, ten readers sustained 1,248.69 searches/s with one single-record write per second, versus 1,209.01 searches/s without writes. See the <a href="benchmark-results/">retrieval results</a> and <a href="http-server-benchmarks/">HTTP server benchmarks</a> for methods and reports.</p>
 
 <section class="final-cta">
-  <p>Current-state agent memory for AI coding agents.</p>
-  <h2>AI memory that knows what is still true.</h2>
+  <p>Context that persists.</p>
+  <h2>Build agents that remember and improve over time.</h2>
   <a class="md-button md-button--primary" href="quickstart/">Read the quickstart</a>
 </section>

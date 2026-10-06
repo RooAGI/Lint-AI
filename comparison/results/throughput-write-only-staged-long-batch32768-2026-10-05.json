@@ -1,0 +1,59 @@
+{
+  "benchmark": "write-only-http-load",
+  "write_acknowledgement": "durable-staged",
+  "created_at_utc": "2026-10-05T19:24:54.901090+00:00",
+  "server_binary": "/Users/louis/sources/Lint-AI/target/release/server",
+  "server_binary_sha256": "dd0a701d85e6cd14ff56144dd4b28b645b47bd6c9e0ca267a4f00803377dca65",
+  "git_revision": "75a9d2fa083844c79119a7ef6099994992e06d85",
+  "tantivy_version": "v0.25.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "records_before_each_cell": 23366,
+  "sessions": 23,
+  "writer_workers": 1,
+  "readers": 0,
+  "measured_seconds_per_cell": 65,
+  "warmup_requests_per_cell": 5,
+  "batch_sizes_add_requests": [
+    128
+  ],
+  "refresh_interval_ms": 250,
+  "refresh_batch_size_documents": 32768,
+  "checkpoint_interval_seconds": 30,
+  "repetitions": 1,
+  "summary": {
+    "128": {
+      "request_throughput_median_per_s": 2.84,
+      "published_record_throughput_median_per_s": 348.66,
+      "record_throughput_median_per_s": 363.63,
+      "p50_latency_median_ms": 3.996,
+      "p95_latency_median_ms": 6.054,
+      "p99_latency_median_ms": 16797.217
+    }
+  },
+  "runs": [
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 128,
+      "seed_records": 23366,
+      "measured_seconds": 84.483,
+      "requests": 240,
+      "successful_requests": 240,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 30720,
+      "request_throughput_per_s": 2.84,
+      "record_throughput_per_s": 363.63,
+      "latency_ms": {
+        "p50": 3.996,
+        "p95": 6.054,
+        "p99": 16797.217,
+        "mean": 351.97
+      },
+      "flush_seconds": 3.625,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 348.66,
+      "last_written_record_searchable": true
+    }
+  ]
+}

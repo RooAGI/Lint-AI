@@ -25,9 +25,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
     feature = "agy",
     feature = "muse-code",
     feature = "openclaw",
-    feature = "hermes"
+    feature = "hermes",
+    feature = "roo-runtime"
 ))]
 pub(crate) mod workspace;
+
+mod staged;
+pub use staged::StagedAddResponse;
 
 const USER_FILTER: &str = "memory_user_id";
 
@@ -238,6 +242,8 @@ pub struct MemoryService {
     request_receipts: HashMap<(String, String), WriteAdjudicationReceipt>,
     /// Where receipts persist across restarts. None for in-memory services.
     receipts_path: Option<std::path::PathBuf>,
+    pending_adds: HashMap<(String, String), Vec<String>>,
+    publication: Option<staged::PendingPublication>,
     conversation_states:
         std::sync::Arc<std::sync::Mutex<crate::conversation_state::ConversationStateStore>>,
     /// Lazily-built dependency-parse relation index for the structured-fact
@@ -516,13 +522,12 @@ fn relations_index_for(
 /// composition, even if it would later be filtered from the hits.
 #[allow(clippy::too_many_arguments)]
 fn structured_fact_results(
-    docs: &[&SourceDocument],
-    options: &PipelineOptions,
+    store: &IndexStore,
     cache: &Mutex<RelationsCache>,
     superseded_ids: &HashSet<(String, String)>,
     request: &SearchRequest,
 ) -> Vec<crate::SearchResult> {
-    if !options.structured_fact_retrieval || request.query.trim().is_empty() {
+    if !store.options().structured_fact_retrieval || request.query.trim().is_empty() {
         return Vec::new();
     }
     // Classify before building: only structured fact questions pay for the
@@ -531,6 +536,10 @@ fn structured_fact_results(
     if analyze_fact_question(&request.query).is_none() {
         return Vec::new();
     }
+    // Enumerating source documents sorts the full corpus. Delay that O(n log
+    // n) work until after classification, since ordinary keyword searches
+    // have no use for the structured-fact view.
+    let docs = store.source_documents();
     let now_ms = unix_time_ms();
     let mut visible: Vec<&SourceDocument> = docs
         .iter()
@@ -545,8 +554,12 @@ fn structured_fact_results(
         })
         .collect();
     visible.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-    let index = match relations_index_for(&visible, &request.user_id, cache, options.python_free())
-    {
+    let index = match relations_index_for(
+        &visible,
+        &request.user_id,
+        cache,
+        store.options().python_free(),
+    ) {
         Some(index) => index,
         None => return Vec::new(),
     };
@@ -762,6 +775,25 @@ impl MemoryService {
         Self::new(IndexStore::in_memory(options))
     }
 
+    /// Adapt a prebuilt CLI query snapshot to the service search path. The
+    /// snapshot and its records are reused, so routing a CLI query through
+    /// `search_with_filters` does not repeat corpus extraction or indexing.
+    pub(crate) fn from_query_index(
+        index: crate::index::MemoryIndex,
+        options: PipelineOptions,
+    ) -> anyhow::Result<Self> {
+        Ok(Self::new(IndexStore::from_query_index(index, options)?))
+    }
+
+    /// The CLI uses the service-owned snapshot to format its query results
+    /// into the existing aggregate and LLM-context output shapes.
+    pub(crate) fn query_index(&self) -> Option<&crate::index::MemoryIndex> {
+        match self.store.memory_index_snapshot()? {
+            crate::pipeline::MemoryIndexSnapshot::Single(index) => Some(index),
+            crate::pipeline::MemoryIndexSnapshot::Segmented(_) => None,
+        }
+    }
+
     /// Open a persistent memory service without exposing `IndexStore` in the
     /// application-facing construction API. Hooks and the MCP server open a
     /// fresh service per invocation against the same index root; a disk-backed
@@ -777,6 +809,7 @@ impl MemoryService {
         // restart return the identical response, including the adjudication.
         service.receipts_path = Some(index_root.join("receipts.json"));
         service.load_receipts();
+        service.recover_staged_adds()?;
         Ok(service)
     }
 
@@ -787,37 +820,63 @@ impl MemoryService {
         let Some(path) = self.receipts_path.as_ref() else {
             return;
         };
-        let Ok(content) = std::fs::read_to_string(path) else {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(entries) =
+                serde_json::from_str::<Vec<((String, String), WriteAdjudicationReceipt)>>(&content)
+            {
+                self.request_receipts.extend(entries);
+            }
+        }
+        let journal = path.with_extension("jsonl");
+        let Ok(content) = std::fs::read_to_string(journal) else {
             return;
         };
-        let Ok(entries): Result<Vec<((String, String), WriteAdjudicationReceipt)>, _> =
-            serde_json::from_str(&content)
-        else {
-            return;
-        };
-        self.request_receipts = entries.into_iter().collect();
+        for line in content.lines() {
+            if let Ok(entries) =
+                serde_json::from_str::<Vec<((String, String), WriteAdjudicationReceipt)>>(line)
+            {
+                self.request_receipts.extend(entries);
+            }
+        }
     }
 
-    /// Persists the receipt cache. Failure is logged but never fails the
-    /// write: the in-memory cache still serves retries for this lifetime.
-    fn persist_receipts(&self) {
+    /// Appends only newly created receipts. Rewriting the full receipt cache
+    /// made every write O(total historical requests); the journal keeps the
+    /// persistent write cost proportional to this mutation's batch size.
+    /// Failure is logged but never fails the write because retries can rebuild
+    /// receipts from the persisted source documents.
+    fn persist_receipts(&self, keys: &[(String, String)]) {
         let Some(path) = self.receipts_path.as_ref() else {
             return;
         };
-        let entries: Vec<((String, String), WriteAdjudicationReceipt)> = self
-            .request_receipts
+        let entries: Vec<((String, String), WriteAdjudicationReceipt)> = keys
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .filter_map(|key| {
+                self.request_receipts
+                    .get(key)
+                    .map(|receipt| (key.clone(), receipt.clone()))
+            })
             .collect();
-        match serde_json::to_string(&entries) {
-            Ok(json) => {
-                if let Err(e) =
-                    crate::pipeline::persistence::write_text_file_atomic(path, &json)
-                {
-                    eprintln!("failed to persist adjudication receipts: {e:#}");
+        if entries.is_empty() {
+            return;
+        }
+        match serde_json::to_vec(&entries) {
+            Ok(mut json) => {
+                json.push(b'\n');
+                let journal = path.with_extension("jsonl");
+                let result = (|| -> std::io::Result<()> {
+                    use std::io::Write;
+                    let mut file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(journal)?;
+                    file.write_all(&json)
+                })();
+                if let Err(e) = result {
+                    eprintln!("failed to append adjudication receipts: {e}");
                 }
             }
-            Err(e) => eprintln!("failed to serialize adjudication receipts: {e:#}"),
+            Err(e) => eprintln!("failed to serialize adjudication receipts: {e}"),
         }
     }
 
@@ -863,6 +922,8 @@ impl MemoryService {
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
+            pending_adds: HashMap::new(),
+            publication: None,
             conversation_states: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::conversation_state::ConversationStateStore::new(None),
             )),
@@ -888,7 +949,7 @@ impl MemoryService {
     /// this method is provided for hosts that batch lower-level changes.
     pub fn refresh(&mut self) -> anyhow::Result<()> {
         self.drain_enrichment_inbox();
-        self.store.refresh()
+        self.flush()
     }
 
     /// Queue freshly written documents for background key-phrase
@@ -1118,7 +1179,7 @@ impl MemoryService {
         let raw = match raw {
             Some(raw) => raw,
             None => {
-                if let Err(error) = self.store.refresh() {
+                if let Err(error) = self.flush() {
                     eprintln!("key-phrase backfill refresh failed (fail-open): {error:#}");
                 }
                 return 0;
@@ -1150,7 +1211,7 @@ impl MemoryService {
                 .retain(|p| !(p.turn.doc_id == doc.doc_id && p.content_hash == hash));
             extracted += 1;
         }
-        if let Err(error) = self.store.refresh() {
+        if let Err(error) = self.flush() {
             eprintln!("key-phrase backfill refresh failed (fail-open): {error:#}");
         }
         extracted
@@ -1191,9 +1252,11 @@ impl MemoryService {
         self.drain_enrichment_inbox();
         let request_key = (request.user_id.clone(), request.request_id.clone());
         let (mut response, doc_ids) = self.add_unpublished(request)?;
-        self.store.refresh()?;
+        self.flush()?;
         self.attach_receipt(&mut response, request_key, &doc_ids);
-        self.persist_receipts();
+        if !doc_ids.is_empty() {
+            self.persist_receipts(&[(response.user_id.clone(), response.request_id.clone())]);
+        }
         Ok(response)
     }
 
@@ -1215,13 +1278,18 @@ impl MemoryService {
             receipt_inputs.push((request_key, doc_ids));
             responses.push(response);
         }
-        self.store.refresh()?;
+        self.flush()?;
+        let new_receipt_keys: Vec<_> = receipt_inputs
+            .iter()
+            .filter(|(_, doc_ids)| !doc_ids.is_empty())
+            .map(|(request_key, _)| request_key.clone())
+            .collect();
         for (response, (request_key, doc_ids)) in
             responses.iter_mut().zip(receipt_inputs.into_iter())
         {
             self.attach_receipt(response, request_key, &doc_ids);
         }
-        self.persist_receipts();
+        self.persist_receipts(&new_receipt_keys);
         Ok(responses)
     }
 
@@ -1237,22 +1305,20 @@ impl MemoryService {
         doc_ids: &[String],
     ) {
         if !doc_ids.is_empty() {
-            let receipt =
-                self.build_adjudication_receipt(response.request_id.clone(), doc_ids);
-            self.request_receipts
-                .insert(request_key, receipt.clone());
+            let receipt = self.build_adjudication_receipt(response.request_id.clone(), doc_ids);
+            self.request_receipts.insert(request_key, receipt.clone());
             response.adjudication = Some(receipt);
         } else {
-            response.adjudication = self
-                .request_receipts
-                .get(&request_key)
-                .cloned()
-                .or_else(|| {
-                    let receipt = self.rebuild_receipt(&request_key)?;
-                    self.request_receipts
-                        .insert(request_key.clone(), receipt.clone());
-                    Some(receipt)
-                });
+            response.adjudication =
+                self.request_receipts
+                    .get(&request_key)
+                    .cloned()
+                    .or_else(|| {
+                        let receipt = self.rebuild_receipt(&request_key)?;
+                        self.request_receipts
+                            .insert(request_key.clone(), receipt.clone());
+                        Some(receipt)
+                    });
         }
     }
 
@@ -1272,10 +1338,7 @@ impl MemoryService {
     /// request_id in its filters, so the original write's documents can be
     /// located without the in-memory cache. Returns None when no documents
     /// for the request exist.
-    fn rebuild_receipt(
-        &self,
-        request_key: &(String, String),
-    ) -> Option<WriteAdjudicationReceipt> {
+    fn rebuild_receipt(&self, request_key: &(String, String)) -> Option<WriteAdjudicationReceipt> {
         let (user_id, request_id) = request_key;
         let doc_ids: Vec<String> = self
             .store
@@ -1283,8 +1346,7 @@ impl MemoryService {
             .into_iter()
             .filter(|doc| {
                 doc.filters.get("request_id").map(|s| s.as_str()) == Some(request_id.as_str())
-                    && doc.filters.get(USER_FILTER).map(|s| s.as_str())
-                        == Some(user_id.as_str())
+                    && doc.filters.get(USER_FILTER).map(|s| s.as_str()) == Some(user_id.as_str())
             })
             .map(|doc| doc.doc_id.clone())
             .collect();
@@ -1373,10 +1435,7 @@ impl MemoryService {
         }
     }
 
-    fn add_unpublished(
-        &mut self,
-        request: AddRequest,
-    ) -> anyhow::Result<(AddResponse, Vec<String>)> {
+    fn prepare_add(&self, request: &AddRequest) -> anyhow::Result<(String, Vec<SourceDocument>)> {
         validate_identifier(&request.request_id, "request_id")?;
         validate_identifier(&request.user_id, "user_id")?;
         validate_identifier(&request.session_id, "session_id")?;
@@ -1395,18 +1454,7 @@ impl MemoryService {
             if previous != &fingerprint {
                 anyhow::bail!("request_id was already used with different content");
             }
-            return Ok((
-                AddResponse {
-                    success: true,
-                    request_id: request.request_id,
-                    user_id: request.user_id,
-                    session_id: request.session_id,
-                    // The receipt is attached post-refresh by attach_receipt,
-                    // which resolves retries from the cache (or rebuilds).
-                    adjudication: None,
-                },
-                Vec::new(),
-            ));
+            return Ok((fingerprint, Vec::new()));
         }
 
         let mut new_docs = Vec::with_capacity(request.messages.len());
@@ -1459,6 +1507,15 @@ impl MemoryService {
                 );
             }
         }
+        Ok((fingerprint, new_docs))
+    }
+
+    fn add_unpublished(
+        &mut self,
+        request: AddRequest,
+    ) -> anyhow::Result<(AddResponse, Vec<String>)> {
+        let (fingerprint, new_docs) = self.prepare_add(&request)?;
+        let request_key = (request.user_id.clone(), request.request_id.clone());
         // The documents are written; key phrases arrive asynchronously.
         // `upsert` queues each document for background enrichment.
         let doc_ids: Vec<String> = new_docs.iter().map(|d| d.doc_id.clone()).collect();
@@ -1496,6 +1553,16 @@ impl MemoryService {
     /// (argument translation + response shaping only) so the HTTP/Python
     /// path and the MCP/benchmark path can never diverge.
     pub fn search(&mut self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
+        self.search_impl(request)
+    }
+
+    /// Search the already-published index snapshot. Server callers use this
+    /// under a shared service lock after mutations have refreshed the index.
+    pub fn search_cached(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
+        self.search_impl_cached(request)
+    }
+
+    fn search_impl(&mut self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
         if !request.user_id.trim().is_empty() {
             validate_identifier(&request.user_id, "user_id")?;
         }
@@ -1527,6 +1594,42 @@ impl MemoryService {
             }
         }
         let results = self.search_with_filters(
+            &request.query,
+            &scope,
+            request.session_id.as_deref(),
+            request.top_k,
+            &filters,
+        )?;
+        Ok(self.format_search_response(results))
+    }
+
+    fn search_impl_cached(&self, request: SearchRequest) -> anyhow::Result<SearchResponse> {
+        if !request.user_id.trim().is_empty() {
+            validate_identifier(&request.user_id, "user_id")?;
+        }
+        if let Some(session_id) = request.session_id.as_deref() {
+            validate_identifier(session_id, "session_id")?;
+        }
+        if request.query.trim().is_empty() {
+            return Ok(SearchResponse { data: vec![] });
+        }
+        let scope = request
+            .scope
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| request.user_id.clone());
+        let mut filters = BTreeMap::new();
+        if !request.user_id.trim().is_empty() {
+            filters.insert(USER_FILTER.to_string(), request.user_id.clone());
+        }
+        if let Some(extra) = request.filters.as_ref() {
+            for (key, value) in extra {
+                if key != USER_FILTER {
+                    filters.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        let results = self.search_with_filters_cached(
             &request.query,
             &scope,
             request.session_id.as_deref(),
@@ -1636,7 +1739,7 @@ impl MemoryService {
         document.key_phrases = Vec::new();
         document.key_phrase_extraction_hash = String::new();
         self.upsert(document);
-        self.store.refresh()?;
+        self.flush()?;
         Ok(self
             .store
             .source_document_by_id(&request.memory_id)
@@ -1685,14 +1788,40 @@ impl MemoryService {
         // this query benefits. Bounded to one extractor batch and fail-open;
         // usually a no-op once every document carries its extraction stamp.
         self.backfill_key_phrases();
+        self.flush()?;
+        self.search_with_filters_cached(query, scope, session_id, top_k, filters)
+    }
+
+    /// Run retrieval against the published immutable index. All mutable
+    /// side state used by search is internally synchronized, so this path can
+    /// serve concurrent readers under a shared service lock.
+    fn search_with_filters_cached(
+        &self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+        filters: &BTreeMap<String, String>,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
         // Luyi 2026-09-27: wire the augmented query into production.
         // analyze_query builds "original + terms" (focus terms, entities)
         // for better routing coverage. This is the same formulation
         // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
         let analysis = analyze_query(query);
-        let query_text = analysis.augmented_query.as_str();
-        let mut prepared =
-            prepare_session_query(&self.conversation_states, scope, session_id, query_text);
+        let augmented_query = analysis.augmented_query.clone();
+        let mut prepared = if session_id.is_none() {
+            // The first analysis already contains the augmented search text.
+            // Reusing it avoids analyzing that text a second time on the
+            // common stateless request path.
+            PreparedQuery::from_analysis(analysis)
+        } else {
+            prepare_session_query(
+                &self.conversation_states,
+                scope,
+                session_id,
+                &augmented_query,
+            )
+        };
         // Definitional semantic tags (Luyi 2026-09-28): computed from the
         // ORIGINAL user query, not the augmented text. Closed-set temporal
         // words ("weekend"/"weekday"), "habitual", and admitted kind tags
@@ -1716,7 +1845,9 @@ impl MemoryService {
         } else {
             top_k
         };
-        let mut lexical = self.store.query_prepared(&prepared, depth, filters)?;
+        let mut lexical = self
+            .store
+            .query_prepared_cached(&prepared, depth, filters)?;
         if do_rerank {
             let entities = session_resolved_entities(
                 &self.conversation_states,
@@ -1751,10 +1882,8 @@ impl MemoryService {
                     scope: Some(scope.to_string()),
                     filters: None,
                 };
-                let docs: Vec<&SourceDocument> = self.store.source_documents();
                 structured_fact_results(
-                    &docs,
-                    self.store.options(),
+                    &self.store,
                     &self.relations_cache,
                     &self.superseded_ids,
                     &request,
@@ -1785,7 +1914,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn sync_shared_memory(
         &mut self,
@@ -1802,7 +1932,7 @@ impl MemoryService {
         // finished are published by this refresh instead of being stranded
         // in the inbox.
         self.drain_enrichment_inbox();
-        self.store.refresh()
+        self.flush()
     }
 
     /// Compose a workspace service with one provider's memory service into a
@@ -1813,7 +1943,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn compose_segmented(
         workspace: Self,
@@ -1846,7 +1977,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn is_empty(&self) -> bool {
         self.store.is_empty()
@@ -1865,6 +1997,49 @@ impl MemoryService {
     pub fn upsert(&mut self, document: crate::SourceDocument) {
         self.queue_key_phrase_enrichment(std::slice::from_ref(&document));
         self.store.upsert(document)
+    }
+
+    /// Replace a host-owned capture group, removing obsolete chunks on replay.
+    /// Call under the workspace write lock. The replacement filter must match
+    /// every new document; an empty filter is never a whole-store delete.
+    pub fn replace_source_group(
+        &mut self,
+        key: &str,
+        value: &str,
+        documents: Vec<crate::SourceDocument>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !key.is_empty() && !value.is_empty(),
+            "source group identity is required"
+        );
+        anyhow::ensure!(
+            documents
+                .iter()
+                .all(|document| document.filters.get(key).map(String::as_str) == Some(value)),
+            "source group mismatch"
+        );
+        let live = documents
+            .iter()
+            .map(|document| document.doc_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let stale = self
+            .store
+            .source_documents()
+            .into_iter()
+            .filter(|document| {
+                document.filters.get(key).map(String::as_str) == Some(value)
+                    && !live.contains(document.doc_id.as_str())
+            })
+            .map(|document| document.doc_id.clone())
+            .collect::<Vec<_>>();
+        for id in stale {
+            self.drop_enrichment_for_doc(&id);
+            self.store.remove(&id);
+        }
+        for document in documents {
+            self.upsert(document);
+        }
+        self.refresh_index()
     }
 
     // -----------------------------------------------------------------------
@@ -2017,7 +2192,7 @@ impl MemoryService {
         // Bypass the enrichment funnel: board definitions are metadata, not
         // searchable content.
         self.store.upsert(doc);
-        self.store.refresh()?;
+        self.flush()?;
         Ok(board)
     }
 
@@ -2253,7 +2428,7 @@ impl MemoryService {
             key_phrase_extraction_hash: String::new(),
         };
         self.store.upsert(doc);
-        self.store.refresh()?;
+        self.flush()?;
         Ok(post)
     }
 
@@ -2459,7 +2634,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn remove(&mut self, doc_id: &str) -> Option<crate::SourceDocument> {
         self.store.remove(doc_id)
@@ -2472,7 +2648,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn record_by_id(&self, doc_id: &str) -> Option<&crate::index::DocRecord> {
         self.store.record_by_id(doc_id)
@@ -2493,7 +2670,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn query_plain(
         &mut self,
@@ -2513,7 +2691,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn note_active_session(&self, provider: &str, session_id: &str) {
         if let Ok(store) = self.conversation_states.lock() {
@@ -2529,7 +2708,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn current_session_id(&self, provider: &str) -> Option<String> {
         self.conversation_states
@@ -2550,7 +2730,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn observe_plain_query(
         &mut self,
@@ -2670,7 +2851,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn search_results_payload(
         &self,
@@ -2685,7 +2867,8 @@ impl MemoryService {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     pub(crate) fn list_memories_payload(&self, limit: usize) -> serde_json::Value {
         crate::integrations::mcp_tools::list_memories(self, limit)
@@ -2735,7 +2918,7 @@ impl MemoryService {
         self.drain_enrichment_inbox();
         self.drop_enrichment_for_doc(doc_id);
         self.store.remove(doc_id);
-        self.store.refresh()?;
+        self.flush()?;
         Ok(true)
     }
 
@@ -2764,7 +2947,7 @@ impl MemoryService {
         // Metadata-only touch: the content is unchanged, so the store is
         // written directly without re-queuing key-phrase enrichment.
         self.store.upsert(replacement);
-        self.store.refresh()?;
+        self.flush()?;
         Ok(true)
     }
 
@@ -2790,7 +2973,7 @@ impl MemoryService {
             self.store.remove(id);
         }
         if !ids.is_empty() {
-            self.store.refresh()?;
+            self.flush()?;
         }
         Ok(ids.len())
     }
@@ -3585,8 +3768,7 @@ mod tests {
         // supersession allow-list when the corpus fit in a single segment
         // (one session). The relations were computed correctly; the query
         // just never applied them.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         // Day-apart timestamps: chronological supersession needs strictly
         // greater dates (same calendar day does not count).
         for (request_id, content, timestamp) in [
@@ -3628,8 +3810,7 @@ mod tests {
     fn decimal_config_backfill_hides_stale_value() {
         // End-to-end for the decimal sentence-splitting regression: the older
         // effective value (written later, as a backfill) must be superseded.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         for (request_id, content, timestamp) in [
             ("new", "version: 2.0", 1_700_003_200_000i64), // 2023-11-15
             ("old", "version: 1.5", 1_699_916_800_000i64), // 2023-11-14
@@ -3668,8 +3849,7 @@ mod tests {
     fn correction_cue_supersedes_prior_usage_claim() {
         // End-to-end for the chain-key regression: "instead of" must not be
         // absorbed into the usage claim's subject.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         for (request_id, content, timestamp) in [
             (
                 "old",
@@ -3717,8 +3897,7 @@ mod tests {
         // Probe P4 exact replication: the two docs live in DIFFERENT sessions
         // (hence different segments). The usage chain is user-scoped, so the
         // correction must still apply.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         for (request_id, content, timestamp, session_id) in [
             (
                 "old",
@@ -3763,7 +3942,7 @@ mod tests {
         assert!(response.data[0].content.contains("MongoDB"));
     }
 
-#[test]
+    #[test]
     fn add_response_serde_round_trip_and_backward_compat() {
         // Old JSON without the adjudication field must still deserialize.
         let old_json = r#"{"success":true,"request_id":"r1","user_id":"u","session_id":"s"}"#;
@@ -3771,8 +3950,7 @@ mod tests {
         assert!(parsed.adjudication.is_none());
 
         // New responses round-trip, including the receipt.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         let response = service
             .add(AddRequest {
                 request_id: "r1".into(),
@@ -3796,15 +3974,12 @@ mod tests {
         );
     }
 
-#[test]
+    #[test]
     fn retry_after_restart_returns_identical_response() {
         // The identical-retry contract must survive restarts, intervening
         // writes, and multi-message requests: the persisted receipt is the
         // original, not a reconstruction from current state.
-        let dir = std::env::temp_dir().join(format!(
-            "lint-ai-receipt-restart-{}",
-            std::process::id()
-        ));
+        let dir = canonical_temp_dir("receipt-restart");
         let _ = std::fs::remove_dir_all(&dir);
         let options = crate::default_production_pipeline_options();
         let args_a = || AddRequest {
@@ -3841,8 +4016,7 @@ mod tests {
             session_id: "s2".into(),
         };
         let first_json = {
-            let mut service =
-                MemoryService::at_path(&dir, options.clone()).expect("open failed");
+            let mut service = MemoryService::at_path(&dir, options.clone()).expect("open failed");
             service.add(args_a()).expect("add A failed");
             // Intervening write supersedes A's ownership claim.
             service.add(args_b()).expect("add B failed");
@@ -3851,20 +4025,18 @@ mod tests {
         };
         // Reopen: the in-memory receipt cache is empty; the persisted
         // receipt must produce the identical serialized response.
-        let mut service =
-            MemoryService::at_path(&dir, options).expect("reopen failed");
+        let mut service = MemoryService::at_path(&dir, options).expect("reopen failed");
         let retry_after_restart = service.add(args_a()).expect("retry failed");
         let second_json = serde_json::to_value(&retry_after_restart).expect("serialize failed");
         assert_eq!(first_json, second_json);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-#[test]
+    #[test]
     fn batch_duplicate_requests_get_identical_receipts() {
         // [A, A] in one batch: the duplicate must resolve to the same
         // receipt as the original once the batch's refresh completes.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         let args = || AddRequest {
             request_id: "dup".into(),
             messages: vec![Message {
@@ -3885,12 +4057,11 @@ mod tests {
         assert!(responses[0].adjudication.is_some());
     }
 
-#[test]
+    #[test]
     fn add_batch_receipts_attribute_cross_request_relations() {
         // In a batch, the second request's receipt must show the supersedes
         // decision against the first request's doc, and vice versa.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         let responses = service
             .add_batch(vec![
                 AddRequest {
@@ -3935,12 +4106,11 @@ mod tests {
         assert!(first.retired_doc_ids.is_empty());
     }
 
-#[test]
+    #[test]
     fn add_response_carries_adjudication_receipt() {
         // The receipt must report what the write extracted and decided:
         // one claim, one supersedes decision, one retired doc.
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         let first = service
             .add(AddRequest {
                 request_id: "r1".into(),
@@ -3993,12 +4163,11 @@ mod tests {
         assert_eq!(receipt.retired_doc_ids.len(), 1);
     }
 
-#[test]
+    #[test]
     fn correction_cue_supersedes_with_identical_timestamps() {
         // Probe P4 exact: SAME timestamp on both docs. The correction cue
         // alone must force supersession (chronological is false).
-        let mut service =
-            MemoryService::in_memory(crate::default_production_pipeline_options());
+        let mut service = MemoryService::in_memory(crate::default_production_pipeline_options());
         for (request_id, content, session_id) in [
             ("old", "We use Postgres for analytics.", "s1"),
             (
@@ -4469,7 +4638,8 @@ mod tests {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     #[test]
     fn observe_plain_query_contributes_session_state_for_follow_ups() {
@@ -4528,7 +4698,8 @@ mod tests {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     #[test]
     fn at_path_persists_conversation_state_across_instances() {
@@ -4578,7 +4749,8 @@ mod tests {
         feature = "codex",
         feature = "gemini-cli",
         feature = "agy",
-        feature = "muse-code"
+        feature = "muse-code",
+        feature = "roo-runtime"
     ))]
     #[test]
     fn compose_segmented_preserves_provider_conversation_state() {
@@ -4656,6 +4828,10 @@ mod tests {
             key_phrases: Vec::new(),
             key_phrase_extraction_hash: String::new(),
         }
+    }
+
+    fn structured_store(docs: &[SourceDocument], options: PipelineOptions) -> IndexStore {
+        IndexStore::with_documents(options, docs.to_vec())
     }
 
     /// Relation index where Gina and Jon both went to Rome (docs d1, d2).
@@ -4764,15 +4940,10 @@ mod tests {
             structured_doc("d2", "Jon: went to Rome", "u1", &[]),
         ];
         let refs: Vec<&SourceDocument> = docs.iter().collect();
+        let store = structured_store(&docs, PipelineOptions::default());
         let cache = seeded_cache("u1", &refs, rome_index());
         let request = fact_request("Which city have both Gina and Jon visited?", "u1");
-        let results = structured_fact_results(
-            &refs,
-            &PipelineOptions::default(),
-            &cache,
-            &HashSet::new(),
-            &request,
-        );
+        let results = structured_fact_results(&store, &cache, &HashSet::new(), &request);
         let mut ids: Vec<&str> = results.iter().map(|r| r.doc_id.as_str()).collect();
         ids.sort_unstable();
         assert_eq!(ids, vec!["d1", "d2"]);
@@ -4808,14 +4979,8 @@ mod tests {
         superseded.insert(("u1".to_string(), "d4".to_string()));
         let request = fact_request("Which city have both Gina and Jon visited?", "u1");
         let cache = seeded_cache("u1", &visible, rome_index());
-        let refs: Vec<&SourceDocument> = docs.iter().collect();
-        let results = structured_fact_results(
-            &refs,
-            &PipelineOptions::default(),
-            &cache,
-            &superseded,
-            &request,
-        );
+        let store = structured_store(&docs, PipelineOptions::default());
+        let results = structured_fact_results(&store, &cache, &superseded, &request);
         let mut ids: Vec<&str> = results.iter().map(|r| r.doc_id.as_str()).collect();
         ids.sort_unstable();
         assert_eq!(
@@ -4828,18 +4993,12 @@ mod tests {
         }
         // A non-fact question never consults the index (no extractor cost).
         let plain = fact_request("Tell me about Rome.", "u1");
-        assert!(structured_fact_results(
-            &refs,
-            &PipelineOptions::default(),
-            &cache,
-            &HashSet::new(),
-            &plain
-        )
-        .is_empty());
+        assert!(structured_fact_results(&store, &cache, &HashSet::new(), &plain).is_empty());
         // The option flag disables the path entirely.
         let mut off = PipelineOptions::default();
         off.structured_fact_retrieval = false;
-        assert!(structured_fact_results(&refs, &off, &cache, &HashSet::new(), &request).is_empty());
+        let off_store = structured_store(&docs, off);
+        assert!(structured_fact_results(&off_store, &cache, &HashSet::new(), &request).is_empty());
     }
 
     #[test]
@@ -4870,9 +5029,10 @@ mod tests {
         all.extend(u1_refs.iter().copied());
         all.extend(u2_refs.iter().copied());
         let opts = PipelineOptions::default();
+        let all_docs: Vec<SourceDocument> = all.into_iter().cloned().collect();
+        let store = structured_store(&all_docs, opts);
         let r1 = structured_fact_results(
-            &all,
-            &opts,
+            &store,
             &cache,
             &HashSet::new(),
             &fact_request("Which city have both Gina and Jon visited?", "u1"),
@@ -4884,8 +5044,7 @@ mod tests {
             .iter()
             .all(|r| r.relation_evidence == vec!["shared relation: Rome"]));
         let r2 = structured_fact_results(
-            &all,
-            &opts,
+            &store,
             &cache,
             &HashSet::new(),
             &fact_request("Which city have both Gina and Jon visited?", "u2"),
@@ -6048,7 +6207,8 @@ mod board_integration_tests {
     feature = "agy",
     feature = "muse-code",
     feature = "openclaw",
-    feature = "hermes"
+    feature = "hermes",
+    feature = "roo-runtime"
 ))]
 impl MemoryService {
     /// Serialize a shared-store mutation against fresh persisted state.

@@ -3,6 +3,10 @@
 This note captures the recommended concurrency model for large Lint-AI
 deployments.
 
+The [write publication implementation and verification plan](write-publication-plan.md)
+tracks the incremental refresh and proposed background builder. The staged
+writer behavior below describes the current implementation.
+
 ## Current Model
 
 `IndexStore` is the mutable owner of the corpus state:
@@ -11,19 +15,95 @@ deployments.
 - derived `DocRecord`s
 - chunk lifecycle metadata
 - temporal facts
-- Tantivy lexical state
 - the current semantic `MemoryIndex` snapshot
 
 `MemoryIndex` is the immutable semantic query snapshot. It is optimized for
-batch construction and fast reads over compact global structures. It is not the
-right object to mutate incrementally in place.
+batch construction and fast reads over compact global structures, including
+the snapshot's Tantivy lexical index. It is not the right object to mutate
+incrementally in place.
 
 `IndexStore::refresh()` builds and publishes a complete immutable generation.
-`MemoryService` is the single external service: its `search(&self)` reads the
-latest complete generation through the store's cached snapshot, while its
-write methods refresh the store before releasing the write lock. Readers
-holding a shared lock never block on a rebuild and never see a partially
-updated index.
+The HTTP server has one mutable `MemoryService` owner and a detached published
+`MemoryService` read view. The indexes are shared through `Arc`; visibility
+and reranking metadata are captured with the same generation. Each search
+retains that view independently of the mutable owner's lock.
+
+## Staged HTTP writes
+
+```mermaid
+flowchart LR
+    A[Add requests] --> Q[Bounded queue]
+    Q --> W[Single writer]
+    W --> J[Append and sync journal]
+    J --> M[Mutable IndexStore]
+    M --> R[Freeze accumulated changes]
+    R --> B[One background builder]
+    B --> S[Published immutable generation]
+    Search --> S
+    M --> C[Periodic or explicit checkpoint]
+    C --> D[Persist records and core]
+    D --> T[Reclaim journal]
+```
+
+With a disk-backed `--index`, the primary HTTP `/add` and `/add/batch` endpoints acknowledge after validating
+and syncing their transaction to `pending-adds.jsonl`, then applying it to the
+mutable store. They do not refresh for each add. The default response includes
+`published: false` when the request is staged; it has no final adjudication.
+
+Publication starts 250 ms after the first pending add, or after 512 pending
+documents. These are scheduling triggers, not latency guarantees: rebuilds,
+checkpoints and queued writes take additional time. The deadline is not reset
+by incoming writes. One background builder creates a frozen generation while
+the writer continues accepting staged adds. The admission queue holds 32
+commands; full admission returns `429`. Snapshot capture and checkpoints still
+hold the mutable owner and can delay acknowledgements.
+Unpublished document accumulation is also bounded at 32,768 documents and returns
+`429` when admission would exceed it. In-memory services have the same publication
+contract but cannot promise restart durability.
+
+Full checkpoints run every 30 seconds and on explicit flush. Publication can
+reuse unchanged segments without rewriting the full persisted corpus each time.
+Checkpoint builds capture a journal boundary and matching records and index.
+After syncing that generation, the owner atomically retains only journal
+transactions after its captured boundary. Writes accepted during the build
+remain recoverable. Startup replays complete transaction lines
+idempotently and drops an interrupted final line. A remaining journal forces a
+rebuild, including when a crash left newer records alongside an older core.
+Committed journal corruption fails startup instead of silently dropping writes.
+
+`POST /flush` and `POST /v1/memories/refresh` capture a target revision and wait
+until it is published and checkpointed. The writer continues accepting later
+adds while building that generation. Deferred flush and visibility replies are
+bounded at 32; exceeding that limit returns `429` before accepting another write.
+SIGINT and SIGTERM drain HTTP requests and flush before
+shutdown. A killed process recovers acknowledged writes from its journal.
+Cancelling an HTTP request does not cancel a command already admitted to the writer.
+
+Use `?wait_for_visibility=true` on either add endpoint for immediate visibility
+and the existing final adjudication response. Idempotently retrying that request
+after publication also returns its final receipt. Synchronous library calls,
+hooks and provider-memory HTTP endpoints retain their immediate publication
+behavior; synchronous mutations checkpoint outstanding staged adds before
+returning, so a later restart cannot replay an add that was subsequently deleted.
+
+Configure the primary HTTP writer with:
+
+| Server option | Default | Meaning |
+|---|---:|---|
+| `--refresh-interval-ms` | 250 | Delay from the first pending add |
+| `--refresh-batch-size` | 512 | Pending documents that trigger publication |
+| `--checkpoint-interval-seconds` | 30 | Full checkpoint cadence |
+
+All values must be positive. Disk-backed staging requires a single process
+owner of the index root. It is not a distributed writer protocol; direct writes
+from a second process to the same root are unsupported. Use a dedicated `--index`
+root for the primary HTTP ingestion server and route its writes through that server.
+Source-document, record, and chunk-lifecycle maps are shared with copy-on-write
+between generations; temporal facts and semantic-relation metadata are still
+cloned at capture. Searches keep using the previous generation during a
+background build. Checkpoint serialization and file commits still hold the
+owner and can delay acceptance. Synchronous library/provider mutations wait
+for the active builder and checkpoint before returning.
 
 ## Recommended Rule
 
@@ -253,15 +333,26 @@ Current behavior:
   insufficient.
 - Empty or low-signal routes execute a bounded deterministic fallback, and
   diagnostics report the segments actually executed.
-- `MemoryService::search` reads the latest complete generation from the
-  store's cached snapshot while writers hold the write lock only for the
-  mutation plus refresh.
-
-The implementation still rebuilds a complete semantic generation during
-`IndexStore::refresh()`; it does not update semantic postings in place or write
-independent binary cores per segment. Those optimizations should be driven by
-benchmark evidence and preserve atomic generation publication.
+- The primary HTTP server stages adds and schedules publication through one
+  writer. Searches retain a detached `MemoryService` view and its immutable
+  snapshot independently of the mutable owner lock.
+- Segmented refreshes rebuild affected segments and share unchanged segment
+  indexes. Single-index refreshes rebuild that index. Publication replaces the
+  complete generation atomically; query postings are not mutated in place.
+- Full checkpoints persist records, lifecycle metadata and the binary core.
+  Scheduled publications defer that corpus-wide persistence until checkpoint.
 
 Operational metrics that remain useful include segment count, selected segment
 IDs, routed relevant-segment recall, snapshot generation, build duration, and
 query latency by routing mode.
+
+## Validation of staged writes
+
+`cargo test --lib` passed all 808 tests after this change. New coverage exercises
+journal replay, incomplete tails, committed corruption, interrupted checkpoints,
+symlink refusal, final receipt completion, deletion without resurrection,
+concurrent adds, retained read generations, reads during a held owner lock,
+publication during continuous writes, cancellation and bounded queue admission.
+An HTTP test covers staged acknowledgement, flush, immediate-visibility retries
+and user isolation. The release server built successfully, and the uv MkDocs
+build and three generated-site tests passed.

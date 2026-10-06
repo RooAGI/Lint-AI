@@ -6,12 +6,10 @@ use crate::semantic_relations::SupersessionOptions;
 use crate::source::SourceDocument;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tantivy::directory::Directory;
 
 fn sample_doc(id: &str, content: &str) -> SourceDocument {
     SourceDocument {
@@ -594,6 +592,24 @@ fn refresh_is_idempotent_when_no_documents_change() {
 }
 
 #[test]
+fn publication_view_shares_corpus_maps_and_copy_on_write_keeps_it_frozen() {
+    let mut store = IndexStore::in_memory(PipelineOptions::default());
+    store.upsert(sample_doc("first", "initial published content"));
+    store.refresh().unwrap();
+
+    let view = store.published_read_view();
+    assert!(store.publication_maps_shared_with(&view));
+
+    store.upsert(sample_doc("second", "new mutable content"));
+    store.refresh().unwrap();
+
+    assert!(store.source_document_by_id("second").is_some());
+    assert!(view.source_document_by_id("second").is_none());
+    assert!(store.record_by_id("second").is_some());
+    assert!(view.record_by_id("second").is_none());
+}
+
+#[test]
 fn incremental_refresh_matches_full_rebuild() {
     fn segmented_options() -> PipelineOptions {
         PipelineOptions {
@@ -762,6 +778,52 @@ fn incremental_refresh_matches_full_rebuild() {
 }
 
 #[test]
+fn failed_segment_build_retains_prepared_changes_for_retry() {
+    let options = PipelineOptions {
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: 8,
+            routing_strategy: SegmentRoutingStrategy::SparseOverlap,
+        },
+        ..PipelineOptions::default()
+    };
+    let mut store = IndexStore::new(options);
+    store.upsert(sample_doc("initial", "initial stable memory"));
+    store.refresh().unwrap();
+    let mut valid = sample_doc("valid", "quartz successful new memory");
+    valid.group_id = Some("valid-group".into());
+    store.upsert(valid);
+    let mut invalid = sample_doc("invalid", "invalid segment memory");
+    invalid.group_id = Some(String::new());
+    store.upsert(invalid.clone());
+    assert!(store.refresh().is_err());
+    // Preparation succeeded, but no generation was published. Only fix the
+    // invalid record: the already prepared valid record must still be included.
+    invalid.group_id = Some("fixed-group".into());
+    store.upsert(invalid);
+    store.refresh().unwrap();
+    let Some(MemoryIndexSnapshot::Segmented(snapshot)) = store.memory_index_snapshot() else {
+        panic!("expected segmented snapshot");
+    };
+    let ids = snapshot
+        .segments
+        .iter()
+        .flat_map(|s| s.doc_ids.iter().cloned())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        ids,
+        ["initial", "valid", "invalid"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    );
+    assert!(store
+        .query("quartz", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.doc_id == "valid"));
+}
+
+#[test]
 fn index_store_remove_deletes_lexical_doc() {
     let mut index = IndexStore::new(PipelineOptions::default());
     index.upsert(sample_doc("doc-1", "redis cache operations"));
@@ -775,7 +837,7 @@ fn index_store_remove_deletes_lexical_doc() {
 }
 
 #[test]
-fn index_store_with_lexical_dir_persists_queries_across_instances() {
+fn index_store_persists_searchable_state_across_instances() {
     let index_root = unique_temp_dir("lexical-root");
     let options = PipelineOptions {
         index_location: IndexLocation::Explicit(index_root.clone()),
@@ -800,7 +862,7 @@ fn index_store_with_lexical_dir_persists_queries_across_instances() {
 }
 
 #[test]
-fn opening_persistent_index_does_not_rewrite_lexical_documents() {
+fn opening_persistent_index_does_not_create_a_redundant_lexical_index() {
     let index_root = unique_temp_dir("read-only-open");
     let options = PipelineOptions {
         index_location: IndexLocation::Explicit(index_root.clone()),
@@ -812,70 +874,13 @@ fn opening_persistent_index_does_not_rewrite_lexical_documents() {
     first.refresh().unwrap();
     drop(first);
 
-    let lexical_dir = index_root.join("lexical");
-    let read_opstamp = || {
-        let metadata: serde_json::Value =
-            serde_json::from_slice(&fs::read(lexical_dir.join("meta.json")).unwrap()).unwrap();
-        metadata["opstamp"].as_u64().unwrap()
-    };
-    let before_open = read_opstamp();
-
     let reopened = IndexStore::at_path(&index_root, options).unwrap();
-    assert!(!reopened.is_empty(), "persisted store should load");
+    assert!(!reopened.is_empty(), "persisted semantic store should load");
     drop(reopened);
-
-    assert_eq!(
-        read_opstamp(),
-        before_open,
-        "opening an unchanged persistent store must not commit Tantivy writes"
+    assert!(
+        !index_root.join("lexical").exists(),
+        "IndexStore should not create a second Tantivy index"
     );
-    let _ = fs::remove_dir_all(index_root);
-}
-
-#[test]
-fn index_store_recovers_from_orphaned_tantivy_delete_file() {
-    let index_root = unique_temp_dir("orphan-delete-file");
-    let options = PipelineOptions {
-        index_location: IndexLocation::Explicit(index_root.clone()),
-        ..PipelineOptions::default()
-    };
-
-    let mut first = IndexStore::at_path(&index_root, options.clone())
-        .expect("explicit-path store should initialize");
-    first.upsert(sample_doc("doc-1", "orphaned delete recovery"));
-    first.refresh().expect("initial index should build");
-
-    let lexical_dir = index_root.join("lexical");
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&fs::read(lexical_dir.join("meta.json")).unwrap()).unwrap();
-    let next_opstamp = metadata["opstamp"].as_u64().unwrap() + 1;
-    let segment_id = metadata["segments"][0]["segment_id"]
-        .as_str()
-        .unwrap()
-        .replace('-', "");
-    let orphaned_delete = lexical_dir.join(format!("{segment_id}.{next_opstamp}.del"));
-    let tantivy_index = tantivy::Index::open_in_dir(&lexical_dir).unwrap();
-    let mut orphan = tantivy_index
-        .directory()
-        .open_write(Path::new(orphaned_delete.file_name().unwrap()))
-        .unwrap();
-    orphan
-        .write_all(b"left behind by an unpublished commit")
-        .unwrap();
-    orphan.flush().unwrap();
-    drop(orphan);
-    drop(tantivy_index);
-
-    first.remove("doc-1");
-    first
-        .refresh()
-        .expect("orphaned delete file must not block the next index commit");
-
-    assert!(!orphaned_delete.exists(), "orphan should be collected");
-    assert!(first
-        .query("orphaned delete recovery", 5)
-        .unwrap()
-        .is_empty());
     let _ = fs::remove_dir_all(index_root);
 }
 
@@ -903,14 +908,15 @@ fn resolve_store_paths_under_corpus_root() {
 }
 
 #[test]
-fn index_store_for_corpus_uses_corpus_local_lexical_dir() {
+fn index_store_for_corpus_uses_corpus_local_semantic_store() {
     let corpus_root = unique_temp_dir("corpus-store");
     let mut index = IndexStore::for_corpus(&corpus_root, PipelineOptions::default())
         .expect("corpus-backed store should initialize");
     index.upsert(sample_doc("doc-1", "corpus rooted lexical index"));
     let results = index.query("lexical", 5).expect("query should succeed");
     assert!(!results.is_empty());
-    assert!(corpus_root.join(".lint-ai").join("lexical").exists());
+    assert!(corpus_root.join(".lint-ai").join("semantic").exists());
+    assert!(!corpus_root.join(".lint-ai").join("lexical").exists());
     let _ = fs::remove_dir_all(corpus_root.join(".lint-ai"));
 }
 
@@ -1254,7 +1260,7 @@ fn reveals_bug_fixed_candidate_window_returns_fewer_than_top_k_current_results()
 }
 
 #[test]
-fn index_store_does_not_delete_invalid_lexical_directory() {
+fn index_store_ignores_and_preserves_legacy_lexical_directory() {
     let index_root = unique_temp_dir("invalid-lexical-dir");
     let lexical_dir = index_root.join("lexical");
     fs::create_dir_all(&lexical_dir).expect("lexical dir should be creatable");
@@ -1262,7 +1268,7 @@ fn index_store_does_not_delete_invalid_lexical_directory() {
     fs::write(&sentinel, "do not delete").expect("sentinel file should be writable");
 
     let result = IndexStore::at_path(&index_root, PipelineOptions::default());
-    assert!(result.is_err());
+    assert!(result.is_ok());
     assert!(sentinel.exists());
 
     let _ = fs::remove_dir_all(index_root);

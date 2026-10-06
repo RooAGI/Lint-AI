@@ -135,6 +135,9 @@ pub(crate) struct SemanticAggregate {
     pub claim_to_docs: HashMap<String, Vec<TermPosting>>,
     pub topic_to_docs: HashMap<String, Vec<String>>,
     pub doc_type_to_docs: HashMap<String, Vec<String>>,
+    pub pending_entity_posting_keys: HashSet<String>,
+    pub pending_term_posting_keys: HashSet<String>,
+    pub pending_claim_posting_keys: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,6 +356,12 @@ pub struct MemoryIndex {
     pub(crate) doc_rerank_texts: Vec<String>,
     #[serde(skip_serializing)]
     pub(crate) doc_rerank_tokens: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub(crate) doc_topic_tokens: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub(crate) doc_type_tokens: Vec<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub(crate) doc_claim_tokens: Vec<Vec<Vec<String>>>,
     #[serde(skip_serializing)]
     pub(crate) doc_has_number: Vec<bool>,
     #[serde(skip_serializing)]

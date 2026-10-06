@@ -3,8 +3,8 @@ use super::{
     compute_corpus_fingerprint, debug_phrase_matches, export_chunk_graph_cytoscape_html,
     export_chunk_graph_dot, export_chunk_graph_json, export_entity_graph_cytoscape_html,
     export_entity_graph_dot, export_entity_graph_json, export_graph_cytoscape_html,
-    export_graph_dot, export_graph_json, export_ontology_json, graph_to_source_documents,
-    load_cached_query_index, query_cache_lexical_dir, save_cached_query_index,
+    export_graph_dot, export_graph_json, export_ontology_json, load_cached_query_index,
+    memory_index_pipeline_options, query_cache_lexical_dir, save_cached_query_index,
     show_concepts_by_section, show_tier1_entities, show_tier1_terms, write_tier0_index,
     CacheSettings, QueryOutput, DEFAULT_QUERY_TOP_K, LLM_CONTEXT_CANDIDATE_TOP_K, MAX_RESULT_COUNT,
 };
@@ -372,6 +372,45 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return run_openclaw_hook(kind, Path::new(&args.path));
     }
 
+    #[cfg(feature = "roo-runtime")]
+    if let Some(hook) = args.roo_runtime_hook {
+        return crate::integrations::roo_runtime::run_hook(hook);
+    }
+
+    #[cfg(feature = "roo-runtime")]
+    if args.roo_runtime_serve {
+        let cfg = load_config(
+            args.config.as_deref(),
+            &args.path,
+            args.strict_config,
+            args.max_config_bytes,
+        )
+        .map_err(|err| anyhow::anyhow!(err))?;
+        crate::integrations::gemini_cli::run_server_for(
+            Path::new(&args.path),
+            crate::integrations::session_recording::RecordingProvider::RooRuntime,
+            "rooagi_runtime",
+            "Roo Runtime",
+            crate::integrations::gemini_cli::GeminiCliServerOptions {
+                max_bytes: args.max_bytes,
+                max_files: args.max_files,
+                max_depth: args.max_depth,
+                max_total_bytes: args.max_total_bytes,
+                ignore_paths: &cfg.ignore_paths,
+            },
+        )?;
+        return Ok(());
+    }
+
+    #[cfg(feature = "roo-runtime")]
+    if args.roo_runtime_install {
+        let written = crate::integrations::roo_runtime::install_hooks(
+            args.roo_runtime_config.as_deref().map(Path::new),
+        )?;
+        println!("Wrote Roo Runtime hooks to {}", written.display());
+        return Ok(());
+    }
+
     #[cfg(feature = "claude-code")]
     if args.claude_code_install {
         let written = install_memory_skill(Path::new(&args.path), args.claude_code_force_skill)?;
@@ -708,17 +747,6 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 graph.pages.iter().map(|p| p.rel_path.clone()).collect();
             graph.tier0_records.retain(|r| retained.contains(&r.source));
         }
-        let source_docs = graph_to_source_documents(&graph);
-        let semantic_relations =
-            crate::semantic_relations::SemanticRelationStore::try_from_documents(
-                source_docs.iter(),
-                crate::semantic_relations::SupersessionOptions::default(),
-            )?;
-        let document_ids = source_docs
-            .iter()
-            .map(|doc| doc.doc_id.clone())
-            .collect::<Vec<_>>();
-
         let index = if let Some(cached) =
             load_cached_query_index(&cache_settings, &corpus_fingerprint)
         {
@@ -743,6 +771,19 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             }
             built
         };
+        let query_options = memory_index_pipeline_options(
+            &args.tier1_ner_provider,
+            &args.spacy_model,
+            &args.tier1_term_ranker,
+            &args.chunk_strategy,
+            args.chunk_lines,
+            args.chunk_overlap,
+            args.chunk_target_tokens,
+            args.chunk_max_tokens,
+            &args.lang,
+            Some(&lexical_dir),
+        );
+        let mut service = crate::MemoryService::from_query_index(index, query_options)?;
         let query_value = args.llm_context.as_deref().or(args.query.as_deref());
         if let Some(query) = query_value {
             let started = Instant::now();
@@ -751,18 +792,19 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             if args.llm_context.is_some() {
                 let requested = args.result_count.clamp(1, MAX_RESULT_COUNT);
                 let candidate_top_k = requested.max(LLM_CONTEXT_CANDIDATE_TOP_K);
-                let candidate_results = prepared
-                    .execute_on_index_with_semantics(
-                        &index,
-                        candidate_top_k,
-                        None,
-                        &semantic_relations,
-                        &document_ids,
-                    )
-                    .0;
+                let candidate_results = service.search_with_filters(
+                    query,
+                    "cli",
+                    None,
+                    candidate_top_k,
+                    &Default::default(),
+                )?;
                 let elapsed_ms = started.elapsed().as_millis();
+                let index = service
+                    .query_index()
+                    .expect("CLI query service owns a single index snapshot");
                 let payload = build_llm_context_output(
-                    &index,
+                    index,
                     query,
                     &args.path,
                     elapsed_ms,
@@ -785,18 +827,19 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 }
             } else {
-                let results = prepared
-                    .execute_on_index_with_semantics(
-                        &index,
-                        DEFAULT_QUERY_TOP_K,
-                        None,
-                        &semantic_relations,
-                        &document_ids,
-                    )
-                    .0;
+                let results = service.search_with_filters(
+                    query,
+                    "cli",
+                    None,
+                    DEFAULT_QUERY_TOP_K,
+                    &Default::default(),
+                )?;
                 let elapsed_ms = started.elapsed().as_millis();
+                let index = service
+                    .query_index()
+                    .expect("CLI query service owns a single index snapshot");
                 let aggregation =
-                    build_aggregate_output(&index, query, &results, DEFAULT_QUERY_TOP_K);
+                    build_aggregate_output(index, query, &results, DEFAULT_QUERY_TOP_K);
                 let payload = QueryOutput {
                     query: query.to_string(),
                     elapsed_ms,

@@ -76,8 +76,7 @@ fn semantic_policy_hides_automatically_superseded_documents_and_exposes_history(
             None,
         ),
     ];
-    let mut index =
-        crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
+    let mut index = crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
 
     let current = index.query("who owns the control surface", 10).unwrap();
     assert!(current
@@ -128,8 +127,7 @@ fn reveals_bug_superseded_claim_hides_unrelated_current_content() {
             None,
         ),
     ];
-    let mut index =
-        crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
+    let mut index = crate::IndexStore::with_documents(crate::PipelineOptions::default(), documents);
 
     let results = index.query("blue-green deployment strategy", 10).unwrap();
 
@@ -175,10 +173,8 @@ fn reveals_bug_operational_before_query_exposes_superseded_guidance() {
         .insert("supersedes_id".to_string(), old.doc_id.clone());
     let legacy_id = old.doc_id.clone();
     let current_id = current.doc_id.clone();
-    let mut index = crate::IndexStore::with_documents(
-        crate::PipelineOptions::default(),
-        vec![old, current],
-    );
+    let mut index =
+        crate::IndexStore::with_documents(crate::PipelineOptions::default(), vec![old, current]);
 
     let results = index
         .query("what must happen before deployment", 10)

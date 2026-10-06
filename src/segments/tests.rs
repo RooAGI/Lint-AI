@@ -132,6 +132,87 @@ fn normalized_catalog(catalog: &SegmentCatalog) -> String {
 }
 
 #[test]
+fn changed_membership_matches_full_rebuild_across_moves_and_deletes() {
+    let initial = vec![
+        record("keep", "stable", "alpha stable", &["alpha"]),
+        record("move", "old", "beta old", &["beta"]),
+        record("delete", "removed", "gamma removed", &["gamma"]),
+    ];
+    let mut snapshot = SegmentedMemoryIndex::from_records_by_group_id(&initial);
+    let stable = snapshot
+        .segments
+        .iter()
+        .find(|s| s.segment_id == "stable")
+        .unwrap()
+        .index
+        .clone();
+    let mut records = initial
+        .into_iter()
+        .map(|r| (r.doc_id.clone(), r))
+        .collect::<HashMap<_, _>>();
+    let steps = vec![
+        (
+            vec![
+                record("move", "new", "beta changed", &["beta"]),
+                record("added", "new", "delta new", &["delta"]),
+            ],
+            vec!["delete"],
+        ),
+        (vec![], vec!["move", "added"]),
+        (
+            vec![record("move", "old", "epsilon restored", &["epsilon"])],
+            vec![],
+        ),
+        (vec![], vec!["missing"]),
+    ];
+    for (step, (upserts, deletes)) in steps.into_iter().enumerate() {
+        let mut changed = HashSet::new();
+        for record in upserts {
+            changed.insert(record.doc_id.clone());
+            records.insert(record.doc_id.clone(), record);
+        }
+        for id in deletes {
+            changed.insert(id.to_string());
+            records.remove(id);
+        }
+        let generation = step as u64 + 1;
+        snapshot = SegmentedMemoryIndex::refresh_changed(&snapshot, &records, &changed, generation)
+            .unwrap();
+        let oracle = SegmentedMemoryIndex::from_records_by_group_id_with_generation(
+            &records.values().cloned().collect::<Vec<_>>(),
+            generation,
+        );
+        assert_eq!(
+            normalized_catalog(&snapshot.catalog),
+            normalized_catalog(&oracle.catalog)
+        );
+        assert_eq!(
+            snapshot.catalog.derived_maps_snapshot(),
+            oracle.catalog.derived_maps_snapshot()
+        );
+        assert_eq!(
+            serde_json::to_value(snapshot.manifest()).unwrap(),
+            serde_json::to_value(oracle.manifest()).unwrap()
+        );
+        for query in ["alpha", "beta", "gamma", "delta", "epsilon"] {
+            assert_eq!(
+                projected_results(&snapshot.query(query, 5, 8)),
+                projected_results(&oracle.query(query, 5, 8))
+            );
+        }
+        assert!(Arc::ptr_eq(
+            &stable,
+            &snapshot
+                .segments
+                .iter()
+                .find(|s| s.segment_id == "stable")
+                .unwrap()
+                .index
+        ));
+    }
+}
+
+#[test]
 fn refresh_incremental_reuses_only_untouched_segments() {
     let records = vec![
         record("keep-1", "keep", "keep alpha", &["alpha"]),

@@ -1,5 +1,6 @@
 mod build;
 mod config;
+pub(crate) mod file_access;
 pub(crate) mod persistence;
 mod store;
 mod watcher;

@@ -1,0 +1,181 @@
+{
+  "benchmark": "single-segment-internal-query-profile",
+  "date": "2026-10-04",
+  "records": 23366,
+  "segments": 1,
+  "routed_segments": 1,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 3,
+  "query_cache": "disabled",
+  "profile_env": "LINT_AI_QUERY_TIMINGS=1",
+  "mode": "segment with --sessions 1",
+  "throughput": {
+    "c1": {
+      "throughput_median_req_s": 355.95,
+      "p50_median_ms": 2.772,
+      "runs": [
+        {
+          "throughput_req_s": 356.92,
+          "p50_ms": 2.779
+        },
+        {
+          "throughput_req_s": 355.95,
+          "p50_ms": 2.772
+        },
+        {
+          "throughput_req_s": 355.11,
+          "p50_ms": 2.766
+        }
+      ]
+    },
+    "c10": {
+      "throughput_median_req_s": 1916.25,
+      "p50_median_ms": 4.792,
+      "runs": [
+        {
+          "throughput_req_s": 1916.25,
+          "p50_ms": 4.792
+        },
+        {
+          "throughput_req_s": 1892.88,
+          "p50_ms": 4.799
+        },
+        {
+          "throughput_req_s": 2031.76,
+          "p50_ms": 4.201
+        }
+      ]
+    }
+  },
+  "index_timing_medians_ms": {
+    "total": 0.775,
+    "parse": 0.002,
+    "sparse_setup": 0.0,
+    "sparse": 0.198,
+    "lexical": 0.048,
+    "posting": 0.151,
+    "accumulate": 0.416,
+    "metadata": 0.416,
+    "rank": 0.032,
+    "graph": 0.0,
+    "entity_graph": 0.006,
+    "sequence": 0.011,
+    "evidence": 0.0,
+    "group_build": 0.062,
+    "group_sort": 0.0
+  },
+  "median_candidate_count": 2404,
+  "timing_samples": 660,
+  "interpretation": "Metadata scoring over existing candidates is the strongest measured improvement target. candidate_accumulation_ms currently starts immediately before metadata_ms and both stop after the metadata loop, so these values overlap and must not be added. The loop materializes candidate IDs and then relooks up each candidate with HashMap::entry; iterating candidates mutably can remove that Vec allocation and redundant map access. A further breakdown is needed before changing topic, doc-type, or claim scoring.",
+  "candidate_metadata_iteration_experiment": {
+    "change": "Iterate candidates.iter_mut() directly instead of collecting candidate IDs into a Vec and re-looking up each entry.",
+    "before_full_sort": {
+      "c1": {
+        "throughput_median_req_s": 355.95,
+        "p50_median_ms": 2.772,
+        "runs": [
+          {
+            "throughput_req_s": 356.92,
+            "p50_ms": 2.779
+          },
+          {
+            "throughput_req_s": 355.95,
+            "p50_ms": 2.772
+          },
+          {
+            "throughput_req_s": 355.11,
+            "p50_ms": 2.766
+          }
+        ]
+      },
+      "c10": {
+        "throughput_median_req_s": 1916.25,
+        "p50_median_ms": 4.792,
+        "runs": [
+          {
+            "throughput_req_s": 1916.25,
+            "p50_ms": 4.792
+          },
+          {
+            "throughput_req_s": 1892.88,
+            "p50_ms": 4.799
+          },
+          {
+            "throughput_req_s": 2031.76,
+            "p50_ms": 4.201
+          }
+        ]
+      }
+    },
+    "after_direct_iteration": {
+      "c1": {
+        "throughput_median_req_s": 359.86,
+        "p50_median_ms": 2.717,
+        "runs": [
+          {
+            "throughput_req_s": 362.73,
+            "p50_ms": 2.717
+          },
+          {
+            "throughput_req_s": 356.21,
+            "p50_ms": 2.713
+          },
+          {
+            "throughput_req_s": 359.86,
+            "p50_ms": 2.744
+          }
+        ]
+      },
+      "c10": {
+        "throughput_median_req_s": 1772.57,
+        "p50_median_ms": 5.182,
+        "runs": [
+          {
+            "throughput_req_s": 1857.03,
+            "p50_ms": 4.651
+          },
+          {
+            "throughput_req_s": 1772.57,
+            "p50_ms": 5.339
+          },
+          {
+            "throughput_req_s": 1683.34,
+            "p50_ms": 5.182
+          }
+        ]
+      }
+    },
+    "index_timing_after_ms": {
+      "total": 0.747,
+      "metadata_and_overlapping_accumulation": 0.391,
+      "candidate_rank": 0.032,
+      "candidate_count": 2403
+    },
+    "assessment": "The metadata loop timing fell from 0.416 ms to 0.391 ms median. End-to-end throughput was mixed: C1 increased slightly while C10 decreased in this three-run sample. Treat the throughput result as inconclusive; the change removes one temporary candidate-ID vector and a redundant candidate-map lookup per candidate, but has not demonstrated a reliable throughput gain."
+  },
+  "metadata_substage_profile": {
+    "env": "LINT_AI_QUERY_METADATA_TIMINGS=1",
+    "sampling": "One candidate in every 64 was timed for each substage; 660 timing rows across three repetitions.",
+    "median_candidates": 2402,
+    "median_sampled_candidates_per_query": 38,
+    "mean_sampled_ns_per_candidate": {
+      "candidate_resolution": 123.9,
+      "topic": 48.4,
+      "doc_type": 19.7,
+      "claim": 14.1
+    },
+    "interpretation": "Candidate resolution (doc_u32_to_id and docs lookups) was the largest sampled substage, followed by topic scoring; document-type and claim scoring were smaller. These are sampled directional timings, not CPU percentages. Per-stage estimates do not sum cleanly to metadata_ms because sampled timers add overhead and are aggregated separately.",
+    "profiled_throughput": {
+      "c1": {
+        "throughput_median_req_s": 361.78,
+        "p50_median_ms": 2.724
+      },
+      "c10": {
+        "throughput_median_req_s": 1895.63,
+        "p50_median_ms": 4.63
+      }
+    },
+    "note": "Throughput in this profile includes metadata substage sampling overhead and should not be compared to uninstrumented runs."
+  }
+}

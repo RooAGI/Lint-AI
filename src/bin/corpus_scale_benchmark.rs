@@ -1,8 +1,8 @@
 //! Measure retrieval build/query behavior as the LongMemEval corpus grows.
 
+use crate::{build_query_snapshot, PipelineOptions, SourceDocument, TemporalQueryContext};
 use anyhow::{Context, Result};
 use clap::Parser;
-use crate::{build_query_snapshot, PipelineOptions, SourceDocument, TemporalQueryContext};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fs;

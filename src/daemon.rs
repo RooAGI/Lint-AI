@@ -10,10 +10,10 @@
 //! `--serve` mode (e.g. bekind): the daemon only moves lines, argv[0] is
 //! the executable.
 //!
-//! Fail-open by construction: every failure mode (missing executable,
-//! spawn failure, dead child, timeout, bad output, lock contention) yields
-//! `None`, and callers fall back to a one-shot subprocess exactly as
-//! before. The daemon is a latency optimization only; it never changes
+//! Fail-open by construction: missing executables, spawn failures, dead
+//! children, timeouts, and bad output are reported to the typed caller.
+//! Contending requests wait for the in-flight request up to their timeout;
+//! callers decide how to handle a timeout. The daemon never changes
 //! judgment or extraction semantics.
 //!
 //! Typed wrappers own their protocol: `crate::segments::extractor_daemon`
@@ -54,13 +54,12 @@ struct DaemonMutable {
     responses: Option<mpsc::Receiver<String>>,
 }
 
-/// Query failure mode: distinguishes lock contention ("busy, try the
-/// fallback") from actual daemon failure (timeout, dead child, write
-/// error). Callers that track backend health (cooldowns, circuit
-/// breakers) should only penalize `Failed`, not `Busy`.
+/// Query failure mode. `Busy` means the request's deadline expired while
+/// waiting for another request to finish. Callers that track backend health
+/// should only penalize `Failed`, not `Busy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryStatus {
-    /// Another request holds the daemon lock; the daemon itself is fine.
+    /// The request deadline expired while another request held the daemon.
     Busy,
     /// The daemon failed: write error, timeout, or dead child.
     Failed,
@@ -107,18 +106,16 @@ impl JsonLinesDaemon {
     }
 
     /// Start the child now so the first real request does not pay the spawn
-    /// cost. Best-effort: failures are silent; requests fall back to the
-    /// one-shot subprocess.
+    /// cost. Best-effort: failures are silent; the typed caller decides how
+    /// to handle a later request failure.
     pub fn prewarm(&self) {
         if let Ok(mut mutable) = self.inner.mutable.lock() {
             let _ = mutable.ensure_running(self.inner.name, &self.inner.argv);
         }
     }
 
-    /// Send one request line, return the raw response line. Returns `None`
-    /// on any failure (including lock contention — the daemon is a fast
-    /// path, never a queue); the caller falls back to a one-shot
-    /// subprocess.
+    /// Send one request line and return the raw response line. Returns
+    /// `None` when the daemon request fails or its deadline expires.
     pub fn query(&self, request_line: &str, timeout: Duration) -> Option<String> {
         self.query_with_status(request_line, timeout).ok()
     }
@@ -132,14 +129,34 @@ impl JsonLinesDaemon {
         request_line: &str,
         timeout: Duration,
     ) -> Result<String, QueryStatus> {
-        // Fast path only: never block behind another in-flight request.
-        let mut mutable = match self.inner.mutable.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err(QueryStatus::Busy),
+        // The child speaks one request/response at a time. Give the current
+        // request a chance to finish instead of dropping semantic work on
+        // the first sign of contention. Charge queue time against the same
+        // end-to-end timeout so contention cannot extend the caller's
+        // deadline. Sleep briefly between attempts to avoid a busy loop.
+        let deadline = std::time::Instant::now() + timeout;
+        let mut mutable = loop {
+            match self.inner.mutable.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(QueryStatus::Failed);
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        return Err(QueryStatus::Busy);
+                    }
+                    std::thread::sleep(remaining.min(Duration::from_millis(1)));
+                }
+            }
         };
         mutable
             .ensure_running(self.inner.name, &self.inner.argv)
             .ok_or(QueryStatus::Failed)?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(QueryStatus::Busy);
+        }
         if mutable.write_line(request_line).is_err() {
             mutable.kill();
             return Err(QueryStatus::Failed);
@@ -147,7 +164,7 @@ impl JsonLinesDaemon {
         match mutable
             .responses
             .as_ref()
-            .and_then(|rx| rx.recv_timeout(timeout).ok())
+            .and_then(|rx| rx.recv_timeout(remaining).ok())
         {
             Some(line) => Ok(line),
             None => {

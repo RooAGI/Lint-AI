@@ -8,11 +8,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--url", default="http://127.0.0.1:8080/add")
 parser.add_argument("--count", type=int, default=23366)
 parser.add_argument("--batch-size", type=int, default=512)
+parser.add_argument("--sessions", type=int, default=1,
+                    help="spread batches across this many session groups")
 parser.add_argument("--bulk", action="store_true",
                     help="send all bounded add requests through /add/batch")
 args = parser.parse_args()
 if args.batch_size < 1 or args.batch_size > 1024:
     raise SystemExit("--batch-size must be between 1 and 1024")
+if args.sessions < 1:
+    raise SystemExit("--sessions must be positive")
 requests = []
 for batch_start in range(0, args.count, args.batch_size):
     batch_end = min(args.count, batch_start + args.batch_size)
@@ -21,7 +25,7 @@ for batch_start in range(0, args.count, args.batch_size):
                 for i in range(batch_start, batch_end)]
     request = {"request_id": f"comparison-seed-{batch_start}",
                        "messages": messages, "user_id": "bench-user",
-                       "session_id": "bench-session"}
+                       "session_id": f"bench-session-{(batch_start // args.batch_size) % args.sessions}"}
     if args.bulk:
         requests.append(request)
         continue
@@ -40,4 +44,10 @@ if args.bulk:
         with urllib.request.urlopen(req, timeout=300) as response:
             if response.status != 200:
                 raise SystemExit(f"bulk seed failed: HTTP {response.status}")
+base_url = args.url[:-4] if args.url.endswith("/add") else args.url.rstrip("/")
+flush = urllib.request.Request(base_url + "/v1/memories/refresh", data=b"{}",
+                               headers={"Content-Type": "application/json"}, method="POST")
+with urllib.request.urlopen(flush, timeout=300) as response:
+    if response.status != 204:
+        raise SystemExit(f"seed flush failed: HTTP {response.status}")
 print(args.count)

@@ -171,6 +171,13 @@ impl ConversationStateStore {
     /// dispatch reads it back as the default session when the caller did not
     /// pass `session_id` explicitly.
     fn current_session_pointer_path(&self, provider: &str) -> Option<PathBuf> {
+        if provider.is_empty()
+            || !provider
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        {
+            return None;
+        }
         self.dir
             .as_ref()
             .map(|dir| dir.join(format!("current_session.{provider}.json")))
@@ -200,14 +207,10 @@ impl ConversationStateStore {
         })) else {
             return;
         };
-        let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, &bytes).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-            return;
-        }
-        if std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+        let _ = crate::pipeline::persistence::write_text_file_atomic(
+            &path,
+            &String::from_utf8_lossy(&bytes),
+        );
     }
 
     /// Read back the session most recently marked active for `provider`, or
@@ -267,7 +270,6 @@ impl ConversationStateStore {
             return None;
         }
         if state.is_expired(now_ms) {
-            let _ = std::fs::remove_file(&path);
             return None;
         }
         Some(state)
@@ -287,14 +289,47 @@ impl ConversationStateStore {
         };
         // Atomic write: temp file + rename. A crash mid-write leaves the
         // previous complete file (or nothing) behind, never a torn one.
-        let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, &bytes).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-            return;
-        }
-        if std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+        let _ = crate::pipeline::persistence::write_text_file_atomic(
+            &path,
+            &String::from_utf8_lossy(&bytes),
+        );
+    }
+
+    /// Serialize session read/modify/write across independently opened services
+    /// and processes. The kernel releases this lock on holder death.
+    fn session_lock(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> std::io::Result<Option<std::fs::File>> {
+        let Some(path) = self.session_path(user_id, session_id) else {
+            return Ok(None);
+        };
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path.with_extension("lock"))?;
+        file.lock()?;
+        Ok(Some(file))
+    }
+
+    fn remove_expired_file(&self, user_id: &str, session_id: &str, now_ms: u64) -> bool {
+        let Ok(_lock) = self.session_lock(user_id, session_id) else {
+            return false;
+        };
+        let Some(path) = self.session_path(user_id, session_id) else {
+            return false;
+        };
+        let expired = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<ConversationState>(&bytes).ok())
+            .is_some_and(|s| {
+                s.user_id == user_id && s.session_id == session_id && s.is_expired(now_ms)
+            });
+        expired && std::fs::remove_file(path).is_ok()
     }
 
     /// Load the state for a session, or `None` when there is no live state.
@@ -306,6 +341,9 @@ impl ConversationStateStore {
         now_ms: u64,
     ) -> Option<&ConversationState> {
         let key = (user_id.to_string(), session_id.to_string());
+        if self.dir.is_some() {
+            self.states.remove(&key);
+        }
         if !self.states.contains_key(&key) {
             if let Some(state) = self.load_from_disk(user_id, session_id, now_ms) {
                 self.states.insert(key.clone(), state);
@@ -320,9 +358,6 @@ impl ConversationStateStore {
         if expired {
             self.states.remove(&key);
             self.access_order.retain(|k| k != &key);
-            if let Some(path) = self.session_path(user_id, session_id) {
-                let _ = std::fs::remove_file(path);
-            }
             return None;
         }
         if self.states.contains_key(&key) {
@@ -349,6 +384,13 @@ impl ConversationStateStore {
             return;
         }
         let key = (user_id.to_string(), session_id.to_string());
+        let Ok(_lock) = self.session_lock(user_id, session_id) else {
+            // Session context is best-effort; never overwrite unlocked state.
+            return;
+        };
+        if self.dir.is_some() {
+            self.states.remove(&key);
+        }
         if !self.states.contains_key(&key) {
             let state = self
                 .load_from_disk(user_id, session_id, now_ms)
@@ -381,9 +423,7 @@ impl ConversationStateStore {
             if expired {
                 self.states.remove(&key);
                 self.access_order.retain(|k| k != &key);
-                if let Some(path) = self.session_path(&key.0, &key.1) {
-                    let _ = std::fs::remove_file(path);
-                }
+                self.remove_expired_file(&key.0, &key.1, now_ms);
                 dropped += 1;
             }
         }
@@ -398,9 +438,14 @@ impl ConversationStateStore {
                     let expired = std::fs::read(&path)
                         .ok()
                         .and_then(|bytes| serde_json::from_slice::<ConversationState>(&bytes).ok())
-                        .is_some_and(|state| state.is_expired(now_ms));
-                    if expired {
-                        if std::fs::remove_file(&path).is_ok() {
+                        .filter(|state| state.is_expired(now_ms));
+                    if let Some(state) = expired {
+                        if self
+                            .session_path(&state.user_id, &state.session_id)
+                            .as_ref()
+                            == Some(&path)
+                            && self.remove_expired_file(&state.user_id, &state.session_id, now_ms)
+                        {
                             dropped += 1;
                         }
                     }
@@ -423,6 +468,116 @@ mod tests {
 
     fn ms() -> u64 {
         1_700_000_000_000
+    }
+
+    #[test]
+    fn disk_session_updates_preserve_turns_from_stale_instances() {
+        let dir = pointer_test_dir("stale-updates");
+        let mut first = ConversationStateStore::new(Some(dir.clone()));
+        first.observe("user", "session", "initial", &[], &[], None, ms());
+        let mut second = ConversationStateStore::new(Some(dir.clone()));
+        assert!(second.get("user", "session", ms()).is_some());
+        first.observe("user", "session", "first update", &[], &[], None, ms() + 1);
+        second.observe("user", "session", "second update", &[], &[], None, ms() + 2);
+        let mut reopened = ConversationStateStore::new(Some(dir.clone()));
+        let state = reopened.get("user", "session", ms() + 3).unwrap();
+        assert_eq!(
+            state.turn_count, 3,
+            "a stale service overwrote another completed turn"
+        );
+        assert!(state.recent_queries.iter().any(|q| q == "first update"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn disk_session_updates_preserve_concurrent_turns() {
+        const WRITERS: usize = 8;
+        let dir = pointer_test_dir("concurrent-updates");
+        let mut seed = ConversationStateStore::new(Some(dir.clone()));
+        seed.observe("user", "session", "initial", &[], &[], None, ms());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
+        let workers: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let dir = dir.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut store = ConversationStateStore::new(Some(dir));
+                    assert!(store.get("user", "session", ms()).is_some());
+                    barrier.wait();
+                    for turn in 0..4 {
+                        store.observe(
+                            "user",
+                            "session",
+                            &format!("writer {writer} turn {turn}"),
+                            &[],
+                            &[],
+                            None,
+                            ms() + 1,
+                        );
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let mut reopened = ConversationStateStore::new(Some(dir.clone()));
+        assert_eq!(
+            reopened
+                .get("user", "session", ms() + 2)
+                .unwrap()
+                .turn_count,
+            1 + (WRITERS * 4) as u64
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn disk_session_observe_is_not_dropped_when_lock_is_busy() {
+        let dir = pointer_test_dir("busy-lock-update");
+        let mut seed = ConversationStateStore::new(Some(dir.clone()));
+        seed.observe("user", "session", "initial", &[], &[], None, ms());
+
+        let locker = ConversationStateStore::new(Some(dir.clone()));
+        let held_lock = locker.session_lock("user", "session").unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let worker_dir = dir.clone();
+        let worker = std::thread::spawn(move || {
+            let mut store = ConversationStateStore::new(Some(worker_dir));
+            started_tx.send(()).unwrap();
+            store.observe("user", "session", "queued update", &[], &[], None, ms() + 1);
+        });
+        started_rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        drop(held_lock);
+        worker.join().unwrap();
+
+        let mut reopened = ConversationStateStore::new(Some(dir.clone()));
+        assert_eq!(
+            reopened
+                .get("user", "session", ms() + 2)
+                .unwrap()
+                .turn_count,
+            2,
+            "an update was discarded while waiting for the session lock"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn disk_session_reads_do_not_delete_a_newer_live_session() {
+        let dir = pointer_test_dir("stale-expiry");
+        let mut stale = ConversationStateStore::new(Some(dir.clone()));
+        stale.observe("user", "session", "initial", &[], &[], None, ms());
+        let mut fresh = ConversationStateStore::new(Some(dir.clone()));
+        let now = ms() + SESSION_TTL_MS + 1;
+        fresh.observe("user", "session", "fresh turn", &[], &[], None, now);
+        assert_eq!(
+            stale.get("user", "session", now).unwrap().recent_queries[0],
+            "fresh turn"
+        );
+        assert!(fresh.session_path("user", "session").unwrap().is_file());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -520,7 +675,10 @@ mod tests {
 
     #[test]
     fn disk_round_trip_survives_new_store() {
-        let dir = std::env::temp_dir().join(format!("lint-ai-convstate-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("lint-ai-convstate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         {
             let mut store = ConversationStateStore::new(Some(dir.clone()));
@@ -546,8 +704,10 @@ mod tests {
 
     #[test]
     fn lru_evicts_cold_sessions_from_memory_but_disk_reloads() {
-        let dir =
-            std::env::temp_dir().join(format!("lint-ai-convstate-lru-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("lint-ai-convstate-lru-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = ConversationStateStore::new(Some(dir.clone()));
         for i in 0..(MAX_SESSIONS_IN_MEMORY + 10) {

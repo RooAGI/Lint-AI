@@ -197,7 +197,9 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
 ) -> SegmentQueryOutput {
     let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
     let coordinator_started = std::time::Instant::now();
+    let query_terms_started = std::time::Instant::now();
     let query_terms = query_tokens_expanded(query);
+    let query_terms_elapsed = query_terms_started.elapsed();
     if top_k == 0 || segment_limit == 0 {
         return SegmentQueryOutput {
             results: Vec::new(),
@@ -214,6 +216,7 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
         .iter()
         .map(|segment| (segment.segment_id.as_str(), segment))
         .collect::<HashMap<_, _>>();
+    let routing_started = std::time::Instant::now();
     let routes = route_segments_with_temporal_context_and_corpus_stats(
         query,
         segments,
@@ -221,6 +224,7 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
         temporal,
         corpus_stats,
     );
+    let routing_elapsed = routing_started.elapsed();
     let mut routes = routes
         .into_iter()
         .filter(|route| {
@@ -228,7 +232,11 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
                 .get(route.segment_id.as_str())
                 .copied()
                 .is_some_and(|segment| {
-                    segment_has_allowed_documents(segment, temporal.allowed_doc_ids)
+                    segment_has_allowed_documents(
+                        segment,
+                        temporal.allowed_doc_ids,
+                        temporal.allowed_segment_doc_bitmaps,
+                    )
                 })
         })
         .collect::<Vec<_>>();
@@ -244,7 +252,11 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
             let Some(segment) = segments_by_id.get(segment_id.as_str()).copied() else {
                 continue;
             };
-            if segment_has_allowed_documents(segment, temporal.allowed_doc_ids) {
+            if segment_has_allowed_documents(
+                segment,
+                temporal.allowed_doc_ids,
+                temporal.allowed_segment_doc_bitmaps,
+            ) {
                 routes.push(SegmentRoute {
                     segment_id: segment_id.clone(),
                     score: 0.0,
@@ -334,6 +346,7 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
             .collect(),
         ..ShardQueryCompleteness::default()
     };
+    let segment_execution_started = std::time::Instant::now();
     let execution_results = execute_selected_segments(
         &execution_segments,
         segments,
@@ -343,9 +356,13 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
         reference_date,
         global_statistics,
     );
+    let segment_execution_elapsed = segment_execution_started.elapsed();
     if profile {
         eprintln!(
-            "query_timing default_segment_execution_ms={:.3} segments={}",
+            "query_timing query_terms_ms={:.3} route_scoring_ms={:.3} segment_execution_ms={:.3} coordinator_before_reduce_ms={:.3} routed_segments={}",
+            query_terms_elapsed.as_secs_f64() * 1000.0,
+            routing_elapsed.as_secs_f64() * 1000.0,
+            segment_execution_elapsed.as_secs_f64() * 1000.0,
             coordinator_started.elapsed().as_secs_f64() * 1000.0,
             execution_segments.len()
         );
@@ -378,7 +395,7 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
     }
     if let Some(allowed_doc_ids) = temporal.allowed_doc_ids {
         for segment in segments {
-            if !segment_has_allowed_documents(segment, Some(allowed_doc_ids)) {
+            if !segment_has_allowed_documents(segment, Some(allowed_doc_ids), None) {
                 per_segment_result_counts
                     .entry(segment.segment_id.clone())
                     .or_insert(0);

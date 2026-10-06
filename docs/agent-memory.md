@@ -1,152 +1,44 @@
-# Agent Memory for AI Coding Agents
+# How Lint-AI remembers
 
-**Lint-AI — AI memory that knows what is still true.**
+AI assistants often forget useful details when a conversation ends. Lint-AI
+helps an assistant pick up where you left off, using information saved from
+earlier work.
 
-**Agent memory** lets an AI agent carry useful project knowledge across sessions instead of rediscovering the same decisions, files, failures, and conventions every time it starts work.
+## What it helps your assistant do
 
-Lint-AI is an open-source **current-state agent memory** layer for AI coding agents. It works with Claude Code, Codex, Gemini CLI, and Antigravity CLI (AGY), and exposes project memory through lifecycle hooks, MCP tools, CLI commands, HTTP, Python, and Rust interfaces.
+### Remember across sessions
 
-The problem Lint-AI focuses on is simple: persistent memory can remember something correctly and still give an agent the wrong answer today.
+Your assistant can find decisions, preferences, and useful outcomes from earlier
+sessions, so you do not have to repeat them or search through old chats.
 
-## Persistent memory is only the first step
+### Keep up when things change
 
-A basic agent-memory system answers questions such as:
+Projects change. When a newer decision replaces an older one, Lint-AI helps the
+assistant tell which information is current while keeping the history available
+when it matters.
 
-- What did we decide about retries?
-- Which module owns authentication?
-- What failed the last time we tried this migration?
-- Where did we leave the unfinished work?
+### Find the right context while you work
 
-That is valuable because it reduces repeated repository exploration and user restatement. But long-running projects introduce a second problem: **project truth changes**.
+Lint-AI connects to supported AI tools. The assistant can look up relevant
+project context as you work, without you having to copy and paste old notes.
+Memories are saved with the project, so connected agents can use the same
+knowledge.
 
-A decision that was correct last month may have been replaced yesterday. An API contract may have changed. Ownership may have moved to another team. A runbook may still be topically relevant even though a newer runbook superseded it.
+## What can it remember?
 
-If an agent-memory layer retrieves both versions without distinguishing their state, the model must spend context tokens reading conflicting evidence and then guess which version is current.
+Anything useful to future work: how you prefer answers, why a technical choice
+was made, what has already been tried, or what still needs to happen. You can
+also add, edit, or remove memory files yourself.
 
-Lint-AI treats agent memory as a **state problem as well as a retrieval problem**.
+Lint-AI keeps its project memory in `.lint-ai/memory`. You stay in control of
+those files and can inspect them at any time.
 
-## Relevant does not always mean current
+## Use it with your AI assistant
 
-Imagine a project contains two decisions:
+Set up Lint-AI for the AI tool you already use. Once connected, supported tools
+can search project memories and save useful outcomes as work continues.
 
-```text
-January: gateway timeout retries = 5
-February: gateway timeout retries = 2
-```
+[Choose your AI tool and follow the setup steps](connect-agent.md){ .md-button .md-button--primary }
 
-Both memories are relevant to the query:
-
-```text
-How many retry attempts should we use for gateway timeouts?
-```
-
-Semantic similarity alone does not tell the agent which value is active now.
-
-Lint-AI combines relevance with time and semantic relationships so current-state retrieval can rank the newer decision as current while preserving the older decision as historical evidence. Explicit supersession metadata is supported, and simple chronological replacement can also be inferred inside an established semantic domain.
-
-That distinction is useful for architecture decisions, configuration values, API contracts, runbooks, ownership, terminology, implementation plans, and other knowledge that changes over time.
-
-## Agent memory and token budget
-
-Every memory injected into an LLM consumes context. More context is not automatically better context.
-
-An agent-memory system should therefore answer two questions:
-
-1. **What information is relevant enough to retrieve?**
-2. **Which of that information is current enough to act on?**
-
-Filtering stale or superseded evidence before it reaches the model can reduce unnecessary context and reduce ambiguity in the prompt. Lint-AI does not currently claim a universal percentage reduction in tokens versus other third-party memory systems; token use depends on the agent, retrieval settings, task, and integration path.
-
-The repository includes reproducible Claude Code and Codex integration measurements that report model tokens, retrieved context, tool calls, latency, and recall. These are diagnostic workload measurements rather than universal product guarantees. See the [Claude Code performance tests](claude-code-performance-tests.md) and [Codex performance tests](codex-performance-tests.md).
-
-## Agent memory and hallucination risk
-
-Memory cannot eliminate hallucinations. A model can still reason incorrectly or produce unsupported details.
-
-What a memory layer can control is the **evidence supplied to the model**. Stale, contradictory, or weakly sourced context can contribute to confident wrong answers. Lint-AI is designed to make those conditions visible by tracking current versus superseded evidence, temporal intent, provenance, contradictions, and semantic drift.
-
-For that reason, the defensible goal is not “zero hallucinations.” It is **less stale and conflicting context, with evidence the agent can inspect**.
-
-## Retrieval quality and speed
-
-Lint-AI publishes reproducible retrieval and service-load benchmarks in the repository.
-
-On the current 500-question LongMemEval-S retrieval track, the heuristic release backend reports:
-
-| Metric | Result |
-|---|---:|
-| Any-hit Recall@5 | 93.8% |
-| Any-hit Recall@10 | 96.6% |
-| Any-hit Recall@20 | 97.2% |
-| MRR | 85.7% |
-| NDCG@10 | 84.5% |
-
-These are the 500-question aggregate any-hit results. They are separate from
-the 133-question multi-session segmented comparison in the benchmark overview;
-“fractional recall” and “any-hit recall” are different metrics and are never
-combined into one headline.
-| Average in-process query latency | 1.88 ms |
-
-The default segmented query path routes each query with the gated
-coverage-local router and runs the routed arm only (no corpus-wide fusion).
-On the full 500-question set this measures 92.8% any-hit Recall@5 at about
-9 ms per query. Passing `--fuse-global` to the server adds a corpus-wide arm
-fused by reciprocal rank fusion; with this router the lift is small
-(+3 questions out of 500) while latency rises to about 70 ms. Full router
-comparisons and the measured trade-offs are in the
-[benchmark results](benchmark-results.md).
-
-The latest v0.2.0 macOS layout comparison used 23,366 records and 100 requests
-per cell across five cold-start repetitions. At concurrency 10, routed segmented
-indexing reached a median 1,512.31 requests per second and global segmented
-indexing reached a median 1,306.82 requests per second on an Apple M5 Pro. These are local uncached measurements, so results
-vary by hardware and index layout. The recorded 952 requests per second result
-is the historical 0.1.9 single-index HTTP baseline and predates the 0.2.0
-server refactor. Benchmark conditions, scripts, comparison data, and caveats
-are published in the [benchmark overview](benchmark.md) and
-[comparison](comparison.md).
-
-## Claude Code memory, Codex memory, and Gemini CLI memory
-
-Lint-AI provides project-scoped memory integrations for major coding-agent clients:
-
-| Agent | Project memory | Lifecycle capture | MCP tools |
-|---|---:|---:|---:|
-| Claude Code | Yes | Yes | Yes |
-| Codex | Yes | Yes | Yes |
-| Gemini CLI | Yes | Yes | Yes |
-| Antigravity CLI / AGY | Yes | Yes | Yes |
-
-Each provider can keep isolated project memory while using Lint-AI's shared retrieval and current-state semantics. See [agent integrations](agents.md) for setup details.
-
-## When current-state agent memory is useful
-
-Lint-AI is a strong fit when an AI coding agent works on a project long enough for history to accumulate and change. Typical cases include long-running codebases, changing architecture decisions, evolving documentation, multi-session implementation work, operational runbooks, and projects where provenance matters.
-
-If the only requirement is simple keyword search over a static set of documents, a current-state memory layer may be more machinery than needed.
-
-## Get started
-
-Install Lint-AI directly from GitHub:
-
-```bash
-cargo install --git https://github.com/RooAGI/Lint-AI
-```
-
-Then index or lint a local project corpus:
-
-```bash
-lint-ai /path/to/repo
-```
-
-Query current project memory:
-
-```bash
-lint-ai --query "what is the current retry policy?" /path/to/repo/docs
-```
-
-For complete installation and integration instructions, see the [quickstart](quickstart.md).
-
-## Related terms
-
-Developers may describe this category as **agent memory**, **AI agent memory**, **persistent agent memory**, **coding agent memory**, **LLM memory**, **Claude Code memory**, **Codex memory**, or **MCP memory**. Lint-AI's specific focus within that category is **current-state memory**: retrieving evidence that is relevant while distinguishing what is still true from what has become historical.
+You can also [try it from the command line](quickstart.md) or read about the
+[available agent integrations](agents.md).

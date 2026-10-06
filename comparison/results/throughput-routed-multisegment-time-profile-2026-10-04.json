@@ -1,0 +1,56 @@
+{
+  "profile": "routed-multisegment-steady-state-time-profiler",
+  "date": "2026-10-04",
+  "workload": {
+    "records": 23366,
+    "segments": 23,
+    "routed_segments": 5,
+    "concurrency": 10,
+    "warmup_requests_per_concurrency": 250,
+    "capture_load_seconds": 17,
+    "requests": 20013,
+    "errors": 0,
+    "throughput_req_s": 1177.24,
+    "p50_ms": 8.644,
+    "p95_ms": 13.077
+  },
+  "profiler": {
+    "tool": "Instruments xctrace",
+    "template": "Time Profiler",
+    "capture_seconds": 22,
+    "host": "MacBook Pro, 24 GB, macOS 26.6.2",
+    "trace": ".benchmark-tmp/lint-ai-routed-profile-warm.trace",
+    "sample_rows": 186672,
+    "rows_with_resolved_symbols": 60674,
+    "symbol_coverage_fraction": 0.325,
+    "caveat": "Partial symbol resolution makes raw symbol sample counts directional only. Counts are samples, not CPU percentages or exclusive wall-time attribution."
+  },
+  "top_self_sample_symbols": [
+    {"symbol": "_xzm_free", "samples": 5336},
+    {"symbol": "Swift/core Sip hasher write", "samples": 4353},
+    {"symbol": "<deduplicated_symbol>", "samples": 3211},
+    {"symbol": "_platform_memmove", "samples": 2483},
+    {"symbol": "Rust stable quicksort", "samples": 2243},
+    {"symbol": "Rust stable quicksort (variant)", "samples": 2233},
+    {"symbol": "_xzm_xzone_malloc", "samples": 2228},
+    {"symbol": "_platform_memcmp", "samples": 2161},
+    {"symbol": "BuildHasher::hash_one", "samples": 1810},
+    {"symbol": "_xzm_xzone_malloc_tiny", "samples": 1632},
+    {"symbol": "_malloc_zone_malloc", "samples": 1300},
+    {"symbol": "MemoryIndex::query_with_lexical_hits_timed", "samples": 1241},
+    {"symbol": "BuildHasher::hash_one (variant)", "samples": 1213},
+    {"symbol": "Rust stable smallsort", "samples": 1139},
+    {"symbol": "mach_absolute_time", "samples": 1010}
+  ],
+  "top_inclusive_query_frames": [
+    {
+      "symbol": "query_with_temporal_context_at_and_statistics_with_local_terms",
+      "samples": 50382
+    },
+    {
+      "symbol": "MemoryIndex::query_with_lexical_hits_timed",
+      "samples": 28746
+    }
+  ],
+  "interpretation": "The filter setup bottleneck is no longer visible as a material steady-state cost. Remaining samples point to shard-local candidate scoring and ranking, with allocator activity, hashing, sorting, and memory operations prominent. This identifies the next investigation area; it does not prove each is independently an optimization opportunity."
+}

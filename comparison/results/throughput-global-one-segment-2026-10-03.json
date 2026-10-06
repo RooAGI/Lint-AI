@@ -1,0 +1,55 @@
+{
+  "benchmark": "lint-ai-http-global-one-segment-throughput-diagnostic",
+  "date": "2026-10-03",
+  "timezone": "America/Los_Angeles",
+  "source_revision": "274b5c18aa6bf65fca62c6e036cee76fdbe6998b",
+  "source_tree": "working tree had uncommitted changes, including the one-segment bitmap filter fix",
+  "release_artifact": false,
+  "records": 23366,
+  "endpoint": "POST /search",
+  "query": "deployment configuration system decision",
+  "user_id": "bench-user",
+  "top_k": 20,
+  "layout": "segmented snapshot containing exactly one global segment",
+  "features": "default release server binary",
+  "bekind": "disabled (default)",
+  "cache": "disabled via LINT_AI_DISABLE_QUERY_CACHE=1",
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 10,
+  "repetitions": 1,
+  "segments": 1,
+  "runner": "comparison/throughput.py",
+  "command": "LINT_AI_DISABLE_QUERY_CACHE=1 TMPDIR=$PWD/.benchmark-tmp python3 comparison/throughput.py --server-bin target/release/server --mode global --records 23366 --requests 100 --warmup-requests 10 --port 18319",
+  "machine": {
+    "os": "Darwin 25.6.0",
+    "architecture": "arm64",
+    "hardware_model": "not captured"
+  },
+  "measurements": [
+    {
+      "concurrency": 1,
+      "requests": 100,
+      "p50_ms": 3.066,
+      "p90_ms": 3.248,
+      "p99_ms": 3.476,
+      "mean_ms": 3.098,
+      "throughput_per_s": 321.6
+    },
+    {
+      "concurrency": 10,
+      "requests": 100,
+      "p50_ms": 5.021,
+      "p90_ms": 8.137,
+      "p99_ms": 10.728,
+      "mean_ms": 5.47,
+      "throughput_per_s": 1775.21
+    }
+  ],
+  "notes": [
+    "One run only; use as a working-tree diagnostic, not a stable release claim.",
+    "The benchmark seeder assigns all records one session_id, so the segmented snapshot has one segment.",
+    "The filter path uses the one-segment bitmap when semantic supersession does not require document IDs.",
+    "The hardware model was not recorded.",
+    "The standalone HTTP benchmark does not initialize provider MCP watchers."
+  ]
+}

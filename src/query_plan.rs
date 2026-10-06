@@ -63,7 +63,7 @@ impl PreparedQuery {
 
     /// Reuses an analysis the caller already computed, so no query is analyzed
     /// twice on paths that need the analysis for other reasons too.
-    fn from_analysis(analysis: QueryAnalysis) -> Self {
+    pub(crate) fn from_analysis(analysis: QueryAnalysis) -> Self {
         Self {
             analysis,
             reference_date: None,
@@ -212,6 +212,15 @@ impl PreparedQuery {
             })
         };
         intersect_allowed_doc_ids(base_allowed_doc_ids, semantic_allowed)
+    }
+
+    pub(crate) fn semantic_visibility_requires_doc_ids(
+        &self,
+        semantic_relations: &SemanticRelationStore,
+    ) -> bool {
+        !semantic_relations.is_empty()
+            && !is_historical_query(&self.analysis.original_query)
+            && semantic_relations.has_superseded_documents()
     }
 
     /// Applies semantic provenance consistently after ranking.

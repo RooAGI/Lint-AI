@@ -1,5 +1,3 @@
-use anyhow::{bail, Context, Result};
-use clap::{ArgAction, Parser, ValueEnum};
 use crate::index::{DocRecord, TemporalQueryHint};
 use crate::{
     analyze_query, build_aggregate_output, build_doc_records, build_query_snapshot_from_records,
@@ -11,6 +9,8 @@ use crate::{
     AggregateOutput, ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimeHint, QueryTimings,
     SearchResult, SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
+use anyhow::{bail, Context, Result};
+use clap::{ArgAction, Parser, ValueEnum};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};

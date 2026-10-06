@@ -201,40 +201,22 @@ impl SemanticAggregate {
             self.entity_to_docs
                 .entry(key.clone())
                 .or_default()
-                .extend(postings.clone());
-            if let Some(entries) = self.entity_to_docs.get_mut(key) {
-                entries.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
+                .extend(postings.iter().cloned());
+            self.pending_entity_posting_keys.insert(key.clone());
         }
         for (key, postings) in &state.term_to_docs {
             self.term_to_docs
                 .entry(key.clone())
                 .or_default()
-                .extend(postings.clone());
-            if let Some(entries) = self.term_to_docs.get_mut(key) {
-                entries.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
+                .extend(postings.iter().cloned());
+            self.pending_term_posting_keys.insert(key.clone());
         }
         for (key, postings) in &state.claim_to_docs {
             self.claim_to_docs
                 .entry(key.clone())
                 .or_default()
-                .extend(postings.clone());
-            if let Some(entries) = self.claim_to_docs.get_mut(key) {
-                entries.sort_by(|a, b| {
-                    b.score
-                        .partial_cmp(&a.score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-            }
+                .extend(postings.iter().cloned());
+            self.pending_claim_posting_keys.insert(key.clone());
         }
         if let Some(topic) = state.topic.as_ref() {
             self.topic_to_docs
@@ -250,17 +232,48 @@ impl SemanticAggregate {
         }
     }
 
+    pub(crate) fn sort_pending_postings(&mut self) {
+        for key in self.pending_entity_posting_keys.drain() {
+            if let Some(postings) = self.entity_to_docs.get_mut(&key) {
+                postings.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+        for key in self.pending_term_posting_keys.drain() {
+            if let Some(postings) = self.term_to_docs.get_mut(&key) {
+                postings.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+        for key in self.pending_claim_posting_keys.drain() {
+            if let Some(postings) = self.claim_to_docs.get_mut(&key) {
+                postings.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+    }
+
     pub(crate) fn remove_doc(&mut self, doc_id: &str) {
-        if let Some(chunk_ids) = self.doc_to_chunks.remove(doc_id) {
-            for chunk_id in chunk_ids {
-                self.chunk_to_doc.remove(&chunk_id);
-                self.chunk_ranges.remove(&chunk_id);
-                for postings in self.term_to_chunks.values_mut() {
-                    postings.retain(|(id, _)| id != &chunk_id);
-                }
-                for postings in self.entity_to_chunks.values_mut() {
-                    postings.retain(|(id, _)| id != &chunk_id);
-                }
+        let Some(chunk_ids) = self.doc_to_chunks.remove(doc_id) else {
+            return;
+        };
+        for chunk_id in chunk_ids {
+            self.chunk_to_doc.remove(&chunk_id);
+            self.chunk_ranges.remove(&chunk_id);
+            for postings in self.term_to_chunks.values_mut() {
+                postings.retain(|(id, _)| id != &chunk_id);
+            }
+            for postings in self.entity_to_chunks.values_mut() {
+                postings.retain(|(id, _)| id != &chunk_id);
             }
         }
         self.term_to_chunks
@@ -289,5 +302,76 @@ impl SemanticAggregate {
             docs.retain(|id| id != doc_id);
         }
         self.doc_type_to_docs.retain(|_, docs| !docs.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod aggregate_tests {
+    use super::*;
+
+    // Structural regression check: the hot refresh path calls remove_doc for
+    // every changed document, including first-time inserts. Keep unknown IDs
+    // out of the aggregate-wide posting scans. Replace this with direct work
+    // instrumentation if removal gains a measurable public result.
+    #[test]
+    fn remove_doc_short_circuits_for_unindexed_documents() {
+        let source = include_str!("semantic.rs");
+        let start = source
+            .find("pub(crate) fn remove_doc(&mut self, doc_id: &str)")
+            .expect("remove_doc implementation exists");
+        let body = &source[start..];
+        let guard_pos = body
+            .find("let Some(chunk_ids) = self.doc_to_chunks.remove(doc_id) else {")
+            .expect("unindexed document guard exists");
+        let return_pos = body[guard_pos..]
+            .find("return;")
+            .map(|offset| guard_pos + offset)
+            .expect("unindexed document guard returns early");
+        let scan_pos = body
+            .find("self.entity_to_docs.values_mut()")
+            .expect("aggregate posting scan exists");
+        assert!(return_pos < scan_pos, "guard must precede aggregate scans");
+    }
+
+    #[test]
+    fn pending_postings_are_sorted_before_snapshot_publication() {
+        let mut aggregate = SemanticAggregate::default();
+        let mut state = SemanticDocState {
+            doc_id: "lower".to_string(),
+            ..SemanticDocState::default()
+        };
+        state.entity_to_docs.insert(
+            "entity".to_string(),
+            vec![EntityPosting {
+                doc_id: "lower".to_string(),
+                score: 0.4,
+            }],
+        );
+        aggregate.insert_doc_state(&state);
+        let mut higher = SemanticDocState {
+            doc_id: "higher".to_string(),
+            ..SemanticDocState::default()
+        };
+        higher.entity_to_docs.insert(
+            "entity".to_string(),
+            vec![EntityPosting {
+                doc_id: "higher".to_string(),
+                score: 0.9,
+            }],
+        );
+        aggregate.insert_doc_state(&higher);
+        let postings = aggregate.entity_to_docs.get("entity").unwrap();
+        assert_eq!(postings[0].doc_id, "lower");
+        assert_eq!(postings[1].doc_id, "higher");
+        let index = crate::index::MemoryIndex::from_records_with_semantic_aggregate(
+            Vec::new(),
+            aggregate,
+            false,
+            false,
+            false,
+        );
+        let postings = index.entity_to_docs.get("entity").unwrap();
+        assert_eq!(postings[0].doc_id, "higher");
+        assert_eq!(postings[1].doc_id, "lower");
     }
 }

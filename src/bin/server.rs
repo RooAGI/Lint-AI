@@ -1,3 +1,7 @@
+#[path = "server_writer.rs"]
+mod server_writer;
+use server_writer::StagedWriter;
+
 use crate::memory_api::{
     AddRequest, DeleteRequest, GetRequest, ListRequest, MemoryService, SearchRequest,
     SupersedeRequest, UpdateRequest,
@@ -39,12 +43,24 @@ struct Args {
     bind: String,
     #[arg(long)]
     index: Option<PathBuf>,
+    /// Publish staged writes after this interval from the first pending add.
+    #[arg(long, default_value_t = 250)]
+    refresh_interval_ms: u64,
+    /// Publish early when this many documents are pending.
+    #[arg(long, default_value_t = 512)]
+    refresh_batch_size: usize,
+    /// Persist a full checkpoint and reclaim the durable journal on this cadence.
+    #[arg(long, default_value_t = 30)]
+    checkpoint_interval_seconds: u64,
     #[arg(long)]
     server_token: Option<String>,
     #[arg(long)]
     tenant_id: Option<String>,
     #[arg(long)]
     allow_unauthenticated: bool,
+    /// Allow binding to non-loopback interfaces. Requires token or JWT authentication.
+    #[arg(long)]
+    allow_non_loopback: bool,
     /// Enable adaptive segmented routing up to this many segments.
     #[arg(long)]
     adaptive_segment_max_n: Option<usize>,
@@ -61,6 +77,9 @@ struct Args {
     /// Disable the two-stage conversational rerank for session follow-ups.
     #[arg(long)]
     no_conversational_rerank: bool,
+    /// Enable optional Bekind linguistic enrichment (disabled by default).
+    #[arg(long)]
+    bekind: bool,
     /// Segment routing strategy for the segmented layout.
     /// Names match docs/benchmark-results.md; the default is the measured
     /// best recall-per-latency trade-off (gated coverage-local).
@@ -117,6 +136,7 @@ impl SegmentRoutingArg {
 struct AppState {
     service: Arc<RwLock<MemoryService>>,
     writer_gate: Arc<tokio::sync::Mutex<()>>,
+    staged_writer: Option<StagedWriter>,
     token: Option<Arc<str>>,
     jwt_secret: Option<Arc<str>>,
     tenant_id: Option<Arc<str>>,
@@ -208,9 +228,12 @@ struct DashboardSession {
 #[tokio::main]
 pub(crate) async fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
-    args.server_token = args
-        .server_token
-        .or_else(|| std::env::var("SERVER_TOKEN").ok());
+    let bekind_enabled = args.bekind;
+    crate::behood_query::set_enabled(bekind_enabled);
+    args.server_token = normalize_secret(
+        args.server_token
+            .or_else(|| std::env::var("SERVER_TOKEN").ok()),
+    );
     args.tenant_id = args
         .tenant_id
         .or_else(|| std::env::var("SERVER_TENANT_ID").ok());
@@ -225,7 +248,12 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             .transpose()?;
     }
     let jwt_secret = normalize_secret(std::env::var("JWT_SECRET").ok());
-    ensure_loopback_bind(&args.bind)?;
+    ensure_bind_allowed(
+        &args.bind,
+        args.allow_non_loopback,
+        args.server_token.is_some() || jwt_secret.is_some(),
+        args.allow_unauthenticated,
+    )?;
     let mut options = memory_pipeline_options(
         args.adaptive_segment_max_n,
         args.single_index,
@@ -269,9 +297,10 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             .transpose()?
             .unwrap_or_else(|| MemoryService::in_memory(options)),
     };
-    let state = AppState {
+    let mut state = AppState {
         service: Arc::new(RwLock::new(service)),
         writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        staged_writer: None,
         token: args
             .server_token
             .map(|s| Arc::<str>::from(s.trim().to_owned())),
@@ -296,20 +325,50 @@ pub(crate) async fn main() -> anyhow::Result<()> {
         .name("python-daemon-prewarm".to_string())
         .spawn(move || {
             crate::segments::extractor_daemon::ExtractorDaemon::global().prewarm();
-            // The judge daemon is tiny (a Rust binary, ~ms startup); warm it
-            // so the first query pays no spawn.
-            crate::behood_query::BekindDaemon::global().prewarm();
+            // The judge daemon is optional and prewarms only when --bekind
+            // enabled it.
+            if bekind_enabled {
+                crate::behood_query::BekindDaemon::global().prewarm();
+            }
         })
         .ok();
-    let app = app_router(state);
+    state.staged_writer = Some(StagedWriter::start_with_schedule(
+        state.service.clone(),
+        server_writer::WriteSchedule {
+            refresh_interval: Duration::from_millis(args.refresh_interval_ms),
+            batch_size: args.refresh_batch_size,
+            checkpoint_interval: Duration::from_secs(args.checkpoint_interval_seconds),
+        },
+    )?);
+    let app = app_router(state.clone());
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     eprintln!("Lint-AI server listening on {}", args.bind);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            #[cfg(unix)]
+            {
+                let mut terminate =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("install SIGTERM handler");
+                tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        })
+        .await?;
+    if let Some(worker) = &state.staged_writer {
+        worker
+            .flush()
+            .await
+            .map_err(|status| anyhow::anyhow!("shutdown flush failed: {status}"))?;
+    }
     Ok(())
 }
 
 fn app_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/dashboard", get(dashboard))
         .route("/dashboard/app.js", get(dashboard_app))
@@ -326,6 +385,7 @@ fn app_router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .route("/add", post(add))
         .route("/add/batch", post(add_batch))
+        .route("/flush", post(refresh_memories))
         .route("/search", post(search))
         .route("/delete", post(delete))
         .route("/supersede", post(supersede))
@@ -336,7 +396,26 @@ fn app_router(state: AppState) -> Router {
             get(get_memory).patch(update_memory).delete(delete_memory),
         )
         .route("/v1/memories/search", post(search))
-        .route("/v1/memories/refresh", post(refresh_memories))
+        .route("/v1/memories/refresh", post(refresh_memories));
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "openclaw",
+        feature = "hermes",
+        feature = "roo-runtime"
+    ))]
+    let router = router
+        .route(
+            "/provider-memory/add/batch",
+            post(provider_memory_add_batch),
+        )
+        .route("/provider-memory/search", post(provider_memory_search));
+    #[cfg(feature = "openclaw")]
+    let router = router.route("/integrations/openclaw/hooks/:kind", post(openclaw_hook));
+    router
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(
             ServiceBuilder::new()
@@ -353,6 +432,73 @@ fn app_router(state: AppState) -> Router {
         )
         .layer(middleware::from_fn_with_state(state.clone(), authorize))
         .with_state(state)
+}
+
+#[cfg(feature = "openclaw")]
+async fn openclaw_hook(
+    State(state): State<AppState>,
+    Path(kind): Path<String>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let Some(kind) = crate::integrations::openclaw::hooks::OpenClawHookKind::from_str(&kind) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail":"unknown OpenClaw hook"})),
+        )
+            .into_response();
+    };
+    // These hooks read/write workspace-wide provider data, not tenant data.
+    if state.tenant_id.is_some() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail":"workspace hooks are unavailable in tenant mode"})),
+        )
+            .into_response();
+    }
+    let root = match state.project_root.canonicalize() {
+        Ok(root) => root,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    for pointer in [
+        "/ctx/workspaceDir",
+        "/event/context/workspaceDir",
+        "/event/workspaceDir",
+    ] {
+        if let Some(candidate) = payload
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            if std::fs::canonicalize(candidate.trim()).ok().as_ref() != Some(&root) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"detail":"hook workspace does not match the server workspace"})),
+                )
+                    .into_response();
+            }
+        }
+    }
+    // OpenClaw captures and Hermes provider-memory writes share the same
+    // server-level mutation admission gate. The shared-store file lock in
+    // `MemoryService::with_shared_memory` remains the cross-process guard.
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail":"writer busy"})),
+        )
+            .into_response();
+    };
+    let result = match tokio::task::spawn_blocking(move || {
+        // Keep admission held if the HTTP timeout cancels the awaiting task.
+        let _writer = writer;
+        crate::integrations::openclaw::hooks::process_http_hook(kind, payload, &root)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    (StatusCode::OK, Json(result)).into_response()
 }
 
 /// Production pipeline options with the server's CLI flags applied as
@@ -415,7 +561,7 @@ async fn authorize(
     if path == "/health" || path == "/dashboard" || path.starts_with("/dashboard/") {
         return next.run(request).await;
     }
-    if is_workspace_telemetry_path(path) {
+    if is_workspace_operation_path(path) {
         if let Some(expected) = state.token.as_deref() {
             let supplied = headers
                 .get("authorization")
@@ -452,10 +598,10 @@ async fn authorize(
         // JWT currently establishes a user identity only. Until the server
         // defines and validates an administrative role, JWT identities must
         // not read workspace-wide operational telemetry.
-        if is_workspace_telemetry_path(path) {
+        if is_workspace_operation_path(path) {
             return (
                 StatusCode::FORBIDDEN,
-                Json(json!({"detail":"workspace telemetry requires server-token authentication"})),
+                Json(json!({"detail":"workspace operations require server-token authentication"})),
             )
                 .into_response();
         }
@@ -479,6 +625,12 @@ async fn authorize(
         }
     }
     next.run(request).await
+}
+
+fn is_workspace_operation_path(path: &str) -> bool {
+    // Provider hooks access the entire workspace and do not implement
+    // per-user attribution or retrieval. A user JWT is insufficient.
+    is_workspace_telemetry_path(path) || path.starts_with("/integrations/openclaw/hooks/")
 }
 
 fn is_workspace_telemetry_path(path: &str) -> bool {
@@ -692,27 +844,155 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         .query_summary;
     let integrations = dashboard_integrations(&state.project_root);
     let mut body = String::from("# Lint-AI operational metrics\n");
-    body.push_str("# TYPE lint_ai_query_requests_total counter\n");
+    body.push_str("# HELP lint_ai_query_requests_window Search requests in the retained telemetry window.\n# TYPE lint_ai_query_requests_window gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_requests_total {}\n",
+        "lint_ai_query_requests_window {}\n",
         query.requests
     ));
-    body.push_str("# TYPE lint_ai_query_errors_total counter\n");
-    body.push_str(&format!("lint_ai_query_errors_total {}\n", query.errors));
-    body.push_str("# TYPE lint_ai_query_requests_per_second gauge\n");
+    body.push_str("# HELP lint_ai_query_errors_window Search errors in the retained telemetry window.\n# TYPE lint_ai_query_errors_window gauge\n");
+    body.push_str(&format!("lint_ai_query_errors_window {}\n", query.errors));
+    body.push_str("# HELP lint_ai_query_empty_results_window Searches with no results in the retained telemetry window.\n# TYPE lint_ai_query_empty_results_window gauge\n");
+    body.push_str(&format!(
+        "lint_ai_query_empty_results_window {}\n",
+        query.empty_results
+    ));
+    body.push_str("# HELP lint_ai_query_requests_per_second Search request rate over the retained telemetry window.\n# TYPE lint_ai_query_requests_per_second gauge\n");
     body.push_str(&format!(
         "lint_ai_query_requests_per_second {}\n",
         query.requests_per_second
     ));
-    body.push_str("# TYPE lint_ai_provider_events_total counter\n");
+    body.push_str("# HELP lint_ai_query_error_rate Fraction of searches that returned errors in the retained telemetry window.\n# TYPE lint_ai_query_error_rate gauge\n");
+    body.push_str(&format!("lint_ai_query_error_rate {}\n", query.error_rate));
+    body.push_str("# HELP lint_ai_query_empty_result_rate Fraction of searches with no results in the retained telemetry window.\n# TYPE lint_ai_query_empty_result_rate gauge\n");
+    body.push_str(&format!(
+        "lint_ai_query_empty_result_rate {}\n",
+        query.empty_result_rate
+    ));
+    body.push_str("# HELP lint_ai_query_latency_ms Estimated query latency quantile in milliseconds over the retained telemetry window.\n# TYPE lint_ai_query_latency_ms gauge\n");
+    body.push_str(&format!(
+        "lint_ai_query_latency_ms{{quantile=\"0.5\"}} {}\n",
+        query.p50_ms
+    ));
+    body.push_str(&format!(
+        "lint_ai_query_latency_ms{{quantile=\"0.95\"}} {}\n",
+        query.p95_ms
+    ));
+    body.push_str("# HELP lint_ai_provider_compiled Whether this server build includes the provider integration.\n# TYPE lint_ai_provider_compiled gauge\n");
+    body.push_str("# HELP lint_ai_provider_observed Whether Lint-AI has ever received lifecycle telemetry for the provider.\n# TYPE lint_ai_provider_observed gauge\n");
+    body.push_str("# HELP lint_ai_provider_events_total Lifecycle events recorded for the provider.\n# TYPE lint_ai_provider_events_total counter\n");
+    body.push_str("# HELP lint_ai_provider_sessions_started_total Provider sessions started.\n# TYPE lint_ai_provider_sessions_started_total counter\n");
+    body.push_str("# HELP lint_ai_provider_sessions_ended_total Provider sessions ended.\n# TYPE lint_ai_provider_sessions_ended_total counter\n");
+    body.push_str("# HELP lint_ai_provider_retrieval_events_total Provider lifecycle events categorized as retrieval.\n# TYPE lint_ai_provider_retrieval_events_total counter\n");
+    body.push_str("# HELP lint_ai_provider_capture_events_total Provider lifecycle events categorized as capture.\n# TYPE lint_ai_provider_capture_events_total counter\n");
+    body.push_str("# HELP lint_ai_provider_sessions_active Active provider sessions observed by Lint-AI.\n# TYPE lint_ai_provider_sessions_active gauge\n");
+    body.push_str("# HELP lint_ai_provider_last_seen_timestamp_seconds Unix timestamp of the last received provider event, or zero if none.\n# TYPE lint_ai_provider_last_seen_timestamp_seconds gauge\n");
+    body.push_str("# HELP lint_ai_provider_recent_events Events by bounded lifecycle category in the retained provider event ledger.\n# TYPE lint_ai_provider_recent_events gauge\n");
+    body.push_str("# HELP lint_ai_provider_token_usage_recent Tokens reported in the retained provider event ledger.\n# TYPE lint_ai_provider_token_usage_recent gauge\n");
     for integration in integrations {
         body.push_str(&format!(
             "lint_ai_provider_events_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.events_total
         ));
         body.push_str(&format!(
+            "lint_ai_provider_compiled{{provider=\"{}\"}} {}\n",
+            integration.recording_provider,
+            u8::from(integration.compiled)
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_observed{{provider=\"{}\"}} {}\n",
+            integration.recording_provider,
+            u8::from(integration.last_seen_ms.is_some())
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_sessions_started_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.sessions_started
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_sessions_ended_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.sessions_ended
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_retrieval_events_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.retrieval_events
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_capture_events_total{{provider=\"{}\"}} {}\n",
+            integration.recording_provider, integration.capture_events
+        ));
+        body.push_str(&format!(
             "lint_ai_provider_sessions_active{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.sessions_active
+        ));
+        body.push_str(&format!(
+            "lint_ai_provider_last_seen_timestamp_seconds{{provider=\"{}\"}} {}\n",
+            integration.recording_provider,
+            integration.last_seen_ms.unwrap_or_default() as f64 / 1_000.0
+        ));
+
+        let mut recent_categories = BTreeMap::<&str, u64>::new();
+        let mut recent_tokens = BTreeMap::<&str, u64>::new();
+        for event in &integration.events {
+            if matches!(
+                event.category.as_str(),
+                "session" | "retrieval" | "compaction" | "capture" | "lifecycle"
+            ) {
+                *recent_categories
+                    .entry(event.category.as_str())
+                    .or_default() += 1;
+            }
+            for (kind, value) in [
+                ("input", event.input_tokens),
+                ("output", event.output_tokens),
+                ("cache_creation_input", event.cache_creation_input_tokens),
+                ("cache_read_input", event.cache_read_input_tokens),
+            ] {
+                if let Some(value) = value {
+                    let total = recent_tokens.entry(kind).or_default();
+                    *total = total.saturating_add(value);
+                }
+            }
+        }
+        for category in ["session", "retrieval", "compaction", "capture", "lifecycle"] {
+            body.push_str(&format!(
+                "lint_ai_provider_recent_events{{provider=\"{}\",category=\"{}\"}} {}\n",
+                integration.recording_provider,
+                category,
+                recent_categories.get(category).copied().unwrap_or_default()
+            ));
+        }
+        for kind in [
+            "input",
+            "output",
+            "cache_creation_input",
+            "cache_read_input",
+        ] {
+            body.push_str(&format!(
+                "lint_ai_provider_token_usage_recent{{provider=\"{}\",kind=\"{}\"}} {}\n",
+                integration.recording_provider,
+                kind,
+                recent_tokens.get(kind).copied().unwrap_or_default()
+            ));
+        }
+    }
+
+    body.push_str("# HELP lint_ai_index_source_documents Source documents in the project memory index.\n# TYPE lint_ai_index_source_documents gauge\n");
+    body.push_str("# HELP lint_ai_index_records Records in the project memory index.\n# TYPE lint_ai_index_records gauge\n");
+    body.push_str("# HELP lint_ai_index_dirty Whether the memory index has unpublished changes.\n# TYPE lint_ai_index_dirty gauge\n");
+    body.push_str("# HELP lint_ai_index_store_revision Current mutable store revision.\n# TYPE lint_ai_index_store_revision gauge\n");
+    body.push_str("# HELP lint_ai_index_snapshot_revision Published search snapshot revision.\n# TYPE lint_ai_index_snapshot_revision gauge\n");
+    body.push_str("# HELP lint_ai_index_revision_lag Difference between store and published snapshot revisions.\n# TYPE lint_ai_index_revision_lag gauge\n");
+    body.push_str("# HELP lint_ai_index_segments Number of segments in the published search snapshot.\n# TYPE lint_ai_index_segments gauge\n");
+    if let Ok(service) = state.service.read() {
+        let inspection = service.inspection();
+        body.push_str(&format!(
+            "lint_ai_index_source_documents {}\nlint_ai_index_records {}\nlint_ai_index_dirty {}\nlint_ai_index_store_revision {}\nlint_ai_index_snapshot_revision {}\nlint_ai_index_revision_lag {}\nlint_ai_index_segments {}\n",
+            inspection.source_document_count,
+            inspection.record_count,
+            u8::from(inspection.dirty),
+            inspection.store_revision,
+            inspection.snapshot_revision,
+            inspection.store_revision.saturating_sub(inspection.snapshot_revision),
+            inspection.snapshot.map(|snapshot| snapshot.segment_count).unwrap_or_default()
         ));
     }
     (
@@ -940,21 +1220,21 @@ fn tenant_check(
     Ok(())
 }
 
+#[derive(Default, serde::Deserialize)]
+struct WriteOptions {
+    #[serde(default)]
+    wait_for_visibility: bool,
+}
+
 async fn add(
     State(state): State<AppState>,
+    Query(options): Query<WriteOptions>,
     auth: Option<Extension<AuthContext>>,
     Json(value): Json<Value>,
 ) -> impl IntoResponse {
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"detail":"writer busy"})),
-        )
-            .into_response();
-    };
     let request = match serde_json::from_value::<AddRequest>(value) {
         Ok(request) => request,
         Err(_) => {
@@ -965,11 +1245,31 @@ async fn add(
                 .into_response()
         }
     };
+    if let Some(worker) = &state.staged_writer {
+        return match worker.add(vec![request], options.wait_for_visibility).await {
+            Ok(mut responses) => Json(responses.as_array_mut().unwrap().remove(0)).into_response(),
+            Err(status) => (
+                status,
+                Json(json!({"detail":"mutation failed or writer queue full"})),
+            )
+                .into_response(),
+        };
+    }
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail":"writer busy"})),
+        )
+            .into_response();
+    };
     let result = {
         let state = state.clone();
-        tokio::task::spawn_blocking(move || write_mutation(&state, |service| service.add(request)))
-            .await
-            .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
+        tokio::task::spawn_blocking(move || {
+            let _writer = writer;
+            write_mutation(&state, |service| service.add(request))
+        })
+        .await
+        .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
     };
     match result {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(result).unwrap())).into_response(),
@@ -982,6 +1282,76 @@ async fn add(
 }
 
 async fn add_batch(
+    State(state): State<AppState>,
+    Query(options): Query<WriteOptions>,
+    auth: Option<Extension<AuthContext>>,
+    Json(requests): Json<Vec<AddRequest>>,
+) -> impl IntoResponse {
+    if requests.is_empty() || requests.len() > 128 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"detail":"batch must contain between 1 and 128 requests"})),
+        )
+            .into_response();
+    }
+    for request in &requests {
+        let value = match serde_json::to_value(request) {
+            Ok(value) => value,
+            Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+        };
+        if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+            return error.into_response();
+        }
+    }
+    if let Some(worker) = &state.staged_writer {
+        return match worker.add(requests, options.wait_for_visibility).await {
+            Ok(responses) => Json(responses).into_response(),
+            Err(status) => (
+                status,
+                Json(json!({"detail":"mutation failed or writer queue full"})),
+            )
+                .into_response(),
+        };
+    }
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"detail":"writer busy"})),
+        )
+            .into_response();
+    };
+    let result = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            let _writer = writer;
+            write_mutation(&state, |service| service.add_batch(requests))
+        }
+    })
+    .await
+    .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")));
+    match result {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":"batch mutation failed"})),
+        )
+            .into_response(),
+    }
+}
+
+/// Provider hooks share `.lint-ai/memory` regardless of the server's primary
+/// `--index`. Search composes that store with the workspace-memory index.
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code",
+    feature = "openclaw",
+    feature = "hermes",
+    feature = "roo-runtime"
+))]
+async fn provider_memory_add_batch(
     State(state): State<AppState>,
     auth: Option<Extension<AuthContext>>,
     Json(requests): Json<Vec<AddRequest>>,
@@ -1002,24 +1372,117 @@ async fn add_batch(
             return error.into_response();
         }
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
         )
             .into_response();
     };
-    let result = tokio::task::spawn_blocking({
-        let state = state.clone();
-        move || write_mutation(&state, |service| service.add_batch(requests))
+    let root = state.project_root.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _writer = writer;
+        MemoryService::with_shared_memory(&root, |service| service.add_batch(requests))
     })
     .await
-    .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")));
+    .unwrap_or_else(|error| {
+        Err(anyhow::anyhow!(
+            "provider memory write task failed: {error}"
+        ))
+    });
     match result {
         Ok(result) => Json(serde_json::to_value(result).unwrap()).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail":"batch mutation failed"})),
+            Json(json!({"detail":"provider memory batch mutation failed"})),
+        )
+            .into_response(),
+    }
+}
+
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code",
+    feature = "openclaw",
+    feature = "hermes",
+    feature = "roo-runtime"
+))]
+async fn provider_memory_search(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
+    Json(value): Json<Value>,
+) -> impl IntoResponse {
+    if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+        return error.into_response();
+    }
+    let mut request = match serde_json::from_value::<SearchRequest>(value) {
+        Ok(request) => request,
+        Err(_) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail":"invalid request"})),
+            )
+                .into_response()
+        }
+    };
+    if let Some(auth) = auth.as_ref() {
+        request.scope = Some(auth.0.user_id.clone());
+    } else {
+        // Server-token provider adapters share one workspace store across
+        // integrations. Keep conversation state scoped to the caller's
+        // configured identity, while allowing retrieval across provider-owned
+        // memories and ordinary workspace documents. JWT callers remain
+        // isolated to their authenticated user below.
+        let caller_scope = request.user_id.clone();
+        request.user_id.clear();
+        if request.scope.as_deref().is_none_or(str::is_empty) {
+            request.scope = Some(caller_scope);
+        }
+    }
+    let root = state.project_root.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let ignore_paths = vec![
+            "node_modules".to_string(),
+            "target".to_string(),
+            "dist".to_string(),
+            "build".to_string(),
+            "vendor".to_string(),
+            "coverage".to_string(),
+            ".git".to_string(),
+        ];
+        let input = crate::adapters::AdapterInput {
+            root: &root,
+            max_bytes: 5_000_000,
+            max_files: 50_000,
+            max_depth: 20,
+            max_total_bytes: 100_000_000,
+        };
+        let mut service = MemoryService::open_workspace(
+            &root,
+            crate::integrations::mcp_index::SHARED_MEMORY_DIR,
+            &ignore_paths,
+            || {
+                let graph = crate::adapters::build_project_graph(&input)?;
+                let graph = crate::adapters::apply_ignore_paths(graph, &ignore_paths);
+                Ok(crate::adapters::graph_to_source_documents(&graph))
+            },
+        )?;
+        service.search(request)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(anyhow::anyhow!(
+            "provider memory search task failed: {error}"
+        ))
+    });
+    match result {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":"provider memory search failed"})),
         )
             .into_response(),
     }
@@ -1049,10 +1512,9 @@ async fn search(
         // user's follow-up state.
         request.scope = Some(auth.0.user_id.clone());
     }
-    // MemoryService::search takes a shared borrow: reads hold the read lock
-    // and never block writers. Execute it directly so concurrent requests do
-    // not queue behind the blocking-pool handoff; mutation/index rebuild
-    // work remains on spawn_blocking paths.
+    // Search uses the already-published immutable index snapshot. Its small
+    // mutable side state is internally synchronized, so requests can share
+    // the service read lock and run retrieval concurrently.
     //
     // Query-time key-phrase backfill: documents written by provider hooks
     // (separate short-lived processes) never see this process's background
@@ -1063,11 +1525,18 @@ async fn search(
     // write lock. A concurrent write landing mid-backfill is safe:
     // application re-validates content hashes and skips stale results.
     // Bounded and fail-open.
-    let backfill_needed = state
-        .service
-        .read()
-        .map(|service| service.key_phrase_backfill_needed())
-        .unwrap_or(false);
+    let backfill_needed = if let Some(worker) = &state.staged_writer {
+        worker
+            .read_view()
+            .map(|view| view.key_phrase_backfill_needed())
+            .unwrap_or(false)
+    } else {
+        state
+            .service
+            .read()
+            .map(|service| service.key_phrase_backfill_needed())
+            .unwrap_or(false)
+    };
     if backfill_needed {
         let owned_state = state.clone();
         let backfill = tokio::task::spawn_blocking(move || {
@@ -1091,9 +1560,24 @@ async fn search(
             eprintln!("key-phrase backfill failed (fail-open): {error:#}");
         }
     }
+    if let Some(worker) = &state.staged_writer {
+        let started = Instant::now();
+        let result = worker
+            .read_view()
+            .and_then(|view| view.search_cached(request));
+        state.telemetry.record_query(
+            started.elapsed().as_millis() as u64,
+            result.is_err(),
+            result.as_ref().map(|r| r.data.is_empty()).unwrap_or(false),
+        );
+        return match result {
+            Ok(response) => Json(response).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+    }
     let started = Instant::now();
-    let result = match state.service.write() {
-        Ok(mut service) => service.search(request),
+    let result = match state.service.read() {
+        Ok(service) => service.search_cached(request),
         Err(_) => Err(anyhow::anyhow!("memory service lock poisoned")),
     };
     match result {
@@ -1187,7 +1671,7 @@ async fn update_memory(
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
@@ -1197,6 +1681,7 @@ async fn update_memory(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
+            let _writer = writer;
             write_mutation(&state, |service| service.update(request))
         })
         .await
@@ -1230,7 +1715,7 @@ async fn delete_memory(
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
@@ -1240,6 +1725,7 @@ async fn delete_memory(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
+            let _writer = writer;
             write_mutation(&state, |service| {
                 service.delete(&request.user_id, &request.doc_id)
             })
@@ -1259,7 +1745,13 @@ async fn delete_memory(
 }
 
 async fn refresh_memories(State(state): State<AppState>) -> impl IntoResponse {
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    if let Some(worker) = &state.staged_writer {
+        return match worker.flush().await {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(status) => status.into_response(),
+        };
+    }
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
@@ -1268,9 +1760,12 @@ async fn refresh_memories(State(state): State<AppState>) -> impl IntoResponse {
     };
     let result = {
         let state = state.clone();
-        tokio::task::spawn_blocking(move || write_mutation(&state, |service| service.refresh()))
-            .await
-            .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
+        tokio::task::spawn_blocking(move || {
+            let _writer = writer;
+            write_mutation(&state, |service| service.refresh())
+        })
+        .await
+        .unwrap_or_else(|error| Err(anyhow::anyhow!("mutation task failed: {error}")))
     };
     match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -1290,7 +1785,7 @@ async fn delete(
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
@@ -1310,6 +1805,7 @@ async fn delete(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
+            let _writer = writer;
             write_mutation(&state, |s| s.delete(&request.user_id, &request.doc_id))
         })
         .await
@@ -1333,7 +1829,7 @@ async fn supersede(
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
@@ -1353,6 +1849,7 @@ async fn supersede(
     let result = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
+            let _writer = writer;
             write_mutation(&state, |s| {
                 s.supersede(&request.user_id, &request.replacement_id, &request.old_id)
             })
@@ -1378,7 +1875,7 @@ async fn expire(
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
-    let Ok(_writer) = state.writer_gate.try_lock() else {
+    let Ok(writer) = state.writer_gate.clone().try_lock_owned() else {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({"detail":"writer busy"})),
@@ -1392,6 +1889,7 @@ async fn expire(
         .to_owned();
     let state_for_mutation = state.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let _writer = writer;
         write_mutation(&state_for_mutation, |service| service.expire(&user_id))
     })
     .await
@@ -1410,38 +1908,55 @@ fn write_mutation<T>(
     state: &AppState,
     mutation: impl FnOnce(&mut MemoryService) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    // Writes refresh the store's snapshot before releasing the lock, so
-    // subsequent reads (shared lock, no re-publish step) are always current.
+    // Synchronous mutations checkpoint staged work and replace the detached
+    // read view before returning. The mutable owner serializes all mutations.
     let mut service = state
         .service
         .write()
         .map_err(|_| anyhow::anyhow!("memory writer lock poisoned"))?;
     let result = mutation(&mut service)?;
+    if let Some(worker) = &state.staged_writer {
+        if service.pending_add_count() == 0 {
+            worker.publish_owner(&service)?;
+        }
+    }
     drop(service);
     Ok(result)
 }
 
-fn ensure_loopback_bind(bind: &str) -> anyhow::Result<()> {
+fn ensure_bind_allowed(
+    bind: &str,
+    allow_non_loopback: bool,
+    authentication_configured: bool,
+    allow_unauthenticated: bool,
+) -> anyhow::Result<()> {
     use std::net::ToSocketAddrs;
     let mut resolved = false;
     for address in bind.to_socket_addrs()? {
         resolved = true;
-        if !address.ip().is_loopback() {
+        if !address.ip().is_loopback() && !allow_non_loopback {
             anyhow::bail!(
-                "refusing non-localhost bind address {}; lint-ai server supports localhost only",
+                "refusing non-localhost bind address {}; pass --allow-non-loopback to opt in",
                 address
             );
         }
     }
     anyhow::ensure!(resolved, "bind address resolved to no addresses: {bind}");
+    if allow_non_loopback {
+        anyhow::ensure!(
+            authentication_configured && !allow_unauthenticated,
+            "--allow-non-loopback requires SERVER_TOKEN or JWT_SECRET authentication and cannot be combined with --allow-unauthenticated"
+        );
+    }
     Ok(())
 }
 
 fn constant_time_eq(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
-    let mut difference = (left.len() ^ right.len()) as u8;
+    let mut difference = left.len() ^ right.len();
     for i in 0..left.len().max(right.len()) {
-        difference |= left.get(i).copied().unwrap_or(0) ^ right.get(i).copied().unwrap_or(0);
+        difference |=
+            usize::from(left.get(i).copied().unwrap_or(0) ^ right.get(i).copied().unwrap_or(0));
     }
     difference == 0
 }
@@ -1481,12 +1996,151 @@ mod tests {
                 .unwrap(),
             )),
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            staged_writer: None,
             token: None,
             jwt_secret: Some("test-secret".into()),
             tenant_id: None,
             telemetry: OperationalTelemetry::new(),
             project_root: root.to_path_buf(),
         }
+    }
+
+    fn provider_memory_test_state(root: &std::path::Path) -> AppState {
+        let mut state = security_test_state(root);
+        state.jwt_secret = None;
+        state
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn staged_http_add_flush_wait_and_user_isolation() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let mut state = provider_memory_test_state(&root);
+        state.staged_writer = Some(
+            StagedWriter::start_with_schedule(
+                state.service.clone(),
+                server_writer::WriteSchedule {
+                    refresh_interval: Duration::from_secs(60),
+                    batch_size: 10000,
+                    checkpoint_interval: Duration::from_secs(60),
+                },
+            )
+            .unwrap(),
+        );
+        let app = app_router(state.clone());
+        async fn post(app: &Router, uri: &str, payload: Value) -> (StatusCode, Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (
+                status,
+                if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                },
+            )
+        }
+        let payload = json!({"request_id":"http-staged","session_id":"session","user_id":"alice","messages":[{"role":"user","content":"quartz staged HTTP memory"}]});
+        let (status, ack) = post(&app, "/add", payload.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ack["published"], false);
+        let (_, before) = post(
+            &app,
+            "/search",
+            json!({"query":"quartz","user_id":"alice","top_k":10}),
+        )
+        .await;
+        assert!(before["data"].as_array().unwrap().is_empty());
+        assert_eq!(
+            post(&app, "/flush", json!({})).await.0,
+            StatusCode::NO_CONTENT
+        );
+        let (_, after) = post(
+            &app,
+            "/search",
+            json!({"query":"quartz","user_id":"alice","top_k":10}),
+        )
+        .await;
+        assert_eq!(after["data"].as_array().unwrap().len(), 1);
+        let (_, foreign) = post(
+            &app,
+            "/search",
+            json!({"query":"quartz","user_id":"bob","top_k":10}),
+        )
+        .await;
+        assert!(foreign["data"].as_array().unwrap().is_empty());
+        let (_, receipt) = post(&app, "/add?wait_for_visibility=true", payload).await;
+        assert!(receipt["adjudication"].is_object());
+        assert_eq!(
+            state
+                .service
+                .read()
+                .unwrap()
+                .inspection()
+                .source_document_count,
+            1
+        );
+        drop(app);
+        drop(state);
+        // The worker's final checkpoint may still be completing, so avoid
+        // deleting its root here; the OS temp directory is test-owned.
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_write_keeps_admission_until_worker_finishes() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let state = provider_memory_test_state(&root);
+        let read_guard = state.service.read().unwrap();
+        let app = app_router(state.clone());
+        let request = tokio::spawn(async move {
+            app.oneshot(axum::http::Request::builder().method("POST").uri("/add")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(json!({"request_id":"cancel-test","session_id":"cancel-session","user_id":"alice","messages":[{"role":"user","timestamp":null,"content":"cancellation regression"}]}).to_string())).unwrap()).await
+        });
+        let acquired = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if state.writer_gate.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_ok();
+        request.abort();
+        let _ = request.await;
+        let remains_locked = state.writer_gate.try_lock().is_err();
+        drop(read_guard);
+        // Let the unabortable blocking worker finish before asserting or cleaning up.
+        tokio::task::spawn_blocking({
+            let state = state.clone();
+            move || {
+                let _guard = state.service.write().unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert!(acquired, "request never acquired writer admission");
+        assert!(
+            remains_locked,
+            "request cancellation released admission while its writer was still running"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn security_test_token(claims: Value) -> String {
@@ -1496,6 +2150,62 @@ mod tests {
             &jsonwebtoken::EncodingKey::from_secret(b"test-secret"),
         )
         .unwrap()
+    }
+
+    #[cfg(feature = "openclaw")]
+    #[tokio::test]
+    async fn openclaw_http_hook_rejects_other_workspaces() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let other = security_test_root();
+        let app = app_router(provider_memory_test_state(&root));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/integrations/openclaw/hooks/session-start")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        json!({"event":{},"ctx":{"workspaceDir":other,"sessionId":"outside"}})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            !other.join(".lint-ai").exists(),
+            "rejected hook must not write outside the server workspace"
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[cfg(feature = "openclaw")]
+    #[tokio::test]
+    async fn openclaw_http_hook_rejects_jwt_workspace_access() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let app = app_router(security_test_state(&root));
+        let token = security_test_token(json!({"sub":"alice", "exp":4_102_444_800u64}));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/integrations/openclaw/hooks/bootstrap")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(axum::body::Body::from(
+                        json!({"event":{"context":{"workspaceDir":root}},"query":"private memory"})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -1630,6 +2340,159 @@ mod tests {
         assert!(states
             .get("alice", "shared-session", now_unix_ms())
             .is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn provider_memory_batch_writes_to_shared_store_and_search_sees_it() {
+        use tower::ServiceExt;
+
+        let root = security_test_root();
+        let app = app_router(provider_memory_test_state(&root));
+        let add = json!([{
+            "request_id":"hermes:test-turn",
+            "user_id":"hermes",
+            "session_id":"hermes:test-session",
+            "messages":[{"role":"assistant","content":"Shared provider memory stores the cobalt telescope calibration procedure."}]
+        }]);
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/provider-memory/add/batch")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(add.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let shared_root = crate::integrations::mcp_index::shared_memory_root(&root);
+        assert!(
+            shared_root.exists(),
+            "provider writes must use .lint-ai/memory"
+        );
+
+        // Use another integration's identity: server-token provider recall is
+        // intentionally shared across provider-owned memories.
+        let query = json!({
+            "query":"cobalt telescope calibration",
+            "user_id":"openclaw",
+            "top_k":5
+        });
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/provider-memory/search")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(query.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let hits = body["data"].as_array().unwrap();
+        assert!(hits.iter().any(|hit| hit["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cobalt telescope")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn provider_memory_search_includes_workspace_documents() {
+        use tower::ServiceExt;
+
+        let root = security_test_root();
+        std::fs::write(
+            root.join("README.md"),
+            "The vermilion observatory uses a brass meridian alignment checklist.",
+        )
+        .unwrap();
+        let app = app_router(provider_memory_test_state(&root));
+        let query = json!({
+            "query":"vermilion observatory meridian alignment checklist",
+            "user_id":"hermes",
+            "top_k":5
+        });
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/provider-memory/search")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(query.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let hits = body["data"].as_array().unwrap();
+        assert!(hits.iter().any(|hit| hit["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("vermilion observatory")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn jwt_provider_memory_search_remains_user_isolated() {
+        use tower::ServiceExt;
+
+        let root = security_test_root();
+        MemoryService::with_shared_memory(&root, |service| {
+            service.add_batch(vec![AddRequest {
+                request_id: "bob-private-memory".to_string(),
+                user_id: "bob".to_string(),
+                session_id: "bob-session".to_string(),
+                messages: vec![crate::memory_api::Message {
+                    role: "assistant".to_string(),
+                    timestamp: None,
+                    content: "Bob's private obsidian sundial calibration details.".to_string(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+            }])?;
+            Ok(())
+        })
+        .unwrap();
+
+        let app = app_router(security_test_state(&root));
+        let token = security_test_token(json!({"sub":"alice", "exp":4_102_444_800u64}));
+        let query = json!({
+            "query":"obsidian sundial calibration",
+            "user_id":"alice",
+            "top_k":5
+        });
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/provider-memory/search")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(axum::body::Body::from(query.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["data"].as_array().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1794,6 +2657,7 @@ mod tests {
         let state = AppState {
             service: Arc::new(RwLock::new(service)),
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            staged_writer: None,
             token: None,
             jwt_secret: None,
             tenant_id: None,
@@ -1824,14 +2688,21 @@ mod tests {
         assert!(token_is_valid("Bearer secret", "secret"));
         assert!(token_is_valid("Token secret", "secret"));
         assert!(!token_is_valid("Bearer other", "secret"));
+        assert!(!token_is_valid("", &"\0".repeat(256)));
     }
 
     #[test]
-    fn server_accepts_only_loopback_bind_addresses() {
-        assert!(ensure_loopback_bind("127.0.0.1:8080").is_ok());
-        assert!(ensure_loopback_bind("[::1]:8080").is_ok());
-        assert!(ensure_loopback_bind("0.0.0.0:8080").is_err());
-        assert!(ensure_loopback_bind("192.168.1.10:8080").is_err());
+    fn non_loopback_bind_requires_opt_in_and_authentication() {
+        assert!(ensure_bind_allowed("127.0.0.1:8080", false, false, false).is_ok());
+        assert!(ensure_bind_allowed("[::1]:8080", false, false, false).is_ok());
+        assert!(ensure_bind_allowed("0.0.0.0:8080", false, true, false).is_err());
+        assert!(ensure_bind_allowed("192.168.1.10:8080", true, false, false).is_err());
+        assert!(ensure_bind_allowed("0.0.0.0:8080", true, true, false).is_ok());
+        assert!(ensure_bind_allowed("0.0.0.0:8080", true, true, true).is_err());
+        let blank_token_is_configured = normalize_secret(Some("   ".to_string())).is_some();
+        assert!(
+            ensure_bind_allowed("0.0.0.0:8080", true, blank_token_is_configured, false).is_err()
+        );
     }
 
     #[tokio::test]
@@ -1839,6 +2710,54 @@ mod tests {
         let gate = tokio::sync::Mutex::new(());
         let _held = gate.lock().await;
         assert!(gate.try_lock().is_err());
+    }
+
+    #[cfg(feature = "openclaw")]
+    #[tokio::test]
+    async fn provider_memory_and_openclaw_http_writers_share_the_same_gate() {
+        use tower::ServiceExt;
+
+        let root = security_test_root();
+        let state = provider_memory_test_state(&root);
+        let gate = state.writer_gate.clone();
+        let app = app_router(state);
+        let _held = gate.lock().await;
+
+        let writes = [
+            (
+                "/provider-memory/add/batch",
+                json!([{
+                    "request_id": "hermes-race-test",
+                    "user_id": "hermes",
+                    "session_id": "race-test",
+                    "messages": [{"role": "user", "content": "race test"}]
+                }]),
+            ),
+            (
+                "/integrations/openclaw/hooks/agent-end",
+                json!({"event": {"runId": "openclaw-race-test"}, "ctx": {}}),
+            ),
+        ];
+
+        for (uri, payload) in writes {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "{uri} must be rejected while the shared writer gate is held"
+            );
+        }
     }
 
     #[test]

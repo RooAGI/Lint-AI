@@ -58,6 +58,18 @@ pub enum OpenClawHookKind {
 }
 
 impl OpenClawHookKind {
+    pub fn from_str(kind: &str) -> Option<Self> {
+        Some(match kind {
+            "bootstrap" => Self::Bootstrap,
+            "agent-end" => Self::AgentEnd,
+            "before-reset" => Self::BeforeReset,
+            "session-start" => Self::SessionStart,
+            "session-end" => Self::SessionEnd,
+            "shutdown" => Self::Shutdown,
+            _ => return None,
+        })
+    }
+
     fn event_name(self) -> &'static str {
         match self {
             Self::Bootstrap => "agent:bootstrap",
@@ -100,14 +112,39 @@ pub fn run_hook(kind: OpenClawHookKind, fallback_root: &Path) -> Result<()> {
             return Ok(());
         }
     };
+    let output = process_hook(kind, input, fallback_root);
+    emit(&output)
+}
+
+/// Execute an OpenClaw lifecycle event for either the CLI shim or HTTP API.
+/// Errors are deliberately converted to a fail-open response.
+pub fn process_http_hook(kind: OpenClawHookKind, value: Value, fallback_root: &Path) -> Value {
+    let input: OpenClawHookInput = match serde_json::from_value(value) {
+        Ok(input) => input,
+        Err(error) => {
+            eprintln!("warning: Lint-AI OpenClaw hook received invalid input: {error:#}");
+            return json!({ "ok": false, "error": "invalid hook input" });
+        }
+    };
+    // HTTP callers cannot choose the server's workspace via hook fields.
+    match fallback_root.canonicalize() {
+        Ok(root) => process_hook_at_root(kind, input, &root),
+        Err(_) => default_output(kind, &input),
+    }
+}
+
+fn process_hook(kind: OpenClawHookKind, input: OpenClawHookInput, fallback_root: &Path) -> Value {
     let root = match resolve_root(&input, kind, fallback_root) {
         Ok(root) => root,
         Err(error) => {
             eprintln!("warning: Lint-AI OpenClaw hook failed open: {error:#}");
-            emit(&default_output(kind, &input))?;
-            return Ok(());
+            return default_output(kind, &input);
         }
     };
+    process_hook_at_root(kind, input, &root)
+}
+
+fn process_hook_at_root(kind: OpenClawHookKind, input: OpenClawHookInput, root: &Path) -> Value {
     let session_id = session_id(&input, kind);
     if let Err(error) = record_event_if_enabled(
         RecordingProvider::OpenClaw,
@@ -125,11 +162,7 @@ pub fn run_hook(kind: OpenClawHookKind, fallback_root: &Path) -> Result<()> {
             default_output(kind, &input)
         }
     };
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &output)?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()?;
-    Ok(())
+    output
 }
 
 fn emit(output: &Value) -> Result<()> {
@@ -300,10 +333,32 @@ fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
 }
 
 fn retrieve_memories(root: &Path, query: &str) -> Result<String> {
-    if !memory_root(root).exists() {
-        return Ok(String::new());
-    }
-    let mut store = open_store(root)?;
+    let ignore_paths = vec![
+        "node_modules".to_string(),
+        "target".to_string(),
+        "dist".to_string(),
+        "build".to_string(),
+        "vendor".to_string(),
+        "coverage".to_string(),
+        ".git".to_string(),
+    ];
+    let input = crate::adapters::AdapterInput {
+        root,
+        max_bytes: 5_000_000,
+        max_files: 50_000,
+        max_depth: 20,
+        max_total_bytes: 100_000_000,
+    };
+    let mut store = MemoryService::open_workspace(
+        root,
+        crate::integrations::mcp_index::SHARED_MEMORY_DIR,
+        &ignore_paths,
+        || {
+            let graph = crate::adapters::build_project_graph(&input)?;
+            let graph = crate::adapters::apply_ignore_paths(graph, &ignore_paths);
+            Ok(crate::adapters::graph_to_source_documents(&graph))
+        },
+    )?;
     if store.is_empty() {
         return Ok(String::new());
     }
@@ -582,7 +637,7 @@ mod tests {
             id
         ));
         fs::create_dir_all(&root).unwrap();
-        root
+        fs::canonicalize(root).unwrap()
     }
 
     fn write_memory_doc(root: &Path, source: &str, content: &str) {
@@ -701,6 +756,35 @@ mod tests {
             .unwrap()
             .iter()
             .all(|f| f["name"] != "LINTAI.md"));
+    }
+
+    #[test]
+    fn bootstrap_recall_composes_workspace_index_with_shared_provider_memory() {
+        let root = test_root();
+        fs::write(
+            root.join("README.md"),
+            "The sapphire greenhouse uses a weekly humidity calibration checklist.",
+        )
+        .unwrap();
+        write_memory_doc(
+            &root,
+            "provider-seed",
+            "The copper observatory telescope calibration uses a star chart.",
+        );
+
+        let workspace_hits =
+            retrieve_memories(&root, "sapphire greenhouse humidity calibration").unwrap();
+        assert!(
+            workspace_hits.contains("sapphire greenhouse"),
+            "{workspace_hits}"
+        );
+
+        let provider_hits =
+            retrieve_memories(&root, "copper observatory telescope calibration").unwrap();
+        assert!(
+            provider_hits.contains("copper observatory"),
+            "{provider_hits}"
+        );
     }
 
     #[test]

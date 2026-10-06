@@ -33,14 +33,11 @@
 //! (prepare -> retrieve -> observe), the same path the MCP server uses.
 //! Sessions are fresh per pair, so there is no cross-pair contamination.
 
-use anyhow::{Context, Result};
-use clap::Parser;
 use crate::memory_api::{AddRequest, MemoryService, Message, SearchRequest};
 use crate::session_prepare::is_follow_up;
-use crate::{
-    ChunkStrategy, PipelineOptions, Tier1NerProvider,
-    Tier1TermRankerKind,
-};
+use crate::{ChunkStrategy, PipelineOptions, Tier1NerProvider, Tier1TermRankerKind};
+use anyhow::{Context, Result};
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -907,8 +904,7 @@ pub(crate) fn main() -> Result<()> {
                     expires_at_ms: None,
                     supersedes_id: None,
                 });
-                let doc_id =
-                    crate::memory_api::memory_document_id(USER_ID, &request_id, turn_idx);
+                let doc_id = crate::memory_api::memory_document_id(USER_ID, &request_id, turn_idx);
                 doc_to_turn.insert(doc_id, format!("s{n}t{turn_idx}"));
                 turn_lookup.insert((*n, turn_idx), (turn.speaker.clone(), turn.text.clone()));
             }

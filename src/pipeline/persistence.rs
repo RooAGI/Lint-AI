@@ -40,33 +40,74 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
         ));
     };
     let filter_started = std::time::Instant::now();
-    let filter_bitmap = match snapshot {
-        MemoryIndexSnapshot::Single(index) => index.doc_bitmap_matching_filters(filters),
-        MemoryIndexSnapshot::Segmented(_) => None,
+    let needs_semantic_visibility =
+        prepared.semantic_visibility_requires_doc_ids(semantic_relations);
+    let filter_bitmap = if filters.is_empty()
+        || (filters.len() == 1
+            && needs_semantic_visibility
+            && matches!(snapshot, MemoryIndexSnapshot::Single(_)))
+    {
+        None
+    } else {
+        match snapshot {
+            MemoryIndexSnapshot::Single(index) => index.doc_bitmap_matching_filters(filters),
+            MemoryIndexSnapshot::Segmented(_) => None,
+        }
     };
-    let filter_allowed = if filters.is_empty() {
+    // For a one-filter, one-segment query, apply semantic supersession as a
+    // bitmap subtraction. This avoids scanning every source document and
+    // materializing an allow-list containing nearly the whole corpus.
+    let effective_filter_bitmap = match snapshot {
+        MemoryIndexSnapshot::Single(index) if filters.len() == 1 && needs_semantic_visibility => {
+            let (key, value) = filters.first_key_value().expect("one filter");
+            index
+                .doc_bitmap_for_single_filter(key, value)
+                .map(|posting| {
+                    let mut allowed = posting.clone();
+                    allowed -=
+                        index.doc_bitmap_for_id_iter(semantic_relations.superseded_document_ids());
+                    allowed
+                })
+        }
+        MemoryIndexSnapshot::Segmented(segmented)
+            if filters.len() == 1
+                && segmented.segment_count() == 1
+                && needs_semantic_visibility =>
+        {
+            let (key, value) = filters.first_key_value().expect("one filter");
+            let index = &segmented.segments[0].index;
+            index
+                .doc_bitmap_for_single_filter(key, value)
+                .map(|posting| {
+                    let mut allowed = posting.clone();
+                    allowed -=
+                        index.doc_bitmap_for_id_iter(semantic_relations.superseded_document_ids());
+                    allowed
+                })
+        }
+        _ => None,
+    };
+    let filter_allowed = if filters.is_empty() || effective_filter_bitmap.is_some() {
         None
     } else if let MemoryIndexSnapshot::Segmented(segmented) = snapshot {
         // Build the routing scope from the per-segment bitmap postings. This
         // preserves filter-aware segment selection without scanning records.
-        // A one-segment snapshot has no routing decision to make; the local
-        // bitmap is sufficient and avoids materializing 23k string IDs --
-        // unless semantic relations exist, in which case the ID set is needed
-        // to intersect the field filters with the semantic supersession
-        // allow-list (a bitmap cannot express supersession).
-        if segmented.segment_count() == 1 && semantic_relations.is_empty() {
-            None
-        } else {
+        // Per-segment filter bitmaps below are enough to prune routing and
+        // constrain local queries. Materialize IDs only when semantic
+        // supersession needs an explicit allow-list.
+        if needs_semantic_visibility {
             segmented.doc_ids_matching_filters(filters)
+        } else {
+            None
         }
     } else if let MemoryIndexSnapshot::Single(index) = snapshot {
-        // The bitmap is the canonical filter representation. Keep the legacy
-        // string allow-list only when semantic suppression must be intersected
-        // with it; otherwise this avoids a full ID materialization per query.
-        if semantic_relations.is_empty() {
-            None
-        } else {
+        // Only materialize IDs when semantic supersession must be intersected
+        // with the filter. Without that policy, the query can enforce filters
+        // directly from the index bitmap.
+        if needs_semantic_visibility {
             index.doc_ids_matching_filters(filters)
+        } else {
+            None
         }
     } else {
         Some(
@@ -84,19 +125,55 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                 .collect::<HashSet<_>>(),
         )
     };
-    let filter_segment_bitmaps = match snapshot {
-        MemoryIndexSnapshot::Segmented(segmented) => {
-            Some(segmented.doc_bitmaps_matching_filters(filters))
+    // The common HTTP path scopes by one user filter. With a one-segment
+    // snapshot, borrow that immutable posting directly instead of cloning the
+    // bitmap into a temporary HashMap for every request.
+    let single_segment_filter_bitmap = match snapshot {
+        MemoryIndexSnapshot::Segmented(segmented)
+            if filters.len() == 1
+                && segmented.segment_count() == 1
+                && !needs_semantic_visibility =>
+        {
+            let (key, value) = filters.first_key_value().expect("one filter");
+            segmented.segments[0]
+                .index
+                .doc_bitmap_for_single_filter(key, value)
         }
-        MemoryIndexSnapshot::Single(_) => None,
+        _ => None,
+    };
+    let filter_segment_bitmaps = if filters.is_empty()
+        || single_segment_filter_bitmap.is_some()
+        || effective_filter_bitmap.is_some()
+    {
+        None
+    } else {
+        match snapshot {
+            MemoryIndexSnapshot::Segmented(segmented) => {
+                Some(segmented.doc_bitmaps_matching_filters(filters))
+            }
+            MemoryIndexSnapshot::Single(_) => None,
+        }
     };
     if profile {
         eprintln!(
-            "query_timing filter_ms={:.3}",
-            filter_started.elapsed().as_secs_f64() * 1000.0
+            "query_timing filter_ms={:.3} filters={} segments={} semantics_empty={}",
+            filter_started.elapsed().as_secs_f64() * 1000.0,
+            filters.len(),
+            match snapshot {
+                MemoryIndexSnapshot::Single(_) => 1,
+                MemoryIndexSnapshot::Segmented(segmented) => segmented.segment_count(),
+            },
+            semantic_relations.is_empty(),
         );
     }
-    let document_ids = source_docs.keys().cloned().collect::<Vec<_>>();
+    // With no semantic relations, semantic visibility is a no-op and the
+    // document IDs are never read. Avoid cloning every ID for ordinary
+    // lexical queries.
+    let document_ids = if !needs_semantic_visibility || effective_filter_bitmap.is_some() {
+        Vec::new()
+    } else {
+        source_docs.keys().cloned().collect::<Vec<_>>()
+    };
     let allowed_doc_ids =
         prepared.semantic_allowed_doc_ids(filter_allowed, semantic_relations, &document_ids);
 
@@ -157,7 +234,9 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
             let output = if !multi_segment {
                 let local_bitmap = filter_segment_bitmaps
                     .as_ref()
-                    .and_then(|maps| maps.values().next());
+                    .and_then(|maps| maps.values().next())
+                    .or(effective_filter_bitmap.as_ref())
+                    .or(single_segment_filter_bitmap);
                 let mut local_context = context;
                 if allowed_doc_ids.is_some() {
                     // The ID allow-list is materialized (field filters,
@@ -170,7 +249,7 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                     local_context.allowed_doc_ids = None;
                     local_context.allowed_doc_bitmap = local_bitmap;
                 }
-                let (results, _) = segmented
+                let (results, query_timings) = segmented
                     .query_single_segment(
                         prepared.search_query(),
                         top_k,
@@ -178,6 +257,15 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                         prepared.reference_date(),
                     )
                     .unwrap_or_default();
+                if profile {
+                    eprintln!(
+                        "query_timing index_total_ms={:.3} lexical_ms={:.3} snapshot_ms={:.3} rerank_ms={:.3}",
+                        query_timings.total_ms,
+                        query_timings.lexical_bm25_ms,
+                        query_timings.snapshot_query_ms,
+                        query_timings.rerank_ms,
+                    );
+                }
                 crate::segments::SegmentQueryOutput {
                     results,
                     diagnostics: Default::default(),
@@ -262,12 +350,17 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
             )
         }
         MemoryIndexSnapshot::Single(index) => {
-            let (results, timings, diagnostics) =
-                if filter_bitmap.is_some() && semantic_relations.is_empty() {
-                    prepared.execute_on_index_with_bitmap(index, top_k, filter_bitmap.as_ref())
-                } else {
-                    prepared.execute_on_index(index, top_k, allowed_doc_ids.as_ref())
-                };
+            let (results, timings, diagnostics) = if effective_filter_bitmap.is_some() {
+                prepared.execute_on_index_with_bitmap(
+                    index,
+                    top_k,
+                    effective_filter_bitmap.as_ref(),
+                )
+            } else if filter_bitmap.is_some() && allowed_doc_ids.is_none() {
+                prepared.execute_on_index_with_bitmap(index, top_k, filter_bitmap.as_ref())
+            } else {
+                prepared.execute_on_index(index, top_k, allowed_doc_ids.as_ref())
+            };
             (
                 prepared.annotate_semantic_results(results, semantic_relations, top_k),
                 timings,
@@ -603,47 +696,71 @@ pub(crate) fn load_semantic_state(
     Ok((source_docs, records, chunk_lifecycle, snapshot))
 }
 
-pub(crate) fn persist_semantic_state(
-    store_paths: &StorePaths,
+pub(crate) struct PreparedSemanticState {
+    records: String,
+    lifecycle: String,
+    core: Option<Vec<u8>>,
+}
+
+/// Serialize a matching generation without touching the filesystem.
+pub(crate) fn prepare_semantic_state(
     snapshot: Option<&MemoryIndex>,
     records_map: &HashMap<String, DocRecord>,
     chunk_lifecycle_map: &HashMap<String, ChunkLifecycleMeta>,
-) -> Result<()> {
-    let Some(semantic_dir) = store_paths.semantic_dir.as_ref() else {
-        return Ok(());
-    };
-    fs::create_dir_all(semantic_dir)?;
-    let records_path = semantic_records_path(store_paths)
-        .expect("records path should exist when semantic dir exists");
+) -> Result<PreparedSemanticState> {
     let mut records = records_map.values().cloned().collect::<Vec<_>>();
     records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
     let payload = PersistedSemanticRecords {
         schema_version: STORE_SCHEMA_VERSION,
         layout_version: STORE_LAYOUT_VERSION.to_string(),
         records: records.into_iter().map(PersistedDocRecord::from).collect(),
-        chunk_lifecycle: chunk_lifecycle_map
-            .values()
-            .cloned()
-            .collect::<Vec<ChunkLifecycleMeta>>(),
+        chunk_lifecycle: chunk_lifecycle_map.values().cloned().collect(),
     };
-    write_text_file_atomic(&records_path, &serde_json::to_string_pretty(&payload)?)?;
-    if let Some(lifecycle_path) = chunk_lifecycle_path(store_paths) {
-        let mut lifecycle = chunk_lifecycle_map
-            .values()
-            .cloned()
-            .collect::<Vec<ChunkLifecycleMeta>>();
-        lifecycle.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
-        write_text_file_atomic(&lifecycle_path, &serde_json::to_string_pretty(&lifecycle)?)?;
-    }
-    if let Some(snapshot) = snapshot {
-        let core_path = semantic_core_path(store_paths)
-            .expect("core path should exist when persisting a single index");
-        save_binary_core_atomic(snapshot, &core_path)?;
+    let mut lifecycle = chunk_lifecycle_map.values().cloned().collect::<Vec<_>>();
+    lifecycle.sort_by(|a, b| a.chunk_id.cmp(&b.chunk_id));
+    Ok(PreparedSemanticState {
+        records: serde_json::to_string(&payload)?,
+        lifecycle: serde_json::to_string(&lifecycle)?,
+        core: snapshot.map(MemoryIndex::to_bytes).transpose()?,
+    })
+}
+
+pub(crate) fn persist_prepared_semantic_state(
+    paths: &StorePaths,
+    prepared: &PreparedSemanticState,
+) -> Result<()> {
+    let Some(semantic_dir) = paths.semantic_dir.as_ref() else {
+        return Ok(());
+    };
+    fs::create_dir_all(semantic_dir)?;
+    write_text_file_atomic(
+        &semantic_records_path(paths).expect("records path"),
+        &prepared.records,
+    )?;
+    write_text_file_atomic(
+        &chunk_lifecycle_path(paths).expect("lifecycle path"),
+        &prepared.lifecycle,
+    )?;
+    if let Some(core) = &prepared.core {
+        write_bytes_file_atomic(&semantic_core_path(paths).expect("core path"), core)?;
     }
     Ok(())
 }
 
-fn ensure_safe_output_path(path: &Path) -> Result<()> {
+pub(crate) fn persist_semantic_state(
+    paths: &StorePaths,
+    snapshot: Option<&MemoryIndex>,
+    records: &HashMap<String, DocRecord>,
+    lifecycle: &HashMap<String, ChunkLifecycleMeta>,
+) -> Result<()> {
+    if paths.semantic_dir.is_none() {
+        return Ok(());
+    }
+    let prepared = prepare_semantic_state(snapshot, records, lifecycle)?;
+    persist_prepared_semantic_state(paths, &prepared)
+}
+
+pub(crate) fn ensure_safe_output_path(path: &Path) -> Result<()> {
     if path.is_dir() {
         anyhow::bail!("refusing to write: output path is a directory");
     }
@@ -707,6 +824,30 @@ fn atomic_temp_path(path: &Path) -> Result<PathBuf> {
 }
 
 pub(crate) fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+    write_text_file_atomic_with_permissions(path, content, false)
+}
+
+pub(crate) fn write_private_text_file_atomic(path: &Path, content: &str) -> Result<()> {
+    write_text_file_atomic_with_permissions(path, content, true)
+}
+
+fn write_text_file_atomic_with_permissions(
+    path: &Path,
+    content: &str,
+    private: bool,
+) -> Result<()> {
+    write_bytes_file_atomic_with_permissions(path, content.as_bytes(), private)
+}
+
+pub(crate) fn write_bytes_file_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    write_bytes_file_atomic_with_permissions(path, content, false)
+}
+
+fn write_bytes_file_atomic_with_permissions(
+    path: &Path,
+    content: &[u8],
+    private: bool,
+) -> Result<()> {
     ensure_safe_output_path(path)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -715,26 +856,22 @@ pub(crate) fn write_text_file_atomic(path: &Path, content: &str) -> Result<()> {
     }
     let temp_path = atomic_temp_path(path)?;
     {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all().ok();
-    }
-    fs::rename(&temp_path, path)?;
-    Ok(())
-}
-
-fn save_binary_core_atomic(snapshot: &MemoryIndex, path: &Path) -> Result<()> {
-    ensure_safe_output_path(path)?;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut file = options.open(&temp_path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
     }
-    let temp_path = atomic_temp_path(path)?;
-    snapshot.save_binary_core(&temp_path)?;
     fs::rename(&temp_path, path)?;
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::File::open(parent)?.sync_all()?;
+    }
     Ok(())
 }

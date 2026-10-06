@@ -15,6 +15,21 @@ use super::helpers::*;
 use super::model::*;
 use super::query_terms::*;
 
+fn partial_sort_top_by<T>(
+    items: &mut [T],
+    limit: usize,
+    mut compare: impl FnMut(&T, &T) -> std::cmp::Ordering,
+) {
+    let limit = limit.min(items.len());
+    if limit == 0 {
+        return;
+    }
+    if limit < items.len() {
+        items.select_nth_unstable_by(limit, |a, b| compare(a, b));
+    }
+    items[..limit].sort_by(|a, b| compare(a, b));
+}
+
 impl MemoryIndex {
     pub fn query(&self, query: &str, top_k: usize) -> Vec<SearchResult> {
         self.query_with_temporal_context(query, top_k, TemporalQueryContext::default())
@@ -392,8 +407,25 @@ impl MemoryIndex {
         Some(bitmap)
     }
 
+    pub(crate) fn doc_bitmap_for_single_filter(
+        &self,
+        key: &str,
+        value: &str,
+    ) -> Option<&RoaringBitmap> {
+        self.filter_postings.get(key)?.get(value)
+    }
+
     pub fn doc_bitmap_for_ids(&self, ids: &HashSet<String>) -> RoaringBitmap {
         ids.iter()
+            .filter_map(|id| self.doc_id_to_u32.get(id).copied())
+            .collect()
+    }
+
+    pub(crate) fn doc_bitmap_for_id_iter<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a str>,
+    ) -> RoaringBitmap {
+        ids.into_iter()
             .filter_map(|id| self.doc_id_to_u32.get(id).copied())
             .collect()
     }
@@ -560,6 +592,7 @@ impl MemoryIndex {
         let allowed_doc_u32s = allowed_doc_bitmap
             .map(AllowedDocs::Bitmap)
             .or_else(|| allowed_doc_ids_u32.as_ref().map(AllowedDocs::Set));
+        let sparse_setup_ms = sparse_start.elapsed().as_secs_f64() * 1000.0;
 
         fn score_doc<F>(
             candidates: &mut HashMap<usize, CandidateState>,
@@ -783,8 +816,8 @@ impl MemoryIndex {
                 continue;
             };
             let entry = candidates.entry(doc_u32).or_default();
-            if let Some(topic) = doc.probable_topic.as_ref() {
-                let topic_tokens = tokenize_query_terms(topic);
+            if let Some(topic) = self.doc_topic_tokens.get(doc_u32).filter(|v| !v.is_empty()) {
+                let topic_tokens = topic;
                 let overlap = topic_tokens
                     .iter()
                     .filter(|t| query_set.contains(*t))
@@ -794,20 +827,54 @@ impl MemoryIndex {
                     entry.score += delta;
                     entry.breakdown.topic_score += delta;
                 }
+            } else if self.doc_topic_tokens.get(doc_u32).is_none() {
+                if let Some(topic) = doc.probable_topic.as_ref() {
+                    let topic_tokens = tokenize_query_terms(topic);
+                    let overlap = topic_tokens
+                        .iter()
+                        .filter(|t| query_set.contains(*t))
+                        .count();
+                    if overlap > 0 {
+                        let delta = TOPIC_OVERLAP_WEIGHT * overlap as f32;
+                        entry.score += delta;
+                        entry.breakdown.topic_score += delta;
+                    }
+                }
             }
-            if let Some(dt) = doc.doc_type_guess.as_ref() {
-                let dt_tokens = tokenize_query_terms(dt);
+            if let Some(dt_tokens) = self.doc_type_tokens.get(doc_u32).filter(|v| !v.is_empty()) {
                 let overlap = dt_tokens.iter().filter(|t| query_set.contains(*t)).count();
                 if overlap > 0 {
                     let delta = DOC_TYPE_OVERLAP_WEIGHT * overlap as f32;
                     entry.score += delta;
                     entry.breakdown.doc_type_score += delta;
                 }
+            } else if self.doc_type_tokens.get(doc_u32).is_none() {
+                if let Some(dt) = doc.doc_type_guess.as_ref() {
+                    let dt_tokens = tokenize_query_terms(dt);
+                    let overlap = dt_tokens.iter().filter(|t| query_set.contains(*t)).count();
+                    if overlap > 0 {
+                        let delta = DOC_TYPE_OVERLAP_WEIGHT * overlap as f32;
+                        entry.score += delta;
+                        entry.breakdown.doc_type_score += delta;
+                    }
+                }
             }
             if self.claim_scoring && !doc.top_claims.is_empty() {
                 let mut best_claim_delta = 0.0f32;
-                for claim in &doc.top_claims {
-                    let claim_terms = claim_tokens(claim);
+                for (claim_idx, claim) in doc.top_claims.iter().enumerate() {
+                    let claim_terms = self
+                        .doc_claim_tokens
+                        .get(doc_u32)
+                        .and_then(|claims| claims.get(claim_idx))
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    let fallback_claim_terms;
+                    let claim_terms = if claim_terms.is_empty() {
+                        fallback_claim_terms = claim_tokens(claim);
+                        fallback_claim_terms.as_slice()
+                    } else {
+                        claim_terms
+                    };
                     if claim_terms.is_empty() {
                         continue;
                     }
@@ -858,7 +925,7 @@ impl MemoryIndex {
             .iter()
             .map(|(doc_u32, state)| (*doc_u32, state.score))
             .collect();
-        ranked_docs.sort_by(|a, b| {
+        partial_sort_top_by(&mut ranked_docs, ENTITY_GRAPH_MAX_CANDIDATES, |a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 // Deterministic tie-break: `candidates` is a HashMap, so equal
@@ -1036,7 +1103,7 @@ impl MemoryIndex {
                 }
             })
             .collect();
-        ranked_docs.sort_by(|a, b| {
+        partial_sort_top_by(&mut ranked_docs, FINAL_RERANK_WINDOW, |a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 // Deterministic tie-break: `candidates` is a HashMap, so equal
@@ -1295,9 +1362,12 @@ impl MemoryIndex {
         let rerank_ms = rerank_start.elapsed().as_secs_f64() * 1000.0;
         if std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some() {
             eprintln!(
-                "index_timing total={:.3} parse={:.3} lexical={:.3} posting={:.3} accumulate={:.3} rank={:.3} sequence={:.3} candidates={}",
-                rerank_ms, parse_ms, lexical_merge_ms, posting_scoring_ms,
-                candidate_accumulation_ms, candidate_rank_ms, sequence_rerank_ms,
+                "index_timing total={:.3} parse={:.3} sparse_setup={:.3} sparse={:.3} lexical={:.3} posting={:.3} accumulate={:.3} metadata={:.3} rank={:.3} graph={:.3} entity_graph={:.3} sequence={:.3} evidence={:.3} group_build={:.3} group_sort={:.3} candidates={}",
+                rerank_ms, parse_ms, sparse_setup_ms, sparse_scoring_ms, lexical_merge_ms, posting_scoring_ms,
+                candidate_accumulation_ms, metadata_ms,
+                candidate_rank_ms, graph_ms,
+                entity_graph_ms, sequence_rerank_ms, evidence_ms, group_build_ms,
+                group_sort_ms,
                 candidates.len()
             );
         }

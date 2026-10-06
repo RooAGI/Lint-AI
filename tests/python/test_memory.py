@@ -474,6 +474,9 @@ class TestRemoteLifecycle(unittest.TestCase):
         )
         self.assertTrue(added["success"])
 
+        # Remote adds are durably accepted before the server publishes the
+        # next immutable search snapshot. Flush explicitly for read-after-write.
+        memory.refresh()
         found = memory.search("submarines", "remote-user", 5)
         self.assertGreaterEqual(len(found), 1)
         record = found[0]

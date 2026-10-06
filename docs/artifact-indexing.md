@@ -112,19 +112,23 @@ Suggested layout:
 
 ```text
 .lint-ai/
-  lexical/
   semantic/
   metadata.json
 ```
 
 Where:
 
-- `lexical/`
-  - Tantivy lexical index
 - `semantic/`
   - persisted semantic records and binary core
 - `metadata.json`
   - index schema/layout metadata for validation and migration checks
+
+`IndexStore` and `MemoryService` persist semantic records and rebuild their
+immutable `MemoryIndex` query snapshot from those records. The snapshot owns
+the Tantivy lexical index used by active searches. They do not maintain a
+second persistent `lexical/` index. Existing legacy `lexical/` directories are
+left untouched. The standalone `build_query_snapshot_from_records` helper can
+still create a persistent Tantivy index at the resolved lexical path.
 
 This keeps index ownership local to the corpus and avoids guessing unrelated
 global paths.
@@ -234,11 +238,10 @@ The current internal layering is:
 - `DocRecord`
   - internal per-document indexed artifact
 - `MemoryIndex`
-  - built whole-corpus semantic query structure
+  - built immutable query structure, including its Tantivy lexical index
 - `IndexStore`
   - mutable orchestration layer over source documents, cached `DocRecord`s,
-    tombstones, an internal Tantivy lexical backend, and the current built
-    `MemoryIndex`
+    tombstones, and the current built `MemoryIndex`
 
 This means the “indexed document” layer already exists in practice today:
 `DocRecord` is that layer.
@@ -265,7 +268,6 @@ It stores:
 - `HashMap<String, SourceDocument>`
 - `HashMap<String, DocRecord>`
 - tombstone set for removed document ids
-- internal Tantivy BM25 state for lexical upsert/delete/search
 - optional `MemoryIndex`
 - dirty flag
 
@@ -292,8 +294,8 @@ Behavior:
   semantic `MemoryIndex` if the index is dirty
 - `query` is the internal query path and uses a fresh semantic snapshot
 - unchanged documents reuse cached `DocRecord`s during refresh
-- `IndexLocation` determines whether Tantivy is in-memory, corpus-local, or
-  under an explicit index root
+- `IndexLocation` determines where semantic persistence is stored; the
+  `MemoryIndex` Tantivy index is rebuilt as part of the query snapshot
 
 This means the write model is now mutable at the API layer, even though the
 underlying query index is still rebuilt in batch.
@@ -301,9 +303,9 @@ underlying query index is still rebuilt in batch.
 Another way to think about it:
 
 - `upsert/remove` edit the working set
-- `refresh()` updates Tantivy incrementally for lexical state and compiles the
-  semantic working set into the current searchable snapshot
-- `query()` combines Tantivy lexical hits with a fresh semantic snapshot
+- `refresh()` compiles the semantic working set into the current searchable
+  snapshot, which owns its Tantivy lexical index
+- `query()` searches the published snapshot
 
 ## Chunk Lifecycle Metadata
 
@@ -503,17 +505,19 @@ Behavior:
 - on `refresh()`, semantic state is written into the resolved semantic path
 - on persistent store initialization, semantic state is loaded from disk when
   compatible metadata and semantic files are present
-- restored semantic records are also used to repopulate the lexical index
+- restored semantic records are used to rebuild the lexical index inside the
+  published `MemoryIndex` snapshot
 
-This means the documented `semantic/` path is now active, not just reserved.
+This means the documented `semantic/` path is active. `IndexStore` no longer
+repopulates a separate lexical index on open.
 
 ## Snapshot as an Internal Concept
 
 The library still uses the concept of a snapshot internally:
 
 - mutable state exists inside the internal `IndexStore`
-- Tantivy lexical state is updated incrementally inside `IndexStore`
-- the queryable `MemoryIndex` is the frozen semantic search snapshot
+- the queryable `MemoryIndex` is the frozen semantic and lexical search
+  snapshot
 - `refresh()` materializes that semantic snapshot from current mutable state
 
 What is intentionally *not* introduced right now is a separate public snapshot

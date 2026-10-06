@@ -387,11 +387,6 @@ fn app_router(state: AppState) -> Router {
         .route("/add/batch", post(add_batch))
         .route("/flush", post(refresh_memories))
         .route("/search", post(search))
-        .route(
-            "/provider-memory/add/batch",
-            post(provider_memory_add_batch),
-        )
-        .route("/provider-memory/search", post(provider_memory_search))
         .route("/delete", post(delete))
         .route("/supersede", post(supersede))
         .route("/expire", post(expire))
@@ -402,6 +397,22 @@ fn app_router(state: AppState) -> Router {
         )
         .route("/v1/memories/search", post(search))
         .route("/v1/memories/refresh", post(refresh_memories));
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "openclaw",
+        feature = "hermes",
+        feature = "roo-runtime"
+    ))]
+    let router = router
+        .route(
+            "/provider-memory/add/batch",
+            post(provider_memory_add_batch),
+        )
+        .route("/provider-memory/search", post(provider_memory_search));
     #[cfg(feature = "openclaw")]
     let router = router.route("/integrations/openclaw/hooks/:kind", post(openclaw_hook));
     router
@@ -1330,6 +1341,16 @@ async fn add_batch(
 
 /// Provider hooks share `.lint-ai/memory` regardless of the server's primary
 /// `--index`. Search composes that store with the workspace-memory index.
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code",
+    feature = "openclaw",
+    feature = "hermes",
+    feature = "roo-runtime"
+))]
 async fn provider_memory_add_batch(
     State(state): State<AppState>,
     auth: Option<Extension<AuthContext>>,
@@ -1379,6 +1400,16 @@ async fn provider_memory_add_batch(
     }
 }
 
+#[cfg(any(
+    feature = "claude-code",
+    feature = "codex",
+    feature = "gemini-cli",
+    feature = "agy",
+    feature = "muse-code",
+    feature = "openclaw",
+    feature = "hermes",
+    feature = "roo-runtime"
+))]
 async fn provider_memory_search(
     State(state): State<AppState>,
     auth: Option<Extension<AuthContext>>,

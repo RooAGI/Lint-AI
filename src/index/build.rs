@@ -8,14 +8,57 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{Bm25StatisticsProvider, BooleanQuery, Occur, Query, QueryParser, TermQuery};
+use tantivy::query::{Bm25StatisticsProvider, Query, QueryParser};
 use tantivy::schema::document::TantivyDocument;
-use tantivy::schema::{Field, IndexRecordOption, Schema, STORED, STRING, TEXT};
-use tantivy::{doc, Index, Term};
+use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT};
+use tantivy::{doc, Index};
 
 use super::helpers::*;
 use super::model::*;
 use super::query_terms::*;
+
+/// Stem query words that match known semantic tag vocabulary (Luyi 2026-10-07).
+///
+/// Only stems words that could be tags ("weekends"->"weekend", "habitual" stays).
+/// Does NOT stem arbitrary words ("library" stays "library") to avoid breaking
+/// existing ranking. The tag vocabulary is the closed set from semantic_tags.rs.
+fn stem_query_porter(query: &str) -> String {
+    // Known tag base forms (canonical). If a query word stems to one of these,
+    // use the stemmed form so "weekends" matches the "weekend" tag.
+    const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food"];
+    
+    let mut result = String::with_capacity(query.len());
+    let mut word = String::new();
+    for c in query.chars() {
+        if c.is_alphanumeric() {
+            word.push(c);
+        } else {
+            if !word.is_empty() {
+                let lower = word.to_lowercase();
+                let stemmed = crate::porter_stemmer::porter_stem(&lower);
+                // Only use stemmed form if it's a known tag base.
+                // Otherwise keep the original word.
+                if TAG_BASES.contains(&stemmed.as_str()) {
+                    result.push_str(&stemmed);
+                } else {
+                    result.push_str(&lower);
+                }
+                word.clear();
+            }
+            result.push(c);
+        }
+    }
+    if !word.is_empty() {
+        let lower = word.to_lowercase();
+        let stemmed = crate::porter_stemmer::porter_stem(&lower);
+        if TAG_BASES.contains(&stemmed.as_str()) {
+            result.push_str(&stemmed);
+        } else {
+            result.push_str(&lower);
+        }
+    }
+    result
+}
 
 /// The chunk-content text indexed in the tantivy `content` field (and the
 /// text bekind judges for definitional semantic tags). Single helper so the
@@ -751,22 +794,49 @@ impl MemoryIndex {
         // Definitional semantic tags (Luyi 2026-09-28): closed-set temporal
         // words ("weekend"/"weekday"), "habitual", admitted kind tags.
         // Plain lowercase single words; the default TEXT analyzer keeps
-        // them intact (covered by unit test below).
+        // them intact.
         let tags_f = schema_builder.add_text_field("semantic_tags", TEXT);
+        // Subword field (Luyi 2026-10-07): Porter stems for
+        // morphological matching ("allergies" vs "allergic"). Uses the
+        // Subword content field (Luyi 2026-10-07): currently unused.
+        // Kept as TEXT to avoid custom tokenizer registration issues.
+        // The field is populated but not queried.
+        let subword_f = schema_builder.add_text_field("subword_content", TEXT);
+        // Session synthetic document fields (Luyi 2026-10-07): one session_doc
+        // per session aggregates tags. is_synthetic marks it; tag_links stores
+        // JSON tag->doc_ids mapping for provenance.
+        let is_synthetic_f = schema_builder.add_text_field("is_synthetic", STRING | STORED);
+        let tag_links_f = schema_builder.add_text_field("tag_links", STRING | STORED);
         let schema = schema_builder.build();
         // Deterministic doc order so the batched bekind verdicts map back
         // to documents by position.
         let mut ordered: Vec<&DocRecord> = docs.values().collect();
         ordered.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
-        let content_texts: Vec<String> = ordered
+        // Tags are precomputed at write time by MemoryService (the single
+        // write path) and stored in DocRecord.semantic_tags. If empty
+        // (legacy docs, or MemoryService didn't populate), compute them
+        // here as a fallback. The index builder just reads them — the
+        // computation is owned by the write path.
+        let tags_per_doc: Vec<Vec<String>> = ordered
             .iter()
-            .map(|doc| lexical_content_text(doc))
+            .map(|doc| {
+                if !doc.semantic_tags.is_empty() {
+                    doc.semantic_tags.clone()
+                } else {
+                    // Fallback: compute from content (should not happen in
+                    // normal flow, but ensures tags work).
+                    let contents: Vec<&str> = doc
+                        .section_chunks
+                        .iter()
+                        .map(|c| c.content.as_str())
+                        .collect();
+                    crate::semantic_tags::batch_doc_semantic_tags(&contents)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default()
+                }
+            })
             .collect();
-        let content_refs: Vec<&str> = content_texts.iter().map(String::as_str).collect();
-        // One batched daemon round-trip for the whole index. Fail-open:
-        // no daemon/binary yields no tags and the index builds exactly as
-        // before (every doc simply indexes an empty tags field).
-        let tags_per_doc = crate::semantic_tags::batch_doc_semantic_tags(&content_refs);
         let index = if let Some(dir) = lexical_dir {
             // Index open, schema migration, and population run through the
             // shared guarded writer entry point.
@@ -778,7 +848,14 @@ impl MemoryIndex {
                 |dir, schema| {
                     fs::create_dir_all(dir)?;
                     match Index::open_in_dir(dir) {
-                        Ok(existing) if existing.schema().get_field("semantic_tags").is_ok() => {
+                        Ok(existing)
+                            if existing.schema().get_field("semantic_tags").is_ok()
+                                && existing.schema().get_field("subword_content").is_ok() =>
+                        {
+                            // Register tokenizers on the open path too:
+                            // QueryParser resolves the field tokenizer
+                            // through the index's manager.
+                            crate::index::cjk_tokenizer::register_cjk_tokenizer(&existing);
                             return Ok((existing, false));
                         }
                         // Only a confirmed old schema authorizes replacement.
@@ -787,7 +864,10 @@ impl MemoryIndex {
                         Err(error) => return Err(error.into()),
                     }
                     fs::create_dir_all(dir)?;
-                    Ok((Index::create_in_dir(dir, schema.clone())?, true))
+                    let new_index = Index::create_in_dir(dir, schema.clone())?;
+                    // Register tokenizers before the writer uses them.
+                    crate::index::cjk_tokenizer::register_cjk_tokenizer(&new_index);
+                    Ok((new_index, true))
                 },
                 |writer| {
                     for (doc, tags) in ordered.iter().zip(tags_per_doc.iter()) {
@@ -812,7 +892,7 @@ impl MemoryIndex {
                         let content_text = lexical_content_text(doc);
                         let temporal_text = doc.temporal_terms.join(" ");
                         let tags_text = tags.join(" ");
-                        writer.add_document(doc!(doc_id_f => doc.doc_id.clone(), content_f => content_text, headings_f => headings_text, terms_f => terms_text, entities_f => entities_text, temporal_f => temporal_text, tags_f => tags_text))?;
+                        writer.add_document(doc!(doc_id_f => doc.doc_id.clone(), content_f => content_text, headings_f => headings_text, terms_f => terms_text, entities_f => entities_text, temporal_f => temporal_text, tags_f => tags_text, subword_f => content_text))?;
                     }
                     Ok(())
                 },
@@ -832,6 +912,9 @@ impl MemoryIndex {
                 entities_f,
                 temporal_f,
                 tags_f,
+                subword_f,
+                is_synthetic_f,
+                tag_links_f,
             )?;
             ram
         };
@@ -853,6 +936,9 @@ impl MemoryIndex {
         let entities_f = schema_ref.get_field("entities")?;
         let temporal_f = schema_ref.get_field("temporal_terms")?;
         let tags_f = schema_ref.get_field("semantic_tags")?;
+        let subword_f = schema_ref.get_field("subword_content")?;
+        let is_synthetic_f = schema_ref.get_field("is_synthetic")?;
+        let tag_links_f = schema_ref.get_field("tag_links")?;
         Ok(LexicalIndex {
             index,
             reader,
@@ -863,6 +949,9 @@ impl MemoryIndex {
             entities_f,
             temporal_f,
             tags_f,
+            subword_f,
+            is_synthetic_f,
+            tag_links_f,
         })
     }
 
@@ -882,6 +971,9 @@ impl MemoryIndex {
         entities_f: Field,
         temporal_f: Field,
         tags_f: Field,
+        subword_f: Field,
+        is_synthetic_f: Field,
+        tag_links_f: Field,
     ) -> Result<()> {
         let mut index = index.clone();
         with_guarded_index_writer(
@@ -919,7 +1011,8 @@ impl MemoryIndex {
                         terms_f => terms_text,
                         entities_f => entities_text,
                         temporal_f => temporal_text,
-                        tags_f => tags_text
+                        tags_f => tags_text,
+                        subword_f => content_text
                     ))?;
                 }
                 Ok(())
@@ -929,31 +1022,25 @@ impl MemoryIndex {
     }
 
     /// Lexical BM25 over the tantivy index, plus definitional semantic-tag
-    /// matching (Luyi 2026-09-28).
+    /// matching (Luyi 2026-09-28; synthetic-document since 2026-10-07).
     ///
-    /// `tags` are closed-set definitional tags derived from the ORIGINAL
-    /// user query (temporal words, "habitual", admitted kind tags). Each
-    /// tag becomes a SHOULD TermQuery on the `semantic_tags` field, scored
-    /// by plain BM25 (IDF, length norm, saturation) like every other term —
-    /// no fixed multiplier. Tags are never added to the multi-field
-    /// QueryParser (avoids cross-field tokenization noise) and never
-    /// filter: an empty `tags` runs the lexical query exactly as before.
+    /// Each document's canonical tags (closed-set temporal words,
+    /// "habitual", admitted kind tags) are indexed as ordinary terms in the
+    /// `semantic_tags` field, and the multi-field QueryParser searches that
+    /// field like every other field — scored by plain BM25 (IDF, length
+    /// norm, saturation) like every other term, no fixed multiplier. Tags
+    /// never filter: a doc without tags simply has an empty field.
     pub(crate) fn lexical_bm25(
         &self,
         query: &str,
         top_k: usize,
         statistics: Option<&dyn Bm25StatisticsProvider>,
-        tags: &[String],
     ) -> Result<HashMap<String, f32>> {
         let Some(lex) = self.lexical.as_ref() else {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        // Canonical tag order so equal tag sets share a cache entry.
-        let mut sorted_tags: Vec<String> = tags.to_vec();
-        sorted_tags.sort();
-        sorted_tags.dedup();
-        let cache_key = (query.to_string(), sorted_tags.clone());
+        let cache_key = query.to_string();
         let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let cached = {
             let cache = parsed_cache
@@ -964,6 +1051,7 @@ impl MemoryIndex {
         let parsed = if let Some(parsed) = cached {
             parsed
         } else {
+            // Main fields: exact match via QueryParser.
             let mut query_parser = QueryParser::for_index(
                 &lex.index,
                 vec![
@@ -972,6 +1060,10 @@ impl MemoryIndex {
                     lex.terms_f,
                     lex.entities_f,
                     lex.temporal_f,
+                    // Synthetic document tags (Luyi 2026-10-07): exact match
+                    // via QueryParser. Query is Porter-stemmed below so
+                    // "weekends" matches the "weekend" tag.
+                    lex.tags_f,
                 ],
             );
             query_parser.set_field_boost(lex.content_f, LEXICAL_CONTENT_BOOST);
@@ -979,10 +1071,15 @@ impl MemoryIndex {
             query_parser.set_field_boost(lex.terms_f, LEXICAL_TERMS_BOOST);
             query_parser.set_field_boost(lex.entities_f, LEXICAL_ENTITIES_BOOST);
             query_parser.set_field_boost(lex.temporal_f, 1.1);
-            let parsed_lexical = match query_parser.parse_query(query) {
+            query_parser.set_field_boost(lex.tags_f, LEXICAL_TAGS_BOOST);
+            // Porter-stem the query (Luyi 2026-10-07): "weekends" -> "weekend"
+            // so inflected forms match canonical tags. Preserves query
+            // structure (quotes, etc.) by stemming word-by-word.
+            let stemmed_query = stem_query_porter(query);
+            let parsed_lexical = match query_parser.parse_query(&stemmed_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {
-                    let fallback_query = sanitize_bm25_query(query);
+                    let fallback_query = sanitize_bm25_query(&stemmed_query);
                     if fallback_query.is_empty() {
                         return Err(first_err.into());
                     }
@@ -992,28 +1089,10 @@ impl MemoryIndex {
                     }
                 }
             };
-            let parsed_lexical: Box<dyn Query> = Box::new(parsed_lexical);
-            // Definitional tags join as SHOULD clauses: purely additive,
-            // scored by BM25 inside the tantivy scorer — a match, not a
-            // bonus bolted on after scoring.
-            // Luyi 2026-09-30: the lexical query stays MUST — its required
-            // terms/AND constraints are mandatory. Tags are SHOULD (optional
-            // scoring). Previously the lexical query was SHOULD, so a doc
-            // matching only a tag could pass despite failing lexical constraints.
-            let combined: Arc<dyn Query> = if sorted_tags.is_empty() {
-                Arc::from(parsed_lexical)
-            } else {
-                let mut subqueries: Vec<(Occur, Box<dyn Query>)> = Vec::new();
-                subqueries.push((Occur::Must, parsed_lexical));
-                for tag in &sorted_tags {
-                    let term_query = TermQuery::new(
-                        Term::from_field_text(lex.tags_f, tag),
-                        IndexRecordOption::Basic,
-                    );
-                    subqueries.push((Occur::Should, Box::new(term_query)));
-                }
-                Arc::new(BooleanQuery::new(subqueries))
-            };
+            // Tags are first-class lexical terms now (see above): no side
+            // SHOULD clauses, no per-query mapping. The parsed query is the
+            // whole retrieval query.
+            let combined: Arc<dyn Query> = Arc::from(parsed_lexical);
             let mut cache = parsed_cache
                 .lock()
                 .expect("parsed lexical query cache lock poisoned");

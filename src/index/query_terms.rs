@@ -10,6 +10,20 @@ pub(crate) const LEXICAL_CONTENT_BOOST: f32 = 1.0;
 pub(crate) const LEXICAL_HEADINGS_BOOST: f32 = 1.4;
 pub(crate) const LEXICAL_TERMS_BOOST: f32 = 2.0;
 pub(crate) const LEXICAL_ENTITIES_BOOST: f32 = 2.4;
+/// Boost for the synthetic document terms (Luyi 2026-10-07): the doc's
+/// canonical definitional tags indexed as ordinary lexical terms in the
+/// `semantic_tags` field. Set high: a canonical match is definitional —
+/// when the question says "weekend" and the doc is tagged "weekend", that
+/// signal must dominate the noise from common question terms.
+/// Set by measurement on the 16Q probe (mem-05); revisit if
+/// retrieval-wide metrics shift.
+pub(crate) const LEXICAL_TAGS_BOOST: f32 = 5.0;
+
+/// Boost for the `subword_content` field (Porter stems). Set very low:
+/// subword matches are a last-resort recall aid for morphological variants,
+/// not a precision signal — the full-word fields carry the definitional
+/// weight. Must not outrank exact matches.
+pub(crate) const LEXICAL_SUBWORD_BOOST: f32 = 0.1;
 
 pub(crate) const FULL_QUERY_ENTITY_WEIGHT: f32 = 1.5;
 pub(crate) const ENTITY_TERM_WEIGHT: f32 = 1.2;
@@ -26,10 +40,13 @@ pub(crate) const QUERY_TERM_CACHE_CAPACITY: usize = 256;
 /// this only scales that in-scorer weight.
 ///
 /// Tuning (2026-09-28, BEHOOD_BIN binary):
-/// Luyi 2026-09-29: no fixed tag multiplier. Tags join the lexical query as
-/// plain SHOULD TermQueries, scored by BM25 like every other term. (The old
-/// TAG_BOOST = 29.0 was calibrated only on the 19-fact toy set and was never
-/// validated retrieval-wide.)
+/// Luyi 2026-09-29: no fixed tag multiplier — tags score by BM25 like every
+/// other term. (The old TAG_BOOST = 29.0 was calibrated only on the 19-fact
+/// toy set and never validated retrieval-wide.)
+/// Luyi 2026-10-07: tags are indexed as ordinary terms in the
+/// `semantic_tags` field (synthetic document) and searched through the
+/// multi-field QueryParser with LEXICAL_TAGS_BOOST — no SHOULD
+/// side-channel, no per-query mapping.
 #[derive(Clone)]
 pub(crate) struct PreparedQueryTerms {
     pub(crate) normalized: String,
@@ -43,11 +60,9 @@ pub(crate) static RAW_PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Prepa
     OnceLock::new();
 // All MemoryIndex lexical shards use the same fixed schema, so Tantivy's parsed
 // query object can be shared safely between shards. This avoids rebuilding the
-// QueryParser and query tree once per selected segment. The key includes the
-// definitional semantic tags: the same query text with different tags is a
-// different tantivy query.
+// QueryParser and query tree once per selected segment.
 pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<
-    Mutex<HashMap<(String, Vec<String>), Arc<dyn Query>>>,
+    Mutex<HashMap<String, Arc<dyn Query>>>,
 > = OnceLock::new();
 
 pub(crate) fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {

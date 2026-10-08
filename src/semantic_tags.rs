@@ -1,19 +1,21 @@
-//! Definitional semantic tags (Luyi 2026-09-28).
+//! Definitional semantic tags (Luyi 2026-09-28; index-time-only since 2026-10-07).
 //!
 //! Ruling: definitional knowledge (Saturday = weekend, cilantro = a herb)
 //! is not a score bonus. It is a first-class match inside the retrieval
-//! model. bekind judges each document at index time and each query at
-//! query time; both sides emit the same closed-set tag vocabulary, and the
-//! tags are indexed and searched as ordinary terms in the tantivy lexical
-//! index — weighted by BM25 (IDF, length norm, saturation) like every
-//! other term. There are no additive constants outside the scorer.
+//! model. bekind judges each document ONCE at index time; the canonical
+//! closed-set tags (temporal words, "habitual", admitted kinds) are indexed
+//! as ordinary terms in the tantivy `semantic_tags` field — the "synthetic
+//! document". The query path does no per-query bekind mapping: a question
+//! saying "weekend" matches a doc whose literal words say "Saturday"
+//! through the doc's indexed canonical terms, scored by BM25 (IDF, length
+//! norm, saturation) like every other term. There are no additive constants
+//! outside the scorer, and no daemon round-trip on the query path.
 //!
-//! Tags are purely additive (SHOULD clauses): a tag match can only raise a
-//! document's score, never lower it, and a missing tag changes nothing.
+//! Tags are purely additive in the index: a doc without tags simply has an
+//! empty synthetic field, and retrieval degrades to the pre-tag behavior.
 
 use crate::behood_query::{
-    analyze_kind_verdicts, analyze_query_semantics, analyze_scope_verdicts, KindVerdict,
-    QueryEntity, ScopeVerdict,
+    analyze_kind_verdicts, analyze_scope_verdicts, KindVerdict, ScopeVerdict,
 };
 use std::collections::HashMap;
 
@@ -23,7 +25,37 @@ pub const HABITUAL_TAG: &str = "habitual";
 /// Admitted closed-set kind tags (Luyi 2026-09-28). Each new category needs
 /// its own explicit admission here: bekind reporting a kind does NOT
 /// automatically tag it.
-pub const ADMITTED_KIND_TAGS: &[&str] = &["herb"];
+pub const ADMITTED_KIND_TAGS: &[&str] = &["herb", "food"];
+
+/// Caller-owned closed food lexicon (Luyi 2026-10-07): bekind does not
+/// reliably extract food entities ("peanuts" comes back unjudged), so the
+/// caller maps known food words to the admitted "food" kind tag. Fixed
+/// enumeration — each new food needs explicit admission here.
+const FOOD_KIND_LEXICON: &[&str] = &[
+    "peanuts", "peanut", "almonds", "almond", "walnuts", "walnut", "cashews", "cashew",
+    "milk", "cheese", "butter", "eggs", "egg", "wheat", "bread", "rice",
+    "chicken", "beef", "pork", "fish", "salmon", "tuna", "shrimp",
+    "apple", "banana", "orange", "strawberry", "blueberry",
+    "chocolate", "honey", "sugar", "salt",
+];
+
+/// Pure food-kind tag emission from document text: emits "food" when the
+/// text names a lexicon food (whole-word match). Unit-testable, no I/O.
+fn doc_food_kind_tag(content: &str) -> Option<String> {
+    let norm = format!(
+        " {} ",
+        content
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    FOOD_KIND_LEXICON
+        .iter()
+        .any(|w| norm.contains(&format!(" {w} ")))
+        .then(|| "food".to_string())
+}
 
 /// Pure tag emission from one document's scope verdict. Unit-testable, no
 /// I/O. Emits the canonical temporal words verbatim (bekind already emits
@@ -67,53 +99,6 @@ pub fn batch_doc_scope_tags(contents: &[&str]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Scope verdicts + definitional tags for the ORIGINAL user query, from a
-/// SINGLE behood daemon round-trip.
-///
-/// The query path needs both halves of the query's semantics: the scope
-/// verdict (canonical temporal words, [`HABITUAL_TAG`] when the question
-/// itself is habitual, and the activity phrase for the venue boost) and
-/// the admitted kind tags ("herb"). Fetching them together costs one parse
-/// plus one judge call through the daemon pair, versus the old multi
-/// round-trip sequence — and no subprocess spawn anywhere.
-///
-/// Tag semantics (unchanged): temporal words are emitted verbatim — bekind
-/// already emits canonical lowercase from the closed 7-day set, so the
-/// query and index sides share the exact token. A non-habitual question
-/// emits no habitual tag — no effect, never a penalty. Kind tags are
-/// admitted kinds only; bekind reporting a kind does NOT automatically
-/// tag it.
-///
-/// Fail-open: no daemon/binary or no definitional content in the question
-/// yields empty verdicts/tags, and the lexical query runs exactly as
-/// before.
-pub fn query_semantics(query: &str) -> (Vec<ScopeVerdict>, Vec<String>) {
-    let (scope_verdicts, entities) = analyze_query_semantics(query);
-    let tags = query_tags(&scope_verdicts, &entities);
-    (scope_verdicts, tags)
-}
-
-/// Pure tag emission from one query's scope verdicts + entities:
-/// temporal words, [`HABITUAL_TAG`], admitted kinds. Unit-testable, no I/O.
-fn query_tags(scope_verdicts: &[ScopeVerdict], entities: &[QueryEntity]) -> Vec<String> {
-    let mut tags = Vec::new();
-    if let Some(verdict) = scope_verdicts.first() {
-        tags.extend(verdict.temporal_words.iter().cloned());
-        if verdict.habitual {
-            tags.push(HABITUAL_TAG.to_string());
-        }
-    }
-    tags.extend(
-        entities
-            .iter()
-            .map(|entity| entity.kind.to_lowercase())
-            .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str())),
-    );
-    tags.sort();
-    tags.dedup();
-    tags
-}
-
 /// Pure tag emission from one document's kind verdict: admitted kinds only.
 /// Unit-testable, no I/O.
 pub fn doc_kind_tags(verdict: &KindVerdict) -> Vec<String> {
@@ -154,27 +139,25 @@ pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
 }
 
 /// All definitional tags for document contents: scope tags + admitted kind
-/// tags, merged and deduplicated. One batched daemon call per layer.
+/// tags, merged and deduplicated. One batched daemon call per layer, plus
+/// the caller-owned food lexicon (bekind under-extracts food entities).
 pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
     let scope_tags = batch_doc_scope_tags(contents);
     let kind_tags = batch_doc_kind_tags(contents);
     scope_tags
         .into_iter()
         .zip(kind_tags)
-        .map(|(mut scope, kind)| {
+        .zip(contents.iter())
+        .map(|((mut scope, kind), content)| {
             scope.extend(kind);
+            if let Some(food) = doc_food_kind_tag(content) {
+                scope.push(food);
+            }
             scope.sort();
             scope.dedup();
             scope
         })
         .collect()
-}
-
-/// All definitional tags for the ORIGINAL user query: scope tags + admitted
-/// kind tags, merged and deduplicated. One daemon round-trip via
-/// [`query_semantics`].
-pub fn query_semantic_tags(query: &str) -> Vec<String> {
-    query_semantics(query).1
 }
 
 #[cfg(test)]
@@ -219,36 +202,6 @@ mod tests {
         );
     }
 
-    fn query_entity(text: &str, kind: &str) -> QueryEntity {
-        QueryEntity {
-            text: text.to_string(),
-            kind: kind.to_string(),
-        }
-    }
-
-    #[test]
-    fn query_tags_merge_scope_and_admitted_kinds() {
-        let verdicts = vec![verdict(&["weekend"], true)];
-        let entities = vec![
-            query_entity("cilantro", "herb"),
-            query_entity("Jean", "person"),
-        ];
-        // "person" is not an admitted kind tag; scope words + habitual kept.
-        assert_eq!(
-            query_tags(&verdicts, &entities),
-            vec![
-                "habitual".to_string(),
-                "herb".to_string(),
-                "weekend".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn query_tags_empty_semantics_yields_no_tags() {
-        assert!(query_tags(&[], &[]).is_empty());
-    }
-
     fn kind_verdict(kinds: &[(&str, &str)]) -> KindVerdict {
         KindVerdict {
             id: "k:0".to_string(),
@@ -263,16 +216,16 @@ mod tests {
     }
 
     #[test]
-    fn doc_kind_tags_emit_admitted_herb_only() {
+    fn doc_kind_tags_emit_admitted_herb_and_food_only() {
         assert_eq!(
-            doc_kind_tags(&kind_verdict(&[("cilantro", "herb"), ("coffee", "food")])),
-            vec!["herb".to_string()]
+            doc_kind_tags(&kind_verdict(&[("cilantro", "herb"), ("coffee", "food"), ("Jean", "person")])),
+            vec!["food".to_string(), "herb".to_string()]
         );
     }
 
     #[test]
     fn doc_kind_tags_empty_without_admitted_kinds() {
-        assert!(doc_kind_tags(&kind_verdict(&[("coffee", "food")])).is_empty());
+        assert!(doc_kind_tags(&kind_verdict(&[("Jean", "person")])).is_empty());
         assert!(doc_kind_tags(&kind_verdict(&[])).is_empty());
     }
 
@@ -284,10 +237,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn doc_food_kind_tag_matches_lexicon_whole_word() {
+        assert_eq!(
+            doc_food_kind_tag("The user is allergic to peanuts."),
+            Some("food".to_string())
+        );
+        // Coffee/tea removed from lexicon (Luyi 2026-10-07): they caused
+        // false positives (e.g., "coffee" matching unrelated docs).
+        // The lexicon focuses on foods that indicate dietary restrictions.
+        assert_eq!(
+            doc_food_kind_tag("The user drinks coffee in the morning."),
+            None
+        );
+        // Whole-word: "peanut" must not match "peanutbutter" (no such word,
+        // but the boundary logic is the control).
+        assert_eq!(doc_food_kind_tag("The user runs daily."), None);
+    }
+
     /// The `semantic_tags` index field uses tantivy's default TEXT analyzer;
     /// every tag token ("weekend", "weekday", "habitual", "herb") must survive
-    /// it as a single lowercase token, otherwise the SHOULD TermQueries
-    /// would silently match nothing.
+    /// it as a single lowercase token, otherwise the QueryParser would
+    /// silently match nothing on the synthetic terms.
     #[test]
     fn default_text_analyzer_preserves_tag_tokens() {
         use tantivy::collector::Count;

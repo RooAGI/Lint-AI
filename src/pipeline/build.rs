@@ -448,6 +448,19 @@ fn assemble_doc_record(
     }
     let temporal_terms =
         extract_temporal_terms(source_doc.timestamp.as_deref(), &doc.content, &doc.headings);
+    // Synthetic semantic tags (Luyi 2026-10-07): bekind's canonical
+    // judgments computed once at write time (MemoryService is the single
+    // write path). Stored in DocRecord, read by the index builder.
+    let semantic_tags: Vec<String> = {
+        let contents: Vec<&str> = section_chunks
+            .iter()
+            .map(|c| c.content.as_str())
+            .collect();
+        crate::semantic_tags::batch_doc_semantic_tags(&contents)
+            .into_iter()
+            .flatten()
+            .collect()
+    };
     let mut record = DocRecord {
         doc_id: doc.id.clone(),
         source: doc.source.clone(),
@@ -481,6 +494,7 @@ fn assemble_doc_record(
         // Stamped here so both build paths (single + batch) agree with the
         // cheap pre-build hash by construction.
         content_hash: doc_record_content_hash(source_doc, options),
+        semantic_tags,
     };
 
     if options.claim_extraction {

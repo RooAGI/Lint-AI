@@ -109,6 +109,8 @@ pub(crate) struct PersistedDocRecord {
     provenance: Provenance,
     #[serde(default)]
     content_hash: String,
+    #[serde(default)]
+    semantic_tags: Vec<String>,
 }
 
 impl From<DocRecord> for PersistedDocRecord {
@@ -136,6 +138,7 @@ impl From<DocRecord> for PersistedDocRecord {
             top_claims: record.top_claims,
             provenance: record.provenance,
             content_hash: record.content_hash,
+            semantic_tags: record.semantic_tags,
         }
     }
 }
@@ -165,6 +168,7 @@ impl From<PersistedDocRecord> for DocRecord {
             top_claims: record.top_claims,
             provenance: record.provenance,
             content_hash: record.content_hash,
+            semantic_tags: record.semantic_tags,
         }
     }
 }

@@ -106,6 +106,8 @@ mod report;
 mod review;
 mod rules;
 mod semantic_tags;
+mod bart_tokenizer;
+mod porter_stemmer;
 mod stopwords_data;
 mod symbols;
 mod temporal;

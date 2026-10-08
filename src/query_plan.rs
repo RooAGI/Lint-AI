@@ -25,10 +25,6 @@ use std::collections::HashSet;
 pub struct PreparedQuery {
     analysis: QueryAnalysis,
     reference_date: Option<String>,
-    /// Definitional semantic tags computed from the ORIGINAL user query
-    /// (not the augmented text). The caller sets these after construction;
-    /// [`Self::temporal_context`] carries them into the index query.
-    semantic_tags: Vec<String>,
 }
 
 impl PreparedQuery {
@@ -36,7 +32,6 @@ impl PreparedQuery {
         Self {
             analysis: analyze_query(query),
             reference_date: None,
-            semantic_tags: Vec::new(),
         }
     }
 
@@ -46,19 +41,11 @@ impl PreparedQuery {
         Self {
             analysis: analyze_query(query),
             reference_date: Some(reference_date.to_string()),
-            semantic_tags: Vec::new(),
         }
     }
 
     pub fn reference_date(&self) -> Option<&str> {
         self.reference_date.as_deref()
-    }
-
-    /// Attaches definitional semantic tags (closed-set temporal words,
-    /// "habitual", admitted kind tags) derived from the original user
-    /// query. Empty = tag matching off.
-    pub fn set_semantic_tags(&mut self, tags: Vec<String>) {
-        self.semantic_tags = tags;
     }
 
     /// Reuses an analysis the caller already computed, so no query is analyzed
@@ -67,7 +54,6 @@ impl PreparedQuery {
         Self {
             analysis,
             reference_date: None,
-            semantic_tags: Vec::new(),
         }
     }
 
@@ -137,9 +123,6 @@ impl PreparedQuery {
             allowed_doc_ids: None,
             allowed_doc_bitmap: None,
             allowed_segment_doc_bitmaps: None,
-            // Definitional tags ride the context into the tantivy lexical
-            // query; empty here means tag matching is off for this query.
-            semantic_tags: &self.semantic_tags,
         }
     }
 

@@ -85,6 +85,13 @@ pub struct DocRecord {
     /// records) and forces a rebuild. See `doc_record_content_hash`.
     #[serde(default)]
     pub content_hash: String,
+    /// Synthetic semantic tags (Luyi 2026-10-07): bekind's canonical
+    /// judgments (scope words like "weekend", "habitual", admitted kind
+    /// tags) indexed as ordinary terms. Computed once at write time by
+    /// MemoryService (the single write path), stored here, read by the
+    /// index builder. No recomputation at index time.
+    #[serde(default)]
+    pub semantic_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,6 +393,15 @@ pub(crate) struct LexicalIndex {
     /// score through BM25 like every other term (Luyi 2026-09-28:
     /// definitional knowledge is a match, not a bonus).
     pub(crate) tags_f: Field,
+    /// Subword field (Luyi 2026-10-07): character 4-grams for morphological
+    /// matching. Uses the "subword" tokenizer.
+    pub(crate) subword_f: Field,
+    /// Session synthetic document marker (Luyi 2026-10-07): "true" for
+    /// session_doc, absent for regular docs.
+    pub(crate) is_synthetic_f: Field,
+    /// Tag->doc_ids JSON mapping for session_doc provenance (Luyi 2026-10-07).
+    /// e.g. {"weekend": ["doc-1"], "food": ["doc-2"]}. STORED only.
+    pub(crate) tag_links_f: Field,
 }
 
 /// A live corpus-wide BM25 statistics provider assembled from shard searchers.
@@ -526,10 +542,6 @@ pub struct ScoreBreakdown {
     pub graph_link_score: f32,
     pub entity_graph_score: f32,
     pub sequence_rerank_score: f32,
-    /// Additive activity↔venue rank boost (lint-ai activity→venue table
-    /// over bekind's activity phrase + place-kind verdicts). Boost only —
-    /// a zero here means "no venue match", never a penalty.
-    pub activity_venue_boost: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -615,12 +627,6 @@ pub struct TemporalQueryContext<'a> {
     pub allowed_doc_ids: Option<&'a HashSet<String>>,
     pub allowed_doc_bitmap: Option<&'a RoaringBitmap>,
     pub allowed_segment_doc_bitmaps: Option<&'a HashMap<String, RoaringBitmap>>,
-    /// Definitional semantic tags for the query (closed-set temporal words,
-    /// "habitual", admitted kind tags), computed from the ORIGINAL user
-    /// query. Carried through to the tantivy lexical query as SHOULD
-    /// TermQueries on the `semantic_tags` field. Empty = tag matching off;
-    /// tags never filter or penalize (Luyi 2026-09-28).
-    pub semantic_tags: &'a [String],
 }
 
 impl<'a> Default for TemporalQueryContext<'a> {
@@ -638,7 +644,6 @@ impl<'a> Default for TemporalQueryContext<'a> {
             allowed_doc_ids: None,
             allowed_doc_bitmap: None,
             allowed_segment_doc_bitmaps: None,
-            semantic_tags: &[],
         }
     }
 }

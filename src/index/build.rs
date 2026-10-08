@@ -8,7 +8,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{Bm25StatisticsProvider, Query, QueryParser};
+use tantivy::query::{Bm25StatisticsProvider, FuzzyTermQuery, Query, QueryParser};
+use tantivy::Term;
 use tantivy::schema::document::TantivyDocument;
 use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT};
 use tantivy::{doc, Index};
@@ -817,24 +818,23 @@ impl MemoryIndex {
         // (legacy docs, or MemoryService didn't populate), compute them
         // here as a fallback. The index builder just reads them — the
         // computation is owned by the write path.
+        // Semantic tags from key_phrases (Luyi 2026-10-08): "use key_phrases
+        // for semantic tags". The beKIND scope/kind judgments are stored as
+        // KeyPhrase entries with kind="semantic_tag" in the DocRecord.
+        // Single truth: SourceDocument (via DocRecord.key_phrases) is the
+        // basic unit; no separate derivation path.
         let tags_per_doc: Vec<Vec<String>> = ordered
             .iter()
             .map(|doc| {
-                if !doc.semantic_tags.is_empty() {
-                    doc.semantic_tags.clone()
-                } else {
-                    // Fallback: compute from content (should not happen in
-                    // normal flow, but ensures tags work).
-                    let contents: Vec<&str> = doc
-                        .section_chunks
-                        .iter()
-                        .map(|c| c.content.as_str())
-                        .collect();
-                    crate::semantic_tags::batch_doc_semantic_tags(&contents)
-                        .into_iter()
-                        .next()
-                        .unwrap_or_default()
-                }
+                let mut tags: Vec<String> = doc
+                    .key_phrases
+                    .iter()
+                    .filter(|kp| kp.kind == "semantic_tag")
+                    .map(|kp| kp.text.clone())
+                    .collect();
+                tags.sort();
+                tags.dedup();
+                tags
             })
             .collect();
         let index = if let Some(dir) = lexical_dir {
@@ -1092,7 +1092,57 @@ impl MemoryIndex {
             // Tags are first-class lexical terms now (see above): no side
             // SHOULD clauses, no per-query mapping. The parsed query is the
             // whole retrieval query.
-            let combined: Arc<dyn Query> = Arc::from(parsed_lexical);
+            // Fuzzy matching (Luyi 2026-10-08): for each stemmed query term,
+            // add FuzzyTermQueries on the tags and content fields (edit
+            // distance 1). This bridges near-misses like "allergi" (query)
+            // vs "allerg" (content stem). Combined via SHOULD so fuzzy
+            // matches boost but don't exclude.
+            let combined: Arc<dyn Query> = {
+                use tantivy::query::BooleanQuery;
+                let mut should_clauses: Vec<(tantivy::query::Occur, Box<dyn Query>)> = Vec::new();
+                // Tokenize the stemmed query into terms for fuzzy matching.
+                let mut has_fuzzy = false;
+                for term in stemmed_query.split_whitespace() {
+                    // Skip very short terms to avoid noise.
+                    if term.len() < 3 {
+                        continue;
+                    }
+                    // Fuzzy on tags field (for tag near-misses).
+                    let fuzzy_tags = FuzzyTermQuery::new(
+                        Term::from_field_text(lex.tags_f, term),
+                        1,    // edit distance
+                        true, // prefix: term must share prefix (performance)
+                    );
+                    let boosted_tags = tantivy::query::BoostQuery::new(
+                        Box::new(fuzzy_tags),
+                        LEXICAL_TAGS_BOOST,
+                    );
+                    should_clauses.push((tantivy::query::Occur::Should, Box::new(boosted_tags)));
+                    // Fuzzy on content field (for "allergi" vs "allerg").
+                    // Use lower boost than tags to avoid drowning exact matches.
+                    let fuzzy_content = FuzzyTermQuery::new(
+                        Term::from_field_text(lex.content_f, term),
+                        1,    // edit distance
+                        true, // prefix
+                    );
+                    let boosted_content = tantivy::query::BoostQuery::new(
+                        Box::new(fuzzy_content),
+                        LEXICAL_CONTENT_BOOST * 0.5, // half boost for fuzzy
+                    );
+                    should_clauses.push((tantivy::query::Occur::Should, Box::new(boosted_content)));
+                    has_fuzzy = true;
+                }
+                should_clauses.push((tantivy::query::Occur::Should, Box::new(parsed_lexical)));
+                // If we added fuzzy clauses, combine; otherwise use parsed as-is.
+                if has_fuzzy {
+                    Arc::from(BooleanQuery::new(should_clauses))
+                } else {
+                    // No fuzzy terms; the parsed query is the only clause.
+                    // Reconstruct from the single SHOULD clause.
+                    let (_, q) = should_clauses.pop().unwrap();
+                    Arc::from(q)
+                }
+            };
             let mut cache = parsed_cache
                 .lock()
                 .expect("parsed lexical query cache lock poisoned");

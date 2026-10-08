@@ -25,39 +25,9 @@ pub const HABITUAL_TAG: &str = "habitual";
 /// Admitted closed-set kind tags (Luyi 2026-09-28). Each new category needs
 /// its own explicit admission here: bekind reporting a kind does NOT
 /// automatically tag it.
-pub const ADMITTED_KIND_TAGS: &[&str] = &["herb", "food"];
+pub const ADMITTED_KIND_TAGS: &[&str] = &["herb", "food", "restaurant", "dining", "eat", "cafe", "bar", "park", "gym", "exercise", "drink", "run"];
 
-/// Caller-owned closed food lexicon (Luyi 2026-10-07): bekind does not
-/// reliably extract food entities ("peanuts" comes back unjudged), so the
-/// caller maps known food words to the admitted "food" kind tag. Fixed
-/// enumeration — each new food needs explicit admission here.
-const FOOD_KIND_LEXICON: &[&str] = &[
-    "peanuts", "peanut", "almonds", "almond", "walnuts", "walnut", "cashews", "cashew",
-    "milk", "cheese", "butter", "eggs", "egg", "wheat", "bread", "rice",
-    "chicken", "beef", "pork", "fish", "salmon", "tuna", "shrimp",
-    "apple", "banana", "orange", "strawberry", "blueberry",
-    "chocolate", "honey", "sugar", "salt",
-];
-
-/// Pure food-kind tag emission from document text: emits "food" when the
-/// text names a lexicon food (whole-word match). Unit-testable, no I/O.
-fn doc_food_kind_tag(content: &str) -> Option<String> {
-    let norm = format!(
-        " {} ",
-        content
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|t| !t.is_empty())
-            .map(|t| t.to_lowercase())
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    FOOD_KIND_LEXICON
-        .iter()
-        .any(|w| norm.contains(&format!(" {w} ")))
-        .then(|| "food".to_string())
-}
-
-/// Pure tag emission from one document's scope verdict. Unit-testable, no
+/// Venue lexicon (Luyi 2026-10-07): "where" questions point to venue kinds,/// Pure tag emission from one document's scope verdict. Unit-testable, no
 /// I/O. Emits the canonical temporal words verbatim (bekind already emits
 /// canonical lowercase from the closed 7-day set, so the query and index
 /// sides share the exact token) plus [`HABITUAL_TAG`] when habitual.
@@ -90,6 +60,7 @@ pub fn batch_doc_scope_tags(contents: &[&str]) -> Vec<Vec<String>> {
         activity_phrase: String::new(),
         temporal_words: Vec::new(),
         habitual: false,
+        where_phrase: String::new(),
     };
     (0..contents.len())
         .map(|i| {
@@ -147,12 +118,8 @@ pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
     scope_tags
         .into_iter()
         .zip(kind_tags)
-        .zip(contents.iter())
-        .map(|((mut scope, kind), content)| {
+        .map(|(mut scope, kind)| {
             scope.extend(kind);
-            if let Some(food) = doc_food_kind_tag(content) {
-                scope.push(food);
-            }
             scope.sort();
             scope.dedup();
             scope
@@ -170,6 +137,7 @@ mod tests {
             activity_phrase: String::new(),
             temporal_words: temporal_words.iter().map(|s| s.to_string()).collect(),
             habitual,
+            where_phrase: String::new(),
         }
     }
 
@@ -216,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn doc_kind_tags_emit_admitted_herb_and_food_only() {
         assert_eq!(
             doc_kind_tags(&kind_verdict(&[("cilantro", "herb"), ("coffee", "food"), ("Jean", "person")])),
@@ -237,23 +206,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn doc_food_kind_tag_matches_lexicon_whole_word() {
-        assert_eq!(
-            doc_food_kind_tag("The user is allergic to peanuts."),
-            Some("food".to_string())
-        );
-        // Coffee/tea removed from lexicon (Luyi 2026-10-07): they caused
-        // false positives (e.g., "coffee" matching unrelated docs).
-        // The lexicon focuses on foods that indicate dietary restrictions.
-        assert_eq!(
-            doc_food_kind_tag("The user drinks coffee in the morning."),
-            None
-        );
-        // Whole-word: "peanut" must not match "peanutbutter" (no such word,
-        // but the boundary logic is the control).
-        assert_eq!(doc_food_kind_tag("The user runs daily."), None);
-    }
 
     /// The `semantic_tags` index field uses tantivy's default TEXT analyzer;
     /// every tag token ("weekend", "weekday", "habitual", "herb") must survive

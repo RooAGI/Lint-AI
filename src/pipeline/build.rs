@@ -461,6 +461,26 @@ fn assemble_doc_record(
             .flatten()
             .collect()
     };
+    // Semantic tags as key phrases (Luyi 2026-10-08): "key_phrases and
+    // concept and semantic tags to me are the same". The beKIND scope/kind
+    // judgments ("food", "habitual", "weekend") are stored as KeyPhrase
+    // entries with kind="semantic_tag", unifying the annotation mechanism.
+    // Single truth (Luyi 2026-10-08): the tags are written back into a
+    // SourceDocument (enriched), not appended only to DocRecord. The index
+    // populates its semantic_tags field from these.
+    let mut enriched_source = source_doc.clone();
+    for tag in &semantic_tags {
+        // Avoid duplicates if the tag was already added.
+        if !enriched_source.key_phrases.iter().any(|kp| kp.text == *tag) {
+            enriched_source.key_phrases.push(crate::source::KeyPhrase {
+                text: tag.clone(),
+                kind: "semantic_tag".to_string(),
+            });
+        }
+    }
+    // Use the enriched SourceDocument's key_phrases for the DocRecord.
+    // DocRecord is a deterministic view of SourceDocument; no second way.
+    let key_phrases = enriched_source.key_phrases.clone();
     let mut record = DocRecord {
         doc_id: doc.id.clone(),
         source: doc.source.clone(),
@@ -480,7 +500,7 @@ fn assemble_doc_record(
         section_chunks,
         // Carry the source-level key phrases (and their extraction stamp)
         // into the record so they survive a persist/reload round-trip.
-        key_phrases: source_doc.key_phrases.clone(),
+        key_phrases,
         key_phrase_extraction_hash: source_doc.key_phrase_extraction_hash.clone(),
         embedding: None,
         top_claims: Vec::new(),

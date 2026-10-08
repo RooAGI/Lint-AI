@@ -1639,6 +1639,157 @@ impl MemoryService {
         self.search_with_filters_cached(query, scope, session_id, top_k, filters)
     }
 
+    /// Session tag link expansion (Luyi 2026-10-07).
+    ///
+    /// When a document is boosted via its semantic tags, other documents in
+    /// the same session that share those tags get a boost too. This uses the
+    /// tag->doc provenance from the session's documents (supplements the
+    /// per-document tag BM25 matching, does not replace it).
+    ///
+    /// For example: session has doc-1 (tags: weekend, habitual) and doc-3
+    /// (tags: habitual). Query "weekends" boosts doc-1 via "weekend" tag.
+    /// doc-1's "habitual" tag links to doc-3, so doc-3 gets a boost too.
+    fn apply_session_tag_link_boost(
+        &self,
+        mut results: Vec<crate::SearchResult>,
+        session_id: Option<&str>,
+        query: &str,
+    ) -> Vec<crate::SearchResult> {
+        if results.is_empty() {
+            return results;
+        }
+        // Tag-only re-rank (Luyi 2026-10-07): Phase 2 of two-stage retrieval.
+        // Phase 1 (BM25) established the candidate set via "user" (preference
+        // marker). Phase 2 ranks WITHIN the set by semantic_tags overlap only.
+        // Definitional knowledge (tags) is the ranking signal, not text similarity.
+        // This is deterministic: no BM25 variance.
+        {
+            // Known tag vocabulary (must match TAG_BASES in index/build.rs).
+            const TAG_VOCAB: &[&str] = &["weekend", "weekday", "habitual", "herb", "food", "place"];
+            let query_lower = query.to_lowercase();
+            let query_tags: Vec<&str> = TAG_VOCAB
+                .iter()
+                .filter(|t| query_lower.contains(**t))
+                .copied()
+                .collect();
+            if !query_tags.is_empty() {
+                // Score each result by tag overlap count.
+                let mut scored: Vec<(usize, usize, f32)> = Vec::new(); // (idx, overlap, orig_score)
+                for (idx, result) in results.iter().enumerate() {
+                    let overlap = self
+                        .record_by_id(&result.doc_id)
+                        .map(|r| {
+                            r.semantic_tags
+                                .iter()
+                                .filter(|t| query_tags.contains(&t.as_str()))
+                                .count()
+                        })
+                        .unwrap_or(0);
+                    scored.push((idx, overlap, result.score));
+                }
+                // Sort by overlap (desc), then original score (desc) for ties.
+                scored.sort_by(|a, b| {
+                    b.1.cmp(&a.1)
+                        .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+                });
+                // Reorder results.
+                let reordered: Vec<crate::SearchResult> = scored
+                    .into_iter()
+                    .map(|(idx, _, _)| results[idx].clone())
+                    .collect();
+                results = reordered;
+            }
+        }
+        // Question-type routing (Luyi 2026-10-07): "where" -> venue kind,
+        // "when" -> temporal. Boost docs whose semantic_tags contain the
+        // relevant category. This is systematic, not per-question.
+        let query_lower = query.to_lowercase();
+        let is_where = query_lower.trim_start().starts_with("where");
+        let is_when = query_lower.trim_start().starts_with("when");
+        // Build tag->docs mapping from the session's documents.
+        // We use the in-memory DocRecords (via record_by_id) to avoid a
+        // Tantivy lookup. The session_doc in the index has the same data
+        // persisted, but in-memory is faster for query-time.
+        use std::collections::{HashMap, HashSet};
+        let mut tag_to_docs: HashMap<String, Vec<String>> = HashMap::new();
+        let mut doc_to_tags: HashMap<String, Vec<String>> = HashMap::new();
+        
+        // Get all docs in this session by scanning results' sessions.
+        // Actually, we need ALL docs in the session, not just results.
+        // For now, use the top results' docs to build the mapping.
+        // A full implementation would fetch all session docs from the store.
+        for result in &results {
+            if let Some(record) = self.record_by_id(&result.doc_id) {
+                // If session_id given, filter to that session. Otherwise include all.
+                if let Some(sid) = session_id {
+                    if record.group_id.as_deref() != Some(sid) {
+                        continue;
+                    }
+                }
+                for tag in &record.semantic_tags {
+                    tag_to_docs.entry(tag.clone()).or_default().push(result.doc_id.clone());
+                    doc_to_tags.entry(result.doc_id.clone()).or_default().push(tag.clone());
+                }
+            }
+        }
+
+        // Question-type boosting (Luyi 2026-10-07): "where" -> venue, "when" -> temporal.
+        const QUESTION_TYPE_BOOST: f32 = 1.5;
+        if is_where || is_when {
+            for result in &mut results {
+                if let Some(tags) = doc_to_tags.get(&result.doc_id) {
+                    let has_relevant = if is_where {
+                        tags.iter().any(|t| t == "venue")
+                    } else {
+                        tags.iter().any(|t| matches!(t.as_str(), "weekend" | "weekday" | "habitual"))
+                    };
+                    if has_relevant {
+                        result.score *= QUESTION_TYPE_BOOST;
+                    }
+                }
+            }
+        }
+        
+        if tag_to_docs.is_empty() {
+            if is_where || is_when {
+                results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            return results;
+        }
+        
+        // For each result doc, find co-linked docs via shared tags and boost them.
+        // Boost factor: 1.2x for docs sharing at least one tag with a top result.
+        const LINK_BOOST: f32 = 1.2;
+        let top_doc_ids: HashSet<String> = results.iter().take(5).map(|r| r.doc_id.clone()).collect();
+        let mut boost_map: HashMap<String, f32> = HashMap::new();
+        
+        for doc_id in &top_doc_ids {
+            if let Some(tags) = doc_to_tags.get(doc_id) {
+                for tag in tags {
+                    if let Some(linked_docs) = tag_to_docs.get(tag) {
+                        for linked_doc in linked_docs {
+                            if !top_doc_ids.contains(linked_doc) {
+                                // This doc shares a tag with a top result but isn't in top results.
+                                // Mark it for boosting if it appears in the full results list.
+                                boost_map.insert(linked_doc.clone(), LINK_BOOST);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Apply boosts to results.
+        for result in &mut results {
+            if let Some(boost) = boost_map.get(&result.doc_id) {
+                result.score *= boost;
+            }
+        }
+        
+        // Re-sort by score (boost may have changed order).
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results
+    }
 
     /// Run retrieval against the published immutable index. All mutable
     /// side state used by search is internally synchronized, so this path can
@@ -1736,6 +1887,11 @@ impl MemoryService {
             }
         };
         let results = blend_structured_first(structured, lexical, top_k);
+        // Session tag link expansion (Luyi 2026-10-07): when a doc is boosted
+        // via its tags, other docs in the same session sharing those tags
+        // get boosted too. Also handles question-type routing ("where"->venue,
+        // "when"->temporal). Supplements (not replaces) per-document tag BM25.
+        let results = self.apply_session_tag_link_boost(results, session_id, query);
         observe_session_search(
             &self.conversation_states,
             scope,

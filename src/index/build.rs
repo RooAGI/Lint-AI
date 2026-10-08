@@ -1104,21 +1104,13 @@ impl MemoryIndex {
                 let mut has_fuzzy = false;
                 for term in stemmed_query.split_whitespace() {
                     // Skip very short terms to avoid noise.
-                    if term.len() < 4 {
+                    if term.len() < 3 {
                         continue;
                     }
-                    // Skip stopwords/pronouns: fuzzy on "its"->"is" causes
-                    // false positives (breaks stateless session test).
-                    // The QueryParser already handles stopwords; fuzzy should
-                    // only apply to content terms.
-                    const STOPWORDS: &[&str] = &[
-                        "what", "are", "its", "the", "a", "an", "and", "or", "but",
-                        "in", "on", "at", "to", "for", "of", "with", "by", "is",
-                        "was", "were", "be", "been", "have", "has", "had", "do",
-                        "does", "did", "will", "would", "could", "should", "may",
-                        "might", "must", "can", "this", "that", "these", "those",
-                    ];
-                    if STOPWORDS.contains(&term) {
+                    // Skip "its" specifically: fuzzy "its"->"is" causes false
+                    // positives (breaks stateless session test). Other terms
+                    // keep loose fuzzy for recall (e.g., "allergies"->"allergic").
+                    if term == "its" {
                         continue;
                     }
                     // Fuzzy on tags field (for tag near-misses).

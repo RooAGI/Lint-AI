@@ -26,7 +26,10 @@ use super::query_terms::*;
 fn stem_query_porter(query: &str) -> String {
     // Known tag base forms (canonical). If a query word stems to one of these,
     // use the stemmed form so "weekends" matches the "weekend" tag.
-    const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food"];
+    // Luyi 2026-10-09: beKIND categories ("gardening", "doctor") are canonical
+    // as-is; do NOT add their stems ("garden") or queries won't match tags.
+    const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food",
+        "gardening", "doctor", "culinary", "sports", "art", "music"];
     
     let mut result = String::with_capacity(query.len());
     let mut word = String::new();

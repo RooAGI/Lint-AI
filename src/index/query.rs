@@ -141,7 +141,11 @@ impl MemoryIndex {
         }
 
         let window_days = temporal.window_days.max(1);
-        let hard_filter = temporal.hard_filter;
+        // Luyi 2026-10-08: When the query has an explicit temporal anchor
+        // ("two weeks ago", "past month"), actually filter by the time window
+        // instead of just boosting. Previously hard_filter was always false,
+        // so docs outside the window could outrank docs inside it.
+        let hard_filter = temporal.hard_filter || target.is_some();
         let time_hint = temporal.time_hint;
         let now_date = DateTime::<Utc>::from(SystemTime::now()).date_naive();
         let mut rescored = Vec::with_capacity(results.len());

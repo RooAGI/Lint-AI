@@ -1639,6 +1639,12 @@ impl MemoryService {
         self.search_with_filters_cached(query, scope, session_id, top_k, filters)
     }
 
+    #[cfg(any(
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "roo-runtime"
+    ))]
     /// Session tag link expansion (Luyi 2026-10-07).
     ///
     /// When a document is boosted via its semantic tags, other documents in
@@ -1891,7 +1897,21 @@ impl MemoryService {
         // via its tags, other docs in the same session sharing those tags
         // get boosted too. Also handles question-type routing ("where"->venue,
         // "when"->temporal). Supplements (not replaces) per-document tag BM25.
+        // Only available with agent features (needs record_by_id).
+        #[cfg(any(
+            feature = "gemini-cli",
+            feature = "agy",
+            feature = "muse-code",
+            feature = "roo-runtime"
+        ))]
         let results = self.apply_session_tag_link_boost(results, session_id, query);
+        #[cfg(not(any(
+            feature = "gemini-cli",
+            feature = "agy",
+            feature = "muse-code",
+            feature = "roo-runtime"
+        )))]
+        let results = results;
         observe_session_search(
             &self.conversation_states,
             scope,

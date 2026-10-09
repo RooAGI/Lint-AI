@@ -256,6 +256,7 @@ pub(crate) fn main() -> anyhow::Result<()> {
             session_id: None,
             scope: None,
             filters: None,
+            reference_date: None,
         })?;
 
         // Dedup hits by session, keep max score, map to bank decisions.

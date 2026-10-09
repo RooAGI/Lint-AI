@@ -497,6 +497,7 @@ impl CodexMcp {
                     session_id.as_deref(),
                     top_k,
                     &filters,
+                    None,
                 );
                 let _ = crate::telemetry::record_project_query(
                     &self.root,
@@ -1075,6 +1076,7 @@ mod tests {
                     None,
                     5,
                     &Default::default(),
+                    None,
                 )
                 .unwrap();
             assert!(results.iter().any(|result| {
@@ -1091,7 +1093,7 @@ mod tests {
         .unwrap();
         wait_for_workspace_store(&mcp, |store| {
             let results = store
-                .search_with_filters("segmented indexes", "test", None, 5, &Default::default())
+                .search_with_filters("segmented indexes", "test", None, 5, &Default::default(), None)
                 .unwrap_or_default();
             results.iter().any(|result| {
                 store

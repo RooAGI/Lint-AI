@@ -141,6 +141,12 @@ pub struct SearchRequest {
     /// user-ownership filter. Absent means no additional filtering.
     #[serde(default)]
     pub filters: Option<BTreeMap<String, String>>,
+    /// Reference date for resolving relative temporal language ("two weeks
+    /// ago", "last Tuesday"). When supplied, relative dates resolve against
+    /// this instead of the machine clock. Format: "2023/05/05" or similar.
+    /// Absent means use system time (production default).
+    #[serde(default)]
+    pub reference_date: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1446,6 +1452,7 @@ impl MemoryService {
             request.session_id.as_deref(),
             request.top_k,
             &filters,
+            request.reference_date.as_deref(),
         )?;
         Ok(self.format_search_response(results))
     }
@@ -1482,6 +1489,7 @@ impl MemoryService {
             request.session_id.as_deref(),
             request.top_k,
             &filters,
+            request.reference_date.as_deref(),
         )?;
         Ok(self.format_search_response(results))
     }
@@ -1628,6 +1636,7 @@ impl MemoryService {
         session_id: Option<&str>,
         top_k: usize,
         filters: &BTreeMap<String, String>,
+        reference_date: Option<&str>,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
         // Query-time key-phrase backfill: documents written by provider
         // hooks (separate short-lived processes whose background workers
@@ -1636,7 +1645,7 @@ impl MemoryService {
         // usually a no-op once every document carries its extraction stamp.
         self.backfill_key_phrases();
         self.flush()?;
-        self.search_with_filters_cached(query, scope, session_id, top_k, filters)
+        self.search_with_filters_cached(query, scope, session_id, top_k, filters, reference_date)
     }
 
     /// Session tag link expansion (Luyi 2026-10-07).
@@ -1801,6 +1810,7 @@ impl MemoryService {
         session_id: Option<&str>,
         top_k: usize,
         filters: &BTreeMap<String, String>,
+        reference_date: Option<&str>,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
         // Luyi 2026-09-27: wire the augmented query into production.
         // analyze_query builds "original + terms" (focus terms, entities)
@@ -1809,10 +1819,12 @@ impl MemoryService {
         let analysis = analyze_query(query);
         let augmented_query = analysis.augmented_query.clone();
         let mut prepared = if session_id.is_none() {
-            // The first analysis already contains the augmented search text.
-            // Reusing it avoids analyzing that text a second time on the
-            // common stateless request path.
-            PreparedQuery::from_analysis(analysis)
+            // Reference date (Luyi 2026-10-09): when supplied, relative
+            // temporal language resolves against it instead of the clock.
+            match reference_date {
+                Some(ref_date) => PreparedQuery::new_at(&augmented_query, ref_date),
+                None => PreparedQuery::from_analysis(analysis),
+            }
         } else {
             prepare_session_query(
                 &self.conversation_states,
@@ -1877,6 +1889,7 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
+                    reference_date: None,
                 };
                 structured_fact_results(
                     &self.store,
@@ -2597,6 +2610,7 @@ impl MemoryService {
             /* session_id = */ None,
             top_k.clamp(1, 50),
             &filters,
+            None,
         )?;
         let mut posts = Vec::new();
         for r in results {
@@ -2667,7 +2681,7 @@ impl MemoryService {
         query: &str,
         top_k: usize,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
-        self.search_with_filters(query, "integration", None, top_k, &BTreeMap::new())
+        self.search_with_filters(query, "integration", None, top_k, &BTreeMap::new(), None)
     }
 
     /// Record the session most recently seen active for `provider` in this
@@ -3388,6 +3402,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3425,6 +3440,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert!(response
@@ -3461,6 +3477,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         let b = service
@@ -3472,6 +3489,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(a.data.len(), 1);
@@ -3591,6 +3609,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert!(response
@@ -3625,6 +3644,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert!(response.data.is_empty());
@@ -3663,6 +3683,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3707,6 +3728,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3746,6 +3768,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3793,6 +3816,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -3843,6 +3867,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -4107,6 +4132,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -4155,6 +4181,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -4389,6 +4416,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
 
@@ -4403,6 +4431,7 @@ mod tests {
                 session_id: Some("s-temporal".into()),
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         let ids: Vec<&str> = turn2.data.iter().map(|memory| memory.id.as_str()).collect();
@@ -4426,6 +4455,7 @@ mod tests {
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         let baseline_ids: Vec<&str> = baseline
@@ -4485,6 +4515,7 @@ mod tests {
                 session_id: session_id.map(str::to_string),
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap()
     }
@@ -4531,6 +4562,7 @@ mod tests {
                     session_id: session_id.map(str::to_string),
                     scope: None,
                     filters: None,
+                    reference_date: None,
                 })
                 .unwrap_err();
             assert!(
@@ -4837,6 +4869,7 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
+            reference_date: None,
         }
     }
 
@@ -5141,6 +5174,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert!(response
@@ -5178,6 +5212,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert_eq!(response.data.len(), 1);
@@ -5287,6 +5322,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                             session_id: None,
                             scope: None,
                             filters: None,
+                            reference_date: None,
                         });
                         drop(guard);
                         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -5330,6 +5366,7 @@ json.dump({{"relations": [], "key_phrases": out}}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         assert!(!response.data.is_empty());
@@ -5654,6 +5691,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
                 session_id: None,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })
             .unwrap();
         let _ = response;

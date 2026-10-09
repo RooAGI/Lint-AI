@@ -67,12 +67,13 @@ fn english_add_search_regression() {
             None,
             10,
             &filters,
+            None,
         )
         .expect("search");
     assert!(
         r.iter().any(|hit| hit.doc_id == id_book),
         "English what-yesterday question missed the book fact"
-    );
+        None,
 
     // Spanish-only words must not leak: they stay live in English
     // (not stopwords). (Words like "no"/"son"/"era" are also English

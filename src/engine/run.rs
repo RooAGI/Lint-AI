@@ -798,6 +798,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     None,
                     candidate_top_k,
                     &Default::default(),
+                    None,
                 )?;
                 let elapsed_ms = started.elapsed().as_millis();
                 let index = service
@@ -833,6 +834,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                     None,
                     DEFAULT_QUERY_TOP_K,
                     &Default::default(),
+                    None,
                 )?;
                 let elapsed_ms = started.elapsed().as_millis();
                 let index = service

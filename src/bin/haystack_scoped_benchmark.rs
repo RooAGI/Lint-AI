@@ -273,6 +273,7 @@ fn combsum_search(
     question: &str,
     top_k: usize,
     question_id: &str,
+    reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -296,6 +297,7 @@ fn combsum_search(
                 scope: None,
                 filters: None,
                 options: None,
+                reference_date: None,
             })
             .with_context(|| format!("combsum search failed for {}", question_id))?;
         for result in resp.data {
@@ -331,6 +333,7 @@ fn rrf_search(
     question: &str,
     top_k: usize,
     question_id: &str,
+    reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -354,6 +357,7 @@ fn rrf_search(
                 scope: None,
                 filters: None,
                 options: None,
+                reference_date: None,
             })
             .with_context(|| format!("rrf search failed for {}", question_id))?;
         for (rank, result) in resp.data.iter().enumerate() {
@@ -390,6 +394,7 @@ fn prf_search(
     question: &str,
     top_k: usize,
     question_id: &str,
+    reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -403,6 +408,7 @@ fn prf_search(
             scope: None,
             filters: None,
             options: None,
+            reference_date: None,
         })
         .with_context(|| format!("prf initial search failed for {}", question_id))?;
 
@@ -447,6 +453,7 @@ fn prf_search(
             scope: None,
             filters: None,
             options: None,
+            reference_date: None,
         })
         .with_context(|| format!("prf expanded search failed for {}", question_id))
 }
@@ -461,6 +468,7 @@ fn rm3_search(
     question: &str,
     top_k: usize,
     question_id: &str,
+    reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -474,6 +482,7 @@ fn rm3_search(
             scope: None,
             filters: None,
             options: None,
+            reference_date: None,
         })
         .with_context(|| format!("rm3 initial search failed for {}", question_id))?;
 
@@ -518,6 +527,7 @@ fn rm3_search(
             scope: None,
             filters: None,
             options: None,
+            reference_date: None,
         })
         .with_context(|| format!("rm3 expanded search failed for {}", question_id))
 }
@@ -532,6 +542,7 @@ fn bo1_search(
     question: &str,
     top_k: usize,
     question_id: &str,
+    reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -544,6 +555,7 @@ fn bo1_search(
             scope: None,
             filters: None,
             options: None,
+            reference_date: None,
         })
         .with_context(|| format!("bo1 initial search failed for {}", question_id))?;
 
@@ -601,6 +613,7 @@ fn bo1_search(
             scope: None,
             filters: None,
             options: None,
+            reference_date: None,
         })
         .with_context(|| format!("bo1 expanded search failed for {}", question_id))
 }
@@ -831,15 +844,15 @@ fn run_scoped_benchmark(
         // --rm3: relevance model 3 expansion
         let search_start = Instant::now();
         let response = if combsum {
-            combsum_search(&mut service, &entry.question, max_k, &entry.question_id)?
+            combsum_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
         } else if rrf {
-            rrf_search(&mut service, &entry.question, max_k, &entry.question_id)?
+            rrf_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
         } else if prf {
-            prf_search(&mut service, &entry.question, max_k, &entry.question_id)?
+            prf_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
         } else if rm3 {
-            rm3_search(&mut service, &entry.question, max_k, &entry.question_id)?
+            rm3_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
         } else if bo1 {
-            bo1_search(&mut service, &entry.question, max_k, &entry.question_id)?
+            bo1_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
         } else {
             service
                 .search(SearchRequest {
@@ -850,6 +863,7 @@ fn run_scoped_benchmark(
                     scope: None,
                     filters: None,
                     options: None,
+                    reference_date: Some(entry.question_date.clone()),
                 })
                 .with_context(|| format!("search failed for {}", entry.question_id))?
         };

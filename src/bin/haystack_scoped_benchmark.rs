@@ -37,6 +37,14 @@ struct Args {
     #[arg(long)]
     question_type: Option<String>,
 
+    /// Enable beKIND semantic tags (occupation/activity hypernyms).
+    #[arg(long)]
+    bekind: bool,
+
+    /// Enable CombSUM fusion: run multiple query variants and sum scores.
+    #[arg(long)]
+    combsum: bool,
+
     /// Optional output path for JSON results.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -241,8 +249,88 @@ struct BenchmarkReport {
     per_query: Vec<QueryMetrics>,
 }
 
+/// CombSUM fusion (Luyi 2026-10-09): run multiple query variants and sum scores.
+/// Variants: (1) original query, (2) query without temporal phrases (broader recall).
+/// Returns fused SearchResponse with top_k results by summed score.
+fn combsum_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    // Generate variants
+    let variants = vec![
+        question.to_string(),                    // Original
+        strip_temporal_phrases(question),        // No temporal (broader)
+    ];
+
+    // Run each variant, collect scores per doc_id
+    let mut score_sums: HashMap<String, f32> = HashMap::new();
+    let mut doc_map: HashMap<String, crate::SearchMemory> = HashMap::new();
+
+    for variant in &variants {
+        let resp = service
+            .search(crate::SearchRequest {
+                query: variant.clone(),
+                user_id: BENCHMARK_USER_ID.to_string(),
+                top_k,
+                session_id: None,
+                scope: None,
+                filters: None,
+                options: None,
+            })
+            .with_context(|| format!("combsum search failed for {}", question_id))?;
+        for result in resp.data {
+            *score_sums.entry(result.id.clone()).or_insert(0.0) += result.score;
+            doc_map.entry(result.id.clone()).or_insert(result);
+        }
+    }
+
+    // Sort by summed score, take top_k
+    let mut fused: Vec<(String, f32)> = score_sums.into_iter().collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(top_k);
+
+    let data: Vec<crate::SearchMemory> = fused
+        .into_iter()
+        .filter_map(|(doc_id, sum_score)| {
+            doc_map.get(&doc_id).map(|r| {
+                let mut fused_result = r.clone();
+                fused_result.score = sum_score;
+                fused_result
+            })
+        })
+        .collect();
+
+    Ok(crate::SearchResponse { data })
+}
+
+/// Strip temporal phrases like "two weeks ago", "last Tuesday", "past month".
+/// Simple heuristic: remove common temporal patterns.
+fn strip_temporal_phrases(question: &str) -> String {
+    let temporal_patterns = [
+        "two weeks ago", "three weeks ago", "four weeks ago",
+        "a week ago", "two months ago", "three months ago",
+        "last week", "last month", "last Tuesday", "last Friday", "last Saturday",
+        "past month", "past three months", "a couple of days ago",
+        "10 days ago", "5 days ago",
+    ];
+    let mut result = question.to_string();
+    for pattern in &temporal_patterns {
+        result = result.replace(pattern, "");
+    }
+    // Clean up extra whitespace
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
+    // Enable beKIND semantic tags if requested (Luyi 2026-10-08).
+    if args.bekind {
+        crate::behood_query::set_enabled(true);
+    }
     let mut ks = args
         .ks
         .into_iter()
@@ -272,6 +360,7 @@ pub(crate) fn main() -> Result<()> {
         args.segment_router.into(),
         args.ner_provider.clone(),
         args.index_mode,
+        args.combsum,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -299,6 +388,7 @@ fn run_scoped_benchmark(
     segment_router: SegmentRoutingStrategy,
     ner_provider: Tier1NerProvider,
     index_mode: IndexModeArg,
+    combsum: bool,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -428,18 +518,24 @@ fn run_scoped_benchmark(
 
         // Production search. session_id/scope/filters are None: stateless
         // search as the benchmark user, no conversation-state scoping.
+        // CombSUM (Luyi 2026-10-09): if --combsum, run multiple query variants
+        // and fuse via score summation.
         let search_start = Instant::now();
-        let response = service
-            .search(SearchRequest {
-                query: entry.question.clone(),
-                user_id: BENCHMARK_USER_ID.to_string(),
-                top_k: max_k,
-                session_id: None,
-                scope: None,
-                filters: None,
-                options: None,
-            })
-            .with_context(|| format!("search failed for {}", entry.question_id))?;
+        let response = if combsum {
+            combsum_search(&mut service, &entry.question, max_k, &entry.question_id)?
+        } else {
+            service
+                .search(SearchRequest {
+                    query: entry.question.clone(),
+                    user_id: BENCHMARK_USER_ID.to_string(),
+                    top_k: max_k,
+                    session_id: None,
+                    scope: None,
+                    filters: None,
+                    options: None,
+                })
+                .with_context(|| format!("search failed for {}", entry.question_id))?
+        };
         let search_ms = search_start.elapsed().as_secs_f64() * 1000.0;
 
         // Session IDs come from SearchMemory.session_id (Option<String>).

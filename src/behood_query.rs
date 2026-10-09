@@ -198,6 +198,8 @@ struct FusedTextResult {
 #[derive(Debug, Clone)]
 struct FusedActivity {
     is_activity: bool,
+    /// Definitional category (Luyi 2026-10-09): e.g. "gardening".
+    category: String,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +283,7 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                     .filter_map(|v| {
                         Some(FusedActivity {
                             is_activity: v.get("is_activity").and_then(|b| b.as_bool()).unwrap_or(false),
+                            category: v.get("category").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                         })
                     })
                     .collect()
@@ -495,6 +498,38 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
                 })
                 .collect(),
         })
+        .collect()
+}
+
+/// Activity category tags for raw text spans (Luyi 2026-10-09): one fused
+/// bekind call, extracts definitional categories ("gardening") from activity
+/// verdicts. Fail-open like kind verdicts.
+pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
+    if texts.is_empty() || !is_enabled() {
+        return vec![Vec::new(); texts.len()];
+    }
+    let inputs: Vec<(String, &str, bool)> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("a:{i}"), *t, false))
+        .collect();
+    let results = match BekindDaemon::global().judge_texts(&inputs) {
+        Some(results) => results,
+        None => return vec![Vec::new(); texts.len()],
+    };
+    let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    for r in results {
+        if let Some(idx) = r.id.strip_prefix("a:").and_then(|s| s.parse::<usize>().ok()) {
+            let cats: Vec<String> = r.activity
+                .into_iter()
+                .filter(|a| a.is_activity && !a.category.is_empty())
+                .map(|a| a.category.to_lowercase())
+                .collect();
+            by_index.insert(idx, cats);
+        }
+    }
+    (0..texts.len())
+        .map(|i| by_index.remove(&i).unwrap_or_default())
         .collect()
 }
 

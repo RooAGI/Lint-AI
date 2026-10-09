@@ -122,16 +122,20 @@ pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
 }
 
 /// All definitional tags for document contents: scope tags + admitted kind
-/// tags, merged and deduplicated. One batched daemon call per layer, plus
-/// the caller-owned food lexicon (bekind under-extracts food entities).
+/// tags + activity categories, merged and deduplicated. One batched daemon
+/// call per layer, plus the caller-owned food lexicon (bekind under-extracts
+/// food entities).
 pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
     let scope_tags = batch_doc_scope_tags(contents);
     let kind_tags = batch_doc_kind_tags(contents);
+    let activity_tags = crate::behood_query::analyze_activity_categories(contents);
     scope_tags
         .into_iter()
         .zip(kind_tags)
-        .map(|(mut scope, kind)| {
+        .zip(activity_tags)
+        .map(|((mut scope, kind), activity)| {
             scope.extend(kind);
+            scope.extend(activity);
             scope.sort();
             scope.dedup();
             scope

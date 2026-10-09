@@ -45,6 +45,10 @@ struct Args {
     #[arg(long)]
     combsum: bool,
 
+    /// Enable RRF fusion: Reciprocal Rank Fusion across query variants.
+    #[arg(long)]
+    rrf: bool,
+
     /// Optional output path for JSON results.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -307,6 +311,64 @@ fn combsum_search(
     Ok(crate::SearchResponse { data })
 }
 
+/// RRF fusion (Luyi 2026-10-09): Reciprocal Rank Fusion across query variants.
+/// score(d) = sum over variants of 1 / (k + rank(d)), with k=60.
+/// More robust than CombSUM as it uses ranks, not raw scores.
+fn rrf_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    const RRF_K: f32 = 60.0;
+
+    let variants = vec![
+        question.to_string(),
+        strip_temporal_phrases(question),
+    ];
+
+    let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+    let mut doc_map: HashMap<String, crate::SearchMemory> = HashMap::new();
+
+    for variant in &variants {
+        let resp = service
+            .search(crate::SearchRequest {
+                query: variant.clone(),
+                user_id: BENCHMARK_USER_ID.to_string(),
+                top_k,
+                session_id: None,
+                scope: None,
+                filters: None,
+                options: None,
+            })
+            .with_context(|| format!("rrf search failed for {}", question_id))?;
+        for (rank, result) in resp.data.iter().enumerate() {
+            let rrf = 1.0 / (RRF_K + rank as f32 + 1.0);
+            *rrf_scores.entry(result.id.clone()).or_insert(0.0) += rrf;
+            doc_map.entry(result.id.clone()).or_insert_with(|| result.clone());
+        }
+    }
+
+    let mut fused: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(top_k);
+
+    let data: Vec<crate::SearchMemory> = fused
+        .into_iter()
+        .filter_map(|(doc_id, rrf_score)| {
+            doc_map.get(&doc_id).map(|r| {
+                let mut fused_result = r.clone();
+                fused_result.score = rrf_score;
+                fused_result
+            })
+        })
+        .collect();
+
+    Ok(crate::SearchResponse { data })
+}
+
 /// Strip temporal phrases like "two weeks ago", "last Tuesday", "past month".
 /// Simple heuristic: remove common temporal patterns.
 fn strip_temporal_phrases(question: &str) -> String {
@@ -361,6 +423,7 @@ pub(crate) fn main() -> Result<()> {
         args.ner_provider.clone(),
         args.index_mode,
         args.combsum,
+        args.rrf,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -389,6 +452,7 @@ fn run_scoped_benchmark(
     ner_provider: Tier1NerProvider,
     index_mode: IndexModeArg,
     combsum: bool,
+    rrf: bool,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -523,6 +587,8 @@ fn run_scoped_benchmark(
         let search_start = Instant::now();
         let response = if combsum {
             combsum_search(&mut service, &entry.question, max_k, &entry.question_id)?
+        } else if rrf {
+            rrf_search(&mut service, &entry.question, max_k, &entry.question_id)?
         } else {
             service
                 .search(SearchRequest {

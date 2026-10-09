@@ -154,9 +154,9 @@ impl MemoryIndex {
                 continue;
             };
             let Some(doc_date) = doc_temporal_date(doc) else {
-                if hard_filter {
-                    continue;
-                }
+                // Luyi 2026-10-08: Docs without dates are kept even with hard_filter.
+                // We can only filter docs that HAVE dates and are outside the window.
+                // Excluding dateless docs was too aggressive (regressed 21 questions).
                 rescored.push(result);
                 continue;
             };

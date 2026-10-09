@@ -57,6 +57,10 @@ struct Args {
     #[arg(long)]
     rm3: bool,
 
+    /// Enable Bo1: DFR Bose-Einstein query expansion.
+    #[arg(long)]
+    bo1: bool,
+
     /// Optional output path for JSON results.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -518,6 +522,89 @@ fn rm3_search(
         .with_context(|| format!("rm3 expanded search failed for {}", question_id))
 }
 
+/// Bo1 (Luyi 2026-10-09): DFR Bose-Einstein query expansion.
+/// 1. Search with original query, get top-10 docs
+/// 2. For each term, compute Bo1 weight: tf * log2((1+Pn)/Pn) + log2(1+Pn)
+///    where Pn = (docs containing term) / (total top docs)
+/// 3. Take top 20 by Bo1 weight, append to query, search again
+fn bo1_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    let initial = service
+        .search(crate::SearchRequest {
+            query: question.to_string(),
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k: 10,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+        })
+        .with_context(|| format!("bo1 initial search failed for {}", question_id))?;
+
+    let query_terms: std::collections::HashSet<String> = question
+        .to_lowercase()
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    let stopwords: std::collections::HashSet<&str> = [
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
+        "had", "do", "does", "did", "will", "would", "could", "should",
+    ]
+    .into_iter()
+    .collect();
+
+    let n_docs = initial.data.len().max(1) as f32;
+    let mut tf_map: HashMap<String, usize> = HashMap::new();
+    let mut df_map: HashMap<String, usize> = HashMap::new();
+
+    for doc in &initial.data {
+        let mut seen_in_doc = std::collections::HashSet::new();
+        for term in doc.content.to_lowercase().split_whitespace() {
+            let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
+            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+                *tf_map.entry(clean.clone()).or_insert(0) += 1;
+                if seen_in_doc.insert(clean.clone()) {
+                    *df_map.entry(clean).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    // Bo1 weight: tf * log2((1+Pn)/Pn) + log2(1+Pn)
+    let mut weighted: Vec<(String, f32)> = tf_map
+        .into_iter()
+        .map(|(term, tf)| {
+            let df = *df_map.get(&term).unwrap_or(&1) as f32;
+            let pn = df / n_docs;
+            let pn = pn.max(0.001); // Avoid division by zero
+            let w = tf as f32 * ((1.0 + pn) / pn).log2() + (1.0 + pn).log2();
+            (term, w)
+        })
+        .collect();
+    weighted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    weighted.truncate(20);
+    let expansion: Vec<String> = weighted.into_iter().map(|(t, _)| t).collect();
+
+    let expanded_query = format!("{} {}", question, expansion.join(" "));
+    service
+        .search(crate::SearchRequest {
+            query: expanded_query,
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+        })
+        .with_context(|| format!("bo1 expanded search failed for {}", question_id))
+}
+
 /// Strip temporal phrases like "two weeks ago", "last Tuesday", "past month".
 /// Simple heuristic: remove common temporal patterns.
 fn strip_temporal_phrases(question: &str) -> String {
@@ -575,6 +662,7 @@ pub(crate) fn main() -> Result<()> {
         args.rrf,
         args.prf,
         args.rm3,
+        args.bo1,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -606,6 +694,7 @@ fn run_scoped_benchmark(
     rrf: bool,
     prf: bool,
     rm3: bool,
+    bo1: bool,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -749,6 +838,8 @@ fn run_scoped_benchmark(
             prf_search(&mut service, &entry.question, max_k, &entry.question_id)?
         } else if rm3 {
             rm3_search(&mut service, &entry.question, max_k, &entry.question_id)?
+        } else if bo1 {
+            bo1_search(&mut service, &entry.question, max_k, &entry.question_id)?
         } else {
             service
                 .search(SearchRequest {

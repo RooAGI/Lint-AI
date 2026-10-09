@@ -487,6 +487,7 @@ mod tests {
                 index_version: "v1".to_string(),
             },
             content_hash: String::new(),
+            semantic_tags: Vec::new(),
         }
     }
 

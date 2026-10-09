@@ -66,6 +66,7 @@ fn record(doc_id: &str, group_id: &str, content: &str, terms: &[&str]) -> DocRec
             index_version: "test".to_string(),
         },
         content_hash: String::new(),
+            semantic_tags: Vec::new(),
     }
 }
 

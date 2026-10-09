@@ -156,7 +156,7 @@ impl BekindDaemon {
         }
         let request = json!({
             "texts": texts.iter().map(|(id, text, with_scope)| {
-                json!({"id": id, "text": text, "with_scope": with_scope})
+                json!({"id": id, "text": text, "with_scope": with_scope, "with_activity": true})
             }).collect::<Vec<_>>(),
         });
         let line = serde_json::to_string(&request).ok()?;
@@ -187,7 +187,14 @@ impl BekindDaemon {
 struct FusedTextResult {
     id: String,
     scope: Option<FusedScope>,
+    /// Activity verdicts (Luyi 2026-10-07): is_activity judgments.
+    activity: Vec<FusedActivity>,
     entities: Vec<QueryEntity>,
+}
+
+#[derive(Debug, Clone)]
+struct FusedActivity {
+    is_activity: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +202,7 @@ struct FusedScope {
     activity_phrase: String,
     temporal_words: Vec<String>,
     habitual: bool,
+    where_phrase: String,
 }
 
 /// Parse bekind's `text_results` array. Pure: unit-testable, no I/O.
@@ -227,6 +235,11 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                         })
                         .unwrap_or_default(),
                     habitual: s.get("habitual").and_then(|v| v.as_bool()).unwrap_or(false),
+                    where_phrase: s
+                        .get("where_phrase")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 })
             }
         });
@@ -248,9 +261,23 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                     .collect()
             })
             .unwrap_or_default();
+        let activity = item
+            .get("activity")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| {
+                        Some(FusedActivity {
+                            is_activity: v.get("is_activity").and_then(|b| b.as_bool()).unwrap_or(false),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         out.push(FusedTextResult {
             id,
             scope,
+            activity,
             entities,
         });
     }
@@ -306,6 +333,7 @@ pub fn analyze_query_semantics(question: &str) -> (Vec<ScopeVerdict>, Vec<QueryE
             activity_phrase: s.activity_phrase,
             temporal_words: s.temporal_words,
             habitual: s.habitual,
+            where_phrase: s.where_phrase,
         })
         .into_iter()
         .collect();
@@ -367,6 +395,9 @@ pub struct ScopeVerdict {
     pub temporal_words: Vec<String>,
     /// Whether the text describes a habitual/recurring activity.
     pub habitual: bool,
+    /// The where of the activity (venue/location phrase). Luyi 2026-10-07:
+    /// where should be a kind.
+    pub where_phrase: String,
 }
 
 /// Scope verdicts for raw text spans, via one fused bekind call.
@@ -394,6 +425,7 @@ pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
                 activity_phrase: s.activity_phrase,
                 temporal_words: s.temporal_words,
                 habitual: s.habitual,
+                where_phrase: s.where_phrase,
             })
         })
         .collect()

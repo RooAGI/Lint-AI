@@ -680,6 +680,7 @@ mod tests {
             top_claims: Vec::new(),
             provenance: provenance(),
             content_hash: String::new(),
+            semantic_tags: Vec::new(),
         }
     }
 

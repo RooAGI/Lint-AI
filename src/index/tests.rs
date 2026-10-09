@@ -95,6 +95,7 @@ fn timestamped_chunk_detects_chunk_level_temporal_anchor() {
             index_version: "v1".to_string(),
         },
         content_hash: String::new(),
+        semantic_tags: Vec::new(),
     };
 
     assert!(doc_has_timestamped_chunk(&doc));

@@ -1,10 +1,11 @@
-// End-to-end: definitional temporal tags (bekind scope verdicts).
+// End-to-end: definitional temporal tags as synthetic document terms.
 //
-// Luyi 2026-09-28: definitional knowledge is a MATCH, not a bonus. The
-// question's closed-set temporal words and habituality become SHOULD
-// TermQueries on the index's `semantic_tags` field, scored by BM25 inside
-// tantivy. There is no additive boost and score_breakdown.scope_boost stays
-// 0.0.
+// Luyi 2026-09-28: definitional knowledge is a MATCH, not a bonus.
+// Luyi 2026-10-07: bekind's mapping lives in the index, not in the query.
+// The question's closed-set temporal words ("weekend") match the doc's
+// indexed `semantic_tags` field (the "synthetic document") through the
+// ordinary tantivy QueryParser, scored by BM25 inside tantivy. There is
+// no additive boost and no per-query bekind mapping.
 //
 // The NeMo pair mem-05:
 //   question: "What is the user's weekend exercise routine?"
@@ -81,6 +82,7 @@ fn weekend_question_ranks_saturday_fact_above_monday_fact_via_tags() {
     // any analyze call in this test process (index-time tagging runs at
     // snapshot build).
     std::env::set_var("BEHOOD_BIN", &bin);
+    crate::behood_query::set_enabled(true);
 
     let user_id = "scope-user";
     let mut service = MemoryService::in_memory(PipelineOptions::default());
@@ -127,6 +129,7 @@ fn non_temporal_question_is_unaffected_by_tags() {
         "BEHOOD_BIN={bin} does not exist"
     );
     std::env::set_var("BEHOOD_BIN", &bin);
+    crate::behood_query::set_enabled(true);
 
     let user_id = "scope-user-plain";
     let mut service = MemoryService::in_memory(PipelineOptions::default());

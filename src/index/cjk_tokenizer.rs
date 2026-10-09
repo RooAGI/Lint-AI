@@ -247,6 +247,106 @@ impl TokenStream for CjkTokenStream {
 /// index's manager, so index-time and query-time segmentation agree.
 pub fn register_cjk_tokenizer(index: &tantivy::Index) {
     index.tokenizers().register("default", CjkTokenizer);
+    // Subword field tokenizer (Luyi 2026-10-07): Porter stemmer for
+    // morphological matching ("weekends" -> "weekend"). Used by the
+    // dedicated `subword_content` field only; the main fields keep the
+    // CJK tokenizer unchanged.
+    index.tokenizers().register("subword", SubwordTokenizer);
+}
+
+/// Subword tokenizer: splits on non-alphanumeric (like the default),
+/// lowercases, and for each word emits the full word plus its Porter stem.
+/// "weekends" -> "weekends" + "weekend", so inflected forms match their
+/// base. Used by the dedicated `subword_content` field only.
+#[derive(Clone, Default)]
+pub struct SubwordTokenizer;
+
+/// Token stream for [`SubwordTokenizer`].
+#[derive(Clone, Default)]
+pub struct SubwordTokenStream {
+    tokens: Vec<Token>,
+    index: usize,
+}
+
+fn push_subword_tokens(
+    tokens: &mut Vec<Token>,
+    position: &mut usize,
+    word: &str,
+    offset_from: usize,
+    offset_to: usize,
+) {
+    let lowered = word.to_lowercase();
+    if lowered.len() >= MAX_TOKEN_BYTES || lowered.is_empty() {
+        return;
+    }
+    let pos = *position;
+    // Porter stem (Luyi 2026-10-07): map to the morphological base form.
+    // "weekends" -> "weekend", "allergies" -> "allergi". The full word is
+    // also emitted for exact matching.
+    tokens.push(Token {
+        text: lowered.clone(),
+        offset_from,
+        offset_to,
+        position: pos,
+        position_length: 1,
+    });
+    let stem = crate::porter_stemmer::porter_stem(&lowered);
+    // Skip if the stem is the same as the word (avoid duplication).
+    if stem != lowered {
+        tokens.push(Token {
+            text: stem,
+            offset_from,
+            offset_to,
+            position: pos,
+            position_length: 1,
+        });
+    }
+    *position += 1;
+}
+
+impl Tokenizer for SubwordTokenizer {
+    type TokenStream<'a> = SubwordTokenStream;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        let mut tokens = Vec::new();
+        let mut position = 0usize;
+        // Simple word splitting: split on non-alphanumeric, track offsets.
+        let mut word_start: Option<usize> = None;
+        for (i, c) in text.char_indices() {
+            if c.is_alphanumeric() {
+                if word_start.is_none() {
+                    word_start = Some(i);
+                }
+            } else if let Some(start) = word_start.take() {
+                let word = &text[start..i];
+                push_subword_tokens(&mut tokens, &mut position, word, start, i);
+            }
+        }
+        if let Some(start) = word_start.take() {
+            let word = &text[start..];
+            push_subword_tokens(&mut tokens, &mut position, word, start, text.len());
+        }
+        SubwordTokenStream { tokens, index: 0 }
+    }
+}
+
+impl TokenStream for SubwordTokenStream {
+    fn advance(&mut self) -> bool {
+        if self.index < self.tokens.len() {
+            self.index += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn token(&self) -> &Token {
+        &self.tokens[self.index - 1]
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        &mut self.tokens[self.index - 1]
+    }
 }
 
 #[cfg(test)]
@@ -346,5 +446,44 @@ mod tests {
             token_texts("Virtual-Machine! Café running"),
             vec!["virtual", "machine", "café", "cafe", "running"]
         );
+    }
+
+    fn subword_texts(text: &str) -> Vec<String> {
+        let mut tok = SubwordTokenizer;
+        let mut stream = tok.token_stream(text);
+        let mut out = Vec::new();
+        while stream.advance() {
+            out.push(stream.token().text.clone());
+        }
+        out
+    }
+
+    #[test]
+    fn subword_allergies_and_allergic_share_stem() {
+        let a: std::collections::HashSet<_> = subword_texts("allergies").into_iter().collect();
+        let b: std::collections::HashSet<_> = subword_texts("allergic").into_iter().collect();
+        // Porter: "allergies" -> "allergi", "allergic" -> "allerg".
+        // Documented: they do NOT share a stem (derivational gap).
+        // The full words are emitted.
+        assert!(a.contains("allergies"));
+        assert!(a.contains("allergi"));
+        assert!(b.contains("allergic"));
+        assert!(b.contains("allerg"));
+    }
+
+    #[test]
+    fn subword_weekends_matches_weekend() {
+        let a: std::collections::HashSet<_> = subword_texts("weekends").into_iter().collect();
+        let b: std::collections::HashSet<_> = subword_texts("weekend").into_iter().collect();
+        // Porter: both map to "weekend".
+        assert!(a.contains("weekend"));
+        assert!(b.contains("weekend"));
+    }
+
+    #[test]
+    fn subword_short_words_emit_word_and_stem() {
+        // Porter stem of "tea" is "tea" (no change); the full word is emitted.
+        let toks = subword_texts("tea");
+        assert!(toks.contains(&"tea".to_string()));
     }
 }

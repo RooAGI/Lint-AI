@@ -52,6 +52,9 @@ pub struct QueryEntity {
     /// Behood's ontological kind: person, place, org, event, work, food,
     /// herb (admitted closed set), thing.
     pub kind: String,
+    /// Closed-set definitional kinds (Luyi 2026-10-09): e.g. "gardening"
+    /// for "planting". From beKIND phrase ClosedSetKind evidence.
+    pub closed_sets: Vec<String>,
 }
 
 /// Locate the bekind binary: `BEHOOD_BIN` first, then `PATH`
@@ -256,6 +259,15 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("thing")
                                 .to_string(),
+                            closed_sets: e
+                                .get("closed_sets")
+                                .and_then(|v| v.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     })
                     .collect()
@@ -299,6 +311,7 @@ fn temporal_question_entity(question: &str) -> Option<QueryEntity> {
     re.find(&lowered).map(|m| QueryEntity {
         text: m.as_str().to_string(),
         kind: "time".to_string(),
+        closed_sets: Vec::new(),
     })
 }
 
@@ -438,6 +451,8 @@ pub struct KindHit {
     pub text: String,
     /// bekind's ontological kind ("herb", "food", "thing", ...).
     pub kind: String,
+    /// Closed-set definitional kinds (Luyi 2026-10-09).
+    pub closed_sets: Vec<String>,
 }
 
 /// bekind kind verdicts for one text span: every entity's kind.
@@ -476,6 +491,7 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
                 .map(|e| KindHit {
                     text: e.text,
                     kind: e.kind,
+                    closed_sets: e.closed_sets,
                 })
                 .collect(),
         })

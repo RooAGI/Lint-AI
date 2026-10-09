@@ -79,6 +79,18 @@ pub fn doc_kind_tags(verdict: &KindVerdict) -> Vec<String> {
         .map(|hit| hit.kind.to_lowercase())
         .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str()))
         .collect();
+    // Closed-set definitional kinds (Luyi 2026-10-09): beKIND's phrase
+    // judgments like "gardening" for "planting", "doctor" for
+    // "dermatologist". These bypass ADMITTED_KIND_TAGS (that's for entity
+    // kinds); beKIND owns definitional knowledge.
+    for hit in &verdict.kinds {
+        for cs in &hit.closed_sets {
+            let tag = cs.to_lowercase();
+            if !tag.is_empty() {
+                tags.push(tag);
+            }
+        }
+    }
     tags.sort();
     tags.dedup();
     tags

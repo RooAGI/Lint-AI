@@ -1190,7 +1190,9 @@ mod stem_query_porter_tests {
 
     #[test]
     fn slash_splits_into_tokens() {
-        assert_eq!(stem_query_porter("and/or"), "and or");
+        // Real case (LongMemEval 10e09553): "7/22" must tokenize to "7" "22"
+        // so it matches indexed date terms.
+        assert_eq!(stem_query_porter("7/22"), "7 22");
     }
 
     #[test]

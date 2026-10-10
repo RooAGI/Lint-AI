@@ -586,14 +586,17 @@ mod tests {
             QueryEntity {
                 text: "both Jean".to_string(),
                 kind: "person".to_string(),
+                closed_sets: Vec::new(),
             },
             QueryEntity {
                 text: "Jean".to_string(),
                 kind: "person".to_string(),
+                closed_sets: Vec::new(),
             },
             QueryEntity {
                 text: "Paris".to_string(),
                 kind: "place".to_string(),
+                closed_sets: Vec::new(),
             },
         ];
         assert_eq!(query_persons(&entities), vec!["Jean".to_string()]);
@@ -604,6 +607,7 @@ mod tests {
         let entities = vec![QueryEntity {
             text: "Paris".to_string(),
             kind: "place".to_string(),
+            closed_sets: Vec::new(),
         }];
         assert!(query_has_kind(&entities, "place"));
         assert!(!query_has_kind(&entities, "person"));

@@ -47,6 +47,7 @@ fn service_persists_searches_updates_and_deletes_without_store_access() -> anyho
         session_id: None,
         scope: None,
         filters: None,
+        reference_date: None,
     })?;
     assert!(hits.data.iter().any(|hit| hit.id == id));
     let updated = service.update(UpdateRequest {

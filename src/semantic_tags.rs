@@ -194,6 +194,7 @@ mod tests {
                 .map(|(text, kind)| crate::behood_query::KindHit {
                     text: text.to_string(),
                     kind: kind.to_string(),
+                    closed_sets: Vec::new(),
                 })
                 .collect(),
         }

@@ -44,6 +44,7 @@ fn search(
             session_id: None,
             scope: None,
             filters: None,
+            reference_date: None,
         })
         .expect("search");
     response.data
@@ -175,6 +176,7 @@ fn auto_detect_routes_chinese_query_to_chinese_memory() {
                 f.insert("memory_user_id".to_string(), user_id.to_string());
                 f
             }),
+            reference_date: None,
         })
         .expect("search");
     assert!(

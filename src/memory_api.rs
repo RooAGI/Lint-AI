@@ -4613,6 +4613,7 @@ mod tests {
                 Some("hook-session"),
                 10,
                 &filters,
+                None,
             )
             .unwrap();
         assert!(
@@ -4674,6 +4675,7 @@ mod tests {
                 Some("persist-s1"),
                 10,
                 &filters,
+                None,
             )
             .unwrap();
         assert!(
@@ -5494,7 +5496,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
         service.store.refresh().unwrap();
         assert!(key_phrases_of(&service, "search-doc").is_empty());
         let results = service
-            .search_with_filters("canary phrase", "test", None, 10, &BTreeMap::new())
+            .search_with_filters("canary phrase", "test", None, 10, &BTreeMap::new(), None)
             .unwrap();
         assert!(
             results.iter().any(|r| r.doc_id == "search-doc"),
@@ -5734,7 +5736,7 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
             "{provider} hook-written doc should start without phrases"
         );
         let results = query_side
-            .search_with_filters(query, "test", None, 10, &BTreeMap::new())
+            .search_with_filters(query, "test", None, 10, &BTreeMap::new(), None)
             .unwrap();
         assert!(
             results.iter().any(|r| r.doc_id == doc_id),

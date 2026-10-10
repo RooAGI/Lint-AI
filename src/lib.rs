@@ -450,6 +450,7 @@ impl PyMemoryCore {
             session_id,
             scope,
             filters,
+            reference_date: None,
         };
         let response = match &mut self.backend {
             MemoryBackend::Local(service) => py

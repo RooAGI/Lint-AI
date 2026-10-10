@@ -53,7 +53,7 @@ fn english_add_search_regression() {
 
     // "Where is the Madrid library?" must top-hit the library fact.
     let r = service
-        .search_with_filters("Where is the Madrid library?", user_id, None, 10, &filters)
+        .search_with_filters("Where is the Madrid library?", user_id, None, 10, &filters, None)
         .expect("search");
     let top = r.first().expect("no results");
     eprintln!("en top: {} score={:.2}", top.doc_id, top.score);
@@ -73,7 +73,7 @@ fn english_add_search_regression() {
     assert!(
         r.iter().any(|hit| hit.doc_id == id_book),
         "English what-yesterday question missed the book fact"
-        None,
+    );
 
     // Spanish-only words must not leak: they stay live in English
     // (not stopwords). (Words like "no"/"son"/"era" are also English

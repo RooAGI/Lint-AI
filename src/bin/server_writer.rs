@@ -419,6 +419,7 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
+            reference_date: None,
         }
     }
     fn owner() -> Arc<RwLock<MemoryService>> {

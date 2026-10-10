@@ -1176,3 +1176,41 @@ impl MemoryIndex {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod stem_query_porter_tests {
+    use super::stem_query_porter;
+
+    #[test]
+    fn hyphen_splits_into_tokens() {
+        // Luyi 2026-10-10: "gardening-related" must tokenize to "gardening"
+        // so it matches the indexed "gardening" tag.
+        assert_eq!(stem_query_porter("gardening-related"), "gardening related");
+    }
+
+    #[test]
+    fn slash_splits_into_tokens() {
+        assert_eq!(stem_query_porter("and/or"), "and or");
+    }
+
+    #[test]
+    fn known_tag_base_uses_stemmed_form() {
+        // "weekends" stems to "weekend", a known tag base.
+        assert_eq!(stem_query_porter("weekends"), "weekend");
+    }
+
+    #[test]
+    fn bekind_category_kept_verbatim() {
+        // "gardening" stems to "garden", which is NOT a tag base —
+        // keep "gardening" so it matches the indexed tag.
+        assert_eq!(stem_query_porter("gardening"), "gardening");
+    }
+
+    #[test]
+    fn mixed_query_tokenizes_systematically() {
+        assert_eq!(
+            stem_query_porter("What gardening-related activity?"),
+            "what gardening related activity"
+        );
+    }
+}

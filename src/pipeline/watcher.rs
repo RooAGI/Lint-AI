@@ -29,6 +29,26 @@ pub struct WorkspaceChangeEvent {
     pub after: Option<String>,
 }
 
+impl WorkspaceChangeEvent {
+    /// The workspace source index currently contains Markdown documents only.
+    /// Provider activity and source-file changes are still captured separately,
+    /// but must not invalidate the full Markdown index.
+    pub fn affects_workspace_index(&self, _root: &Path) -> bool {
+        if self.file_path == "<watcher-error>" {
+            return true;
+        }
+        let path = Path::new(&self.file_path);
+        let is_markdown = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == "md");
+        if !is_markdown {
+            return false;
+        }
+        true
+    }
+}
+
 /// Debounced project-file changes shared by every long-lived index consumer.
 pub struct WorkspaceWatcher {
     _watcher: Debouncer<RecommendedWatcher, RecommendedCache>,

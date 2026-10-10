@@ -255,6 +255,9 @@ impl ClaudeMcp {
             .map(mcp_index::WorkspaceWatcher::take_file_changes)
             .unwrap_or_default();
         if !file_changes.is_empty() {
+            let workspace_index_changed = file_changes
+                .iter()
+                .any(|change| change.affects_workspace_index(&self.root));
             if let Err(error) =
                 crate::integrations::session_recording::capture_workspace_file_changes(
                     RecordingProvider::Claude,
@@ -264,7 +267,9 @@ impl ClaudeMcp {
             {
                 eprintln!("warning: failed to save workspace file changes: {error:#}");
             }
-            *store = None;
+            if workspace_index_changed {
+                *store = None;
+            }
         }
         if store.is_none() {
             let graph = build_project_graph(&AdapterInput {

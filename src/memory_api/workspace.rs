@@ -414,6 +414,8 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         .iter_mut()
         .for_each(|path| *path = path.to_lowercase());
     ignore_paths.sort();
+    // The graph adapter scans Markdown across the workspace. Match that
+    // corpus while avoiding invalidation from unrelated source files.
     let mut entries = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -423,6 +425,7 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         })
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "md"))
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(root).ok()?.to_path_buf();
             let metadata = entry.metadata().ok()?;
@@ -443,7 +446,7 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         fingerprint.update(modified.subsec_nanos().to_le_bytes());
     }
     Ok(json!({
-        "version": 2,
+        "version": 3,
         "filesystem_fingerprint": format!("{:x}", fingerprint.finalize()),
         "ignore_paths": ignore_paths,
     }))

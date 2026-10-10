@@ -49,7 +49,15 @@ fn stem_query_porter(query: &str) -> String {
                 }
                 word.clear();
             }
-            result.push(c);
+            // Luyi 2026-10-10: hyphens must become spaces so "gardening-related"
+            // tokenizes to "gardening" + "related", matching the indexed tag.
+            // Preserving the hyphen lets Tantivy treat it as a single token
+            // that never matches the "gardening" tag.
+            if c == '-' {
+                result.push(' ');
+            } else {
+                result.push(c);
+            }
         }
     }
     if !word.is_empty() {

@@ -28,6 +28,8 @@ mod server;
 mod session_ab_benchmark;
 #[path = "bin/validate_corpus.rs"]
 mod validate_corpus;
+#[path = "bin/query_repl.rs"]
+mod query_repl;
 
 pub(crate) fn run(name: &str) -> anyhow::Result<()> {
     match name {
@@ -50,6 +52,7 @@ pub(crate) fn run(name: &str) -> anyhow::Result<()> {
             validate_corpus::main();
             Ok(())
         }
+        "query_repl" => query_repl::main(),
         _ => anyhow::bail!("executable is unavailable in this build: {name}"),
     }
 }

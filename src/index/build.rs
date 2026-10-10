@@ -30,46 +30,28 @@ fn stem_query_porter(query: &str) -> String {
     // as-is; do NOT add their stems ("garden") or queries won't match tags.
     const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food",
         "gardening", "doctor", "culinary", "sports", "art", "music"];
-    
-    let mut result = String::with_capacity(query.len());
-    let mut word = String::new();
-    for c in query.chars() {
-        if c.is_alphanumeric() {
-            word.push(c);
-        } else {
-            if !word.is_empty() {
-                let lower = word.to_lowercase();
-                let stemmed = crate::porter_stemmer::porter_stem(&lower);
-                // Only use stemmed form if it's a known tag base.
-                // Otherwise keep the original word.
-                if TAG_BASES.contains(&stemmed.as_str()) {
-                    result.push_str(&stemmed);
-                } else {
-                    result.push_str(&lower);
-                }
-                word.clear();
-            }
-            // Luyi 2026-10-10: hyphens must become spaces so "gardening-related"
-            // tokenizes to "gardening" + "related", matching the indexed tag.
-            // Preserving the hyphen lets Tantivy treat it as a single token
-            // that never matches the "gardening" tag.
-            if c == '-' {
-                result.push(' ');
+
+    // Systematic (Luyi 2026-10-10): tokenize on non-alphanumeric, mirroring
+    // Tantivy's default tokenizer used for the tags field at index time.
+    // This guarantees query tokens align with indexed tags — no per-symbol
+    // patching (hyphen, slash, etc.). Each token is lowercased, then replaced
+    // by its stem only if the stem is a known tag base.
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|word| {
+            let lower = word.to_lowercase();
+            let stemmed = crate::porter_stemmer::porter_stem(&lower);
+            // Only use stemmed form if it's a known tag base.
+            // Otherwise keep the original word.
+            if TAG_BASES.contains(&stemmed.as_str()) {
+                stemmed
             } else {
-                result.push(c);
+                lower
             }
-        }
-    }
-    if !word.is_empty() {
-        let lower = word.to_lowercase();
-        let stemmed = crate::porter_stemmer::porter_stem(&lower);
-        if TAG_BASES.contains(&stemmed.as_str()) {
-            result.push_str(&stemmed);
-        } else {
-            result.push_str(&lower);
-        }
-    }
-    result
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The chunk-content text indexed in the tantivy `content` field (and the

@@ -168,13 +168,40 @@ impl BekindDaemon {
         // failures trigger the cooldown.
         let response = match self.daemon.query_with_status(&line, DAEMON_TIMEOUT) {
             Ok(response) => response,
-            Err(crate::daemon::QueryStatus::Busy) => return None,
+            Err(crate::daemon::QueryStatus::Busy) => {
+                return None;
+            },
             Err(crate::daemon::QueryStatus::Failed) => {
                 self.cooldown.note_failure();
                 return None;
             }
         };
         self.cooldown.note_success();
+        let value: Value = serde_json::from_str(&response).ok()?;
+        parse_text_results(&value)
+    }
+
+    /// Bulk variant for index builds: no global cooldown. Each call is
+    /// isolated — one failure does not poison subsequent batches.
+    /// Production rule: a single bad document must never crush the batch.
+    fn judge_texts_bulk(&self, texts: &[(String, &str, bool)]) -> Option<Vec<FusedTextResult>> {
+        if !is_enabled() {
+            return None;
+        }
+        // No cooldown gate: bulk operations are independent. A transient
+        // daemon failure affects only this batch, not the entire build.
+        let request = json!({
+            "texts": texts.iter().map(|(id, text, with_scope)| {
+                json!({"id": id, "text": text, "with_scope": with_scope, "with_activity": true})
+            }).collect::<Vec<_>>(),
+        });
+        let line = serde_json::to_string(&request).ok()?;
+        let response = match self.daemon.query_with_status(&line, DAEMON_TIMEOUT) {
+            Ok(response) => response,
+            // Busy or Failed: return None for THIS batch only. No cooldown,
+            // no global state change. The next batch tries independently.
+            Err(_) => return None,
+        };
         let value: Value = serde_json::from_str(&response).ok()?;
         parse_text_results(&value)
     }
@@ -513,7 +540,9 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
         .enumerate()
         .map(|(i, t)| (format!("a:{i}"), *t, false))
         .collect();
-    let results = match BekindDaemon::global().judge_texts(&inputs) {
+    // Use bulk variant: no global cooldown. One failure must not crush
+    // the entire index build (production rule).
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
         Some(results) => results,
         None => return vec![Vec::new(); texts.len()],
     };

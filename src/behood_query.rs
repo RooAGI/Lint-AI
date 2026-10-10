@@ -456,7 +456,8 @@ pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
         .enumerate()
         .map(|(i, t)| (format!("s:{i}"), *t, true))
         .collect();
-    let results = match BekindDaemon::global().judge_texts(&inputs) {
+    // Bulk: no global cooldown. One failure must not crush the build.
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
         Some(results) => results,
         None => return Vec::new(),
     };
@@ -507,7 +508,8 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
         .enumerate()
         .map(|(i, t)| (format!("k:{i}"), *t, false))
         .collect();
-    let results = match BekindDaemon::global().judge_texts(&inputs) {
+    // Bulk: no global cooldown. One failure must not crush the build.
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
         Some(results) => results,
         None => return Vec::new(),
     };

@@ -122,20 +122,32 @@ pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
 }
 
 /// All definitional tags for document contents: scope tags + admitted kind
-/// tags + activity categories, merged and deduplicated. One batched daemon
-/// call per layer, plus the caller-owned food lexicon (bekind under-extracts
-/// food entities).
+/// tags + activity categories + location tags, merged and deduplicated.
+/// One batched daemon call per layer, plus the caller-owned food lexicon
+/// (bekind under-extracts food entities).
 pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
     let scope_tags = batch_doc_scope_tags(contents);
     let kind_tags = batch_doc_kind_tags(contents);
     let activity_tags = crate::behood_query::analyze_activity_categories(contents);
+    let location_tags = crate::behood_query::analyze_location_categories(contents);
     scope_tags
         .into_iter()
         .zip(kind_tags)
         .zip(activity_tags)
-        .map(|((mut scope, kind), activity)| {
+        .zip(location_tags)
+        .map(|(((mut scope, kind), activity), location)| {
             scope.extend(kind);
             scope.extend(activity);
+            scope.extend(location);
+            // Luyi 2026-10-10: index-time synonym expansion.
+            // Expand semantic tags with WordNet synonyms so queries
+            // using different words match. E.g., tag "leisure" also
+            // indexes "recreation", "free time".
+            let expanded = crate::query_expansion::expand_query_terms(
+                &scope,
+                crate::lang::Lang::En,
+            );
+            scope.extend(expanded.expanded_terms);
             scope.sort();
             scope.dedup();
             scope

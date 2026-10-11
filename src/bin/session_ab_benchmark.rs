@@ -940,6 +940,7 @@ pub(crate) fn main() -> Result<()> {
                 session_id,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })?;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
             let mut seen = HashSet::new();
@@ -976,6 +977,7 @@ pub(crate) fn main() -> Result<()> {
                 session_id,
                 scope: None,
                 filters: None,
+                reference_date: None,
             })?;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
             let mut seen = HashSet::new();

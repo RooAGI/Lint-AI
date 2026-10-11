@@ -3020,10 +3020,12 @@ mod tests {
             QueryEntity {
                 text: "What places".to_string(),
                 kind: "place".to_string(),
+                closed_sets: Vec::new(),
             },
             QueryEntity {
                 text: "Nate".to_string(),
                 kind: "person".to_string(),
+                closed_sets: Vec::new(),
             },
         ];
         assert_eq!(answer_kind_from_behood(&entities), Some(AnswerKind::Place));
@@ -3031,6 +3033,7 @@ mod tests {
         let entities = vec![QueryEntity {
             text: "Nate".to_string(),
             kind: "person".to_string(),
+            closed_sets: Vec::new(),
         }];
         assert_eq!(answer_kind_from_behood(&entities), None);
     }
@@ -3044,10 +3047,12 @@ mod tests {
             QueryEntity {
                 text: "when".to_string(),
                 kind: "time".to_string(),
+                closed_sets: Vec::new(),
             },
             QueryEntity {
                 text: "John".to_string(),
                 kind: "person".to_string(),
+                closed_sets: Vec::new(),
             },
         ];
         assert_eq!(answer_kind_from_behood(&entities), Some(AnswerKind::Date));

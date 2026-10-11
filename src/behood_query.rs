@@ -40,7 +40,7 @@ pub fn set_enabled(enabled: bool) {
     BEKIND_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-fn is_enabled() -> bool {
+pub fn is_enabled() -> bool {
     BEKIND_ENABLED.load(Ordering::Relaxed)
 }
 
@@ -52,6 +52,9 @@ pub struct QueryEntity {
     /// Behood's ontological kind: person, place, org, event, work, food,
     /// herb (admitted closed set), thing.
     pub kind: String,
+    /// Closed-set definitional kinds (Luyi 2026-10-09): e.g. "gardening"
+    /// for "planting". From beKIND phrase ClosedSetKind evidence.
+    pub closed_sets: Vec<String>,
 }
 
 /// Locate the bekind binary: `BEHOOD_BIN` first, then `PATH`
@@ -165,13 +168,40 @@ impl BekindDaemon {
         // failures trigger the cooldown.
         let response = match self.daemon.query_with_status(&line, DAEMON_TIMEOUT) {
             Ok(response) => response,
-            Err(crate::daemon::QueryStatus::Busy) => return None,
+            Err(crate::daemon::QueryStatus::Busy) => {
+                return None;
+            },
             Err(crate::daemon::QueryStatus::Failed) => {
                 self.cooldown.note_failure();
                 return None;
             }
         };
         self.cooldown.note_success();
+        let value: Value = serde_json::from_str(&response).ok()?;
+        parse_text_results(&value)
+    }
+
+    /// Bulk variant for index builds: no global cooldown. Each call is
+    /// isolated — one failure does not poison subsequent batches.
+    /// Production rule: a single bad document must never crush the batch.
+    fn judge_texts_bulk(&self, texts: &[(String, &str, bool)]) -> Option<Vec<FusedTextResult>> {
+        if !is_enabled() {
+            return None;
+        }
+        // No cooldown gate: bulk operations are independent. A transient
+        // daemon failure affects only this batch, not the entire build.
+        let request = json!({
+            "texts": texts.iter().map(|(id, text, with_scope)| {
+                json!({"id": id, "text": text, "with_scope": with_scope, "with_activity": true, "with_location": true})
+            }).collect::<Vec<_>>(),
+        });
+        let line = serde_json::to_string(&request).ok()?;
+        let response = match self.daemon.query_with_status(&line, DAEMON_TIMEOUT) {
+            Ok(response) => response,
+            // Busy or Failed: return None for THIS batch only. No cooldown,
+            // no global state change. The next batch tries independently.
+            Err(_) => return None,
+        };
         let value: Value = serde_json::from_str(&response).ok()?;
         parse_text_results(&value)
     }
@@ -189,12 +219,16 @@ struct FusedTextResult {
     scope: Option<FusedScope>,
     /// Activity verdicts (Luyi 2026-10-07): is_activity judgments.
     activity: Vec<FusedActivity>,
+    /// Location tags (Luyi 2026-10-10): canonical country tags.
+    location: Vec<String>,
     entities: Vec<QueryEntity>,
 }
 
 #[derive(Debug, Clone)]
 struct FusedActivity {
     is_activity: bool,
+    /// Definitional category (Luyi 2026-10-09): e.g. "gardening".
+    category: String,
 }
 
 #[derive(Debug, Clone)]
@@ -256,6 +290,15 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("thing")
                                 .to_string(),
+                            closed_sets: e
+                                .get("closed_sets")
+                                .and_then(|v| v.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     })
                     .collect()
@@ -269,8 +312,18 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                     .filter_map(|v| {
                         Some(FusedActivity {
                             is_activity: v.get("is_activity").and_then(|b| b.as_bool()).unwrap_or(false),
+                            category: v.get("category").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                         })
                     })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let location = item
+            .get("location")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect()
             })
             .unwrap_or_default();
@@ -278,6 +331,7 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
             id,
             scope,
             activity,
+            location,
             entities,
         });
     }
@@ -299,6 +353,7 @@ fn temporal_question_entity(question: &str) -> Option<QueryEntity> {
     re.find(&lowered).map(|m| QueryEntity {
         text: m.as_str().to_string(),
         kind: "time".to_string(),
+        closed_sets: Vec::new(),
     })
 }
 
@@ -413,7 +468,8 @@ pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
         .enumerate()
         .map(|(i, t)| (format!("s:{i}"), *t, true))
         .collect();
-    let results = match BekindDaemon::global().judge_texts(&inputs) {
+    // Bulk: no global cooldown. One failure must not crush the build.
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
         Some(results) => results,
         None => return Vec::new(),
     };
@@ -438,6 +494,8 @@ pub struct KindHit {
     pub text: String,
     /// bekind's ontological kind ("herb", "food", "thing", ...).
     pub kind: String,
+    /// Closed-set definitional kinds (Luyi 2026-10-09).
+    pub closed_sets: Vec<String>,
 }
 
 /// bekind kind verdicts for one text span: every entity's kind.
@@ -462,7 +520,8 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
         .enumerate()
         .map(|(i, t)| (format!("k:{i}"), *t, false))
         .collect();
-    let results = match BekindDaemon::global().judge_texts(&inputs) {
+    // Bulk: no global cooldown. One failure must not crush the build.
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
         Some(results) => results,
         None => return Vec::new(),
     };
@@ -476,9 +535,119 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
                 .map(|e| KindHit {
                     text: e.text,
                     kind: e.kind,
+                    closed_sets: e.closed_sets,
                 })
                 .collect(),
         })
+        .collect()
+}
+
+/// Combined location + activity tags for query text (Luyi 2026-10-10 P1):
+/// single beKIND daemon round-trip returning both tag sets. The daemon's
+/// judge_texts_bulk response carries both `location` and `activity` verdicts,
+/// so one call serves both. Fail-open: returns empty tags on any failure.
+pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
+    if texts.is_empty() || !is_enabled() {
+        return vec![(Vec::new(), Vec::new()); texts.len()];
+    }
+    let inputs: Vec<(String, &str, bool)> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("q:{i}"), *t, false))
+        .collect();
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
+        Some(results) => results,
+        None => return vec![(Vec::new(), Vec::new()); texts.len()],
+    };
+    let mut by_index: std::collections::HashMap<usize, (Vec<String>, Vec<String>)> =
+        std::collections::HashMap::new();
+    for r in results {
+        if let Some(idx) = r.id.strip_prefix("q:").and_then(|s| s.parse::<usize>().ok()) {
+            // Location: natural forms -> single-token Tantivy tags.
+            let loc: Vec<String> = r.location
+                .into_iter()
+                .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
+                .collect();
+            // Activity: definitional categories.
+            let act: Vec<String> = r.activity
+                .into_iter()
+                .filter(|a| a.is_activity && !a.category.is_empty())
+                .map(|a| a.category.to_lowercase())
+                .collect();
+            by_index.insert(idx, (loc, act));
+        }
+    }
+    (0..texts.len())
+        .map(|i| by_index.remove(&i).unwrap_or_default())
+        .collect()
+}
+
+/// Activity category tags for raw text spans (Luyi 2026-10-09): one fused
+/// bekind call, extracts definitional categories ("gardening") from activity
+/// verdicts. Fail-open like kind verdicts.
+pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
+    if texts.is_empty() || !is_enabled() {
+        return vec![Vec::new(); texts.len()];
+    }
+    let inputs: Vec<(String, &str, bool)> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("a:{i}"), *t, false))
+        .collect();
+    // Use bulk variant: no global cooldown. One failure must not crush
+    // the entire index build (production rule).
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
+        Some(results) => results,
+        None => return vec![Vec::new(); texts.len()],
+    };
+    let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    for r in results {
+        if let Some(idx) = r.id.strip_prefix("a:").and_then(|s| s.parse::<usize>().ok()) {
+            let cats: Vec<String> = r.activity
+                .into_iter()
+                .filter(|a| a.is_activity && !a.category.is_empty())
+                .map(|a| a.category.to_lowercase())
+                .collect();
+            by_index.insert(idx, cats);
+        }
+    }
+    (0..texts.len())
+        .map(|i| by_index.remove(&i).unwrap_or_default())
+        .collect()
+}
+
+/// Location tags for raw text spans (Luyi 2026-10-10): one fused
+/// bekind call, extracts canonical country tags ("united_states") from
+/// location mentions. Fail-open like activity categories.
+pub fn analyze_location_categories(texts: &[&str]) -> Vec<Vec<String>> {
+    if texts.is_empty() || !is_enabled() {
+        return vec![Vec::new(); texts.len()];
+    }
+    let inputs: Vec<(String, &str, bool)> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("l:{i}"), *t, false))
+        .collect();
+    // Use bulk variant: no global cooldown. One failure must not crush
+    // the entire index build (production rule).
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
+        Some(results) => results,
+        None => return vec![Vec::new(); texts.len()],
+    };
+    let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    for r in results {
+        if let Some(idx) = r.id.strip_prefix("l:").and_then(|s| s.parse::<usize>().ok()) {
+            // Luyi 2026-10-10: beKIND returns natural forms ("United States").
+            // Normalize to Tantivy-friendly single tokens ("unitedstates") for the index.
+            let normalized: Vec<String> = r.location
+                .into_iter()
+                .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
+                .collect();
+            by_index.insert(idx, normalized);
+        }
+    }
+    (0..texts.len())
+        .map(|i| by_index.remove(&i).unwrap_or_default())
         .collect()
 }
 
@@ -504,14 +673,17 @@ mod tests {
             QueryEntity {
                 text: "both Jean".to_string(),
                 kind: "person".to_string(),
+                closed_sets: Vec::new(),
             },
             QueryEntity {
                 text: "Jean".to_string(),
                 kind: "person".to_string(),
+                closed_sets: Vec::new(),
             },
             QueryEntity {
                 text: "Paris".to_string(),
                 kind: "place".to_string(),
+                closed_sets: Vec::new(),
             },
         ];
         assert_eq!(query_persons(&entities), vec!["Jean".to_string()]);
@@ -522,6 +694,7 @@ mod tests {
         let entities = vec![QueryEntity {
             text: "Paris".to_string(),
             kind: "place".to_string(),
+            closed_sets: Vec::new(),
         }];
         assert!(query_has_kind(&entities, "place"));
         assert!(!query_has_kind(&entities, "person"));
@@ -670,5 +843,23 @@ for line in sys.stdin:
                 .is_none(),
             "bad binary must fail open"
         );
+    }
+
+    // Luyi 2026-10-10 P1: analyze_query_tags must fail open when disabled
+    // (no daemon round-trip).
+    #[test]
+    fn analyze_query_tags_empty_when_disabled() {
+        // Ensure disabled (may have been enabled by another test).
+        set_enabled(false);
+        let tags = analyze_query_tags(&["camping in Colorado"]);
+        assert_eq!(tags.len(), 1);
+        assert!(tags[0].0.is_empty(), "location tags must be empty when disabled");
+        assert!(tags[0].1.is_empty(), "activity tags must be empty when disabled");
+    }
+
+    #[test]
+    fn analyze_query_tags_empty_for_no_input() {
+        let tags = analyze_query_tags(&[]);
+        assert!(tags.is_empty());
     }
 }

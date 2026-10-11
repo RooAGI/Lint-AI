@@ -129,6 +129,10 @@ path = "src/bin/launchers/session_ab_benchmark.rs"
 name = "validate_corpus"
 path = "src/bin/launchers/validate_corpus.rs"
 
+[[bin]]
+name = "query_repl"
+path = "src/bin/launchers/query_repl.rs"
+
 [dev-dependencies]
 # Only the SIGKILL crash test needs raw syscalls now; the lock itself is std.
 libc = "0.2"

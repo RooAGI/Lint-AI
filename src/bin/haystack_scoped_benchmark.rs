@@ -37,6 +37,30 @@ struct Args {
     #[arg(long)]
     question_type: Option<String>,
 
+    /// Enable beKIND semantic tags (occupation/activity hypernyms).
+    #[arg(long)]
+    bekind: bool,
+
+    /// Enable CombSUM fusion: run multiple query variants and sum scores.
+    #[arg(long)]
+    combsum: bool,
+
+    /// Enable RRF fusion: Reciprocal Rank Fusion across query variants.
+    #[arg(long)]
+    rrf: bool,
+
+    /// Enable PRF: Pseudo-Relevance Feedback query expansion.
+    #[arg(long)]
+    prf: bool,
+
+    /// Enable RM3: Relevance Model 3 query expansion.
+    #[arg(long)]
+    rm3: bool,
+
+    /// Enable Bo1: DFR Bose-Einstein query expansion.
+    #[arg(long)]
+    bo1: bool,
+
     /// Optional output path for JSON results.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -241,8 +265,383 @@ struct BenchmarkReport {
     per_query: Vec<QueryMetrics>,
 }
 
+/// CombSUM fusion (Luyi 2026-10-09): run multiple query variants and sum scores.
+/// Variants: (1) original query, (2) query without temporal phrases (broader recall).
+/// Returns fused SearchResponse with top_k results by summed score.
+fn combsum_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+    reference_date: Option<&str>,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    // Generate variants
+    let variants = vec![
+        question.to_string(),                    // Original
+        strip_temporal_phrases(question),        // No temporal (broader)
+    ];
+
+    // Run each variant, collect scores per doc_id
+    let mut score_sums: HashMap<String, f32> = HashMap::new();
+    let mut doc_map: HashMap<String, crate::SearchMemory> = HashMap::new();
+
+    for variant in &variants {
+        let resp = service
+            .search(crate::SearchRequest {
+                query: variant.clone(),
+                user_id: BENCHMARK_USER_ID.to_string(),
+                top_k,
+                session_id: None,
+                scope: None,
+                filters: None,
+                options: None,
+                reference_date: None,
+            })
+            .with_context(|| format!("combsum search failed for {}", question_id))?;
+        for result in resp.data {
+            *score_sums.entry(result.id.clone()).or_insert(0.0) += result.score;
+            doc_map.entry(result.id.clone()).or_insert(result);
+        }
+    }
+
+    // Sort by summed score, take top_k
+    let mut fused: Vec<(String, f32)> = score_sums.into_iter().collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(top_k);
+
+    let data: Vec<crate::SearchMemory> = fused
+        .into_iter()
+        .filter_map(|(doc_id, sum_score)| {
+            doc_map.get(&doc_id).map(|r| {
+                let mut fused_result = r.clone();
+                fused_result.score = sum_score;
+                fused_result
+            })
+        })
+        .collect();
+
+    Ok(crate::SearchResponse { data })
+}
+
+/// RRF fusion (Luyi 2026-10-09): Reciprocal Rank Fusion across query variants.
+/// score(d) = sum over variants of 1 / (k + rank(d)), with k=60.
+/// More robust than CombSUM as it uses ranks, not raw scores.
+fn rrf_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+    reference_date: Option<&str>,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    const RRF_K: f32 = 60.0;
+
+    let variants = vec![
+        question.to_string(),
+        strip_temporal_phrases(question),
+    ];
+
+    let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+    let mut doc_map: HashMap<String, crate::SearchMemory> = HashMap::new();
+
+    for variant in &variants {
+        let resp = service
+            .search(crate::SearchRequest {
+                query: variant.clone(),
+                user_id: BENCHMARK_USER_ID.to_string(),
+                top_k,
+                session_id: None,
+                scope: None,
+                filters: None,
+                options: None,
+                reference_date: None,
+            })
+            .with_context(|| format!("rrf search failed for {}", question_id))?;
+        for (rank, result) in resp.data.iter().enumerate() {
+            let rrf = 1.0 / (RRF_K + rank as f32 + 1.0);
+            *rrf_scores.entry(result.id.clone()).or_insert(0.0) += rrf;
+            doc_map.entry(result.id.clone()).or_insert_with(|| result.clone());
+        }
+    }
+
+    let mut fused: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused.truncate(top_k);
+
+    let data: Vec<crate::SearchMemory> = fused
+        .into_iter()
+        .filter_map(|(doc_id, rrf_score)| {
+            doc_map.get(&doc_id).map(|r| {
+                let mut fused_result = r.clone();
+                fused_result.score = rrf_score;
+                fused_result
+            })
+        })
+        .collect();
+
+    Ok(crate::SearchResponse { data })
+}
+
+/// PRF (Luyi 2026-10-09): Pseudo-Relevance Feedback.
+/// 1. Search with original query, get top-10 docs
+/// 2. Extract top terms from those docs (by frequency, excluding stopwords/query terms)
+/// 3. Add top 20 terms to query, search again
+fn prf_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+    reference_date: Option<&str>,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    // Step 1: Initial retrieval
+    let initial = service
+        .search(crate::SearchRequest {
+            query: question.to_string(),
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k: 10,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+            reference_date: None,
+        })
+        .with_context(|| format!("prf initial search failed for {}", question_id))?;
+
+    // Step 2: Extract terms from top docs
+    let query_terms: std::collections::HashSet<String> = question
+        .to_lowercase()
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    let stopwords: std::collections::HashSet<&str> = [
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
+        "had", "do", "does", "did", "will", "would", "could", "should", "what",
+        "which", "who", "whom", "how", "when", "where", "why", "i", "my", "you",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut term_freq: HashMap<String, usize> = HashMap::new();
+    for doc in &initial.data {
+        for term in doc.content.to_lowercase().split_whitespace() {
+            let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
+            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+                *term_freq.entry(clean).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Step 3: Take top 20 expansion terms
+    let mut terms: Vec<(String, usize)> = term_freq.into_iter().collect();
+    terms.sort_by(|a, b| b.1.cmp(&a.1));
+    terms.truncate(20);
+    let expansion: Vec<String> = terms.into_iter().map(|(t, _)| t).collect();
+
+    // Step 4: Expanded query and final search
+    let expanded_query = format!("{} {}", question, expansion.join(" "));
+    service
+        .search(crate::SearchRequest {
+            query: expanded_query,
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+            reference_date: None,
+        })
+        .with_context(|| format!("prf expanded search failed for {}", question_id))
+}
+
+/// RM3 (Luyi 2026-10-09): Relevance Model 3 (simplified).
+/// 1. Search with original query, get top docs with scores
+/// 2. Build relevance model: weight terms by doc score
+/// 3. Interpolate: expanded = original + top RM terms (lambda=0.5)
+/// 4. Search with expanded query
+fn rm3_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+    reference_date: Option<&str>,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    // Step 1: Initial retrieval with scores
+    let initial = service
+        .search(crate::SearchRequest {
+            query: question.to_string(),
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k: 10,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+            reference_date: None,
+        })
+        .with_context(|| format!("rm3 initial search failed for {}", question_id))?;
+
+    // Step 2: Build relevance model P(w|R) weighted by doc scores
+    let query_terms: std::collections::HashSet<String> = question
+        .to_lowercase()
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    let stopwords: std::collections::HashSet<&str> = [
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
+        "had", "do", "does", "did", "will", "would", "could", "should",
+    ]
+    .into_iter()
+    .collect();
+
+    let mut rm_weights: HashMap<String, f32> = HashMap::new();
+    for doc in &initial.data {
+        let weight = doc.score.max(0.01); // Avoid zero weights
+        for term in doc.content.to_lowercase().split_whitespace() {
+            let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
+            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+                *rm_weights.entry(clean).or_insert(0.0) += weight;
+            }
+        }
+    }
+
+    // Step 3: Top RM terms (lambda interpolation simplified: just append)
+    let mut terms: Vec<(String, f32)> = rm_weights.into_iter().collect();
+    terms.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    terms.truncate(15);
+    let expansion: Vec<String> = terms.into_iter().map(|(t, _)| t).collect();
+
+    // Step 4: Expanded query (original + RM terms)
+    let expanded_query = format!("{} {}", question, expansion.join(" "));
+    service
+        .search(crate::SearchRequest {
+            query: expanded_query,
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+            reference_date: None,
+        })
+        .with_context(|| format!("rm3 expanded search failed for {}", question_id))
+}
+
+/// Bo1 (Luyi 2026-10-09): DFR Bose-Einstein query expansion.
+/// 1. Search with original query, get top-10 docs
+/// 2. For each term, compute Bo1 weight: tf * log2((1+Pn)/Pn) + log2(1+Pn)
+///    where Pn = (docs containing term) / (total top docs)
+/// 3. Take top 20 by Bo1 weight, append to query, search again
+fn bo1_search(
+    service: &mut crate::MemoryService,
+    question: &str,
+    top_k: usize,
+    question_id: &str,
+    reference_date: Option<&str>,
+) -> anyhow::Result<crate::SearchResponse> {
+    use std::collections::HashMap;
+
+    let initial = service
+        .search(crate::SearchRequest {
+            query: question.to_string(),
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k: 10,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+            reference_date: None,
+        })
+        .with_context(|| format!("bo1 initial search failed for {}", question_id))?;
+
+    let query_terms: std::collections::HashSet<String> = question
+        .to_lowercase()
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    let stopwords: std::collections::HashSet<&str> = [
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
+        "had", "do", "does", "did", "will", "would", "could", "should",
+    ]
+    .into_iter()
+    .collect();
+
+    let n_docs = initial.data.len().max(1) as f32;
+    let mut tf_map: HashMap<String, usize> = HashMap::new();
+    let mut df_map: HashMap<String, usize> = HashMap::new();
+
+    for doc in &initial.data {
+        let mut seen_in_doc = std::collections::HashSet::new();
+        for term in doc.content.to_lowercase().split_whitespace() {
+            let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
+            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+                *tf_map.entry(clean.clone()).or_insert(0) += 1;
+                if seen_in_doc.insert(clean.clone()) {
+                    *df_map.entry(clean).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    // Bo1 weight: tf * log2((1+Pn)/Pn) + log2(1+Pn)
+    let mut weighted: Vec<(String, f32)> = tf_map
+        .into_iter()
+        .map(|(term, tf)| {
+            let df = *df_map.get(&term).unwrap_or(&1) as f32;
+            let pn = df / n_docs;
+            let pn = pn.max(0.001); // Avoid division by zero
+            let w = tf as f32 * ((1.0 + pn) / pn).log2() + (1.0 + pn).log2();
+            (term, w)
+        })
+        .collect();
+    weighted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    weighted.truncate(20);
+    let expansion: Vec<String> = weighted.into_iter().map(|(t, _)| t).collect();
+
+    let expanded_query = format!("{} {}", question, expansion.join(" "));
+    service
+        .search(crate::SearchRequest {
+            query: expanded_query,
+            user_id: BENCHMARK_USER_ID.to_string(),
+            top_k,
+            session_id: None,
+            scope: None,
+            filters: None,
+            options: None,
+            reference_date: None,
+        })
+        .with_context(|| format!("bo1 expanded search failed for {}", question_id))
+}
+
+/// Strip temporal phrases like "two weeks ago", "last Tuesday", "past month".
+/// Simple heuristic: remove common temporal patterns.
+fn strip_temporal_phrases(question: &str) -> String {
+    let temporal_patterns = [
+        "two weeks ago", "three weeks ago", "four weeks ago",
+        "a week ago", "two months ago", "three months ago",
+        "last week", "last month", "last Tuesday", "last Friday", "last Saturday",
+        "past month", "past three months", "a couple of days ago",
+        "10 days ago", "5 days ago",
+    ];
+    let mut result = question.to_string();
+    for pattern in &temporal_patterns {
+        result = result.replace(pattern, "");
+    }
+    // Clean up extra whitespace
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub(crate) fn main() -> Result<()> {
     let args = Args::parse();
+    // Enable beKIND semantic tags if requested (Luyi 2026-10-08).
+    if args.bekind {
+        crate::behood_query::set_enabled(true);
+    }
     let mut ks = args
         .ks
         .into_iter()
@@ -272,6 +671,11 @@ pub(crate) fn main() -> Result<()> {
         args.segment_router.into(),
         args.ner_provider.clone(),
         args.index_mode,
+        args.combsum,
+        args.rrf,
+        args.prf,
+        args.rm3,
+        args.bo1,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -299,6 +703,11 @@ fn run_scoped_benchmark(
     segment_router: SegmentRoutingStrategy,
     ner_provider: Tier1NerProvider,
     index_mode: IndexModeArg,
+    combsum: bool,
+    rrf: bool,
+    prf: bool,
+    rm3: bool,
+    bo1: bool,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -428,18 +837,36 @@ fn run_scoped_benchmark(
 
         // Production search. session_id/scope/filters are None: stateless
         // search as the benchmark user, no conversation-state scoping.
+        // Fusion/expansion (Luyi 2026-10-09):
+        // --combsum: multiple variants, sum scores
+        // --rrf: multiple variants, reciprocal rank fusion
+        // --prf: pseudo-relevance feedback expansion
+        // --rm3: relevance model 3 expansion
         let search_start = Instant::now();
-        let response = service
-            .search(SearchRequest {
-                query: entry.question.clone(),
-                user_id: BENCHMARK_USER_ID.to_string(),
-                top_k: max_k,
-                session_id: None,
-                scope: None,
-                filters: None,
-                options: None,
-            })
-            .with_context(|| format!("search failed for {}", entry.question_id))?;
+        let response = if combsum {
+            combsum_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+        } else if rrf {
+            rrf_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+        } else if prf {
+            prf_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+        } else if rm3 {
+            rm3_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+        } else if bo1 {
+            bo1_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+        } else {
+            service
+                .search(SearchRequest {
+                    query: entry.question.clone(),
+                    user_id: BENCHMARK_USER_ID.to_string(),
+                    top_k: max_k,
+                    session_id: None,
+                    scope: None,
+                    filters: None,
+                    options: None,
+                    reference_date: Some(entry.question_date.clone()),
+                })
+                .with_context(|| format!("search failed for {}", entry.question_id))?
+        };
         let search_ms = search_start.elapsed().as_secs_f64() * 1000.0;
 
         // Session IDs come from SearchMemory.session_id (Option<String>).

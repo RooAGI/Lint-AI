@@ -499,6 +499,7 @@ mod tests {
             session_id: None,
             scope: None,
             filters: None,
+            reference_date: None,
         }
     }
     #[test]

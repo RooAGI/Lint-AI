@@ -26,39 +26,44 @@ use super::query_terms::*;
 fn stem_query_porter(query: &str) -> String {
     // Known tag base forms (canonical). If a query word stems to one of these,
     // use the stemmed form so "weekends" matches the "weekend" tag.
-    const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food"];
-    
-    let mut result = String::with_capacity(query.len());
-    let mut word = String::new();
-    for c in query.chars() {
-        if c.is_alphanumeric() {
-            word.push(c);
-        } else {
-            if !word.is_empty() {
-                let lower = word.to_lowercase();
-                let stemmed = crate::porter_stemmer::porter_stem(&lower);
-                // Only use stemmed form if it's a known tag base.
-                // Otherwise keep the original word.
-                if TAG_BASES.contains(&stemmed.as_str()) {
-                    result.push_str(&stemmed);
-                } else {
-                    result.push_str(&lower);
-                }
-                word.clear();
+    // Luyi 2026-10-09: beKIND categories ("gardening", "doctor") are canonical
+    // as-is; do NOT add their stems ("garden") or queries won't match tags.
+    // Luyi 2026-10-10: location tags use natural forms ("United States"),
+    // no normalization. Tantivy tokenizes naturally; tags field boost
+    // distinguishes tag matches from content keyword matches.
+    const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food",
+        "gardening", "doctor", "culinary", "sports", "art", "music"];
+
+    // Systematic (Luyi 2026-10-10): tokenize on non-alphanumeric, mirroring
+    // Tantivy's default tokenizer used for the tags field at index time.
+    // This guarantees query tokens align with indexed tags — no per-symbol
+    // patching (hyphen, slash, etc.). Each token is lowercased, then replaced
+    // by its stem only if the stem is a known tag base.
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .filter(|w| {
+            // Systematic stopword filtering (Luyi 2026-10-10):
+            // Remove stopwords for all supported languages before Tantivy.
+            // Uses the canonical lists from crate::tokenizer.
+            let lower = w.to_lowercase();
+            !crate::tokenizer::english_stopwords().contains(lower.as_str())
+                && !crate::tokenizer::chinese_stopwords().contains(lower.as_str())
+                && !crate::tokenizer::korean_stopwords().contains(lower.as_str())
+        })
+        .map(|word| {
+            let lower = word.to_lowercase();
+            let stemmed = crate::porter_stemmer::porter_stem(&lower);
+            // Only use stemmed form if it's a known tag base.
+            // Otherwise keep the original word.
+            if TAG_BASES.contains(&stemmed.as_str()) {
+                stemmed
+            } else {
+                lower
             }
-            result.push(c);
-        }
-    }
-    if !word.is_empty() {
-        let lower = word.to_lowercase();
-        let stemmed = crate::porter_stemmer::porter_stem(&lower);
-        if TAG_BASES.contains(&stemmed.as_str()) {
-            result.push_str(&stemmed);
-        } else {
-            result.push_str(&lower);
-        }
-    }
-    result
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The chunk-content text indexed in the tantivy `content` field (and the
@@ -890,6 +895,13 @@ impl MemoryIndex {
                             .collect::<Vec<_>>()
                             .join(" ");
                         let content_text = lexical_content_text(doc);
+                        // Luyi 2026-10-10: inject semantic tags into content field
+                        // so tag matches benefit from content-field boost.
+                        let content_text = if tags.is_empty() {
+                            content_text
+                        } else {
+                            format!("{} {}", content_text, tags.join(" "))
+                        };
                         let temporal_text = doc.temporal_terms.join(" ");
                         let tags_text = tags.join(" ");
                         writer.add_document(doc!(doc_id_f => doc.doc_id.clone(), content_f => content_text, headings_f => headings_text, terms_f => terms_text, entities_f => entities_text, temporal_f => temporal_text, tags_f => tags_text, subword_f => content_text))?;
@@ -1002,6 +1014,15 @@ impl MemoryIndex {
                         .collect::<Vec<_>>()
                         .join(" ");
                     let content_text = lexical_content_text(doc);
+                    // Luyi 2026-10-10: inject semantic tags into content field
+                    // so tag matches benefit from content-field boost.
+                    // Documents without the tag (e.g., institutional "Senate"
+                    // filtered from location tags) don't get the boost.
+                    let content_text = if tags.is_empty() {
+                        content_text
+                    } else {
+                        format!("{} {}", content_text, tags.join(" "))
+                    };
                     let temporal_text = doc.temporal_terms.join(" ");
                     let tags_text = tags.join(" ");
                     writer.add_document(doc!(
@@ -1040,17 +1061,37 @@ impl MemoryIndex {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        let cache_key = query.to_string();
+        // Parsed-query cache: check with the raw query first so cache hits
+        // avoid the beKIND daemon round-trip entirely (Luyi 2026-10-10 P1).
         let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let cached = {
             let cache = parsed_cache
                 .lock()
                 .expect("parsed lexical query cache lock poisoned");
-            cache.get(&cache_key).cloned()
+            cache.get(query).cloned()
         };
         let parsed = if let Some(parsed) = cached {
             parsed
         } else {
+            // Per-query beKIND judgment (Luyi 2026-10-10): single daemon
+            // round-trip for location + activity tags, appended to the query.
+            // Replaces hardcoded phrase mappings with proper judgment.
+            // Only runs on cache miss.
+            let query_with_bekind_tags = if crate::behood_query::is_enabled() {
+                let tags = crate::behood_query::analyze_query_tags(&[query]);
+                let mut all_tags = Vec::new();
+                if let Some((loc, act)) = tags.first() {
+                    all_tags.extend(loc.iter().cloned());
+                    all_tags.extend(act.iter().cloned());
+                }
+                if !all_tags.is_empty() {
+                    format!("{} {}", query, all_tags.join(" "))
+                } else {
+                    query.to_string()
+                }
+            } else {
+                query.to_string()
+            };
             // Main fields: exact match via QueryParser.
             let mut query_parser = QueryParser::for_index(
                 &lex.index,
@@ -1075,11 +1116,16 @@ impl MemoryIndex {
             // Porter-stem the query (Luyi 2026-10-07): "weekends" -> "weekend"
             // so inflected forms match canonical tags. Preserves query
             // structure (quotes, etc.) by stemming word-by-word.
-            let stemmed_query = stem_query_porter(query);
-            let parsed_lexical = match query_parser.parse_query(&stemmed_query) {
+            // Luyi 2026-10-10: query includes beKIND location tags.
+            let stemmed_query = stem_query_porter(&query_with_bekind_tags);
+            // Synonym expansion DISABLED (Luyi 2026-10-10): WordNet expansion
+            // adds 100+ noisy terms (clarenc shepard day jr, bivouack, etc.)
+            // that hurt ranking. beKIND semantic tags provide cleaner signal.
+            let final_query = stemmed_query.clone();
+            let parsed_lexical = match query_parser.parse_query(&final_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {
-                    let fallback_query = sanitize_bm25_query(&stemmed_query);
+                    let fallback_query = sanitize_bm25_query(&final_query);
                     if fallback_query.is_empty() {
                         return Err(first_err.into());
                     }
@@ -1157,7 +1203,9 @@ impl MemoryIndex {
                     cache.remove(&oldest_key);
                 }
             }
-            cache.insert(cache_key, combined.clone());
+            // Cache by the raw query: beKIND tags are deterministic for a
+            // given query, so the parsed result is stable.
+            cache.insert(query.to_string(), combined.clone());
             combined
         };
         let collector = TopDocs::with_limit(top_k);
@@ -1181,5 +1229,48 @@ impl MemoryIndex {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod stem_query_porter_tests {
+    use super::stem_query_porter;
+
+    #[test]
+    fn hyphen_splits_into_tokens() {
+        // Luyi 2026-10-10: "gardening-related" must tokenize to "gardening"
+        // so it matches the indexed "gardening" tag.
+        assert_eq!(stem_query_porter("gardening-related"), "gardening related");
+    }
+
+    #[test]
+    fn slash_splits_into_tokens() {
+        // Real case (LongMemEval 10e09553): "7/22" must tokenize to "7" "22"
+        // so it matches indexed date terms.
+        assert_eq!(stem_query_porter("7/22"), "7 22");
+    }
+
+    #[test]
+    fn known_tag_base_uses_stemmed_form() {
+        // "weekends" stems to "weekend", a known tag base.
+        assert_eq!(stem_query_porter("weekends"), "weekend");
+    }
+
+    #[test]
+    fn bekind_category_kept_verbatim() {
+        // "gardening" stems to "garden", which is NOT a tag base —
+        // keep "gardening" so it matches the indexed tag.
+        assert_eq!(stem_query_porter("gardening"), "gardening");
+    }
+
+    #[test]
+    fn mixed_query_tokenizes_systematically() {
+        // "what" is a canonical English stopword (c26d84c) — filtered.
+        // "gardening" stems to "garden", which is NOT a tag base —
+        // keep "gardening" so it matches the indexed tag.
+        assert_eq!(
+            stem_query_porter("What gardening-related activity?"),
+            "gardening related activity"
+        );
     }
 }

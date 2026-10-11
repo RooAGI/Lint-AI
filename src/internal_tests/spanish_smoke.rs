@@ -42,7 +42,7 @@ fn search(service: &mut MemoryService, user_id: &str, query: &str) -> Vec<crate:
     let mut filters = BTreeMap::new();
     filters.insert("memory_user_id".to_string(), user_id.to_string());
     service
-        .search_with_filters(query, user_id, None, 10, &filters)
+        .search_with_filters(query, user_id, None, 10, &filters, None)
         .expect("search")
 }
 

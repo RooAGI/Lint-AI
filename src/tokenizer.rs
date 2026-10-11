@@ -105,10 +105,6 @@ pub fn is_stopword(token: &str, mode: TokenizerMode) -> bool {
 
 /// True if `token` is a Chinese function word. Shared with
 /// `crate::query_expansion` (focus classification) and `crate::tier1`.
-pub(crate) fn is_chinese_stopword(token: &str) -> bool {
-    chinese_stopwords().contains(token)
-}
-
 fn unstemmed_tokens(input: &str) -> Vec<String> {
     static TOKEN_RE: OnceLock<Regex> = OnceLock::new();
     let token_re = TOKEN_RE.get_or_init(|| {

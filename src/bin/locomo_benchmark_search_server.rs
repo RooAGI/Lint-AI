@@ -284,7 +284,7 @@ fn run_search(index: &ConvIndex, conv: &str, query: &str, k: usize) -> Result<Ve
             .lock()
             .expect("benchmark searcher lock poisoned");
         let results =
-            searcher.search_with_filters(query, BENCHMARK_SCOPE, Some(conv), k, &filters)?;
+            searcher.search_with_filters(query, BENCHMARK_SCOPE, Some(conv), k, &filters, None)?;
         search_results(&searcher, results)
     };
     let mut out = Vec::new();

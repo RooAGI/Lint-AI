@@ -79,6 +79,18 @@ pub fn doc_kind_tags(verdict: &KindVerdict) -> Vec<String> {
         .map(|hit| hit.kind.to_lowercase())
         .filter(|kind| ADMITTED_KIND_TAGS.contains(&kind.as_str()))
         .collect();
+    // Closed-set definitional kinds (Luyi 2026-10-09): beKIND's phrase
+    // judgments like "gardening" for "planting", "doctor" for
+    // "dermatologist". These bypass ADMITTED_KIND_TAGS (that's for entity
+    // kinds); beKIND owns definitional knowledge.
+    for hit in &verdict.kinds {
+        for cs in &hit.closed_sets {
+            let tag = cs.to_lowercase();
+            if !tag.is_empty() {
+                tags.push(tag);
+            }
+        }
+    }
     tags.sort();
     tags.dedup();
     tags
@@ -110,16 +122,25 @@ pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
 }
 
 /// All definitional tags for document contents: scope tags + admitted kind
-/// tags, merged and deduplicated. One batched daemon call per layer, plus
-/// the caller-owned food lexicon (bekind under-extracts food entities).
+/// tags + activity categories + location tags, merged and deduplicated.
+/// One batched daemon call per layer, plus the caller-owned food lexicon
+/// (bekind under-extracts food entities).
 pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
     let scope_tags = batch_doc_scope_tags(contents);
     let kind_tags = batch_doc_kind_tags(contents);
+    let activity_tags = crate::behood_query::analyze_activity_categories(contents);
+    let location_tags = crate::behood_query::analyze_location_categories(contents);
     scope_tags
         .into_iter()
         .zip(kind_tags)
-        .map(|(mut scope, kind)| {
+        .zip(activity_tags)
+        .zip(location_tags)
+        .map(|(((mut scope, kind), activity), location)| {
             scope.extend(kind);
+            scope.extend(activity);
+            scope.extend(location);
+            // Synonym expansion DISABLED (Luyi 2026-10-10): WordNet adds
+            // noise. beKIND tags are sufficient semantic signal.
             scope.sort();
             scope.dedup();
             scope
@@ -178,6 +199,7 @@ mod tests {
                 .map(|(text, kind)| crate::behood_query::KindHit {
                     text: text.to_string(),
                     kind: kind.to_string(),
+                    closed_sets: Vec::new(),
                 })
                 .collect(),
         }

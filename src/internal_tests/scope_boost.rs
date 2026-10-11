@@ -61,7 +61,7 @@ fn search(service: &mut MemoryService, user_id: &str, question: &str) -> Vec<cra
     // locomo benchmark server): the ownership filter const is crate-private.
     filters.insert("memory_user_id".to_string(), user_id.to_string());
     service
-        .search_with_filters(question, user_id, None, 10, &filters)
+        .search_with_filters(question, user_id, None, 10, &filters, None)
         .expect("search")
 }
 

@@ -488,6 +488,7 @@ impl MuseMcp {
                     session_id.as_deref(),
                     top_k,
                     &filters,
+                    None,
                 );
                 let _ = crate::telemetry::record_project_query(
                     &self.root,

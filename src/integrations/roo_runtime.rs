@@ -213,6 +213,7 @@ fn recall(root: &Path, input: &HookInvocation) -> Result<HookResult> {
             session_id: None,
             scope: None,
             filters: None,
+            reference_date: None,
         })
     })?;
     if hits.data.is_empty() {

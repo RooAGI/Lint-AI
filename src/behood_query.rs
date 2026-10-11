@@ -475,7 +475,7 @@ pub struct ScopeVerdict {
 /// Fail-open: any daemon failure yields an empty vec, and the caller
 /// emits no tags. Search never breaks because of scope verdicts.
 pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
-    if texts.is_empty() || !is_enabled() {
+    if texts.is_empty() {
         return Vec::new();
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -527,7 +527,7 @@ pub struct KindVerdict {
 /// Fail-open: any daemon failure yields an empty vec, and the caller
 /// emits no kind tags. Search never breaks because of kind verdicts.
 pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
-    if texts.is_empty() || !is_enabled() {
+    if texts.is_empty() {
         return Vec::new();
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -621,7 +621,7 @@ pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
 /// bekind call, extracts definitional categories ("gardening") from activity
 /// verdicts. Fail-open like kind verdicts.
 pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
-    if texts.is_empty() || !is_enabled() {
+    if texts.is_empty() {
         return vec![Vec::new(); texts.len()];
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -643,15 +643,22 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
                 .filter(|a| a.is_activity)
                 .flat_map(|a| {
                     let mut v = Vec::new();
-                    // Category (broad, e.g., "entertainment").
-                    if !a.category.is_empty() {
-                        v.push(a.category.to_lowercase());
-                    }
+                    // Luyi 2026-10-11: DO NOT emit the generic category
+                    // ("entertainment", "leisure") as a tag. Use the category
+                    // to chain specific siblings, but only emit the specific
+                    // terms.
                     // Learned hypernym (specific, e.g., "stand-up" -> "show").
-                    // Luyi 2026-10-11: enables lexical queries for the hypernym
-                    // to match docs with the specific term.
+                    // Enables lexical queries for the hypernym to match docs
+                    // with the specific term.
                     if !a.hypernym.is_empty() {
                         v.push(a.hypernym.to_lowercase());
+                    }
+                    // Sibling activities (Luyi 2026-10-11): put show, movie,
+                    // stand-up together on the same doc. If a doc is about
+                    // one entertainment activity, tag it with all siblings
+                    // so queries for any sibling match.
+                    for s in a.siblings {
+                        v.push(s.to_lowercase());
                     }
                     v.into_iter()
                 })
@@ -670,7 +677,7 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
 /// bekind call, extracts canonical country tags ("united_states") from
 /// location mentions. Fail-open like activity categories.
 pub fn analyze_location_categories(texts: &[&str]) -> Vec<Vec<String>> {
-    if texts.is_empty() || !is_enabled() {
+    if texts.is_empty() {
         return vec![Vec::new(); texts.len()];
     }
     let inputs: Vec<(String, &str, bool)> = texts

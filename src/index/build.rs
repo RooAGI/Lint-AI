@@ -1061,40 +1061,37 @@ impl MemoryIndex {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        // Per-query beKIND judgment (Luyi 2026-10-10):
-        // Get canonical location + activity tags for the query, append to search.
-        // Replaces hardcoded phrase mappings with proper judgment.
-        let query_with_bekind_tags = if crate::behood_query::is_enabled() {
-            let loc_tags = crate::behood_query::analyze_location_categories(&[query]);
-            let act_tags = crate::behood_query::analyze_activity_categories(&[query]);
-            let mut tags = Vec::new();
-            if !loc_tags.is_empty() {
-                eprintln!("[QUERY DEBUG] bekind location tags: {:?}", loc_tags[0]);
-                tags.extend(loc_tags[0].iter().cloned());
-            }
-            if !act_tags.is_empty() {
-                eprintln!("[QUERY DEBUG] bekind activity tags: {:?}", act_tags[0]);
-                tags.extend(act_tags[0].iter().cloned());
-            }
-            if !tags.is_empty() {
-                format!("{} {}", query, tags.join(" "))
-            } else {
-                query.to_string()
-            }
-        } else {
-            query.to_string()
-        };
-        let cache_key = query_with_bekind_tags.clone();
+        // Parsed-query cache: check with the raw query first so cache hits
+        // avoid the beKIND daemon round-trip entirely (Luyi 2026-10-10 P1).
         let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let cached = {
             let cache = parsed_cache
                 .lock()
                 .expect("parsed lexical query cache lock poisoned");
-            cache.get(&cache_key).cloned()
+            cache.get(query).cloned()
         };
         let parsed = if let Some(parsed) = cached {
             parsed
         } else {
+            // Per-query beKIND judgment (Luyi 2026-10-10): single daemon
+            // round-trip for location + activity tags, appended to the query.
+            // Replaces hardcoded phrase mappings with proper judgment.
+            // Only runs on cache miss.
+            let query_with_bekind_tags = if crate::behood_query::is_enabled() {
+                let tags = crate::behood_query::analyze_query_tags(&[query]);
+                let mut all_tags = Vec::new();
+                if let Some((loc, act)) = tags.first() {
+                    all_tags.extend(loc.iter().cloned());
+                    all_tags.extend(act.iter().cloned());
+                }
+                if !all_tags.is_empty() {
+                    format!("{} {}", query, all_tags.join(" "))
+                } else {
+                    query.to_string()
+                }
+            } else {
+                query.to_string()
+            };
             // Main fields: exact match via QueryParser.
             let mut query_parser = QueryParser::for_index(
                 &lex.index,
@@ -1121,7 +1118,6 @@ impl MemoryIndex {
             // structure (quotes, etc.) by stemming word-by-word.
             // Luyi 2026-10-10: query includes beKIND location tags.
             let stemmed_query = stem_query_porter(&query_with_bekind_tags);
-            eprintln!("[QUERY DEBUG] stemmed: {}", stemmed_query);
             // Synonym expansion DISABLED (Luyi 2026-10-10): WordNet expansion
             // adds 100+ noisy terms (clarenc shepard day jr, bivouack, etc.)
             // that hurt ranking. beKIND semantic tags provide cleaner signal.
@@ -1207,7 +1203,9 @@ impl MemoryIndex {
                     cache.remove(&oldest_key);
                 }
             }
-            cache.insert(cache_key, combined.clone());
+            // Cache by the raw query: beKIND tags are deterministic for a
+            // given query, so the parsed result is stable.
+            cache.insert(query.to_string(), combined.clone());
             combined
         };
         let collector = TopDocs::with_limit(top_k);

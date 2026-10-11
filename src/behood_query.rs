@@ -542,6 +542,46 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
         .collect()
 }
 
+/// Combined location + activity tags for query text (Luyi 2026-10-10 P1):
+/// single beKIND daemon round-trip returning both tag sets. The daemon's
+/// judge_texts_bulk response carries both `location` and `activity` verdicts,
+/// so one call serves both. Fail-open: returns empty tags on any failure.
+pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
+    if texts.is_empty() || !is_enabled() {
+        return vec![(Vec::new(), Vec::new()); texts.len()];
+    }
+    let inputs: Vec<(String, &str, bool)> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("q:{i}"), *t, false))
+        .collect();
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
+        Some(results) => results,
+        None => return vec![(Vec::new(), Vec::new()); texts.len()],
+    };
+    let mut by_index: std::collections::HashMap<usize, (Vec<String>, Vec<String>)> =
+        std::collections::HashMap::new();
+    for r in results {
+        if let Some(idx) = r.id.strip_prefix("q:").and_then(|s| s.parse::<usize>().ok()) {
+            // Location: natural forms -> single-token Tantivy tags.
+            let loc: Vec<String> = r.location
+                .into_iter()
+                .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
+                .collect();
+            // Activity: definitional categories.
+            let act: Vec<String> = r.activity
+                .into_iter()
+                .filter(|a| a.is_activity && !a.category.is_empty())
+                .map(|a| a.category.to_lowercase())
+                .collect();
+            by_index.insert(idx, (loc, act));
+        }
+    }
+    (0..texts.len())
+        .map(|i| by_index.remove(&i).unwrap_or_default())
+        .collect()
+}
+
 /// Activity category tags for raw text spans (Luyi 2026-10-09): one fused
 /// bekind call, extracts definitional categories ("gardening") from activity
 /// verdicts. Fail-open like kind verdicts.
@@ -803,5 +843,23 @@ for line in sys.stdin:
                 .is_none(),
             "bad binary must fail open"
         );
+    }
+
+    // Luyi 2026-10-10 P1: analyze_query_tags must fail open when disabled
+    // (no daemon round-trip).
+    #[test]
+    fn analyze_query_tags_empty_when_disabled() {
+        // Ensure disabled (may have been enabled by another test).
+        set_enabled(false);
+        let tags = analyze_query_tags(&["camping in Colorado"]);
+        assert_eq!(tags.len(), 1);
+        assert!(tags[0].0.is_empty(), "location tags must be empty when disabled");
+        assert!(tags[0].1.is_empty(), "activity tags must be empty when disabled");
+    }
+
+    #[test]
+    fn analyze_query_tags_empty_for_no_input() {
+        let tags = analyze_query_tags(&[]);
+        assert!(tags.is_empty());
     }
 }

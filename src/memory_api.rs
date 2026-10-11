@@ -1831,6 +1831,7 @@ impl MemoryService {
                 scope,
                 session_id,
                 &augmented_query,
+                reference_date,
             )
         };
         // Synthetic document terms (Luyi 2026-10-07): bekind's mapping lives
@@ -1840,9 +1841,12 @@ impl MemoryService {
         // field, which the tantivy QueryParser searches like every other
         // field. The query itself needs no per-query bekind mapping: a
         // question saying "weekend" matches a doc whose literal words say
-        // "Saturday" through the doc's indexed canonical terms. No daemon
-        // round-trip on the query path; fail-open is structural (a doc
-        // without tags simply has no synthetic terms).
+        // "Saturday" through the doc's indexed canonical terms.
+        // Per-query beKIND (Luyi 2026-10-10): location/activity tags are
+        // appended to the lexical query via a single daemon round-trip on
+        // cache miss only; parsed-query cache hits avoid the daemon entirely.
+        // Fail-open is structural (a doc without tags simply has no synthetic
+        // terms; a failed daemon call yields no query tags).
         let do_rerank = should_conversational_rerank(
             self.store.options().conversational_rerank,
             session_id,
@@ -3043,6 +3047,7 @@ pub(crate) fn prepare_session_query(
     scope: &str,
     session_id: Option<&str>,
     query: &str,
+    reference_date: Option<&str>,
 ) -> PreparedQuery {
     let Some(session_id) = session_id else {
         return PreparedQuery::new(query);
@@ -3053,7 +3058,13 @@ pub(crate) fn prepare_session_query(
         let state = states.get(scope, session_id, now_ms);
         crate::session_prepare::resolve_follow_up(query, state)
     };
-    PreparedQuery::new(&rewritten)
+    // Reference date (Luyi 2026-10-10 P2): apply to session-scoped searches
+    // too, so relative temporal language resolves against it instead of the
+    // clock, consistent with non-session searches.
+    match reference_date {
+        Some(ref_date) => PreparedQuery::new_at(&rewritten, ref_date),
+        None => PreparedQuery::new(&rewritten),
+    }
 }
 
 /// Record a completed search turn in the session state. No-op without a

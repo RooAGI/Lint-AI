@@ -29,7 +29,27 @@ fn stem_query_porter(query: &str) -> String {
     // Luyi 2026-10-09: beKIND categories ("gardening", "doctor") are canonical
     // as-is; do NOT add their stems ("garden") or queries won't match tags.
     const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food",
-        "gardening", "doctor", "culinary", "sports", "art", "music"];
+        "gardening", "doctor", "culinary", "sports", "art", "music",
+        // Luyi 2026-10-10: hierarchical location tags (beKIND location judgment)
+        // Nation level
+        "unitedstates", "unitedkingdom", "canada", "mexico", "china",
+        "japan", "germany", "france", "italy", "spain", "australia",
+        "brazil", "india",
+        // US state level (examples; full list in beKIND)
+        "colorado", "california", "texas", "utah", "newyork",
+        // Place level (examples)
+        "rockymountains", "yellowstone", "yosemite", "grandcanyon",
+        "bigsur", "moab", "london",
+        // UK state level
+        "england"];
+
+    // Location phrase mapping: "United States" -> "unitedstates" (single token)
+    // so it matches the canonical location tag. Applied before tokenization.
+    let query = query
+        .replace("United States", "unitedstates")
+        .replace("united states", "unitedstates")
+        .replace("United Kingdom", "unitedkingdom")
+        .replace("united kingdom", "unitedkingdom");
 
     // Systematic (Luyi 2026-10-10): tokenize on non-alphanumeric, mirroring
     // Tantivy's default tokenizer used for the tags field at index time.
@@ -1033,7 +1053,20 @@ impl MemoryIndex {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        let cache_key = query.to_string();
+        // Per-query beKIND location judgment (Luyi 2026-10-10):
+        // Get canonical location tags for the query, append to search.
+        // Replaces hardcoded phrase mappings with proper judgment.
+        let query_with_location_tags = if crate::behood_query::is_enabled() {
+            let loc_tags = crate::behood_query::analyze_location_categories(&[query]);
+            if !loc_tags.is_empty() && !loc_tags[0].is_empty() {
+                format!("{} {}", query, loc_tags[0].join(" "))
+            } else {
+                query.to_string()
+            }
+        } else {
+            query.to_string()
+        };
+        let cache_key = query_with_location_tags.clone();
         let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let cached = {
             let cache = parsed_cache
@@ -1068,7 +1101,8 @@ impl MemoryIndex {
             // Porter-stem the query (Luyi 2026-10-07): "weekends" -> "weekend"
             // so inflected forms match canonical tags. Preserves query
             // structure (quotes, etc.) by stemming word-by-word.
-            let stemmed_query = stem_query_porter(query);
+            // Luyi 2026-10-10: query includes beKIND location tags.
+            let stemmed_query = stem_query_porter(&query_with_location_tags);
             let parsed_lexical = match query_parser.parse_query(&stemmed_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {

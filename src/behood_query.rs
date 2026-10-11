@@ -40,7 +40,7 @@ pub fn set_enabled(enabled: bool) {
     BEKIND_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-fn is_enabled() -> bool {
+pub fn is_enabled() -> bool {
     BEKIND_ENABLED.load(Ordering::Relaxed)
 }
 
@@ -192,7 +192,7 @@ impl BekindDaemon {
         // daemon failure affects only this batch, not the entire build.
         let request = json!({
             "texts": texts.iter().map(|(id, text, with_scope)| {
-                json!({"id": id, "text": text, "with_scope": with_scope, "with_activity": true})
+                json!({"id": id, "text": text, "with_scope": with_scope, "with_activity": true, "with_location": true})
             }).collect::<Vec<_>>(),
         });
         let line = serde_json::to_string(&request).ok()?;
@@ -219,6 +219,8 @@ struct FusedTextResult {
     scope: Option<FusedScope>,
     /// Activity verdicts (Luyi 2026-10-07): is_activity judgments.
     activity: Vec<FusedActivity>,
+    /// Location tags (Luyi 2026-10-10): canonical country tags.
+    location: Vec<String>,
     entities: Vec<QueryEntity>,
 }
 
@@ -316,10 +318,20 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                     .collect()
             })
             .unwrap_or_default();
+        let location = item
+            .get("location")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
         out.push(FusedTextResult {
             id,
             scope,
             activity,
+            location,
             entities,
         });
     }
@@ -557,6 +569,35 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
                 .map(|a| a.category.to_lowercase())
                 .collect();
             by_index.insert(idx, cats);
+        }
+    }
+    (0..texts.len())
+        .map(|i| by_index.remove(&i).unwrap_or_default())
+        .collect()
+}
+
+/// Location tags for raw text spans (Luyi 2026-10-10): one fused
+/// bekind call, extracts canonical country tags ("united_states") from
+/// location mentions. Fail-open like activity categories.
+pub fn analyze_location_categories(texts: &[&str]) -> Vec<Vec<String>> {
+    if texts.is_empty() || !is_enabled() {
+        return vec![Vec::new(); texts.len()];
+    }
+    let inputs: Vec<(String, &str, bool)> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("l:{i}"), *t, false))
+        .collect();
+    // Use bulk variant: no global cooldown. One failure must not crush
+    // the entire index build (production rule).
+    let results = match BekindDaemon::global().judge_texts_bulk(&inputs) {
+        Some(results) => results,
+        None => return vec![Vec::new(); texts.len()],
+    };
+    let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    for r in results {
+        if let Some(idx) = r.id.strip_prefix("l:").and_then(|s| s.parse::<usize>().ok()) {
+            by_index.insert(idx, r.location);
         }
     }
     (0..texts.len())

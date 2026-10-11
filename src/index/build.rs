@@ -1122,26 +1122,11 @@ impl MemoryIndex {
             // Luyi 2026-10-10: query includes beKIND location tags.
             let stemmed_query = stem_query_porter(&query_with_bekind_tags);
             eprintln!("[QUERY DEBUG] stemmed: {}", stemmed_query);
-            // Luyi 2026-10-10: wire synonym expansion into query path.
-            // Rule: only nouns from ORIGINAL query, one synonym each.
-            // (Not from augmented duplicates or beKIND tags.)
-            // is_expandable_concept filters to focus-worthy nouns.
-            // MAX_EXPANSIONS_PER_TERM=1 ensures one synonym per term.
-            let original_terms: Vec<String> = query
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|w| !w.is_empty())
-                .map(|w| w.to_lowercase())
-                .collect();
-            let expanded = crate::query_expansion::expand_query_terms(
-                &original_terms,
-                crate::lang::Lang::En,
-            );
-            let final_query = if expanded.expanded_terms.is_empty() {
-                stemmed_query.clone()
-            } else {
-                eprintln!("[QUERY DEBUG] expanded synonyms (1 per noun): {:?}", expanded.expanded_terms);
-                format!("{} {}", stemmed_query, expanded.expanded_terms.join(" "))
-            };
+            // Synonym expansion DISABLED (Luyi 2026-10-10): WordNet expansion
+            // adds 100+ noisy terms (clarenc shepard day jr, bivouack, etc.)
+            // that hurt ranking. beKIND semantic tags provide cleaner signal.
+            let final_query = stemmed_query.clone();
+            let parsed_lexical = match query_parser.parse_query(&final_query) {
             let parsed_lexical = match query_parser.parse_query(&final_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {

@@ -139,15 +139,8 @@ pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
             scope.extend(kind);
             scope.extend(activity);
             scope.extend(location);
-            // Luyi 2026-10-10: index-time synonym expansion.
-            // Expand semantic tags with WordNet synonyms so queries
-            // using different words match. E.g., tag "leisure" also
-            // indexes "recreation", "free time".
-            let expanded = crate::query_expansion::expand_query_terms(
-                &scope,
-                crate::lang::Lang::En,
-            );
-            scope.extend(expanded.expanded_terms);
+            // Synonym expansion DISABLED (Luyi 2026-10-10): WordNet adds
+            // noise. beKIND tags are sufficient semantic signal.
             scope.sort();
             scope.dedup();
             scope

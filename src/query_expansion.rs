@@ -440,7 +440,7 @@ pub(crate) fn is_expandable_concept(term: &str, lang: Lang) -> bool {
     // Chinese function words are never concepts. (Interrogatives are
     // handled separately by crate::question_focus; they never reach here
     // as expandable terms, but excluding them here too is harmless.)
-    if crate::tokenizer::is_chinese_stopword(term) {
+    if crate::tokenizer::chinese_stopwords().contains(term) {
         return false;
     }
     // Question words (stemmed forms)

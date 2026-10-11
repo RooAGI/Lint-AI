@@ -59,6 +59,15 @@ fn stem_query_porter(query: &str) -> String {
     query
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
+        .filter(|w| {
+            // Systematic stopword filtering (Luyi 2026-10-10):
+            // Remove stopwords for all supported languages before Tantivy.
+            // Uses the canonical lists from crate::tokenizer.
+            let lower = w.to_lowercase();
+            !crate::tokenizer::english_stopwords().contains(lower.as_str())
+                && !crate::tokenizer::chinese_stopwords().contains(lower.as_str())
+                && !crate::tokenizer::korean_stopwords().contains(lower.as_str())
+        })
         .map(|word| {
             let lower = word.to_lowercase();
             let stemmed = crate::porter_stemmer::porter_stem(&lower);

@@ -40,7 +40,7 @@ static CONCEPTNET_DATA: &[u8] = include_bytes!("../data/lexical/conceptnet_subse
 static STORE: OnceLock<Option<LexicalStore>> = OnceLock::new();
 static STEMMER: OnceLock<Stemmer> = OnceLock::new();
 static NORMALIZE_RE: OnceLock<Regex> = OnceLock::new();
-const MAX_EXPANSIONS_PER_TERM: usize = 3;
+const MAX_EXPANSIONS_PER_TERM: usize = 1;
 const CONCEPTNET_MIN_CONFIDENCE: f32 = 0.82;
 
 /// Eagerly load the WordNet/ConceptNet lexical expansion store.

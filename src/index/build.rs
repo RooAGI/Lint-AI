@@ -1123,19 +1123,23 @@ impl MemoryIndex {
             let stemmed_query = stem_query_porter(&query_with_bekind_tags);
             eprintln!("[QUERY DEBUG] stemmed: {}", stemmed_query);
             // Luyi 2026-10-10: wire synonym expansion into query path.
-            // Expand stemmed terms with WordNet/ConceptNet synonyms.
-            let query_terms: Vec<String> = stemmed_query
-                .split_whitespace()
-                .map(|s| s.to_string())
+            // Rule: only nouns from ORIGINAL query, one synonym each.
+            // (Not from augmented duplicates or beKIND tags.)
+            // is_expandable_concept filters to focus-worthy nouns.
+            // MAX_EXPANSIONS_PER_TERM=1 ensures one synonym per term.
+            let original_terms: Vec<String> = query
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(|w| w.to_lowercase())
                 .collect();
             let expanded = crate::query_expansion::expand_query_terms(
-                &query_terms,
+                &original_terms,
                 crate::lang::Lang::En,
             );
             let final_query = if expanded.expanded_terms.is_empty() {
                 stemmed_query.clone()
             } else {
-                eprintln!("[QUERY DEBUG] expanded synonyms: {:?}", expanded.expanded_terms);
+                eprintln!("[QUERY DEBUG] expanded synonyms (1 per noun): {:?}", expanded.expanded_terms);
                 format!("{} {}", stemmed_query, expanded.expanded_terms.join(" "))
             };
             let parsed_lexical = match query_parser.parse_query(&final_query) {

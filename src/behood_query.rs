@@ -477,7 +477,9 @@ pub struct ScopeVerdict {
 /// Fail-open: any daemon failure yields an empty vec, and the caller
 /// emits no tags. Search never breaks because of scope verdicts.
 pub fn analyze_scope_verdicts(texts: &[&str]) -> Vec<ScopeVerdict> {
-    if texts.is_empty() {
+    // Luyi 2026-10-11: beKIND totally off. Index-side tags disabled.
+    // The 87.96% MRR (no tags) beats 87.58% (with tags) and 86.31% (sibling tags).
+    if texts.is_empty() || !is_enabled() {
         return Vec::new();
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -529,7 +531,9 @@ pub struct KindVerdict {
 /// Fail-open: any daemon failure yields an empty vec, and the caller
 /// emits no kind tags. Search never breaks because of kind verdicts.
 pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
-    if texts.is_empty() {
+    // Luyi 2026-10-11: beKIND totally off. Index-side tags disabled.
+    // The 87.96% MRR (no tags) beats 87.58% (with tags) and 86.31% (sibling tags).
+    if texts.is_empty() || !is_enabled() {
         return Vec::new();
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -623,7 +627,9 @@ pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
 /// bekind call, extracts definitional categories ("gardening") from activity
 /// verdicts. Fail-open like kind verdicts.
 pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
-    if texts.is_empty() {
+    // Luyi 2026-10-11: beKIND totally off. Index-side tags disabled.
+    // The 87.96% MRR (no tags) beats 87.58% (with tags) and 86.31% (sibling tags).
+    if texts.is_empty() || !is_enabled() {
         return vec![Vec::new(); texts.len()];
     }
     let inputs: Vec<(String, &str, bool)> = texts
@@ -679,7 +685,9 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
 /// bekind call, extracts canonical country tags ("united_states") from
 /// location mentions. Fail-open like activity categories.
 pub fn analyze_location_categories(texts: &[&str]) -> Vec<Vec<String>> {
-    if texts.is_empty() {
+    // Luyi 2026-10-11: beKIND totally off. Index-side tags disabled.
+    // The 87.96% MRR (no tags) beats 87.58% (with tags) and 86.31% (sibling tags).
+    if texts.is_empty() || !is_enabled() {
         return vec![Vec::new(); texts.len()];
     }
     let inputs: Vec<(String, &str, bool)> = texts

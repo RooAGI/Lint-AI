@@ -1053,20 +1053,30 @@ impl MemoryIndex {
             return Ok(HashMap::new());
         };
         let searcher = lex.reader.searcher();
-        // Per-query beKIND location judgment (Luyi 2026-10-10):
-        // Get canonical location tags for the query, append to search.
+        // Per-query beKIND judgment (Luyi 2026-10-10):
+        // Get canonical location + activity tags for the query, append to search.
         // Replaces hardcoded phrase mappings with proper judgment.
-        let query_with_location_tags = if crate::behood_query::is_enabled() {
+        let query_with_bekind_tags = if crate::behood_query::is_enabled() {
             let loc_tags = crate::behood_query::analyze_location_categories(&[query]);
-            if !loc_tags.is_empty() && !loc_tags[0].is_empty() {
-                format!("{} {}", query, loc_tags[0].join(" "))
+            let act_tags = crate::behood_query::analyze_activity_categories(&[query]);
+            let mut tags = Vec::new();
+            if !loc_tags.is_empty() {
+                eprintln!("[QUERY DEBUG] bekind location tags: {:?}", loc_tags[0]);
+                tags.extend(loc_tags[0].iter().cloned());
+            }
+            if !act_tags.is_empty() {
+                eprintln!("[QUERY DEBUG] bekind activity tags: {:?}", act_tags[0]);
+                tags.extend(act_tags[0].iter().cloned());
+            }
+            if !tags.is_empty() {
+                format!("{} {}", query, tags.join(" "))
             } else {
                 query.to_string()
             }
         } else {
             query.to_string()
         };
-        let cache_key = query_with_location_tags.clone();
+        let cache_key = query_with_bekind_tags.clone();
         let parsed_cache = PARSED_LEXICAL_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let cached = {
             let cache = parsed_cache
@@ -1102,7 +1112,8 @@ impl MemoryIndex {
             // so inflected forms match canonical tags. Preserves query
             // structure (quotes, etc.) by stemming word-by-word.
             // Luyi 2026-10-10: query includes beKIND location tags.
-            let stemmed_query = stem_query_porter(&query_with_location_tags);
+            let stemmed_query = stem_query_porter(&query_with_bekind_tags);
+            eprintln!("[QUERY DEBUG] stemmed: {}", stemmed_query);
             let parsed_lexical = match query_parser.parse_query(&stemmed_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {

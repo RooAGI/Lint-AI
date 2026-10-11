@@ -185,9 +185,11 @@ impl BekindDaemon {
     /// isolated — one failure does not poison subsequent batches.
     /// Production rule: a single bad document must never crush the batch.
     fn judge_texts_bulk(&self, texts: &[(String, &str, bool)]) -> Option<Vec<FusedTextResult>> {
-        if !is_enabled() {
-            return None;
-        }
+        // Luyi 2026-10-11: no is_enabled() gate here. Index-side callers
+        // (scope/kind/activity/location tags) always run so the index carries
+        // beKIND tags. The query-side caller (analyze_query_tags) checks
+        // is_enabled() itself. If no binary is available the daemon query
+        // fails and we return None (fail-open).
         // No cooldown gate: bulk operations are independent. A transient
         // daemon failure affects only this batch, not the entire build.
         let request = json!({

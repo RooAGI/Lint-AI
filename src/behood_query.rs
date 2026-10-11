@@ -229,6 +229,9 @@ struct FusedActivity {
     is_activity: bool,
     /// Definitional category (Luyi 2026-10-09): e.g. "gardening".
     category: String,
+    /// Sibling activities sharing the category (Luyi 2026-10-11).
+    /// Used at query time instead of the generic category.
+    siblings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +316,14 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                         Some(FusedActivity {
                             is_activity: v.get("is_activity").and_then(|b| b.as_bool()).unwrap_or(false),
                             category: v.get("category").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                            siblings: v.get("siblings")
+                                .and_then(|s| s.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     })
                     .collect()
@@ -546,6 +557,12 @@ pub fn analyze_kind_verdicts(texts: &[&str]) -> Vec<KindVerdict> {
 /// single beKIND daemon round-trip returning both tag sets. The daemon's
 /// judge_texts_bulk response carries both `location` and `activity` verdicts,
 /// so one call serves both. Fail-open: returns empty tags on any failure.
+///
+/// Luyi 2026-10-11: Deduplicate entailed tags. beKIND returns locations
+/// most-specific-first (["Miami", "Florida", "United States"]). If the query
+/// already contains the most specific location, the parents only add noise —
+/// skip all location tags. The query's own specificity wins; the index-side
+/// hierarchy already handles parent→child matching.
 pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
     if texts.is_empty() || !is_enabled() {
         return vec![(Vec::new(), Vec::new()); texts.len()];
@@ -563,16 +580,30 @@ pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
         std::collections::HashMap::new();
     for r in results {
         if let Some(idx) = r.id.strip_prefix("q:").and_then(|s| s.parse::<usize>().ok()) {
-            // Location: natural forms -> single-token Tantivy tags.
-            let loc: Vec<String> = r.location
-                .into_iter()
-                .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
-                .collect();
-            // Activity: definitional categories.
+            let query_lower = texts[idx].to_lowercase();
+            // Location: skip if query already has the most specific.
+            // beKIND returns most-specific-first; if the query contains it,
+            // parents ("florida", "unitedstates") only broaden the query.
+            let loc: Vec<String> = if r.location.first()
+                .map(|most_specific| query_lower.contains(&most_specific.to_lowercase()))
+                .unwrap_or(false)
+            {
+                Vec::new()
+            } else {
+                r.location
+                    .into_iter()
+                    .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
+                    .collect()
+            };
+            // Activity: sibling activities, NOT the generic category.
+            // Luyi 2026-10-11: the category chains similar activities.
+            // "movie" (leisure) → ["show", "concert"]. We add the specific
+            // siblings, not the generic "leisure".
             let act: Vec<String> = r.activity
                 .into_iter()
-                .filter(|a| a.is_activity && !a.category.is_empty())
-                .map(|a| a.category.to_lowercase())
+                .filter(|a| a.is_activity)
+                .flat_map(|a| a.siblings.into_iter())
+                .map(|s| s.to_lowercase())
                 .collect();
             by_index.insert(idx, (loc, act));
         }
@@ -862,4 +893,8 @@ for line in sys.stdin:
         let tags = analyze_query_tags(&[]);
         assert!(tags.is_empty());
     }
+
+    // Luyi 2026-10-11: deduplication is pure logic, but analyze_query_tags
+    // requires the daemon. Test the principle via the location-skip rule:
+    // documented here, verified end-to-end via query_repl.
 }

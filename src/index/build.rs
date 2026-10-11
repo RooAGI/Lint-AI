@@ -1074,25 +1074,39 @@ impl MemoryIndex {
             parsed
         } else {
             // Per-query beKIND judgment (Luyi 2026-10-10): single daemon
-            // round-trip for location + activity tags, appended to the query.
-            // Replaces hardcoded phrase mappings with proper judgment.
+            // round-trip for location + activity tags.
+            // Luyi 2026-10-11: tags are NOT appended to the query string.
+            // The category chains similar activities via the tags field —
+            // it is not a query term. Appending "leisure" to "recommend a
+            // show" lets the generic term match distractors' content.
+            // Instead, tags are searched as a separate clause against the
+            // tags field only.
+            // Luyi 2026-10-11: Only LOCATION tags are used at query time.
+            // Activity categories ("travel", "leisure") are too generic —
+            // they dilute precise query terms ("hotel", "show", "movie").
+            // Location tags are hierarchical and precise. Activity tags
+            // remain on the index side (docs tagged at index time).
+            // Luyi 2026-10-11 (sibling activities): beKIND now returns
+            // sibling activities instead of the generic category.
+            // "movie" → ["show", "concert"]. These specific terms are
+            // added, not the generic "leisure".
             // Only runs on cache miss.
-            let query_with_bekind_tags = if crate::behood_query::is_enabled() {
+            let bekind_tags: Vec<String> = if crate::behood_query::is_enabled() {
                 let tags = crate::behood_query::analyze_query_tags(&[query]);
                 let mut all_tags = Vec::new();
                 if let Some((loc, act)) = tags.first() {
+                    // Location (deduplicated) + sibling activities (specific).
                     all_tags.extend(loc.iter().cloned());
                     all_tags.extend(act.iter().cloned());
                 }
-                if !all_tags.is_empty() {
-                    format!("{} {}", query, all_tags.join(" "))
-                } else {
-                    query.to_string()
-                }
+                all_tags
             } else {
-                query.to_string()
+                Vec::new()
             };
             // Main fields: exact match via QueryParser.
+            // Note: tags field is included here for index-side synthetic tags
+            // (docs tagged at index time). Per-query beKIND tags are handled
+            // as a separate clause below, against the tags field only.
             let mut query_parser = QueryParser::for_index(
                 &lex.index,
                 vec![
@@ -1117,7 +1131,7 @@ impl MemoryIndex {
             // so inflected forms match canonical tags. Preserves query
             // structure (quotes, etc.) by stemming word-by-word.
             // Luyi 2026-10-10: query includes beKIND location tags.
-            let stemmed_query = stem_query_porter(&query_with_bekind_tags);
+            let stemmed_query = stem_query_porter(query);
             // Synonym expansion DISABLED (Luyi 2026-10-10): WordNet expansion
             // adds 100+ noisy terms (clarenc shepard day jr, bivouack, etc.)
             // that hurt ranking. beKIND semantic tags provide cleaner signal.
@@ -1185,11 +1199,33 @@ impl MemoryIndex {
                     has_fuzzy = true;
                 }
                 should_clauses.push((tantivy::query::Occur::Should, Box::new(parsed_lexical)));
-                // If we added fuzzy clauses, combine; otherwise use parsed as-is.
-                if has_fuzzy {
+                // Per-query beKIND tags (Luyi 2026-10-11): search as a separate
+                // clause against the tags field ONLY. The category chains
+                // similar activities via the index-side tags — it is not a
+                // query term. This prevents generic categories ("leisure")
+                // from matching distractors' content.
+                let mut has_bekind_tags = false;
+                if !bekind_tags.is_empty() {
+                    use tantivy::query::TermSetQuery;
+                    let tag_terms: Vec<Term> = bekind_tags
+                        .iter()
+                        .map(|t| Term::from_field_text(lex.tags_f, t))
+                        .collect();
+                    if !tag_terms.is_empty() {
+                        let tags_query = TermSetQuery::new(tag_terms);
+                        let boosted_tags = tantivy::query::BoostQuery::new(
+                            Box::new(tags_query),
+                            LEXICAL_TAGS_BOOST,
+                        );
+                        should_clauses.push((tantivy::query::Occur::Should, Box::new(boosted_tags)));
+                        has_bekind_tags = true;
+                    }
+                }
+                // If we added fuzzy or beKIND clauses, combine; otherwise use parsed as-is.
+                if has_fuzzy || has_bekind_tags {
                     Arc::from(BooleanQuery::new(should_clauses))
                 } else {
-                    // No fuzzy terms; the parsed query is the only clause.
+                    // No fuzzy terms or beKIND tags; the parsed query is the only clause.
                     // Reconstruct from the single SHOULD clause.
                     let (_, q) = should_clauses.pop().unwrap();
                     Arc::from(q)

@@ -597,7 +597,13 @@ pub fn analyze_location_categories(texts: &[&str]) -> Vec<Vec<String>> {
     let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
     for r in results {
         if let Some(idx) = r.id.strip_prefix("l:").and_then(|s| s.parse::<usize>().ok()) {
-            by_index.insert(idx, r.location);
+            // Luyi 2026-10-10: beKIND returns natural forms ("United States").
+            // Normalize to Tantivy-friendly single tokens ("unitedstates") for the index.
+            let normalized: Vec<String> = r.location
+                .into_iter()
+                .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
+                .collect();
+            by_index.insert(idx, normalized);
         }
     }
     (0..texts.len())

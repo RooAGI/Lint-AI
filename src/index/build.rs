@@ -1127,7 +1127,6 @@ impl MemoryIndex {
             // that hurt ranking. beKIND semantic tags provide cleaner signal.
             let final_query = stemmed_query.clone();
             let parsed_lexical = match query_parser.parse_query(&final_query) {
-            let parsed_lexical = match query_parser.parse_query(&final_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {
                     let fallback_query = sanitize_bm25_query(&final_query);

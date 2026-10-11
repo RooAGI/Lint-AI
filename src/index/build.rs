@@ -895,13 +895,11 @@ impl MemoryIndex {
                             .collect::<Vec<_>>()
                             .join(" ");
                         let content_text = lexical_content_text(doc);
-                        // Luyi 2026-10-10: inject semantic tags into content field
-                        // so tag matches benefit from content-field boost.
-                        let content_text = if tags.is_empty() {
-                            content_text
-                        } else {
-                            format!("{} {}", content_text, tags.join(" "))
-                        };
+                        // Luyi 2026-10-11: DO NOT inject tags into content field.
+                        // Categories ("leisure", "travel") in content let
+                        // unrelated docs match. Tags stay in the tags field
+                        // only, where they chain via the category without
+                        // polluting lexical matching.
                         let temporal_text = doc.temporal_terms.join(" ");
                         let tags_text = tags.join(" ");
                         writer.add_document(doc!(doc_id_f => doc.doc_id.clone(), content_f => content_text, headings_f => headings_text, terms_f => terms_text, entities_f => entities_text, temporal_f => temporal_text, tags_f => tags_text, subword_f => content_text))?;
@@ -1014,15 +1012,11 @@ impl MemoryIndex {
                         .collect::<Vec<_>>()
                         .join(" ");
                     let content_text = lexical_content_text(doc);
-                    // Luyi 2026-10-10: inject semantic tags into content field
-                    // so tag matches benefit from content-field boost.
-                    // Documents without the tag (e.g., institutional "Senate"
-                    // filtered from location tags) don't get the boost.
-                    let content_text = if tags.is_empty() {
-                        content_text
-                    } else {
-                        format!("{} {}", content_text, tags.join(" "))
-                    };
+                    // Luyi 2026-10-11: DO NOT inject tags into content field.
+                    // Categories ("leisure", "travel") in content let
+                    // unrelated docs match. Tags stay in the tags field
+                    // only, where they chain via the category without
+                    // polluting lexical matching.
                     let temporal_text = doc.temporal_terms.join(" ");
                     let tags_text = tags.join(" ");
                     writer.add_document(doc!(

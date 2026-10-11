@@ -28,28 +28,11 @@ fn stem_query_porter(query: &str) -> String {
     // use the stemmed form so "weekends" matches the "weekend" tag.
     // Luyi 2026-10-09: beKIND categories ("gardening", "doctor") are canonical
     // as-is; do NOT add their stems ("garden") or queries won't match tags.
+    // Luyi 2026-10-10: location tags use natural forms ("United States"),
+    // no normalization. Tantivy tokenizes naturally; tags field boost
+    // distinguishes tag matches from content keyword matches.
     const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food",
-        "gardening", "doctor", "culinary", "sports", "art", "music",
-        // Luyi 2026-10-10: hierarchical location tags (beKIND location judgment)
-        // Nation level
-        "unitedstates", "unitedkingdom", "canada", "mexico", "china",
-        "japan", "germany", "france", "italy", "spain", "australia",
-        "brazil", "india",
-        // US state level (examples; full list in beKIND)
-        "colorado", "california", "texas", "utah", "newyork",
-        // Place level (examples)
-        "rockymountains", "yellowstone", "yosemite", "grandcanyon",
-        "bigsur", "moab", "london",
-        // UK state level
-        "england"];
-
-    // Location phrase mapping: "United States" -> "unitedstates" (single token)
-    // so it matches the canonical location tag. Applied before tokenization.
-    let query = query
-        .replace("United States", "unitedstates")
-        .replace("united states", "unitedstates")
-        .replace("United Kingdom", "unitedkingdom")
-        .replace("united kingdom", "unitedkingdom");
+        "gardening", "doctor", "culinary", "sports", "art", "music"];
 
     // Systematic (Luyi 2026-10-10): tokenize on non-alphanumeric, mirroring
     // Tantivy's default tokenizer used for the tags field at index time.
@@ -1139,10 +1122,26 @@ impl MemoryIndex {
             // Luyi 2026-10-10: query includes beKIND location tags.
             let stemmed_query = stem_query_porter(&query_with_bekind_tags);
             eprintln!("[QUERY DEBUG] stemmed: {}", stemmed_query);
-            let parsed_lexical = match query_parser.parse_query(&stemmed_query) {
+            // Luyi 2026-10-10: wire synonym expansion into query path.
+            // Expand stemmed terms with WordNet/ConceptNet synonyms.
+            let query_terms: Vec<String> = stemmed_query
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            let expanded = crate::query_expansion::expand_query_terms(
+                &query_terms,
+                crate::lang::Lang::En,
+            );
+            let final_query = if expanded.expanded_terms.is_empty() {
+                stemmed_query.clone()
+            } else {
+                eprintln!("[QUERY DEBUG] expanded synonyms: {:?}", expanded.expanded_terms);
+                format!("{} {}", stemmed_query, expanded.expanded_terms.join(" "))
+            };
+            let parsed_lexical = match query_parser.parse_query(&final_query) {
                 Ok(parsed) => parsed,
                 Err(first_err) => {
-                    let fallback_query = sanitize_bm25_query(&stemmed_query);
+                    let fallback_query = sanitize_bm25_query(&final_query);
                     if fallback_query.is_empty() {
                         return Err(first_err.into());
                     }

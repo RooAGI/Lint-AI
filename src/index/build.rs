@@ -1267,9 +1267,12 @@ mod stem_query_porter_tests {
 
     #[test]
     fn mixed_query_tokenizes_systematically() {
+        // "what" is a canonical English stopword (c26d84c) — filtered.
+        // "gardening" stems to "garden", which is NOT a tag base —
+        // keep "gardening" so it matches the indexed tag.
         assert_eq!(
             stem_query_porter("What gardening-related activity?"),
-            "what gardening related activity"
+            "gardening related activity"
         );
     }
 }

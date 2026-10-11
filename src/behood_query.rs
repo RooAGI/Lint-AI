@@ -232,6 +232,9 @@ struct FusedActivity {
     /// Sibling activities sharing the category (Luyi 2026-10-11).
     /// Used at query time instead of the generic category.
     siblings: Vec<String>,
+    /// Learned hypernym (Luyi 2026-10-11): e.g., "stand-up" -> "show".
+    /// Emitted as an index tag so lexical queries match.
+    hypernym: String,
 }
 
 #[derive(Debug, Clone)]
@@ -324,6 +327,7 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                                         .collect()
                                 })
                                 .unwrap_or_default(),
+                            hypernym: v.get("hypernym").and_then(|s| s.as_str()).unwrap_or("").to_string(),
                         })
                     })
                     .collect()
@@ -634,12 +638,27 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
     let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
     for r in results {
         if let Some(idx) = r.id.strip_prefix("a:").and_then(|s| s.parse::<usize>().ok()) {
-            let cats: Vec<String> = r.activity
+            let mut tags: Vec<String> = r.activity
                 .into_iter()
-                .filter(|a| a.is_activity && !a.category.is_empty())
-                .map(|a| a.category.to_lowercase())
+                .filter(|a| a.is_activity)
+                .flat_map(|a| {
+                    let mut v = Vec::new();
+                    // Category (broad, e.g., "entertainment").
+                    if !a.category.is_empty() {
+                        v.push(a.category.to_lowercase());
+                    }
+                    // Learned hypernym (specific, e.g., "stand-up" -> "show").
+                    // Luyi 2026-10-11: enables lexical queries for the hypernym
+                    // to match docs with the specific term.
+                    if !a.hypernym.is_empty() {
+                        v.push(a.hypernym.to_lowercase());
+                    }
+                    v.into_iter()
+                })
                 .collect();
-            by_index.insert(idx, cats);
+            tags.sort();
+            tags.dedup();
+            by_index.insert(idx, tags);
         }
     }
     (0..texts.len())

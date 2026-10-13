@@ -58,6 +58,7 @@ nav:
       - Docker: docker.md
       - MCP interface: mcp.md
       - Node.js binding: node.md
+      - Update notifications: update-notifications.md
   - Agents:
       - Overview: connect-agent.md
       - How Membrick remembers: agent-memory.md

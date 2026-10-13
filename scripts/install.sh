@@ -122,6 +122,7 @@ chmod 0755 "$BIN_TMP"
 cp "$BIN_TMP" "${INSTALL_DIR}/membrick"
 BIN="${INSTALL_DIR}/membrick"
 touch "${INSTALL_DIR}/.membrick-managed"
+printf '%s\n' standalone > "${INSTALL_DIR}/membrick-install-method"
 
 echo "Installed $($BIN --version) to ${BIN}"
 

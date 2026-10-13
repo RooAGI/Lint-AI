@@ -50,10 +50,33 @@ jobs:
           else
             npx napi build --platform --release --target "${{ matrix.target }}"
           fi
+      - name: Build agent-capable CLI
+        shell: bash
+        run: |
+          if [[ "${{ matrix.cross }}" == "true" ]]; then
+            cargo install cross --locked
+            cross build --release --bin membrick --features agent-integrations --target "${{ matrix.target }}"
+          else
+            cargo build --release --bin membrick --features agent-integrations --target "${{ matrix.target }}"
+          fi
+      - name: Stage CLI executable
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+            cp "target/${{ matrix.target }}/release/membrick.exe" dist/membrick.exe
+          else
+            cp "target/${{ matrix.target }}/release/membrick" dist/membrick
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: node-addon-${{ matrix.target }}
           path: bindings/node/membrick_node.*.node
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-cli-${{ matrix.target }}
+          path: dist/membrick*
           if-no-files-found: error
 
   publish:
@@ -79,6 +102,10 @@ jobs:
         with:
           pattern: node-addon-*
           path: bindings/node/artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: node-cli-*
+          path: bindings/node/cli-artifacts
       - name: Create platform packages and collect binaries
         working-directory: bindings/node
         run: |
@@ -87,6 +114,15 @@ jobs:
           for target in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu win32-x64-msvc; do
             test -f "npm/$target/membrick_node.$target.node"
           done
+      - name: Add CLI executables to platform packages
+        working-directory: bindings/node
+        shell: bash
+        run: |
+          node scripts/package-cli.cjs darwin-arm64 cli-artifacts/node-cli-aarch64-apple-darwin/membrick
+          node scripts/package-cli.cjs darwin-x64 cli-artifacts/node-cli-x86_64-apple-darwin/membrick
+          node scripts/package-cli.cjs linux-arm64-gnu cli-artifacts/node-cli-aarch64-unknown-linux-gnu/membrick
+          node scripts/package-cli.cjs linux-x64-gnu cli-artifacts/node-cli-x86_64-unknown-linux-gnu/membrick
+          node scripts/package-cli.cjs win32-x64-msvc cli-artifacts/node-cli-x86_64-pc-windows-msvc/membrick.exe
       - name: Publish platform packages, then the root package
         working-directory: bindings/node
         env:

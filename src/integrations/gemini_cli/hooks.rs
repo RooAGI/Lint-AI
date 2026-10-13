@@ -100,11 +100,14 @@ pub fn run_hook_for(
     {
         eprintln!("warning: Membrick {provider_label} session recording failed open: {error:#}");
     }
-    let output =
+    let mut output =
         handle_hook(kind, &input, &root, provider, provider_label).unwrap_or_else(|error| {
             eprintln!("warning: Membrick {provider_label} hook failed open: {error:#}");
             GeminiHookOutput::default()
         });
+    if kind == GeminiHookKind::SessionStart {
+        output.system_message = crate::updater::take_update_notice();
+    }
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, &output)?;
     stdout.write_all(b"\n")?;

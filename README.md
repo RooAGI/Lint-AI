@@ -370,8 +370,16 @@ See the [HTTP server guide](docs/server.md).
 
 ### Python
 
-Build the optional Python extension with `uv` and `maturin`, then use the
-memory service from Python:
+Install the PyPI package to get both the Python `MemoryService` API and the
+Rust `membrick` CLI on supported platforms:
+
+```bash
+pipx install membrick
+membrick --codex-install .
+```
+
+For development from this checkout, build the optional Python extension with
+`uv` and `maturin`:
 
 ```bash
 uv venv --python 3.10

@@ -9,6 +9,17 @@ Install it from npm:
 npm install membrick
 ```
 
+The package also installs the `membrick` CLI for the supported platform. For
+example, install it globally and connect a project to Codex:
+
+```bash
+npm install --global membrick
+membrick --codex-install .
+```
+
+The CLI is the same Rust executable shipped in Membrick releases. The npm
+platform package includes both that executable and the Node native binding.
+
 ## Local memory service
 
 Use `path` to persist a local memory store, or omit it for in-memory operation:

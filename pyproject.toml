@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "membrick"
 version = "0.4.0"
-description = "Persistent, evidence-backed memory for AI coding agents"
+description = "Persistent agent memory API and CLI, backed by Membrick's Rust MemoryService"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }

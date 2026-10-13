@@ -42,6 +42,8 @@ pub struct ClaudeHookInput {
 pub struct ClaudeHookOutput {
     #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
     pub hook_specific_output: Option<ClaudeHookSpecificOutput>,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +64,7 @@ impl ClaudeHookOutput {
                 hook_event_name: event_name.to_string(),
                 additional_context: context,
             }),
+            system_message: None,
         }
     }
 }

@@ -119,13 +119,19 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
         }
     }
     let started = Instant::now();
-    let output = match run_with_budget(kind, input, fallback_root) {
+    let mut output = match run_with_budget(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("warning: Membrick Codex hook failed open: {error:#}");
             CodexHookOutput::default()
         }
     };
+    if matches!(
+        kind,
+        CodexHookKind::SessionStart | CodexHookKind::UserPromptSubmit
+    ) {
+        output.system_message = crate::updater::take_update_notice();
+    }
     write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;

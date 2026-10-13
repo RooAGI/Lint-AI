@@ -13,6 +13,17 @@ by the Rust and Python APIs. It has the same two backend modes as Python:
 npm install membrick
 ```
 
+This installs both the Node.js `MemoryService` binding and the `membrick` CLI
+on supported platforms. For example:
+
+```sh
+npm install --global membrick
+membrick --codex-install .
+```
+
+The CLI is the Rust release executable. Platform packages contain it alongside
+the N-API addon, so agent integration behavior stays in the Rust CLI.
+
 Prebuilt native packages are selected for macOS arm64/x64, Linux arm64/x64
 glibc, and Windows x64. Building from a checkout requires Rust 1.88+ and
 Node.js 20.17+, 22.13+, or 23.5+ for the N-API build CLI.

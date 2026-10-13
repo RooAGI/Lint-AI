@@ -122,6 +122,7 @@ pub fn serve_requests(
     mut on_handler_error: impl FnMut(&str, &anyhow::Error),
     mut on_response: impl FnMut(),
 ) -> Result<()> {
+    crate::updater::schedule_daily_check();
     while let Some((request, line_framed)) = read_request(reader)? {
         on_request(&request.method);
         if request.id.is_none() {

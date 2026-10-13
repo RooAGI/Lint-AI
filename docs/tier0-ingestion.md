@@ -40,7 +40,7 @@ Both map back to the processed document path.
 Use the CLI to write a persistent index:
 
 ```bash
-./target/debug/lint-ai /path/to/repo --tier0-index-out
+./target/debug/membrick /path/to/repo --tier0-index-out
 ```
 
 Default output file:
@@ -49,7 +49,7 @@ Default output file:
 Custom output path:
 
 ```bash
-./target/debug/lint-ai /path/to/repo --tier0-index-out out/my-index
+./target/debug/membrick /path/to/repo --tier0-index-out out/my-index
 ```
 
 If the provided output path has no extension, `.json` is appended automatically.

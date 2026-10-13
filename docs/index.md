@@ -8,14 +8,21 @@ hide:
 <section class="hero">
   <div class="hero__eyebrow">THE MEMORY LAYER FOR AI AGENTS</div>
   <h1>Give your AI a memory that lasts.</h1>
-  <p class="hero__lede"><strong>Context that persists. Built for production.</strong> Lint-AI helps an assistant remember useful preferences, decisions, and history across interactions, then brings the right context back when it matters.</p>
+  <p class="hero__lede"><strong>Context that persists. Built for production.</strong> Membrick helps an assistant remember useful preferences, decisions, and history across interactions, then brings the right context back when it matters.</p>
   <p><a class="md-button md-button--primary" href="quickstart/">Get started</a> <a class="md-button" href="agent-memory/">Explore agent memory</a></p>
 </section>
 </div>
 
+<div class="admonition info">
+<p class="admonition-title">A new name: Membrick</p>
+<p>Previously known as Lint-AI, the project is now Membrick. Version 0.4.0
+updates the product and package names. The legacy <code>lint-ai</code> command
+and existing configuration are supported during the transition.</p>
+</div>
+
 ## From one conversation to a lasting relationship {.landing-heading}
 
-On its own, an AI model only has the context it can see right now. Lint-AI adds
+On its own, an AI model only has the context it can see right now. Membrick adds
 a memory that stays between conversations. As an agent saves new information or
 feedback, that memory can be updated and used in future interactions. The model
 does not need to be retrained; it gets better context to work with.
@@ -32,13 +39,13 @@ does not need to be retrained; it gets better context to work with.
     <span class="feature-number">02</span>
     <h3>Learn from what changes</h3>
     <p>When new information or feedback updates a memory, future conversations
-    can use it. Lint-AI keeps the earlier history too, so an old answer does not
+    can use it. Membrick keeps the earlier history too, so an old answer does not
     quietly become the current one.</p>
   </article>
   <article>
     <span class="feature-number">03</span>
     <h3>Add memory without building it all yourself</h3>
-    <p>Lint-AI handles saving, updating, and finding memories through one
+    <p>Membrick handles saving, updating, and finding memories through one
     persistent service. Use the integrations and APIs to add memory to an agent
     without building a separate memory system from scratch.</p>
   </article>
@@ -46,7 +53,7 @@ does not need to be retrained; it gets better context to work with.
 
 ## What lasting memory makes possible {.landing-heading}
 
-Connect Lint-AI to the experience you are building:
+Connect Membrick to the experience you are building:
 
 <div class="feature-grid">
   <article>
@@ -86,7 +93,7 @@ already know.
 
 ## Built for dependable use {.landing-heading}
 
-Lint-AI keeps memory in a persistent store and provides a shared service for
+Membrick keeps memory in a persistent store and provides a shared service for
 agents and applications. It supports user and session scoping, durable writes,
 and retrieval that can account for newer corrections while preserving history.
 Run it locally or connect through its HTTP and MCP servers. A dashboard helps
@@ -94,7 +101,7 @@ you inspect memory and agent activity.
 
 <h3>Benchmark highlights</h3>
 
-<section class="proof-grid proof-grid--six" aria-label="Lint-AI benchmark highlights">
+<section class="proof-grid proof-grid--six" aria-label="Membrick benchmark highlights">
   <div><strong>96.0%</strong><span>fused temporal any-hit Recall@5 · 500 questions</span></div>
   <div><strong>94.2%</strong><span>routed top-5 any-hit Recall@5</span></div>
   <div><strong>2.63 ms</strong><span>single-index mean search latency</span></div>

@@ -70,7 +70,7 @@ if a.phase == 'prepare':
         index = work / f'old-{layout}'
         if index.exists(): raise RuntimeError(f'refusing to overwrite {index}')
         with server(a.baseline, layout, index, 18770+i, f'prepare-{layout}'):
-            subprocess.run([sys.executable, str(ROOT/'comparison/seed_lint_ai.py'), '--url', f'http://127.0.0.1:{18770+i}/add', '--count',str(a.records), '--batch-size','1024','--sessions','5','--bulk'],check=True)
+            subprocess.run([sys.executable, str(ROOT/'comparison/seed_membrick.py'), '--url', f'http://127.0.0.1:{18770+i}/add', '--count',str(a.records), '--batch-size','1024','--sessions','5','--bulk'],check=True)
             (work/f'{layout}-rankings.json').write_text(json.dumps(rankings(18770+i),indent=2))
         (work/f'{layout}-files.json').write_text(json.dumps(immutable_files(index),indent=2))
         print(f'prepared {layout}',flush=True)

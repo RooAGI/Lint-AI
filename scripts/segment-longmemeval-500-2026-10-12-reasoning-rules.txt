@@ -1,4 +1,4 @@
-   Compiling lint-ai v0.3.0 (/Users/louis/sources/Lint-AI)
+   Compiling membrick v0.3.0 (/Users/louis/sources/Membrick)
 warning: unused imports: `TextFieldIndexing` and `TextOptions`
   --> src/index/build.rs:16:39
    |
@@ -262,9 +262,9 @@ warning: variable does not need to be mutable
     |             help: remove this `mut`
 
 For more information about this error, try `rustc --explain E0063`.
-warning: `lint-ai` (lib) generated 39 warnings
-error: could not compile `lint-ai` (lib) due to 1 previous error; 39 warnings emitted
-   Compiling lint-ai v0.3.0 (/Users/louis/sources/Lint-AI)
+warning: `membrick` (lib) generated 39 warnings
+error: could not compile `membrick` (lib) due to 1 previous error; 39 warnings emitted
+   Compiling membrick v0.3.0 (/Users/louis/sources/Membrick)
 warning: unused imports: `TextFieldIndexing` and `TextOptions`
   --> src/index/build.rs:16:39
    |
@@ -1839,7 +1839,7 @@ warning: struct `UsageSummary` is never constructed
 251 | pub struct UsageSummary {
     |            ^^^^^^^^^^^^
 
-warning: `lint-ai` (lib) generated 183 warnings (run `cargo fix --lib -p lint-ai` to apply 38 suggestions)
+warning: `membrick` (lib) generated 183 warnings (run `cargo fix --lib -p membrick` to apply 38 suggestions)
     Finished `release` profile [optimized] target(s) in 21.65s
      Running `target/release/segment_scoped_benchmark --longmemeval benchmark/data/longmemeval_s_raw.json --segment-compare --segment-top-n 5 --adaptive-segment-max-n 12 --segment-router coverage-local --ner-provider heuristic --k 1 --k 3 --k 5 --k 10 --k 20 --out comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz`
 loading raw LongMemEval data...

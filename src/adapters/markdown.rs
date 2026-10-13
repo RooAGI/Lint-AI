@@ -308,7 +308,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let suffix = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let root = std::env::temp_dir().join(format!("lint-ai-markdown-permissions-{suffix}"));
+        let root = std::env::temp_dir().join(format!("membrick-markdown-permissions-{suffix}"));
         fs::create_dir_all(&root)?;
         let readable = root.join("readable.md");
         let unreadable = root.join("unreadable.md");

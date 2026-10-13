@@ -1,20 +1,20 @@
 # Integration glossary
 
-This glossary defines the provider-neutral terms used by the Lint-AI
+This glossary defines the provider-neutral terms used by the Membrick
 integrations. Provider documentation may use different names for equivalent
 lifecycle events, but these meanings remain the same.
 
 ## Core concepts
 
 **Memory** is durable, project-scoped information retained for use by later
-agent work. In Lint-AI, memory is an indexed source document derived from a
+agent work. In Membrick, memory is an indexed source document derived from a
 session, note, decision, trace, or other supported corpus item. Memory is not
 the same as a provider's built-in memory and is not automatically equivalent
 to a complete transcript.
 
 **Context** is information supplied to an agent for its current turn or task.
 Retrieved memory is one possible source of context. Context is temporary from
-Lint-AI's perspective unless it is explicitly captured as memory.
+Membrick's perspective unless it is explicitly captured as memory.
 
 **Session** is one provider interaction identified by a provider session ID.
 It may contain multiple turns, messages, tool calls, lifecycle events, and
@@ -60,13 +60,13 @@ that every event does not become long-term memory.
 
 **Provider** is the agent client being integrated, such as Claude Code, Codex,
 Gemini CLI, or AGY. Provider-specific adapters translate that client's hook
-payloads and transcript format into the shared Lint-AI model.
+payloads and transcript format into the shared Membrick model.
 
 **Lifecycle hook** is a provider callback at a session or activity boundary.
 Hooks can trigger recall, injection, capture, or status handling. A hook is
 not itself a memory record.
 
-**MCP** is the explicit tool interface exposed by Lint-AI to the provider.
+**MCP** is the explicit tool interface exposed by Membrick to the provider.
 MCP tools let the client or model request operations such as search, status,
 and session recording control. MCP does not capture conversations
 automatically.
@@ -80,7 +80,7 @@ events. It is an audit or evaluation artifact, not automatically a memory
 store.
 
 **Native memory** is memory maintained by the provider itself. It is separate
-from Lint-AI memory and may be enabled, disabled, or compared independently.
+from Membrick memory and may be enabled, disabled, or compared independently.
 
 The usual flow is:
 

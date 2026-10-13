@@ -1,12 +1,12 @@
 //! Query-time behood: thin client over the bekind `--serve` daemon.
 //!
 //! bekind owns the full tag→chunk→judge pipeline (Luyi 2026-09-30):
-//! lint-ai sends raw texts and gets back per-text verdicts. No descriptors
+//! membrick sends raw texts and gets back per-text verdicts. No descriptors
 //! cross the process boundary; no Python process is involved.
 //!
 //! Luyi's design: "the behood provide people as the source, then we have
 //! place and thing." At query time, behood judges the question's entities
-//! and returns (text, kind) pairs. Lint-ai uses the text for matching and
+//! and returns (text, kind) pairs. Membrick uses the text for matching and
 //! the kind for filtering in structured question analysis.
 //!
 //! One long-lived child (`bekind --serve`) does all the work. Spawning the
@@ -459,7 +459,7 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
 
 /// Temporal question words ("when", "what time", ...) ask for a time.
 /// Purely local match on the lowered question; behood judges these as
-/// time-seeking and lint-ai uses the kind for answer-kind filtering.
+/// time-seeking and membrick uses the kind for answer-kind filtering.
 /// (Moved from `scripts/behood_query.py` when the Python layer became
 /// parse-only; the text stays lowercase exactly as before.)
 fn temporal_question_entity(question: &str) -> Option<QueryEntity> {

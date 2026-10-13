@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Parser)]
-#[command(about = "Measure Lint-AI retrieval scaling on LongMemEval-S")]
+#[command(about = "Measure Membrick retrieval scaling on LongMemEval-S")]
 struct Args {
     #[arg(long)]
     longmemeval: PathBuf,

@@ -40,13 +40,13 @@ flowchart TD
 
 ## File ownership map
 
-- [`src/graph.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/graph.rs): corpus traversal, page discovery, Tier 0 record generation
-- [`src/source.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/source.rs): canonical source document shape
-- [`src/chunking.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/chunking.rs): chunk boundaries and chunk enrichment
-- [`src/tier1.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/tier1.rs): entity and important-term extraction
-- [`src/pipeline.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/pipeline.rs): ingestion-to-index pipeline and store assembly
-- [`src/index.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/index.rs): persistent query structures and retrieval state
-- [`src/engine.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/engine.rs): CLI orchestration, cache handling, query flow
+- [`src/graph.rs`](https://github.com/RooAGI/Membrick/blob/main/src/graph.rs): corpus traversal, page discovery, Tier 0 record generation
+- [`src/source.rs`](https://github.com/RooAGI/Membrick/blob/main/src/source.rs): canonical source document shape
+- [`src/chunking.rs`](https://github.com/RooAGI/Membrick/blob/main/src/chunking.rs): chunk boundaries and chunk enrichment
+- [`src/tier1.rs`](https://github.com/RooAGI/Membrick/blob/main/src/tier1.rs): entity and important-term extraction
+- [`src/pipeline.rs`](https://github.com/RooAGI/Membrick/blob/main/src/pipeline.rs): ingestion-to-index pipeline and store assembly
+- [`src/index.rs`](https://github.com/RooAGI/Membrick/blob/main/src/index.rs): persistent query structures and retrieval state
+- [`src/engine.rs`](https://github.com/RooAGI/Membrick/blob/main/src/engine.rs): CLI orchestration, cache handling, query flow
 
 ## Adapter design
 
@@ -70,7 +70,7 @@ pub trait SourceAdapter {
     fn ingest(
         &self,
         input: &AdapterInput<'_>,
-    ) -> anyhow::Result<Vec<lint_ai::SourceDocument>>;
+    ) -> anyhow::Result<Vec<membrick::SourceDocument>>;
 }
 ```
 

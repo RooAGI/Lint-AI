@@ -15,7 +15,7 @@ const MAX_ARRAY_ITEMS: usize = 128;
 const MAX_REPLAY_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REPLAY_EVENTS: usize = 100_000;
 const MAX_REPLAY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const REPLAY_SESSION_ENV: &str = "LINT_AI_REPLAY_SESSION_ID";
+const REPLAY_SESSION_ENV: &str = "MEMBRICK_REPLAY_SESSION_ID";
 const INTERRUPTED_SESSION_STALE_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +44,7 @@ pub struct ReplayReport {
     pub baseline_session_id: String,
     pub replay_session_id: String,
     pub replay_archive: String,
-    pub lint_ai_enabled: bool,
+    pub membrick_enabled: bool,
     pub exit_code: Option<i32>,
     pub output_bytes: usize,
     pub prompt_count: usize,
@@ -59,7 +59,7 @@ pub fn replay_recorded_session(
     project_root: &Path,
     archive_override: Option<&Path>,
     session_id: &str,
-    enable_lint_ai: bool,
+    enable_membrick: bool,
 ) -> Result<ReplayReport> {
     let replay_workspace = ReplayWorkspace::create(project_root)?;
     let archive_root = archive_override
@@ -90,7 +90,7 @@ pub fn replay_recorded_session(
             "replay_of_session_id": session_id,
             "recording_mode": "replay",
             "recording_enabled": true,
-            "lint_ai_enabled": enable_lint_ai,
+            "membrick_enabled": enable_membrick,
             "prompt_count": prompts.len(),
             "event_count": 0,
             "redaction_policy": "default-v1"
@@ -98,7 +98,7 @@ pub fn replay_recorded_session(
     )?;
 
     set_recording_state(provider, replay_workspace.path(), true)?;
-    set_lint_ai_state(provider, replay_workspace.path(), enable_lint_ai)?;
+    set_membrick_state(provider, replay_workspace.path(), enable_membrick)?;
 
     let command_result = run_provider_process(
         provider,
@@ -160,7 +160,7 @@ pub fn replay_recorded_session(
         baseline_session_id: session_id.to_string(),
         replay_session_id,
         replay_archive: replay_dir.to_string_lossy().into_owned(),
-        lint_ai_enabled: enable_lint_ai,
+        membrick_enabled: enable_membrick,
         exit_code: execution.exit_code,
         output_bytes: execution.stdout.len() + execution.stderr.len(),
         prompt_count: prompts.len(),
@@ -176,7 +176,7 @@ struct ReplayWorkspace {
 impl ReplayWorkspace {
     fn create(source: &Path) -> Result<Self> {
         let path = source
-            .join(".lint-ai")
+            .join(".membrick")
             .join("replay-workspaces")
             .join(format!(
                 "replay-{}-{}",
@@ -206,7 +206,7 @@ fn copy_replay_tree(source: &Path, destination: &Path) -> Result<()> {
         let name = entry.file_name();
         if matches!(
             name.to_str(),
-            Some(".git" | ".lint-ai" | "target" | "node_modules")
+            Some(".git" | ".membrick" | "target" | "node_modules")
         ) {
             continue;
         }
@@ -331,7 +331,7 @@ fn run_provider_process(
 ) -> Result<ReplayExecution> {
     let mut execution = ReplayExecution::default();
     let mut provider_session_id = None;
-    let isolated_home = project_root.join(".lint-ai-replay-home");
+    let isolated_home = project_root.join(".membrick-replay-home");
     fs::create_dir_all(&isolated_home)?;
     let isolated_codex_home = isolated_home.join(".codex");
     fs::create_dir_all(&isolated_codex_home)?;
@@ -342,7 +342,7 @@ fn run_provider_process(
 
     for (index, prompt) in prompts.iter().enumerate() {
         eprintln!(
-            "lint-ai replay: starting turn {}/{} ({})",
+            "membrick replay: starting turn {}/{} ({})",
             index + 1,
             prompts.len(),
             provider.as_str()
@@ -437,7 +437,7 @@ fn run_provider_process(
         append_bounded(&mut execution.stdout, &stdout);
         append_bounded(&mut execution.stderr, &stderr);
         eprintln!(
-            "lint-ai replay: finished turn {}/{} in {:.1}s ({})",
+            "membrick replay: finished turn {}/{} in {:.1}s ({})",
             index + 1,
             prompts.len(),
             turn_started.elapsed().as_secs_f64(),
@@ -541,7 +541,7 @@ pub fn promote_recorded_session(
         let body = event_content(&event);
         documents.push(SourceDocument {
             source: format!(
-                "lint-ai://{}/session/{}/{}",
+                "membrick://{}/session/{}/{}",
                 provider.as_str(),
                 session_id,
                 sequence
@@ -594,6 +594,7 @@ pub fn set_recording_state(
     project_root: &Path,
     enabled: bool,
 ) -> Result<Value> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let root = session_root(provider, project_root);
     fs::create_dir_all(&root)?;
     let state = serde_json::json!({
@@ -608,6 +609,7 @@ pub fn set_recording_state(
 }
 
 pub fn recording_state(provider: RecordingProvider, project_root: &Path) -> Result<Value> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let path = session_root(provider, project_root).join("recording.json");
     if !path.exists() {
         return Ok(serde_json::json!({
@@ -619,11 +621,12 @@ pub fn recording_state(provider: RecordingProvider, project_root: &Path) -> Resu
     Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }
 
-pub fn set_lint_ai_state(
+pub fn set_membrick_state(
     provider: RecordingProvider,
     project_root: &Path,
     enabled: bool,
 ) -> Result<Value> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let root = provider_state_dir(provider, project_root);
     fs::create_dir_all(&root)?;
     let state = serde_json::json!({
@@ -637,7 +640,8 @@ pub fn set_lint_ai_state(
     Ok(state)
 }
 
-pub fn lint_ai_enabled(provider: RecordingProvider, project_root: &Path) -> Result<bool> {
+pub fn membrick_enabled(provider: RecordingProvider, project_root: &Path) -> Result<bool> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let path = provider_state_dir(provider, project_root).join("integration.json");
     if !path.exists() {
         return Ok(true);
@@ -657,7 +661,7 @@ pub(crate) fn capture_workspace_file_changes(
     project_root: &Path,
     changes: Vec<crate::pipeline::WorkspaceChangeEvent>,
 ) -> Result<()> {
-    if changes.is_empty() || !lint_ai_enabled(provider, project_root)? {
+    if changes.is_empty() || !membrick_enabled(provider, project_root)? {
         return Ok(());
     }
 
@@ -676,7 +680,7 @@ pub(crate) fn capture_workspace_file_changes(
                 change.after.as_deref(),
             );
             let doc_id = format!("workspace-file-change:{suffix}");
-            let source = format!("lint-ai://workspace/file-change/{suffix}");
+            let source = format!("membrick://workspace/file-change/{suffix}");
             let mut filters = BTreeMap::new();
             filters.insert(
                 "source_type".to_string(),
@@ -896,17 +900,17 @@ pub fn record_event_if_enabled(
 
 fn session_root(provider: RecordingProvider, project_root: &Path) -> PathBuf {
     project_root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(format!("{}-sessions", provider.as_str()))
 }
 
 /// Directory for per-provider integration state (`integration.json`, the
-/// lint-ai on/off flag). This intentionally avoids the legacy
+/// membrick on/off flag). This intentionally avoids the legacy
 /// `{provider}-memory` name: those directories are migrated into the shared
 /// store and removed on first use, which would silently delete the state file.
 pub(crate) fn provider_state_dir(provider: RecordingProvider, project_root: &Path) -> PathBuf {
     project_root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(format!("{}-state", provider.as_str()))
 }
 
@@ -1520,7 +1524,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-recording-{name}-{nonce}"));
+            .join(format!("membrick-recording-{name}-{nonce}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -1662,7 +1666,7 @@ mod tests {
         let workspace = ReplayWorkspace::create(&root).unwrap();
         assert!(workspace
             .path()
-            .starts_with(root.join(".lint-ai/replay-workspaces")));
+            .starts_with(root.join(".membrick/replay-workspaces")));
         let path = workspace.path().to_path_buf();
         drop(workspace);
         assert!(!path.exists());
@@ -1729,7 +1733,7 @@ mod tests {
         )
         .unwrap());
         let telemetry =
-            fs::read_to_string(root.join(".lint-ai/provider-telemetry/claude.json")).unwrap();
+            fs::read_to_string(root.join(".membrick/provider-telemetry/claude.json")).unwrap();
         assert!(telemetry.contains("\"event\": \"TurnUsage\""));
         assert!(telemetry.contains("\"total_tokens\": 29"));
 
@@ -1746,7 +1750,7 @@ mod tests {
         )
         .unwrap());
         let events =
-            fs::read_to_string(root.join(".lint-ai/claude-sessions/session-1/events.jsonl"))
+            fs::read_to_string(root.join(".membrick/claude-sessions/session-1/events.jsonl"))
                 .unwrap();
         assert!(events.contains("\"kind\":\"turn_usage\""));
         assert!(events.contains("\"source\":\"claude-transcript\""));
@@ -1770,7 +1774,7 @@ mod tests {
         .unwrap();
 
         set_recording_state(RecordingProvider::Claude, &root, true).unwrap();
-        let telemetry_path = root.join(".lint-ai/provider-telemetry/claude.json");
+        let telemetry_path = root.join(".membrick/provider-telemetry/claude.json");
         let before = fs::read_to_string(&telemetry_path).unwrap_or_default();
         assert!(
             !before.contains("TurnUsage"),
@@ -1994,21 +1998,21 @@ mod tests {
             assert!(!recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
                 .unwrap());
-            assert!(lint_ai_enabled(provider, &root).unwrap());
+            assert!(membrick_enabled(provider, &root).unwrap());
 
             set_recording_state(provider, &root, true).unwrap();
-            set_lint_ai_state(provider, &root, false).unwrap();
+            set_membrick_state(provider, &root, false).unwrap();
             assert!(recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
                 .unwrap());
-            assert!(!lint_ai_enabled(provider, &root).unwrap());
+            assert!(!membrick_enabled(provider, &root).unwrap());
 
             set_recording_state(provider, &root, false).unwrap();
-            set_lint_ai_state(provider, &root, true).unwrap();
+            set_membrick_state(provider, &root, true).unwrap();
             assert!(!recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
                 .unwrap());
-            assert!(lint_ai_enabled(provider, &root).unwrap());
+            assert!(membrick_enabled(provider, &root).unwrap());
             fs::remove_dir_all(root).unwrap();
         }
     }
@@ -2022,7 +2026,7 @@ mod tests {
             RecordingProvider::Agy,
         ] {
             let root = temp_root(provider.as_str());
-            set_lint_ai_state(provider, &root, false).unwrap();
+            set_membrick_state(provider, &root, false).unwrap();
             record_event_if_enabled(
                 provider,
                 &root,
@@ -2032,7 +2036,7 @@ mod tests {
             )
             .unwrap();
             let events = root
-                .join(".lint-ai")
+                .join(".membrick")
                 .join(format!("{}-sessions", provider.as_str()))
                 .join("session-off-memory/events.jsonl");
             assert!(!events.exists());
@@ -2047,7 +2051,7 @@ mod tests {
             )
             .unwrap();
             assert!(root
-                .join(".lint-ai")
+                .join(".membrick")
                 .join(format!("{}-sessions", provider.as_str()))
                 .join("session-on-recording/events.jsonl")
                 .exists());
@@ -2088,8 +2092,8 @@ mod tests {
         assert_eq!(report.session_id, "baseline");
         assert_eq!(report.imported_document_ids.len(), 2);
         // Promoted sessions land in the shared cross-provider store.
-        assert!(project_root.join(".lint-ai/memory").exists());
-        assert!(!project_root.join(".lint-ai/claude-memory").exists());
+        assert!(project_root.join(".membrick/memory").exists());
+        assert!(!project_root.join(".membrick/claude-memory").exists());
         fs::remove_dir_all(project_root).unwrap();
         fs::remove_dir_all(archive_root).unwrap();
     }

@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO="RooAGI/Lint-AI"
+REPO="RooAGI/Membrick"
 BASE_URL="https://github.com/${REPO}/releases/latest/download"
-INSTALL_DIR="${LINT_AI_INSTALL_DIR:-${HOME}/.local/bin}"
+INSTALL_DIR="${MEMBRICK_INSTALL_DIR:-${HOME}/.local/bin}"
 AGENT=""
 PROJECT="."
 
 usage() {
   cat <<'EOF'
-Install the latest official Lint-AI release and optionally configure an agent.
+Install the latest official Membrick release and optionally configure an agent.
 
 Usage:
   install.sh [--agent codex|claude|gemini|agy] [--project PATH] [--install-dir DIR]
@@ -59,16 +59,16 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "${OS}:${ARCH}" in
   Linux:x86_64|Linux:amd64)
-    ASSET="lint-ai-linux-x86_64"
+    ASSET="membrick-linux-x86_64"
     ;;
   Darwin:x86_64|Darwin:amd64)
-    ASSET="lint-ai-macos-x86_64"
+    ASSET="membrick-macos-x86_64"
     ;;
   Darwin:arm64|Darwin:aarch64)
-    ASSET="lint-ai-macos-aarch64"
+    ASSET="membrick-macos-aarch64"
     ;;
   *)
-    echo "No prebuilt Lint-AI release for ${OS} ${ARCH}." >&2
+    echo "No prebuilt Membrick release for ${OS} ${ARCH}." >&2
     echo "Fallback: cargo install --git https://github.com/${REPO} --features agent-integrations" >&2
     exit 1
     ;;
@@ -89,7 +89,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 BIN_TMP="${TMP_DIR}/${ASSET}"
 SUM_TMP="${TMP_DIR}/${ASSET}.sha256"
 
-echo "Downloading official Lint-AI release for ${OS} ${ARCH}..."
+echo "Downloading official Membrick release for ${OS} ${ARCH}..."
 fetch "${BASE_URL}/${ASSET}" "$BIN_TMP"
 fetch "${BASE_URL}/${ASSET}.sha256" "$SUM_TMP"
 
@@ -111,8 +111,8 @@ fi
 echo "Checksum verified."
 mkdir -p "$INSTALL_DIR"
 chmod 0755 "$BIN_TMP"
-cp "$BIN_TMP" "${INSTALL_DIR}/lint-ai"
-BIN="${INSTALL_DIR}/lint-ai"
+cp "$BIN_TMP" "${INSTALL_DIR}/membrick"
+BIN="${INSTALL_DIR}/membrick"
 
 echo "Installed $($BIN --version) to ${BIN}"
 
@@ -144,11 +144,11 @@ if [ -n "$AGENT" ]; then
       ;;
   esac
 
-  echo "Configuring Lint-AI for ${AGENT} in ${PROJECT}..."
+  echo "Configuring Membrick for ${AGENT} in ${PROJECT}..."
   "$BIN" "$INSTALL_FLAG" "$PROJECT"
-  echo "Verifying the Lint-AI MCP runtime..."
+  echo "Verifying the Membrick MCP runtime..."
   "$BIN" "$VERIFY_FLAG" "$PROJECT"
-  echo "Lint-AI is installed, configured for ${AGENT}, and MCP verification passed."
+  echo "Membrick is installed, configured for ${AGENT}, and MCP verification passed."
 else
-  echo "Lint-AI is installed. To configure an agent, rerun with --agent codex|claude|gemini|agy."
+  echo "Membrick is installed. To configure an agent, rerun with --agent codex|claude|gemini|agy."
 fi

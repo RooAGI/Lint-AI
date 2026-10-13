@@ -32,7 +32,7 @@ args = parser.parse_args()
 if args.startup_timeout_seconds <= 0:
     parser.error("startup timeout must be positive")
 
-index_dir = Path(tempfile.mkdtemp(prefix=f"lint-ai-throughput-{args.mode}.")).resolve()
+index_dir = Path(tempfile.mkdtemp(prefix=f"membrick-throughput-{args.mode}.")).resolve()
 bind = f"127.0.0.1:{args.port}"
 command = [str(args.server_bin), "--bind", bind, "--index", str(index_dir), "--project-root", str(index_dir)]
 if args.mode == "single":
@@ -56,7 +56,7 @@ try:
     subprocess.run(
         [
             "python3",
-            str(ROOT / "comparison/seed_lint_ai.py"),
+            str(ROOT / "comparison/seed_membrick.py"),
             "--url",
             f"http://{bind}/add",
             "--count",

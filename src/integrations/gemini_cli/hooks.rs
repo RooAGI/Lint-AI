@@ -1,5 +1,5 @@
 use crate::integrations::session_recording::{
-    lint_ai_enabled, record_event_if_enabled, RecordingProvider,
+    membrick_enabled, record_event_if_enabled, RecordingProvider,
 };
 use crate::memory_api::MemoryService;
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
@@ -98,11 +98,11 @@ pub fn run_hook_for(
     if let Err(error) =
         record_event_if_enabled(provider, &root, &input.session_id, kind.event_name(), raw)
     {
-        eprintln!("warning: Lint-AI {provider_label} session recording failed open: {error:#}");
+        eprintln!("warning: Membrick {provider_label} session recording failed open: {error:#}");
     }
     let output =
         handle_hook(kind, &input, &root, provider, provider_label).unwrap_or_else(|error| {
-            eprintln!("warning: Lint-AI {provider_label} hook failed open: {error:#}");
+            eprintln!("warning: Membrick {provider_label} hook failed open: {error:#}");
             GeminiHookOutput::default()
         });
     let mut stdout = std::io::stdout().lock();
@@ -136,13 +136,13 @@ fn handle_hook(
     if kind == GeminiHookKind::SessionStart {
         return Ok(GeminiHookOutput {
             system_message: Some(
-                "Lint-AI hooks active; session recording follows the configured recording state."
+                "Membrick hooks active; session recording follows the configured recording state."
                     .into(),
             ),
             ..Default::default()
         });
     }
-    if !lint_ai_enabled(provider, _root)? {
+    if !membrick_enabled(provider, _root)? {
         return Ok(GeminiHookOutput::default());
     }
     match kind {
@@ -387,7 +387,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-gemini-hook-{name}-{nonce}"));
+            .join(format!("membrick-gemini-hook-{name}-{nonce}"));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -539,8 +539,8 @@ mod tests {
                 .starts_with(&format!("{provider}-session:")));
         }
         // The legacy per-provider silos are gone.
-        assert!(!root.join(".lint-ai/gemini-cli-memory").exists());
-        assert!(!root.join(".lint-ai/agy-memory").exists());
+        assert!(!root.join(".membrick/gemini-cli-memory").exists());
+        assert!(!root.join(".membrick/agy-memory").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

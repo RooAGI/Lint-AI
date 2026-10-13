@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    lint_ai::run_binary("corpus_scale_benchmark")
+    membrick::run_binary("corpus_scale_benchmark")
 }

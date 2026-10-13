@@ -1,10 +1,10 @@
 # Benchmark Suite
 
-This directory holds the retrieval benchmarks for `lint-ai`, including
+This directory holds the retrieval benchmarks for `membrick`, including
 haystack-style corpora, LongMemEval-S runs, and agent integration performance
 scaffolds.
 
-For the reproducible Lint-AI versus AgentMemory service comparison, including
+For the reproducible Membrick versus AgentMemory service comparison, including
 latency scripts, seeders, recorded JSON results, and methodology, see
 [`comparison/`](../comparison/).
 
@@ -31,11 +31,11 @@ recency score contribution, and the freshness distribution of top-1 results.
 This is intended as a deterministic regression check for ranking behavior and
 does not require external datasets or model downloads.
 
-To evaluate the real persisted Lint-AI project memory corpus instead:
+To evaluate the real persisted Membrick project memory corpus instead:
 
 ```bash
 cargo run --bin project_memory_recency_benchmark -- \
-  --records .lint-ai/memory/semantic/records.json
+  --records .membrick/memory/semantic/records.json
 ```
 
 This reports the corpus freshness distribution and the freshness distribution
@@ -135,7 +135,7 @@ scope and is not directly comparable.
 | temporal-reasoning | 133 | 81.1% | 92.0% | 91.7% | 84.1% | 82.3% |
 | multi-session | 133 | 77.7% | 87.1% | 94.7% | 85.3% | 80.2% |
 
-Results file: `benchmark/data/lintai_longmemeval_scoped_results_0512.json`
+Results file: `benchmark/data/membrick_longmemeval_scoped_results_0512.json`
 
 ### Heuristic Release Backend (current revalidation)
 
@@ -171,7 +171,7 @@ scorer, not this historical per-type table.
 | temporal-reasoning | 133 | 77.0% | 85.7% | 86.5% | 81.8% | 78.2% |
 | multi-session | 133 | 72.5% | 79.3% | 93.2% | 82.7% | 74.3% |
 
-Results file: `benchmark/data/lintai_longmemeval_scoped_results.json`
+Results file: `benchmark/data/membrick_longmemeval_scoped_results.json`
 
 ## Dataset format
 
@@ -236,7 +236,7 @@ If you want question-scoped haystack retrieval, where each query only searches t
 cargo run --release --bin haystack_scoped_benchmark -- \
   --longmemeval benchmark/data/longmemeval_s_raw.json \
   --k 5 --k 10 --k 20 \
-  --out benchmark/data/lintai_longmemeval_scoped_results.json
+  --out benchmark/data/membrick_longmemeval_scoped_results.json
 ```
 
 Scoped LongMemEval reporting includes both `recall@k` and `recall_any@k`. The any-hit metric matches the interpretation used by the current LongMemEval-S release notes and README.
@@ -247,11 +247,11 @@ cutoffs above and score both per-question outputs with the shared evaluator:
 ```bash
 python3 benchmark/score_retrieval.py \
   --dataset benchmark/data/longmemeval_s_raw.json \
-  --lintai benchmark/data/lintai_longmemeval_scoped_results.json \
+  --membrick benchmark/data/membrick_longmemeval_scoped_results.json \
   --agentmemory /path/to/agentmemory/benchmark/data/longmemeval_results_bm25.json
 ```
 
-The comparison repository records the exact Lint-AI and AgentMemory artifacts
+The comparison repository records the exact Membrick and AgentMemory artifacts
 and reports the resulting any-hit Recall@5/10/20, MRR, and NDCG@10. Do not
 compare a run that only requested top-10 with the top-20 headline.
 

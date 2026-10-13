@@ -18,8 +18,8 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
-def remove_lint_ai_hooks(settings_path: Path) -> None:
-    """Keep unrelated Claude hooks while disabling only Lint-AI hooks."""
+def remove_membrick_hooks(settings_path: Path) -> None:
+    """Keep unrelated Claude hooks while disabling only Membrick hooks."""
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks_by_event = settings.get("hooks", {})
     if not isinstance(hooks_by_event, dict):
@@ -63,18 +63,18 @@ def main() -> None:
         "--profile",
         choices=("hooks-only", "production", "mcp-only"),
         default="hooks-only",
-        help="Measure hooks, the full integration, or MCP without Lint-AI hooks",
+        help="Measure hooks, the full integration, or MCP without Membrick hooks",
     )
     parser.add_argument(
         "--arms",
         nargs="+",
-        choices=("claude-native", "claude-lint-ai", "claude-both"),
-        default=("claude-native", "claude-lint-ai", "claude-both"),
-        help="Benchmark arms: native memory, Lint-AI only, or both (default: all)",
+        choices=("claude-native", "claude-membrick", "claude-both"),
+        default=("claude-native", "claude-membrick", "claude-both"),
+        help="Benchmark arms: native memory, Membrick only, or both (default: all)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("LINT_AI_CLAUDE_MODEL", "claude-sonnet-5"),
+        default=os.environ.get("MEMBRICK_CLAUDE_MODEL", "claude-sonnet-5"),
         help="Claude model used by both benchmark arms",
     )
     parser.add_argument("--results-dir", type=Path, default=None)
@@ -84,8 +84,8 @@ def main() -> None:
     benchmark_root = Path(__file__).resolve().parents[1]
     results_dir = (args.results_dir or benchmark_root / "results").resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
-    temp_root = Path(tempfile.mkdtemp(prefix="lint-ai-claude-perf."))
-    binary = repo_root / "target" / "debug" / "lint-ai"
+    temp_root = Path(tempfile.mkdtemp(prefix="membrick-claude-perf."))
+    binary = repo_root / "target" / "debug" / "membrick"
     runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
     cargo_bin = Path.home() / ".cargo" / "bin"
     base_path = f"{cargo_bin}:{os.environ.get('PATH', '')}"
@@ -165,23 +165,23 @@ def main() -> None:
             env.update({
                 "HOME": str(claude_home),
                 "CLAUDE_CONFIG_DIR": str(claude_config_dir),
-                "LINT_AI_CLAUDE_SETTINGS": str(settings_path),
-                "LINT_AI_CLAUDE_MODEL": args.model,
-                "LINT_AI_CLAUDE_MCP_CONFIG": str(mcp_config_path),
+                "MEMBRICK_CLAUDE_SETTINGS": str(settings_path),
+                "MEMBRICK_CLAUDE_MODEL": args.model,
+                "MEMBRICK_CLAUDE_MCP_CONFIG": str(mcp_config_path),
                 "PATH": f"{repo_root / 'target' / 'debug'}:{base_path}",
             })
-            # The skill instructs the model to call mcp__lint-ai__search, which only
+            # The skill instructs the model to call mcp__membrick__search, which only
             # exists when MCP is wired in; hooks-only strips MCP out of claude.json, so
             # installing the skill there just confuses the model with a tool that isn't there.
             if args.profile != "hooks-only":
-                env["LINT_AI_BENCHMARK_SKILL_PATH"] = str(
+                env["MEMBRICK_BENCHMARK_SKILL_PATH"] = str(
                     repo_root / "src" / "integrations" / "claude_code" / "skill.md"
                 )
             else:
-                env.pop("LINT_AI_BENCHMARK_SKILL_PATH", None)
+                env.pop("MEMBRICK_BENCHMARK_SKILL_PATH", None)
             env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
             env.pop("CLAUDE_CODE_SHELL_PREFIX", None)  # Apple sandbox wrapper causes sandbox_apply failure
-            if arm == "claude-lint-ai":
+            if arm == "claude-membrick":
                 env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
             if arm != "claude-native":
                 subprocess.run(
@@ -199,14 +199,14 @@ def main() -> None:
                     check=True,
                 )
                 if args.profile == "mcp-only":
-                    remove_lint_ai_hooks(settings_path)
+                    remove_membrick_hooks(settings_path)
                 config = json.loads(claude_config.read_text(encoding="utf-8"))
                 if args.profile == "hooks-only":
                     # Hooks-only measurements must not include MCP startup or code indexing.
-                    config.get("mcpServers", {}).pop("lint-ai", None)
-                elif "lint-ai" in config.get("mcpServers", {}):
+                    config.get("mcpServers", {}).pop("membrick", None)
+                elif "membrick" in config.get("mcpServers", {}):
                     # MCP child processes may not inherit the benchmark PATH.
-                    config["mcpServers"]["lint-ai"]["command"] = str(binary)
+                    config["mcpServers"]["membrick"]["command"] = str(binary)
                 write_json(claude_config, config)
             write_json(
                 mcp_config_path,
@@ -229,7 +229,7 @@ def main() -> None:
                 "  shift\n"
                 "fi\n"
                 "set -- --print --verbose --output-format stream-json --include-hook-events "
-                "--model \"$LINT_AI_CLAUDE_MODEL\" "
+                "--model \"$MEMBRICK_CLAUDE_MODEL\" "
                 "--dangerously-skip-permissions "
                 "--permission-mode bypassPermissions "
                 f"--strict-mcp-config --mcp-config {shlex.quote(str(mcp_config_path))}\n"

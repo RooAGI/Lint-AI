@@ -1,4 +1,4 @@
-//! LoCoMo retrieval benchmark adapter for Lint-AI.
+//! LoCoMo retrieval benchmark adapter for Membrick.
 //!
 //! Ingests each LoCoMo conversation (snap-research/locomo, `locomo10.json`)
 //! as turn-level documents grouped by session, builds one query snapshot per
@@ -25,7 +25,7 @@ use std::time::Instant;
 
 #[derive(Debug, Parser)]
 #[command(name = "locomo-benchmark")]
-#[command(about = "Run the LoCoMo retrieval benchmark against Lint-AI")]
+#[command(about = "Run the LoCoMo retrieval benchmark against Membrick")]
 struct Args {
     /// Path to locomo10.json from snap-research/locomo.
     #[arg(long)]

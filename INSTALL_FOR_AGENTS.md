@@ -1,10 +1,10 @@
-# Install Lint-AI with an AI coding agent
+# Install Membrick with an AI coding agent
 
 This file is the canonical installation contract for Codex, Claude Code, Gemini CLI, AGY, ChatGPT Work, and other agents that can operate a local terminal with the user's permission.
 
 ## Goal
 
-Install the official Lint-AI binary, configure it only for the agent the user requested, verify the MCP runtime, and report exactly what changed.
+Install the official Membrick binary, configure it only for the agent the user requested, verify the MCP runtime, and report exactly what changed.
 
 Do not modify unrelated project files. Do not disable existing MCP servers, hooks, instructions, or user configuration.
 
@@ -14,7 +14,7 @@ Use the agent explicitly named by the user or the environment you are currently 
 
 Supported values:
 
-| User / environment | Installer value | Lint-AI install flag | Verification flag |
+| User / environment | Installer value | Membrick install flag | Verification flag |
 |---|---|---|---|
 | Codex | `codex` | `--codex-install` | `--codex-verify-mcp` |
 | Claude Code | `claude` | `--claude-code-install` | `--claude-code-verify-mcp` |
@@ -27,7 +27,7 @@ If the user has not identified an agent and the environment is ambiguous, ask wh
 
 Use the repository or project the user asked you to configure. If you are already operating inside that repository, use its root.
 
-Before installation, confirm the directory exists. Lint-AI's provider installers canonicalize the project path and will refuse a missing path.
+Before installation, confirm the directory exists. Membrick's provider installers canonicalize the project path and will refuse a missing path.
 
 ## 3. Install on macOS or Linux
 
@@ -35,7 +35,7 @@ Download the installer to a temporary file before executing it:
 
 ```bash
 installer="$(mktemp)"
-curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh -o "$installer"
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh -o "$installer"
 sh "$installer" --agent codex --project "$PWD"
 rm -f "$installer"
 ```
@@ -48,20 +48,20 @@ The installer:
 2. downloads the matching official GitHub Release asset,
 3. downloads its `.sha256` sidecar,
 4. verifies the SHA-256 checksum before installation,
-5. installs `lint-ai` under `~/.local/bin` by default,
+5. installs `membrick` under `~/.local/bin` by default,
 6. runs the provider-specific configuration command, and
 7. runs the provider-specific MCP verification command.
 
-A custom binary directory can be supplied with `--install-dir` or `LINT_AI_INSTALL_DIR`.
+A custom binary directory can be supplied with `--install-dir` or `MEMBRICK_INSTALL_DIR`.
 
 ## 4. Install on Windows
 
 Download the PowerShell installer first, then execute it:
 
 ```powershell
-$installer = Join-Path $env:TEMP 'lint-ai-install.ps1'
+$installer = Join-Path $env:TEMP 'membrick-install.ps1'
 Invoke-WebRequest -UseBasicParsing `
-  -Uri 'https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.ps1' `
+  -Uri 'https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.ps1' `
   -OutFile $installer
 & $installer -Agent codex -Project (Get-Location).Path
 Remove-Item $installer
@@ -78,14 +78,14 @@ A newly merged installer may be newer than the most recent tagged release. If th
 If Rust/Cargo is already available, use the source-install fallback:
 
 ```bash
-cargo install --git https://github.com/RooAGI/Lint-AI --features agent-integrations --force
+cargo install --git https://github.com/RooAGI/Membrick --features agent-integrations --force
 ```
 
 Then configure and verify the requested provider. For Codex:
 
 ```bash
-lint-ai --codex-install "$PWD"
-lint-ai --codex-verify-mcp "$PWD"
+membrick --codex-install "$PWD"
+membrick --codex-verify-mcp "$PWD"
 ```
 
 Use the corresponding flags from the table above for other providers.
@@ -96,18 +96,18 @@ Do not report success only because a binary was downloaded.
 
 Installation is successful when all of the following are true:
 
-- `lint-ai --version` exits successfully,
+- `membrick --version` exits successfully,
 - the requested provider installation command exits successfully,
 - the provider MCP verification command exits successfully, and
 - no unrelated configuration was overwritten.
 
-The MCP verification launches the installed Lint-AI provider server, performs the MCP `initialize` handshake, calls `tools/list`, and requires a valid Lint-AI response.
+The MCP verification launches the installed Membrick provider server, performs the MCP `initialize` handshake, calls `tools/list`, and requires a valid Membrick response.
 
 ## 7. Report back to the user
 
 Report:
 
-- the installed Lint-AI version,
+- the installed Membrick version,
 - the binary path,
 - the project path,
 - the configured agent,
@@ -119,11 +119,11 @@ If a step fails, stop at that step and show the error. Do not hide a failed chec
 ## Example prompt for Codex
 
 ```text
-Install Lint-AI in this project. Follow INSTALL_FOR_AGENTS.md from RooAGI/Lint-AI. Use the official release, verify its checksum, configure the Codex integration, run the MCP verification, and tell me exactly what changed. Do not modify unrelated project files.
+Install Membrick in this project. Follow INSTALL_FOR_AGENTS.md from RooAGI/Membrick. Use the official release, verify its checksum, configure the Codex integration, run the MCP verification, and tell me exactly what changed. Do not modify unrelated project files.
 ```
 
 ## Example prompt for ChatGPT Work
 
 ```text
-Install Lint-AI in my current project by following RooAGI/Lint-AI's INSTALL_FOR_AGENTS.md. Configure it for the coding agent I use, verify the official release and MCP runtime, and report the installed version and files/configuration changed. Do not modify unrelated project files.
+Install Membrick in my current project by following RooAGI/Membrick's INSTALL_FOR_AGENTS.md. Configure it for the coding agent I use, verify the official release and MCP runtime, and report the installed version and files/configuration changed. Do not modify unrelated project files.
 ```

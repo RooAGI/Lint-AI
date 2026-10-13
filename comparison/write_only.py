@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure sequential HTTP write throughput on a pre-seeded Lint-AI index."""
+"""Measure sequential HTTP write throughput on a pre-seeded Membrick index."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -53,7 +53,7 @@ def add_requests(batch_size, sequence, session_count, writer_session_group=None)
 def run_cell(args, repetition, batch_size):
     temp_root = Path(tempfile.gettempdir()).resolve()
     with tempfile.TemporaryDirectory(
-        prefix=f"lint-ai-write-only-{repetition}-{batch_size}-", dir=temp_root
+        prefix=f"membrick-write-only-{repetition}-{batch_size}-", dir=temp_root
     ) as index_tmp:
         port = args.port + (repetition - 1) * len(args.batch_sizes) + args.batch_sizes.index(batch_size)
         bind = f"127.0.0.1:{port}"
@@ -83,7 +83,7 @@ def run_cell(args, repetition, batch_size):
                 raise RuntimeError("server did not become healthy")
 
             subprocess.run([
-                "python3", str(ROOT / "comparison/seed_lint_ai.py"),
+                "python3", str(ROOT / "comparison/seed_membrick.py"),
                 "--url", f"http://{bind}/add", "--count", str(args.records),
                 "--batch-size", "1024", "--sessions", str(args.sessions), "--bulk",
             ], check=True, cwd=ROOT, stdout=subprocess.DEVNULL)

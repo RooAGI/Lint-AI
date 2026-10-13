@@ -198,7 +198,7 @@ pub(crate) fn doc_record_content_hash_with_version(
     //
     // v3: the optional Bekind evidence extraction mode changes the derived
     // top_claims. Toggling --bekind must rebuild records in either direction.
-    hash_len_prefixed(&mut hasher, b"lint-ai-doc-record-content-hash/v4");
+    hash_len_prefixed(&mut hasher, b"membrick-doc-record-content-hash/v4");
     hash_len_prefixed(&mut hasher, &[u8::from(crate::behood_query::is_enabled())]);
     // Build version pins the implementation behind the option identities;
     // any bump invalidates every stored hash (mismatch -> rebuild).

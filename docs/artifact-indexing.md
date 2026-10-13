@@ -14,7 +14,7 @@ visibility changes.
 5. Search through the service.
 
 ```rust
-use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
+use membrick::{MemoryService, PipelineOptions, SourceDocument};
 use std::collections::BTreeMap;
 
 let mut memory = MemoryService::in_memory(PipelineOptions::default());
@@ -74,7 +74,7 @@ Recommended mapping:
 Example:
 
 ```rust
-use lint_ai::SourceDocument;
+use membrick::SourceDocument;
 
 let doc = SourceDocument {
     doc_id: "artifact-123".to_string(),
@@ -94,7 +94,7 @@ let doc = SourceDocument {
 The preferred storage model is:
 
 - one corpus root
-- one local `.lint-ai/` index root under that corpus
+- one local `.membrick/` index root under that corpus
 
 If the corpus root is:
 
@@ -105,13 +105,13 @@ If the corpus root is:
 then the default index root should be:
 
 ```text
-/path/to/corpus/.lint-ai/
+/path/to/corpus/.membrick/
 ```
 
 Suggested layout:
 
 ```text
-.lint-ai/
+.membrick/
   semantic/
   metadata.json
 ```
@@ -140,7 +140,7 @@ Conceptually, the library should support these modes:
 - in-memory
   - no filesystem state
 - under corpus root
-  - default persistent mode using `.lint-ai/`
+  - default persistent mode using `.membrick/`
 - explicit path
   - caller provides an explicit index root
 
@@ -192,15 +192,15 @@ If one logical global index is desired, it should be explicit.
 For example:
 
 ```text
-/var/lib/lint-ai/indexes/my-index/
+/var/lib/membrick/indexes/my-index/
 ```
 
 with:
 
 ```text
-/var/lib/lint-ai/indexes/my-index/lexical/
-/var/lib/lint-ai/indexes/my-index/semantic/
-/var/lib/lint-ai/indexes/my-index/metadata.json
+/var/lib/membrick/indexes/my-index/lexical/
+/var/lib/membrick/indexes/my-index/semantic/
+/var/lib/membrick/indexes/my-index/metadata.json
 ```
 
 This should be an explicit configuration choice, not something inferred from
@@ -330,7 +330,7 @@ Current metadata shape:
 
 Persistence:
 
-- lifecycle is written with semantic state under `.lint-ai/semantic/`
+- lifecycle is written with semantic state under `.membrick/semantic/`
 - currently persisted both:
   - inline in `records.json` as `chunk_lifecycle`
   - in a dedicated `chunk_lifecycle.json`
@@ -491,7 +491,7 @@ Remaining gaps:
 
 ## Semantic Persistence
 
-Persistent stores now use `.lint-ai/semantic/` for semantic state.
+Persistent stores now use `.membrick/semantic/` for semantic state.
 
 Current files:
 
@@ -572,7 +572,7 @@ For an artifact system, the recommended architecture remains:
 This keeps responsibilities clear:
 
 - artifact system owns fetching, storage, OCR, file parsing, and metadata
-- `lint-ai` owns chunking, enrichment, indexing, and retrieval
+- `membrick` owns chunking, enrichment, indexing, and retrieval
 
 ## Summary
 
@@ -588,5 +588,5 @@ Current state:
 - `refresh()` is the mutable-to-immutable boundary
 - internal `MemoryIndex` is still rebuilt in batch from cached records
 
-So `lint-ai` now supports artifact ingestion in a practical way, but it does
+So `membrick` now supports artifact ingestion in a practical way, but it does
 not yet provide true low-level incremental indexing.

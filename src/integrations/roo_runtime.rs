@@ -1,7 +1,7 @@
 //! Roo Runtime process hook adapter. All durable writes use MemoryService's
 //! shared workspace memory store, so MCP and hook callers see one index.
 use crate::cli::RooRuntimeHook;
-use crate::integrations::session_recording::{lint_ai_enabled, RecordingProvider};
+use crate::integrations::session_recording::{membrick_enabled, RecordingProvider};
 use crate::memory_api::{MemoryService, SearchRequest};
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
@@ -83,7 +83,7 @@ pub fn run_hook(kind: RooRuntimeHook) -> Result<()> {
             return Ok(HookResult::default());
         }
         load_payload_references(&root, &mut invocation.payload)?;
-        if !lint_ai_enabled(RecordingProvider::RooRuntime, &root)? {
+        if !membrick_enabled(RecordingProvider::RooRuntime, &root)? {
             return Ok(HookResult::default());
         }
         match kind {
@@ -118,7 +118,7 @@ pub fn run_hook(kind: RooRuntimeHook) -> Result<()> {
         }
     })();
     let result = result.unwrap_or_else(|error| {
-        eprintln!("warning: Roo Runtime Lint-AI hook failed open: {error:#}");
+        eprintln!("warning: Roo Runtime Membrick hook failed open: {error:#}");
         HookResult::default()
     });
     serde_json::to_writer(std::io::stdout().lock(), &result)?;
@@ -222,7 +222,7 @@ fn recall(root: &Path, input: &HookInvocation) -> Result<HookResult> {
     if hits.is_empty() {
         return Ok(HookResult::default());
     }
-    let mut context = String::from("Relevant project memory from Lint-AI:\n");
+    let mut context = String::from("Relevant project memory from Membrick:\n");
     for hit in hits {
         if context.len() >= MAX_CONTEXT_BYTES {
             break;
@@ -567,7 +567,7 @@ fn tool_result_context(input: &HookInvocation) -> HookResult {
     };
     HookResult {
         additional_context: Some(format!(
-            "Tool evidence from Lint-AI ({completeness}). Tool: {}; call: {}.\n{}\nAdditional evidence is searchable in workspace memory; this preview is not an exhaustive dataset.",
+            "Tool evidence from Membrick ({completeness}). Tool: {}; call: {}.\n{}\nAdditional evidence is searchable in workspace memory; this preview is not an exhaustive dataset.",
             bounded(input.payload.get("toolName").and_then(Value::as_str).unwrap_or("unknown"), 128),
             bounded(input.payload.get("toolUseId").and_then(Value::as_str).unwrap_or("unknown"), 128),
             preview,
@@ -688,7 +688,7 @@ pub fn install_hooks(config_override: Option<&Path>) -> Result<PathBuf> {
         !hook
             .get("id")
             .and_then(Value::as_str)
-            .is_some_and(|id| id.starts_with("lint-ai-roo-runtime-"))
+            .is_some_and(|id| id.starts_with("membrick-roo-runtime-"))
     });
     let executable = std::env::current_exe()?.canonicalize()?;
     for kind in [
@@ -714,9 +714,9 @@ pub fn install_hooks(config_override: Option<&Path>) -> Result<PathBuf> {
             5
         };
         hooks.push(serde_json::json!({
-            "id": format!("lint-ai-roo-runtime-{name}"),
+            "id": format!("membrick-roo-runtime-{name}"),
             "event": name,
-            "handlers": [{ "type": "process", "executable": executable, "args": ["--roo-runtime-hook", name.replace('_', "-")], "sandbox_profile": profile, "inherit_environment": ["LINTAI_SERVER_URL", "LINTAI_SERVER_TOKEN", "LINTAI_USER_ID"], "require_enforcement": false, "timeout_seconds": timeout_seconds }]
+            "handlers": [{ "type": "process", "executable": executable, "args": ["--roo-runtime-hook", name.replace('_', "-")], "sandbox_profile": profile, "inherit_environment": ["MEMBRICK_SERVER_URL", "MEMBRICK_SERVER_TOKEN", "MEMBRICK_USER_ID", "LINTAI_SERVER_URL", "LINTAI_SERVER_TOKEN", "LINTAI_USER_ID"], "require_enforcement": false, "timeout_seconds": timeout_seconds }]
         }));
     }
     let encoded = serde_json::to_vec_pretty(&config)?;
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn tool_result_retries_are_idempotent_and_workspace_isolated() {
         let base = std::env::temp_dir().join(format!(
-            "lint-ai-roo-tools-{}-{}",
+            "membrick-roo-tools-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn full_recall_budget_still_returns_context() {
         let context = format!(
-            "Relevant project memory from Lint-AI:\nbudget-proof {}\n",
+            "Relevant project memory from Membrick:\nbudget-proof {}\n",
             "evidence ".repeat(2_000)
         );
         let result = recall_context_result(&context)
@@ -935,7 +935,7 @@ mod tests {
     }
     #[test]
     fn installer_preserves_other_hooks_and_replaces_its_own() {
-        let dir = std::env::temp_dir().join(format!("lint-ai-roo-install-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("membrick-roo-install-{}", std::process::id()));
         let path = dir.join("hooks.json");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
@@ -957,7 +957,14 @@ mod tests {
         assert_eq!(hooks[2]["handlers"][0]["timeout_seconds"], 5);
         assert_eq!(
             hooks[2]["handlers"][0]["inherit_environment"],
-            serde_json::json!(["LINTAI_SERVER_URL", "LINTAI_SERVER_TOKEN", "LINTAI_USER_ID"])
+            serde_json::json!([
+                "MEMBRICK_SERVER_URL",
+                "MEMBRICK_SERVER_TOKEN",
+                "MEMBRICK_USER_ID",
+                "LINTAI_SERVER_URL",
+                "LINTAI_SERVER_TOKEN",
+                "LINTAI_USER_ID"
+            ])
         );
         assert_eq!(
             hooks[6]["handlers"][0]["sandbox_profile"],
@@ -979,7 +986,7 @@ mod tests {
     #[test]
     fn captured_turn_is_retrievable_from_the_shared_store() {
         let root = std::env::temp_dir().join(format!(
-            "lint-ai-roo-capture-{}-{}",
+            "membrick-roo-capture-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

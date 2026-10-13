@@ -12,19 +12,19 @@ RUN cargo build --release --bin server
 
 FROM debian:bookworm-slim AS runtime
 
-RUN groupadd --gid 10001 lintai \
-    && useradd --uid 10001 --gid lintai --home-dir /data --no-create-home --shell /usr/sbin/nologin lintai \
+RUN groupadd --gid 10001 membrick \
+    && useradd --uid 10001 --gid membrick --home-dir /data --no-create-home --shell /usr/sbin/nologin membrick \
     && mkdir -p /data/index \
-    && chown -R lintai:lintai /data
+    && chown -R membrick:membrick /data
 
-COPY --from=builder /build/target/release/server /usr/local/bin/lint-ai-server
+COPY --from=builder /build/target/release/server /usr/local/bin/membrick-server
 
-USER lintai
+USER membrick
 WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 8080
 
 ENV RUST_LOG=info
 
-ENTRYPOINT ["/usr/local/bin/lint-ai-server"]
+ENTRYPOINT ["/usr/local/bin/membrick-server"]
 CMD ["--bind", "0.0.0.0:8080", "--allow-non-loopback", "--index", "/data/index"]

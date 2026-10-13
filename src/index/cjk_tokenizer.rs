@@ -1,7 +1,7 @@
 //! CJK-aware tokenizer for tantivy's TEXT fields.
 //!
 //! Registered as an override of the built-in `"default"` tokenizer on every
-//! index lint-ai creates (see [`register_cjk_tokenizer`]). Overriding the
+//! index membrick creates (see [`register_cjk_tokenizer`]). Overriding the
 //! name rather than naming a per-field tokenizer keeps the schema unchanged
 //! and applies to already-existing on-disk indexes too: the tokenizer name
 //! is resolved through the index's `TokenizerManager` at index and query

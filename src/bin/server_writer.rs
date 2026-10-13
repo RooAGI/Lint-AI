@@ -1164,8 +1164,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn global_flush_and_queued_delete_recover_both_stores_without_resurrection() {
         let root = super::super::tests::security_test_root();
-        let captured_root = root.join(".lint-ai/memory");
-        let workspace_root = root.join(".lint-ai/workspace-memory");
+        let captured_root = root.join(".membrick/memory");
+        let workspace_root = root.join(".membrick/workspace-memory");
         let options = PipelineOptions {
             key_phrase_enrichment: false,
             ..crate::memory_api::workspace::segmented_store_options()

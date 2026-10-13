@@ -267,7 +267,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
                 Path::new(&args.path),
                 args.session_root.as_deref().map(Path::new),
                 session_id,
-                args.replay_enable_lint_ai,
+                args.replay_enable_membrick,
             )?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             return Ok(());

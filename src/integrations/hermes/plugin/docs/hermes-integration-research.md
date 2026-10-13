@@ -1,7 +1,7 @@
-# lint-ai × Hermes Agent integration research
+# membrick × Hermes Agent integration research
 
 **Date:** 2026-09-28
-**Probed checkout:** `https://github.com/NousResearch/hermes-agent` at commit `e408d363` ("fix(desktop): break the combo.ts <-> actions.ts import cycle (#126361)"), cloned to `/tmp/hermes-probe/hermes-agent` (scratch only — nothing installed into `~/lint-ai-demo`, no commits).
+**Probed checkout:** `https://github.com/NousResearch/hermes-agent` at commit `e408d363` ("fix(desktop): break the combo.ts <-> actions.ts import cycle (#126361)"), cloned to `/tmp/hermes-probe/hermes-agent` (scratch only — nothing installed into `~/membrick-demo`, no commits).
 **Hermes identity:** Hermes Agent is Nous Research's open-source AI agent framework (MIT licensed), a Python codebase that descends from OpenClaw — it is in the same family as OpenClaw, not a different architecture. Conventions (skills, plugins, MCP client, gateway) are OpenClaw-shaped.
 
 **Live-probe rule compliance:** All integration surfaces were verified against the real code/config in the probed checkout. No API keys were used. Where static reading was enough it was used; the MCP client path was additionally executed live.
@@ -34,8 +34,8 @@ STATUS: [
 REGISTERED_SERVERS: ['lintai_probe']
 ```
 
-The echo server config used the exact key shape a lint-ai server would need:
-`{"command": "<python>", "args": ["/tmp/hermes-probe/echo_mcp.py"], "env": {"LINTAI_TEST": "1"}}` — command/args/env all accepted, tool names follow the `mcp__<server>__<tool>` pattern. (Needed probe deps installed to user site: `ruamel.yaml`, `mcp`, `python-dotenv` — all Hermes' own runtime requirements, not lint-ai's.)
+The echo server config used the exact key shape a membrick server would need:
+`{"command": "<python>", "args": ["/tmp/hermes-probe/echo_mcp.py"], "env": {"LINTAI_TEST": "1"}}` — command/args/env all accepted, tool names follow the `mcp__<server>__<tool>` pattern. (Needed probe deps installed to user site: `ruamel.yaml`, `mcp`, `python-dotenv` — all Hermes' own runtime requirements, not membrick's.)
 
 ---
 
@@ -51,18 +51,16 @@ The echo server config used the exact key shape a lint-ai server would need:
 
 HTTP servers use `url` + `headers` instead (`tools/mcp_tool_transport.py:145–149` `_connect_inputs`: presence of `"url"` in the entry selects HTTP). Config is loaded through `hermes_cli/mcp_config.py:209` `_get_mcp_servers`, launched via `tools/mcp_tool_discovery.py:146` `_connect_server` → `MCPServerTask.start(config)` (`tools/mcp_tool_server_run.py:538`).
 
-**Exact config.yaml snippet to register lint-ai** (analogous to lint-ai's own OpenClaw writer, `src/integrations/openclaw/mod.rs:70-78`, which emits `{"command": <binary>, "args": ["--openclaw-serve", <root>]}`):
+**Exact config.yaml snippet to register membrick** (analogous to membrick's own OpenClaw writer, `src/integrations/openclaw/mod.rs:70-78`, which emits `{"command": <binary>, "args": ["--openclaw-serve", <root>]}`):
 
 ```yaml
 mcp_servers:
-  lint-ai:
-    command: /path/to/lint-ai          # built with the openclaw feature (has --openclaw-serve)
+  membrick:
+    command: /path/to/membrick          # built with the openclaw feature (has --openclaw-serve)
     args: ["--openclaw-serve", "/path/to/project-root"]
-    env:
-      LINTAI_CONFIG: /path/to/lint-ai-config.toml   # if needed
 ```
 
-Tools would surface to the Hermes agent as `mcp__lint-ai__search`, `mcp__lint-ai__info`, `mcp__lint-ai__record_session`, `mcp__lint-ai__enable_lint_ai`, `mcp__lint-ai__disable_lint_ai`, `mcp__lint-ai__lint_ai_status` (the shared stdio scaffolding in lint-ai defines these — `src/integrations/gemini_cli/mod.rs:349` `tool_definitions()`; `--openclaw-serve` reuses the same scaffolding via `run_server_for` in `src/integrations/openclaw/mod.rs:81-86`).
+Tools would surface to the Hermes agent as `mcp__membrick__search`, `mcp__membrick__info`, `mcp__membrick__record_session`, `mcp__membrick__enable_membrick`, `mcp__membrick__disable_membrick`, `mcp__membrick__membrick_status` (the shared stdio scaffolding in membrick defines these — `src/integrations/gemini_cli/mod.rs:349` `tool_definitions()`; `--openclaw-serve` reuses the same scaffolding via `run_server_for` in `src/integrations/openclaw/mod.rs:81-86`).
 
 **`hermes mcp` CLI** (`hermes_cli/subcommands/mcp.py`, handlers in `hermes_cli/mcp_config.py`):
 
@@ -71,8 +69,8 @@ Tools would surface to the Hermes agent as `mcp__lint-ai__search`, `mcp__lint-ai
 - `hermes mcp serve` is a different thing — see §5.
 
 **Notes:**
-- A security gate exists: `tools/mcp_tool_config.py:403` `_filter_suspicious_mcp_servers` drops "exfiltration-shaped" MCP configs before spawn (via `hermes_cli.mcp_security.validate_mcp_server_entry`). A lint-ai stdio entry is ordinary (local binary, no network), so it passes.
-- `lazy: true` registers from the on-disk tool cache and spawns only on first call — useful for lint-ai since it's consulted infrequently.
+- A security gate exists: `tools/mcp_tool_config.py:403` `_filter_suspicious_mcp_servers` drops "exfiltration-shaped" MCP configs before spawn (via `hermes_cli.mcp_security.validate_mcp_server_entry`). A membrick stdio entry is ordinary (local binary, no network), so it passes.
+- `lazy: true` registers from the on-disk tool cache and spawns only on first call — useful for membrick since it's consulted infrequently.
 
 ---
 
@@ -94,7 +92,7 @@ memory:
 **The ABC.** `agent/memory_provider.py` — `MemoryProvider(ABC)`:
 
 Abstract (must implement):
-- `name() -> str` (line 93) — short identifier, e.g. `"lintai"`
+- `name() -> str` (line 93) — short identifier, e.g. `"membrick"`
 - `is_available() -> bool` (line 99) — config/deps check only, no network
 - `initialize(session_id: str, **kwargs) -> None` (line 103) — kwargs include `hermes_home`, `platform`, `agent_context` (`"primary"|"subagent"|"cron"|"flush"` — skip writes for non-primary), `agent_identity`, `agent_workspace`, `parent_session_id`, `user_id`
 - `get_tool_schemas() -> List[dict]` (line 142) — OpenAI function-calling schemas the agent sees
@@ -109,12 +107,12 @@ Important optional overrides (all default-implemented):
 
 **Reference implementation:** `plugins/memory/mem0/__init__.py` — `Mem0MemoryProvider(MemoryProvider)` exposes tools `mem0_search` / `mem0_add` / `mem0_update` / `mem0_delete` (lines 324–364) over an internal `Mem0Backend` ABC (`_backend.py:19-37`: `search`, `add`, `_update`, `_delete`).
 
-**What a lint-ai provider would look like:** a pip package `lintai-hermes` (or a directory dropped in `$HERMES_HOME/plugins/lintai/`) exposing `hermes_agent.memory_providers` entry point `lintai = <module>:LintaiMemoryProvider`, where the provider:
-- `name()` → `"lintai"`; `is_available()` → lint-ai binary/config present
-- `get_tool_schemas()` → `lintai_search`, `lintai_add` (+ update/delete) mirroring the mem0 tool set
-- `handle_tool_call` → shell out to / call into the lint-ai engine
-- `prefetch()` → lint-ai query per turn (the auto-recall hook)
-- `sync_turn()` → feed completed turns into lint-ai (the auto-capture hook)
+**What a Membrick provider would look like:** a pip package `membrick-hermes` (or a directory dropped in `$HERMES_HOME/plugins/membrick/`) exposing `hermes_agent.memory_providers` entry point `membrick = <module>:MembrickMemoryProvider`, where the provider:
+- `name()` → `"membrick"`; `is_available()` → Membrick binary/config present
+- `get_tool_schemas()` → `membrick_search`, `membrick_add` (+ update/delete) mirroring the mem0 tool set
+- `handle_tool_call` → shell out to / call into the membrick engine
+- `prefetch()` → membrick query per turn (the auto-recall hook)
+- `sync_turn()` → feed completed turns into membrick (the auto-capture hook)
 - `on_session_end()` → session-boundary extraction
 
 Bundled backends shipped for reference: `plugins/memory/{mem0,honcho,supermemory,retaindb,byterover,holographic,openviking}/`, each with `plugin.yaml` + `config_schema.py` (declarative UI config; `plugins/memory/config_schema.py`).
@@ -125,7 +123,7 @@ Bundled backends shipped for reference: `plugins/memory/{mem0,honcho,supermemory
 
 Skills are `SKILL.md` files with YAML frontmatter (`name`, `description`, `version`, `author`, `license`, `platforms`, `metadata.hermes.tags`). Bundled: `skills/<category>/<name>/SKILL.md`; optional ones in `optional-skills/`. Discovery (`tools/skills_tool.py:173` `_skill_search_dirs`): **project dirs first**, then the active skills dir (`~/.hermes/...`), then external dirs (`agent/skill_utils.get_external_skills_dirs`). Dedup is first-wins so project-local beats bundled.
 
-A lint-ai skill would be a `SKILL.md` dropped in a project dir (or shipped by the provider plugin — memory-provider plugins can register skills via `PluginContext.register_skill`, see `plugins/memory/__init__.py:393`) that teaches the Hermes agent: "when you need long-term memory / before reading files, call `mcp__lint-ai__search`…" — exactly the pattern lint-ai's own `src/integrations/openclaw/skill.md` already uses for OpenClaw (`lint-ai` MCP server's `search` / `record_session` tools). No auto-skill-generation interplay was found — skills are declarative files, not generated; the "auto" element is provider plugins *registering* their own skills at load time.
+A membrick skill would be a `SKILL.md` dropped in a project dir (or shipped by the provider plugin — memory-provider plugins can register skills via `PluginContext.register_skill`, see `plugins/memory/__init__.py:393`) that teaches the Hermes agent: "when you need long-term memory / before reading files, call `mcp__membrick__search`…" — exactly the pattern membrick's own `src/integrations/openclaw/skill.md` already uses for OpenClaw (`membrick` MCP server's `search` / `record_session` tools). No auto-skill-generation interplay was found — skills are declarative files, not generated; the "auto" element is provider plugins *registering* their own skills at load time.
 
 ---
 
@@ -133,9 +131,9 @@ A lint-ai skill would be a `SKILL.md` dropped in a project dir (or shipped by th
 
 Hermes has a real plugin hook system — comparable to OpenClaw's hooks, arguably richer:
 
-- **Plugin hooks** (`hermes_cli/plugins.py:109` `VALID_HOOKS`): `pre_tool_call`, `post_tool_call`, `transform_tool_result`, `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `on_stream_start/delta/end`, `pre_llm_call`, `post_llm_call`, `pre_verify`, `subagent_start/stop`, `pre_gateway_dispatch`, `agent_loop_stopped`, approval observers, etc. Directory plugins (`~/.hermes/plugins/<name>/` with `plugin.yaml` + `register(ctx)`) or pip entry points in the `hermes_agent.plugins` group register callbacks via `PluginContext.register_hook` (line 933). A lint-ai plugin could subscribe `post_tool_call`/`on_stream_end` (per-turn capture) and `on_session_end`/`on_session_finalize` (session extraction) — **without touching the memory-provider interface**.
-- **Memory-provider lifecycle** (§2): `sync_turn` per turn + `on_session_end` — the native auto-capture surface if lint-ai goes the Route B path.
-- **Cron** (`cron/`): scheduled jobs subsystem — a lint-ai plugin/cron job could periodically sync sessions into lint-ai.
+- **Plugin hooks** (`hermes_cli/plugins.py:109` `VALID_HOOKS`): `pre_tool_call`, `post_tool_call`, `transform_tool_result`, `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `on_stream_start/delta/end`, `pre_llm_call`, `post_llm_call`, `pre_verify`, `subagent_start/stop`, `pre_gateway_dispatch`, `agent_loop_stopped`, approval observers, etc. Directory plugins (`~/.hermes/plugins/<name>/` with `plugin.yaml` + `register(ctx)`) or pip entry points in the `hermes_agent.plugins` group register callbacks via `PluginContext.register_hook` (line 933). A membrick plugin could subscribe `post_tool_call`/`on_stream_end` (per-turn capture) and `on_session_end`/`on_session_finalize` (session extraction) — **without touching the memory-provider interface**.
+- **Memory-provider lifecycle** (§2): `sync_turn` per turn + `on_session_end` — the native auto-capture surface if membrick goes the Route B path.
+- **Cron** (`cron/`): scheduled jobs subsystem — a membrick plugin/cron job could periodically sync sessions into membrick.
 - **Webhooks**: platform `webhook:` config routes incoming JSON to scripts under the profile's scripts dir (`cli-config.yaml.example:~1455`); outbound webhooks exist too (`agent/outbound_webhooks.py`). Event-driven, not per-turn.
 
 For "OpenClaw-style automatic capture/recall", the direct equivalents are: `sync_turn` + `prefetch` (Route B), or a plugin hooking `post_tool_call` + `on_session_end` (plugin route).
@@ -148,7 +146,7 @@ For "OpenClaw-style automatic capture/recall", the direct equivalents are: `sync
 
 `conversations_list`, `conversation_get`, `messages_read`, `attachments_fetch`, `events_poll`, `events_wait`, `messages_send`, `channels_list`, `permissions_list_open`, `permissions_respond`
 
-i.e. a messaging bridge: read/send messages across Telegram, Discord, Slack, WhatsApp, Signal, Matrix. For hierarchical compositions, an external agent (or a lint-ai indexer) could attach Hermes as a *source of conversation transcripts* — e.g. read finished Hermes sessions into lint-ai via `messages_read`. It does not expose Hermes memory.
+i.e. a messaging bridge: read/send messages across Telegram, Discord, Slack, WhatsApp, Signal, Matrix. For hierarchical compositions, an external agent (or a membrick indexer) could attach Hermes as a *source of conversation transcripts* — e.g. read finished Hermes sessions into membrick via `messages_read`. It does not expose Hermes memory.
 
 ---
 
@@ -156,17 +154,17 @@ i.e. a messaging bridge: read/send messages across Telegram, Discord, Slack, Wha
 
 **Lowest-risk first step: Route A — MCP adapter, in the same shape as `--openclaw-serve`.** Ranked:
 
-1. **Route A (MCP client) — lowest risk.** Verified live end-to-end today against Hermes' real loader: any stdio MCP server registers and its tools are callable as `mcp__lint-ai__*`. lint-ai already ships the binary (`lint-ai --openclaw-serve <root>`); Hermes registration is a 4-line `mcp_servers` config or one `hermes mcp add lint-ai --command lint-ai --args --openclaw-serve /root` command. Zero Hermes-side code, zero Python packaging, zero risk to Hermes' one-provider-at-a-time memory model. Pair with **Route C (skill)**: ship a lint-ai `SKILL.md` (modeled on `src/integrations/openclaw/skill.md`) telling the agent when to call the lint-ai tools. This mirrors exactly the OpenClaw Option A pattern (MCP server + skill/directive) already chosen for OpenClaw — same playbook, new host.
-2. **Route B (native memory provider) — best long-term, higher cost.** The interface is real and third-party-friendly: pip-installable via the `hermes_agent.memory_providers` entry-point group, activated by `memory.provider: "lintai"`, with native per-turn auto-recall (`prefetch`) and auto-capture (`sync_turn`) plus `on_session_end`. But it means writing a Python provider package wrapping lint-ai (subprocess or FFI/HTTP into the Rust engine), and it fights Hermes' "ONE provider at a time" rule — adopting lint-ai *replaces* the built-in memory rather than augmenting it. Do this after Route A proves value.
-3. **Route 4 (plugin hooks) — niche.** If Route B is too heavy but per-turn auto-capture is wanted without replacing the memory provider, a `~/.hermes/plugins/lintai/` plugin hooking `post_tool_call` + `on_session_end` can push turns into lint-ai. Less invasive than Route B (memory provider untouched), but per-event Python glue still needs writing and maintenance; and `sync_turn` in Route B already covers the same ground more cleanly.
+1. **Route A (MCP client) — lowest risk.** Verified live end-to-end today against Hermes' real loader: any stdio MCP server registers and its tools are callable as `mcp__membrick__*`. membrick already ships the binary (`membrick --openclaw-serve <root>`); Hermes registration is a 4-line `mcp_servers` config or one `hermes mcp add membrick --command membrick --args --openclaw-serve /root` command. Zero Hermes-side code, zero Python packaging, zero risk to Hermes' one-provider-at-a-time memory model. Pair with **Route C (skill)**: ship a membrick `SKILL.md` (modeled on `src/integrations/openclaw/skill.md`) telling the agent when to call the membrick tools. This mirrors exactly the OpenClaw Option A pattern (MCP server + skill/directive) already chosen for OpenClaw — same playbook, new host.
+2. **Route B (native memory provider) — best long-term, higher cost.** The interface is real and third-party-friendly: pip-installable via the `hermes_agent.memory_providers` entry-point group, activated by `memory.provider: "membrick"`, with native per-turn auto-recall (`prefetch`) and auto-capture (`sync_turn`) plus `on_session_end`. But it means writing a Python provider package wrapping Membrick (subprocess or FFI/HTTP into the Rust engine), and it fights Hermes' "ONE provider at a time" rule — adopting Membrick *replaces* the built-in memory rather than augmenting it. Do this after Route A proves value.
+3. **Route 4 (plugin hooks) — niche.** If Route B is too heavy but per-turn auto-capture is wanted without replacing the memory provider, a `~/.hermes/plugins/membrick/` plugin hooking `post_tool_call` + `on_session_end` can push turns into Membrick. Less invasive than Route B (memory provider untouched), but per-event Python glue still needs writing and maintenance; and `sync_turn` in Route B already covers the same ground more cleanly.
 4. **Route 5 (`hermes mcp serve`) — not an integration path into Hermes;** note it as a *source* (conversation transcripts readable by external agents).
 
-**Suggested sequence:** A — ship `--hermes-serve`-style flag? Not even needed: `--openclaw-serve` is host-agnostic stdio MCP and works as-is in Hermes; only the skill text and install docs are Hermes-specific (config path `~/.hermes/config.yaml`, server name `lint-ai`). Then C — the skill. Then, once real usage exists, B — the native provider for automatic capture/recall.
+**Suggested sequence:** A — ship `--hermes-serve`-style flag? Not even needed: `--openclaw-serve` is host-agnostic stdio MCP and works as-is in Hermes; only the skill text and install docs are Hermes-specific (config path `~/.hermes/config.yaml`, server name `membrick`). Then C — the skill. Then, once real usage exists, B — the native provider for automatic capture/recall.
 
 ## Open questions for the repo owner (Luyi)
 
-1. Does lint-ai want a Hermes-specific serve flag (`--hermes-serve`) or is the generic `--openclaw-serve` (host-agnostic stdio MCP) the permanent shape? Hermes needs nothing special — but naming/docs clarity.
-2. Route B replaces the user's active memory provider (one at a time). Is that acceptable, or should lint-ai stay an *augmenting* sidecar (Route A + skill) that never competes with built-in/Honcho/Mem0?
-3. For Route B, the provider is Python and must wrap the Rust engine — preferred transport: subprocess calls to the lint-ai CLI, or an HTTP sidecar? (Hermes mem0-OSS precedent shells to a local service.)
-4. `mcp__lint-ai__search` requires a project `root` arg baked into the config at install time. Is per-project-root spawning acceptable for Hermes users, or should the server resolve the workspace dynamically?
-5. Auto-capture (`sync_turn` / hooks) ships conversation text to lint-ai's store — any privacy/consent UX needed before enabling by default?
+1. Does membrick want a Hermes-specific serve flag (`--hermes-serve`) or is the generic `--openclaw-serve` (host-agnostic stdio MCP) the permanent shape? Hermes needs nothing special — but naming/docs clarity.
+2. Route B replaces the user's active memory provider (one at a time). Is that acceptable, or should membrick stay an *augmenting* sidecar (Route A + skill) that never competes with built-in/Honcho/Mem0?
+3. For Route B, the provider is Python and must wrap the Rust engine — preferred transport: subprocess calls to the membrick CLI, or an HTTP sidecar? (Hermes mem0-OSS precedent shells to a local service.)
+4. `mcp__membrick__search` requires a project `root` arg baked into the config at install time. Is per-project-root spawning acceptable for Hermes users, or should the server resolve the workspace dynamically?
+5. Auto-capture (`sync_turn` / hooks) ships conversation text to membrick's store — any privacy/consent UX needed before enabling by default?

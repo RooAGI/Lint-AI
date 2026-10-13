@@ -6,7 +6,7 @@
 //! and persistence are internal implementation details.
 //!
 //! ```no_run
-//! use lint_ai::{MemoryService, PipelineOptions, AddRequest, Message};
+//! use membrick::{MemoryService, PipelineOptions, AddRequest, Message};
 //!
 //! let mut memory = MemoryService::in_memory(PipelineOptions::default());
 //! memory.add(AddRequest {
@@ -27,22 +27,22 @@
 //! Direct storage access is intentionally unavailable:
 //!
 //! ```compile_fail
-//! use lint_ai::IndexStore;
+//! use membrick::IndexStore;
 //! ```
 //! ```compile_fail
-//! use lint_ai::index::MemoryIndex;
+//! use membrick::index::MemoryIndex;
 //! ```
 //! ```compile_fail
-//! use lint_ai::pipeline::build_index_store;
+//! use membrick::pipeline::build_index_store;
 //! ```
 //! ```compile_fail
-//! use lint_ai::MemoryIndexSnapshot;
+//! use membrick::MemoryIndexSnapshot;
 //! ```
 //! ```compile_fail
-//! use lint_ai::segments::SegmentedMemoryIndex;
+//! use membrick::segments::SegmentedMemoryIndex;
 //! ```
 //! ```compile_fail
-//! use lint_ai::build_query_snapshot;
+//! use membrick::build_query_snapshot;
 //! ```
 
 mod board;
@@ -83,6 +83,7 @@ pub mod semantic_audit;
 mod semantic_relations;
 mod session_prepare;
 mod source;
+mod state_paths;
 mod telemetry;
 mod temporal_fact;
 
@@ -568,10 +569,10 @@ impl PyMemoryCore {
     }
 }
 
-/// Agent memory backed by lint-ai's `MemoryService`.
+/// Agent memory backed by membrick's `MemoryService`.
 ///
 /// Local mode keeps the index in-process (`path` selects a persistent
-/// directory, otherwise in-memory). Remote mode talks to a lint-ai server
+/// directory, otherwise in-memory). Remote mode talks to a membrick server
 /// over HTTP (`base_url`, optional `api_key`).
 ///
 /// `ner_provider` is `'heuristic'` (default, Python-free) or `'spacy'`,
@@ -765,7 +766,7 @@ fn json_error(error: impl std::fmt::Display) -> pyo3::PyErr {
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn lint_ai(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn membrick(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_class::<PyMemory>()?;
     Ok(())

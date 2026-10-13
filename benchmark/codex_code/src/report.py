@@ -21,12 +21,12 @@ def _average(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def _percent_delta(baseline: Any, lint_ai: Any) -> float | None:
-    if not isinstance(baseline, (int, float)) or not isinstance(lint_ai, (int, float)):
+def _percent_delta(baseline: Any, membrick: Any) -> float | None:
+    if not isinstance(baseline, (int, float)) or not isinstance(membrick, (int, float)):
         return None
     if baseline == 0:
         return None
-    return (lint_ai - baseline) / baseline
+    return (membrick - baseline) / baseline
 
 
 def _continuation_metrics(result: dict[str, Any]) -> dict[str, Any]:
@@ -151,7 +151,7 @@ def build_final_results(
         scenarios.append(
             {
                 "scenario_id": scenario_id,
-                "arm": str(result.get("arm", "lint-ai")),
+                "arm": str(result.get("arm", "membrick")),
                 "repetition": repetition,
                 "success": bool(result.get("success", False)),
                 "invalid_reason": result.get("invalid_reason"),
@@ -179,7 +179,7 @@ def build_final_results(
         )
 
     successful = sum(1 for result in results if result.get("success"))
-    arms = {str(result.get("arm", "lint-ai")) for result in results}
+    arms = {str(result.get("arm", "membrick")) for result in results}
     arm_summaries: dict[str, dict[str, Any]] = {}
     for arm in sorted(arms):
         arm_scenarios = [item for item in scenarios if item["arm"] == arm]
@@ -318,9 +318,9 @@ def build_final_results(
             f"This report compares {', '.join(candidate_arms)} against {reference_arm}."
             if reference_arm in arms and candidate_arms
             else (
-                "This report contains only the lint-ai arm. A baseline arm has not "
+                "This report contains only the membrick arm. A baseline arm has not "
                 "been run, so percentage comparisons are not valid."
-                if arms == {"lint-ai"}
+                if arms == {"membrick"}
                 else "A native reference arm has not been run, so percentage comparisons "
                 "are not valid."
             )
@@ -342,7 +342,7 @@ def summarize_results(
     invalid_count = 0
     for result in results:
         scenario_id = str(result.get("scenario_id", ""))
-        arm = str(result.get("arm", "lint-ai"))
+        arm = str(result.get("arm", "membrick"))
         by_scenario[scenario_id][arm] += 1
         if result.get("success"):
             success_count += 1

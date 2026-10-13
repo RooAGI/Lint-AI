@@ -1,35 +1,35 @@
-# Use Lint-AI with Antigravity CLI
+# Use Membrick with Antigravity CLI
 
-Connect Lint-AI to a project so Antigravity CLI (AGY) can find earlier
+Connect Membrick to a project so Antigravity CLI (AGY) can find earlier
 decisions and save useful outcomes as work continues. Project memory is stored
-in `.lint-ai/memory/` and can be shared with other connected agents.
+in `.membrick/memory/` and can be shared with other connected agents.
 
-## 1. Install Lint-AI
+## 1. Install Membrick
 
 On macOS or Linux, download and verify the official release with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh | sh
 ```
 
-On Windows, download `lint-ai-windows-x86_64.exe` from the
-[release page](https://github.com/RooAGI/Lint-AI/releases/latest).
+On Windows, download `membrick-windows-x86_64.exe` from the
+[release page](https://github.com/RooAGI/Membrick/releases/latest).
 
-## 2. Enable Lint-AI for this project
+## 2. Enable Membrick for this project
 
 Open a terminal in the project folder and run:
 
 ```bash
-lint-ai --agy-install .
+membrick --agy-install .
 ```
 
-This enables AGY to use Lint-AI in the project. It configures the MCP connection and hooks, installs the project memory skill, and preserves your other AGY settings.
+This enables AGY to use Membrick in the project. It configures the MCP connection and hooks, installs the project memory skill, and preserves your other AGY settings.
 
 On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 
 ```powershell
-.\lint-ai-windows-x86_64.exe --agy-install .
+.\membrick-windows-x86_64.exe --agy-install .
 ```
 
 Restart AGY and open the project so it loads the new settings.
@@ -37,16 +37,16 @@ Restart AGY and open the project so it loads the new settings.
 ## 3. Try it
 
 Ask AGY to look up a decision from earlier work, or continue work in a new
-session. Lint-AI can bring relevant project memory into the conversation and
+session. Membrick can bring relevant project memory into the conversation and
 save useful outcomes as work finishes.
 
 ## 4. If memory is not available
 
-Restart AGY and make sure you opened the project where you installed Lint-AI.
+Restart AGY and make sure you opened the project where you installed Membrick.
 You can check the MCP connection with:
 
 ```bash
-lint-ai --agy-verify-mcp .
+membrick --agy-verify-mcp .
 ```
 
 For details, see [all agent integrations](agents.md) and

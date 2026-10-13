@@ -1,12 +1,12 @@
-# Run Lint-AI with Docker
+# Run Membrick with Docker
 
-Docker Compose builds and runs the Lint-AI HTTP server, keeps its memory index
+Docker Compose builds and runs the Membrick HTTP server, keeps its memory index
 in a persistent volume, and publishes the API on localhost.
 
 ## Requirements
 
 - Docker Engine with the Compose plugin
-- A terminal in the Lint-AI repository
+- A terminal in the Membrick repository
 
 ## Start the server
 
@@ -18,7 +18,7 @@ docker compose up --build -d
 ```
 
 The first start builds the release server image. Compose stores the index in
-the `lint-ai-data` volume, so memories remain available when the container is
+the `membrick-data` volume, so memories remain available when the container is
 restarted or upgraded.
 
 The server is available at `http://127.0.0.1:8080`. The Compose port mapping
@@ -85,8 +85,8 @@ uninstalled. To permanently delete the Helm-managed index, remove the claim
 after uninstalling:
 
 ```bash
-helm uninstall lint-ai --namespace lint-ai
-kubectl delete pvc lint-ai --namespace lint-ai
+helm uninstall membrick --namespace membrick
+kubectl delete pvc membrick --namespace membrick
 ```
 
 Keep `SERVER_TOKEN` private. The supplied Compose file publishes the port only
@@ -96,30 +96,30 @@ another interface, put it behind an authenticated, encrypted access layer.
 ## Install on Kubernetes with Helm
 
 The chart runs one server replica with a persistent volume and an internal
-`ClusterIP` Service. The single replica is required because one Lint-AI server
+`ClusterIP` Service. The single replica is required because one Membrick server
 process owns writes to its index. The dashboard is included at `/dashboard`.
 
 Create a namespace and token Secret:
 
 ```bash
-kubectl create namespace lint-ai
+kubectl create namespace membrick
 token="$(openssl rand -hex 32)"
-kubectl create secret generic lint-ai-auth \
-  --namespace lint-ai \
+kubectl create secret generic membrick-auth \
+  --namespace membrick \
   --from-literal=SERVER_TOKEN="$token"
 ```
 
-The chart defaults to `ghcr.io/rooagi/lint-ai-server:0.4.0`; the repository
+The chart defaults to `ghcr.io/rooagi/membrick-server:0.4.0`; the repository
 does not currently publish this image automatically. Build and push the image
 to a registry you control, then set `image.repository` and `image.tag` during
 installation. For example:
 
 ```bash
-docker build -t registry.example.com/lint-ai-server:0.4.0 .
-docker push registry.example.com/lint-ai-server:0.4.0
-helm upgrade --install lint-ai ./charts/lint-ai \
-  --namespace lint-ai \
-  --set image.repository=registry.example.com/lint-ai-server \
+docker build -t registry.example.com/membrick-server:0.4.0 .
+docker push registry.example.com/membrick-server:0.4.0
+helm upgrade --install membrick ./charts/membrick \
+  --namespace membrick \
+  --set image.repository=registry.example.com/membrick-server \
   --set image.tag=0.4.0
 ```
 
@@ -132,16 +132,16 @@ Forward the internal Service to your local machine to try the API and
 dashboard:
 
 ```bash
-kubectl port-forward --namespace lint-ai service/lint-ai 8080:8080
+kubectl port-forward --namespace membrick service/membrick 8080:8080
 ```
 
 Open [`http://127.0.0.1:8080/dashboard`](http://127.0.0.1:8080/dashboard).
-In-cluster agents can call `http://lint-ai.lint-ai.svc.cluster.local:8080` and
+In-cluster agents can call `http://membrick.membrick.svc.cluster.local:8080` and
 send the token in the `X-Api-Key` header. The chart does not create a public
 Ingress. Add TLS and authenticated access at your cluster's gateway if
 outside-cluster clients need to connect.
 
-The chart source is versioned in `charts/lint-ai`; it can be installed on any
+The chart source is versioned in `charts/membrick`; it can be installed on any
 Kubernetes cluster, including AWS EKS. Amazon ECR supports hosting images and
 Helm charts as OCI artifacts; see the
 [AWS ECR chart instructions](https://docs.aws.amazon.com/AmazonECR/latest/userguide/push-oci-artifact.html)

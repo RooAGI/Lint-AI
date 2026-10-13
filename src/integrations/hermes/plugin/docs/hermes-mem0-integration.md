@@ -7,7 +7,7 @@
 
 ## TL;DR
 
-**mem0 ships the plugin itself.** It lives upstream at `mem0ai/mem0/integrations/hermes-plugin-mem0/` — a self-contained *directory plugin* (not a pip entry point, not a PR to Hermes). Hermes originally **vendored a copy** into `hermes-agent/plugins/memory/mem0/`, and the two are now migrating toward the standalone plugin (mem0's copy is newer — Hermes' bundle lags). mem0 never modified Hermes' core; it implemented Hermes' `MemoryProvider` ABC and is distributed via `hermes plugins install`. This is the exact template for lint-ai's Route B.
+**mem0 ships the plugin itself.** It lives upstream at `mem0ai/mem0/integrations/hermes-plugin-mem0/` — a self-contained *directory plugin* (not a pip entry point, not a PR to Hermes). Hermes originally **vendored a copy** into `hermes-agent/plugins/memory/mem0/`, and the two are now migrating toward the standalone plugin (mem0's copy is newer — Hermes' bundle lags). mem0 never modified Hermes' core; it implemented Hermes' `MemoryProvider` ABC and is distributed via `hermes plugins install`. This is the exact template for membrick's Route B.
 
 ---
 
@@ -63,12 +63,12 @@ Provider settings in `$HERMES_HOME/mem0.json` (written by `hermes memory setup`)
 
 Secrets in that profile's `.env`: `MEM0_API_KEY` (platform or self-hosted server), `OPENAI_API_KEY` (OSS mode), `MEM0_HOST` (server URL fallback).
 
-### 1.5 Transport: three modes, no lint-ai-shaped sidecar
+### 1.5 Transport: three modes, no membrick-shaped sidecar
 
 From `_backend.py` (`Mem0Backend` ABC, lines 19–37: `search` / `add` / `_update` / `_delete`):
 
 - **Platform** (`PlatformBackend`): in-process `mem0.MemoryClient(api_key=...)` — mem0's cloud HTTP API client, imported lazily inside `__init__`.
-- **Self-hosted server** (`SelfHostedBackend`): raw `httpx.Client` speaking the mem0 FastAPI server's real contract (`X-API-Key` header, `/memories`, `/search` routes). mem0's own `MemoryClient` is hardcoded to cloud auth, so the plugin bypasses it — a gotcha worth remembering for lint-ai's HTTP path (speak the server's contract directly).
+- **Self-hosted server** (`SelfHostedBackend`): raw `httpx.Client` speaking the mem0 FastAPI server's real contract (`X-API-Key` header, `/memories`, `/search` routes). mem0's own `MemoryClient` is hardcoded to cloud auth, so the plugin bypasses it — a gotcha worth remembering for membrick's HTTP path (speak the server's contract directly).
 - **OSS** (`OSSBackend`): in-process `mem0.Memory(MemoryConfig(...))` with user-chosen LLM/embedder/vector store (qdrant/pgvector). Note the `_openai_llm.py` workaround: Hermes registers a custom `hermes_openai` LLM provider into mem0's `LlmFactory` because mem0 validates `LlmConfig.provider` before its own factory lookup.
 
 ### 1.6 Gotchas (from code comments + docs)
@@ -103,30 +103,30 @@ hermes memory status
 
 ---
 
-## 3. Direct comparison: if lint-ai followed mem0's exact path
+## 3. Direct comparison: if membrick followed mem0's exact path
 
-| mem0's path | lint-ai equivalent |
+| mem0's path | membrick equivalent |
 |---|---|
-| Directory `integrations/hermes-plugin-mem0/` in the mem0 monorepo | New directory in the lint-ai repo, e.g. `src/integrations/hermes/plugin/` (Rust repo shipping a Python plugin dir — fine, it's just files) |
-| `plugin.yaml`: `name: mem0`, `pip_dependencies: [mem0ai>=2.0.10,<3]` | `plugin.yaml`: `name: lintai`, `pip_dependencies` — none needed if the provider talks to lint-ai over HTTP (only stdlib+`httpx`); or depend on nothing and shell to the `lint-ai` binary |
-| `__init__.py`: `Mem0MemoryProvider(MemoryProvider)` | `__init__.py`: `LintaiMemoryProvider(MemoryProvider)` implementing `name` → `"lintai"`, `is_available`, `initialize`, `get_tool_schemas` → `lintai_search`/`lintai_add`(/`update`/`delete`), `handle_tool_call`, `prefetch`, `on_turn_start` (queue background recall), `sync_turn` (feed turn into lint-ai), `shutdown`, plus `get_config_schema`/`save_config` for `hermes memory setup` |
-| `_backend.py`: `Mem0Backend` ABC → Platform/SelfHosted/OSS | `LintaiBackend`: HTTP client speaking lint-ai's server contract (`/search`, `/add/batch`, `/delete` — the same API the NeMo plugin uses), or subprocess calls to `lint-ai` CLI |
-| User config: `hermes config set memory.provider mem0` + `$HERMES_HOME/mem0.json` | User config: `hermes config set memory.provider lintai` + `$HERMES_HOME/lintai.json` (root path, server URL, API key if any) |
-| Docs page `docs/integrations/hermes.mdx` on mem0's site | Same on lint-ai's docs |
-| No Hermes repo changes; no PyPI publish needed for the plugin itself | Same — the `lint-ai` binary is already the distributed artifact; the plugin dir is a thin Python wrapper |
+| Directory `integrations/hermes-plugin-mem0/` in the mem0 monorepo | New directory in the membrick repo, e.g. `src/integrations/hermes/plugin/` (Rust repo shipping a Python plugin dir — fine, it's just files) |
+| `plugin.yaml`: `name: mem0`, `pip_dependencies: [mem0ai>=2.0.10,<3]` | `plugin.yaml`: `name: membrick`, `pip_dependencies` — none needed if the provider talks to Membrick over HTTP (only stdlib+`httpx`); or depend on nothing and shell to the `membrick` binary |
+| `__init__.py`: `Mem0MemoryProvider(MemoryProvider)` | `__init__.py`: `MembrickMemoryProvider(MemoryProvider)` implementing `name` → `"membrick"`, `is_available`, `initialize`, `get_tool_schemas` → `membrick_search`/`membrick_add`(/`update`/`delete`), `handle_tool_call`, `prefetch`, `on_turn_start` (queue background recall), `sync_turn` (feed turn into Membrick), `shutdown`, plus `get_config_schema`/`save_config` for `hermes memory setup` |
+| `_backend.py`: `Mem0Backend` ABC → Platform/SelfHosted/OSS | `MembrickBackend`: HTTP client speaking Membrick's server contract (`/search`, `/add/batch`, `/delete` — the same API the NeMo plugin uses), or subprocess calls to the `membrick` CLI |
+| User config: `hermes config set memory.provider mem0` + `$HERMES_HOME/mem0.json` | User config: `hermes config set memory.provider membrick` + `$HERMES_HOME/membrick.json` (root path, server URL, API key if any) |
+| Docs page `docs/integrations/hermes.mdx` on mem0's site | Same on membrick's docs |
+| No Hermes repo changes; no PyPI publish needed for the plugin itself | Same — the `membrick` binary is already the distributed artifact; the plugin dir is a thin Python wrapper |
 
-**What changes in Hermes' config:** exactly two things — `memory.provider: "lintai"` in the profile's `config.yaml`, and a new `$HERMES_HOME/lintai.json` (+ secrets in `.env`). Nothing in the Hermes repo, no fork, no PR.
+**What changes in Hermes' config:** exactly two things — `memory.provider: "membrick"` in the profile's `config.yaml`, and a new `$HERMES_HOME/membrick.json` (+ secrets in `.env`). Nothing in the Hermes repo, no fork, no PR.
 
 ---
 
-## 4. Implication for lint-ai's Route B decision
+## 4. Implication for membrick's Route B decision
 
 mem0's precedent **de-risks Route B substantially** and answers the earlier open questions:
 
-1. **The pattern is third-party-owned, zero Hermes-side code.** mem0 never touched the Hermes repo for its *current* distribution — the plugin lives in mem0's own repo and installs via `hermes plugins install`. (The historical vendored bundle was Hermes' choice, now being unwound.) So lint-ai can ship Route B unilaterally: a `src/integrations/hermes/plugin/` directory + docs, no upstream negotiation needed.
-2. **No pip entry point required.** The `hermes_agent.memory_providers` entry-point group exists but mem0 doesn't use it — directory plugins are the proven, simpler path. That drops the Python-packaging burden: we don't need a `lintai-hermes` PyPI package, just a plugin directory.
-3. **Transport precedent favors HTTP, not subprocess.** mem0's platform and self-hosted modes are both HTTP clients against a server API — directly analogous to lint-ai's server API (`/add/batch`, `/search`, `/delete`). The provider would be a thin Python wrapper (~200 lines of backend + ~300 lines of provider), with the real memory engine staying in Rust. The mem0 self-hosted-backend gotcha is instructive: when the vendor's own client is hardcoded to cloud auth, speak the server's HTTP contract directly with `httpx`.
-4. **The "one provider at a time" tradeoff is accepted by the market leader.** mem0 accepted that selecting it replaces the built-in/external provider slot, with built-in file memory continuing to run additively alongside. lint-ai would sit in exactly the same position — this normalizes Luyi's open question #2: staying an "augmenting sidecar" (Route A+MCP) vs. replacing the provider slot (Route B) is the same choice mem0 made, and mem0 chose Route B.
+1. **The pattern is third-party-owned, zero Hermes-side code.** mem0 never touched the Hermes repo for its *current* distribution — the plugin lives in mem0's own repo and installs via `hermes plugins install`. (The historical vendored bundle was Hermes' choice, now being unwound.) So membrick can ship Route B unilaterally: a `src/integrations/hermes/plugin/` directory + docs, no upstream negotiation needed.
+2. **No pip entry point required.** The `hermes_agent.memory_providers` entry-point group exists but mem0 doesn't use it — directory plugins are the proven, simpler path. That drops the Python-packaging burden: we don't need a `membrick-hermes` PyPI package, just a plugin directory.
+3. **Transport precedent favors HTTP, not subprocess.** mem0's platform and self-hosted modes are both HTTP clients against a server API — directly analogous to membrick's server API (`/add/batch`, `/search`, `/delete`). The provider would be a thin Python wrapper (~200 lines of backend + ~300 lines of provider), with the real memory engine staying in Rust. The mem0 self-hosted-backend gotcha is instructive: when the vendor's own client is hardcoded to cloud auth, speak the server's HTTP contract directly with `httpx`.
+4. **The "one provider at a time" tradeoff is accepted by the market leader.** mem0 accepted that selecting it replaces the built-in/external provider slot, with built-in file memory continuing to run additively alongside. membrick would sit in exactly the same position — this normalizes Luyi's open question #2: staying an "augmenting sidecar" (Route A+MCP) vs. replacing the provider slot (Route B) is the same choice mem0 made, and mem0 chose Route B.
 5. **Sequencing still holds:** mem0's docs describe the MCP-style tool path as fallback ("the model can still call `mem0_search` itself"), i.e. even the native provider ships explicit agent-callable tools — Route A (MCP adapter) and Route B (native provider) are complementary, not exclusive. Build the `--hermes-serve` MCP adapter first (already decided), then the provider plugin reuses the same server.
 
-**Bottom line:** mem0's exact path — a `MemoryProvider` subclass in a self-owned plugin directory, HTTP transport to the memory server, config via `memory.provider` + profile JSON — is directly copyable for lint-ai. Estimated scope: one Python package directory (~500–700 lines mirroring mem0's structure: `__init__.py` provider + `_backend.py` HTTP client + `plugin.yaml` + `pyproject.toml` + README), zero Hermes-side changes, zero changes to the Rust core beyond the existing HTTP API.
+**Bottom line:** mem0's exact path — a `MemoryProvider` subclass in a self-owned plugin directory, HTTP transport to the memory server, config via `memory.provider` + profile JSON — is directly copyable for membrick. Estimated scope: one Python package directory (~500–700 lines mirroring mem0's structure: `__init__.py` provider + `_backend.py` HTTP client + `plugin.yaml` + `pyproject.toml` + README), zero Hermes-side changes, zero changes to the Rust core beyond the existing HTTP API.

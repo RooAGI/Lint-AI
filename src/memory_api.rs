@@ -1,4 +1,4 @@
-//! Memory Add/Search API backed by Lint-AI's `IndexStore`.
+//! Memory Add/Search API backed by Membrick's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
 use crate::index::ClaimStatus;
@@ -2229,7 +2229,7 @@ impl MemoryService {
             .unwrap_or_else(|| workspace.store.inspection().snapshot_revision);
         // The composed view must keep the conversation-state store the hooks
         // write to: the provider memory's disk-backed store (opened under the
-        // same `.lint-ai/memory/` root the hooks use), falling back to the
+        // same `.membrick/memory/` root the hooks use), falling back to the
         // workspace store when there is no provider memory. A fresh
         // memory-only store here would lose hook-written active sessions,
         // drop explicit session state across MCP invocations, and break
@@ -3022,14 +3022,6 @@ impl MemoryService {
     }
 
     /// Remove one document by id, returning the removed document if present.
-    #[cfg(any(
-        feature = "claude-code",
-        feature = "codex",
-        feature = "gemini-cli",
-        feature = "agy",
-        feature = "muse-code",
-        feature = "roo-runtime"
-    ))]
     pub(crate) fn remove(&mut self, doc_id: &str) -> Option<crate::SourceDocument> {
         self.store.remove(doc_id)
     }
@@ -3769,7 +3761,7 @@ mod tests {
         let base = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
-        base.join(format!("lint-ai-{name}-{}", std::process::id()))
+        base.join(format!("membrick-{name}-{}", std::process::id()))
     }
 
     fn bare_search_result(doc_id: &str, score: f32) -> crate::SearchResult {
@@ -6285,7 +6277,7 @@ mod board_integration_tests {
         let base = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
-        let dir = base.join(format!("lint-ai-board-{name}-{}", std::process::id()));
+        let dir = base.join(format!("membrick-board-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

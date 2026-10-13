@@ -188,7 +188,7 @@ pub fn resolve_store_paths(
             let corpus_root = corpus_root
                 .map(Path::to_path_buf)
                 .ok_or_else(|| anyhow::anyhow!("corpus root is required for UnderCorpusRoot"))?;
-            let root = corpus_root.join(".lint-ai");
+            let root = corpus_root.join(".membrick");
             Ok(StorePaths {
                 lexical_dir: Some(root.join("lexical")),
                 semantic_dir: Some(root.join("semantic")),

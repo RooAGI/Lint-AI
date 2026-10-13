@@ -486,7 +486,7 @@ mod tests {
         let base = std::env::temp_dir().canonicalize().unwrap();
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = base.join(format!(
-            "lint-ai-staged-{}-{}-{}",
+            "membrick-staged-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

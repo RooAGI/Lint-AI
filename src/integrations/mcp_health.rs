@@ -18,7 +18,7 @@ pub fn verify(root: &Path, serve_flag: &str, timeout_ms: Option<u64>) -> Result<
     let timeout_ms = timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
     let started = Instant::now();
     let mut child =
-        Command::new(env::current_exe().context("failed to locate lint-ai executable")?)
+        Command::new(env::current_exe().context("failed to locate membrick executable")?)
             .arg(serve_flag)
             .arg(&root)
             .stdin(Stdio::piped())
@@ -71,7 +71,7 @@ pub fn verify(root: &Path, serve_flag: &str, timeout_ms: Option<u64>) -> Result<
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "lint-ai-health-check", "version": env!("CARGO_PKG_VERSION")}
+            "clientInfo": {"name": "membrick-health-check", "version": env!("CARGO_PKG_VERSION")}
         }
     });
     let request_started = Instant::now();
@@ -110,7 +110,7 @@ pub fn verify(root: &Path, serve_flag: &str, timeout_ms: Option<u64>) -> Result<
 
     let initialized = response.get("result").is_some()
         && response.get("id") == Some(&json!(1))
-        && response["result"]["serverInfo"]["name"] == "lint-ai";
+        && response["result"]["serverInfo"]["name"] == "membrick";
     if !initialized {
         terminate_child(&mut child);
         let stderr = stderr_rx.recv_timeout(Duration::from_secs(1)).ok();
@@ -244,7 +244,7 @@ fn report(
 fn write_report(report: &Value) -> Result<()> {
     let output = serde_json::to_string_pretty(report)?;
     println!("{output}");
-    if let Some(path) = env::var_os("LINT_AI_MCP_HEALTH_PATH") {
+    if let Some(path) = env::var_os("MEMBRICK_MCP_HEALTH_PATH") {
         fs::write(path, format!("{output}\n"))?;
     }
     Ok(())
@@ -264,7 +264,7 @@ mod tests {
                 "id": 1,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": "lint-ai"}
+                    "serverInfo": {"name": "membrick"}
                 }
             })),
             None,

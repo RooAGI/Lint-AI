@@ -1,6 +1,6 @@
 # Strong evaluation (pillars 1–4)
 
-Reproducible end-to-end evaluation of Lint-AI retrieval, efficiency, and the
+Reproducible end-to-end evaluation of Membrick retrieval, efficiency, and the
 write path. Every pillar runs N independent repetitions (default 5) and
 reports mean ± population standard deviation. Pin the dataset SHA, the code
 commit, and the hardware with every published result, and keep the raw logs.

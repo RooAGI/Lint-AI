@@ -31,12 +31,12 @@ def score(ranked, gold):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True)
-    ap.add_argument("--lintai", required=True)
+    ap.add_argument("--membrick", "--lintai", dest="membrick", required=True)
     ap.add_argument("--agentmemory", required=True)
     args = ap.parse_args()
     dataset = {x["question_id"]: x for x in json.loads(Path(args.dataset).read_text())}
     reports = {
-        "Lint-AI": json.loads(Path(args.lintai).read_text())["per_query"],
+        "Membrick": json.loads(Path(args.membrick).read_text())["per_query"],
         "AgentMemory": json.loads(Path(args.agentmemory).read_text())["per_question"],
     }
     for name, rows in reports.items():

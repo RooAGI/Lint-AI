@@ -1843,7 +1843,7 @@ warning: struct `UsageSummary` is never constructed
 251 | pub struct UsageSummary {
     |            ^^^^^^^^^^^^
 
-warning: `lint-ai` (lib) generated 218 warnings (run `cargo fix --lib -p lint-ai` to apply 40 suggestions)
+warning: `membrick` (lib) generated 218 warnings (run `cargo fix --lib -p membrick` to apply 40 suggestions)
     Finished `release` profile [optimized] target(s) in 0.38s
      Running `target/release/query_repl --longmemeval benchmark/data/longmemeval_s_raw.json --question-id 06878be2 --top-k 80`
 Indexing 50 haystack sessions for '06878be2'...

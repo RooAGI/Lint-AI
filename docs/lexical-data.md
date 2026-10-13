@@ -1,6 +1,6 @@
 # Lexical Expansion Data
 
-`lint-ai` uses compact JSON lexical subsets at:
+`membrick` uses compact JSON lexical subsets at:
 
 - `data/lexical/wordnet_subset.json`
 - `data/lexical/conceptnet_subset.json`

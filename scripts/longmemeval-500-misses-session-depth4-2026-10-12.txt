@@ -1,4 +1,4 @@
-   Compiling lint-ai v0.3.0 (/Users/louis/sources/Lint-AI)
+   Compiling membrick v0.3.0 (/Users/louis/sources/Membrick)
 warning: unused imports: `TextFieldIndexing` and `TextOptions`
   --> src/index/build.rs:16:39
    |
@@ -1844,7 +1844,7 @@ warning: struct `UsageSummary` is never constructed
 251 | pub struct UsageSummary {
     |            ^^^^^^^^^^^^
 
-warning: `lint-ai` (lib) generated 218 warnings (run `cargo fix --lib -p lint-ai` to apply 40 suggestions)
+warning: `membrick` (lib) generated 218 warnings (run `cargo fix --lib -p membrick` to apply 40 suggestions)
     Finished `release` profile [optimized] target(s) in 20.09s
      Running `target/release/haystack_scoped_benchmark --longmemeval benchmark/data/longmemeval_s_raw.json --k 1 --k 3 --k 5 --k 10 --k 20 --ner-provider heuristic --structured-fact-retrieval --out scripts/longmemeval-500-misses-session-depth4-2026-10-12.json`
 loading raw LongMemEval data...

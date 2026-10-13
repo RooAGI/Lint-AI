@@ -18,16 +18,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            asset_name: lint-ai-linux-x86_64
+            asset_name: membrick-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
-            asset_name: lint-ai-macos-x86_64
+            asset_name: membrick-macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            asset_name: lint-ai-macos-aarch64
+            asset_name: membrick-macos-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            asset_name: lint-ai-windows-x86_64.exe
+            asset_name: membrick-windows-x86_64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/lint-ai dist/${{ matrix.asset_name }}
+          cp target/${{ matrix.target }}/release/membrick dist/${{ matrix.asset_name }}
           if command -v sha256sum >/dev/null 2>&1; then
             (cd dist && sha256sum "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256")
           else
@@ -56,7 +56,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\${{ matrix.target }}\release\lint-ai.exe dist\${{ matrix.asset_name }}
+          Copy-Item target\${{ matrix.target }}\release\membrick.exe dist\${{ matrix.asset_name }}
           $hash = (Get-FileHash -Algorithm SHA256 "dist\${{ matrix.asset_name }}").Hash.ToLower()
           "$hash  ${{ matrix.asset_name }}" | Set-Content -NoNewline "dist\${{ matrix.asset_name }}.sha256"
 

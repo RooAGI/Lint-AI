@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn conversation_lock_cannot_write_through_symlinked_state_directory() {
         let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "lint-ai-state-link-{}-{}",
+            "membrick-state-link-{}-{}",
             std::process::id(),
             ms()
         ));
@@ -726,7 +726,7 @@ mod tests {
         let dir = std::env::temp_dir()
             .canonicalize()
             .unwrap()
-            .join(format!("lint-ai-convstate-{}", std::process::id()));
+            .join(format!("membrick-convstate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         {
             let mut store = ConversationStateStore::new(Some(dir.clone()));
@@ -755,7 +755,7 @@ mod tests {
         let dir = std::env::temp_dir()
             .canonicalize()
             .unwrap()
-            .join(format!("lint-ai-convstate-lru-{}", std::process::id()));
+            .join(format!("membrick-convstate-lru-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = ConversationStateStore::new(Some(dir.clone()));
         for i in 0..(MAX_SESSIONS_IN_MEMORY + 10) {
@@ -781,7 +781,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         base.join(format!(
-            "lint-ai-pointer-{name}-{}-{}",
+            "membrick-pointer-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

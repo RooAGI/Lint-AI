@@ -1,4 +1,4 @@
-// Public-API integration tests for the curated `lint_ai` surface.
+// Public-API integration tests for the curated `membrick` surface.
 // White-box tests for crate-internal modules live in `src/` unit tests.
 use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::{RankedTerm, Tier1Entity};

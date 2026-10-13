@@ -192,7 +192,7 @@ filter fields would be the natural next step.
 ## Usage Example
 
 ```rust
-use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
+use membrick::{MemoryService, PipelineOptions, SourceDocument};
 use std::collections::BTreeMap;
 
 let mut store = MemoryService::in_memory(PipelineOptions::default());

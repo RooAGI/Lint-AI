@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build lint-ai lexical JSON subsets from upstream WordNet and ConceptNet files.
+"""Build membrick lexical JSON subsets from upstream WordNet and ConceptNet files.
 
 The output schema intentionally matches data/lexical/*_subset.json(.gz):
 [

@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "lint-ai.fullname" . }}
+  name: {{ include "membrick.fullname" . }}
   labels:
-    {{- include "lint-ai.labels" . | nindent 4 }}
+    {{- include "membrick.labels" . | nindent 4 }}
   annotations:
     helm.sh/resource-policy: keep
 spec:

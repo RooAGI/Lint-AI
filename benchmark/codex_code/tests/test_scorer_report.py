@@ -61,7 +61,7 @@ class ScorerReportTests(unittest.TestCase):
             )
             result = {
                 "scenario_id": "codex-tool-use-retrieval",
-                "arm": "lint-ai",
+                "arm": "membrick",
                 "repetition": 2,
                 "success": True,
                 "validators": [{"name": "validator-a"}],
@@ -72,7 +72,7 @@ class ScorerReportTests(unittest.TestCase):
             }
             score = scorer.score_result(result, scenario)
             self.assertEqual(score.scenario_id, "codex-tool-use-retrieval")
-            self.assertEqual(score.arm, "lint-ai")
+            self.assertEqual(score.arm, "membrick")
             self.assertEqual(score.validator_count, 1)
             self.assertEqual(score.expected_fact_ids_found, ["codex-tool-hooks"])
             self.assertEqual(score.forbidden_fact_ids_found, [])
@@ -81,7 +81,7 @@ class ScorerReportTests(unittest.TestCase):
             )
         self.assertEqual(summary["result_count"], 1)
         self.assertEqual(summary["success_count"], 1)
-        self.assertEqual(summary["scenarios"]["codex-tool-use-retrieval"]["lint-ai"], 1)
+        self.assertEqual(summary["scenarios"]["codex-tool-use-retrieval"]["membrick"], 1)
         self.assertEqual(summary["scores"][0]["scenario_id"], "codex-tool-use-retrieval")
         self.assertEqual(summary["final_results"]["status"], "passed")
         self.assertEqual(summary["final_results"]["successful_runs"], 1)
@@ -92,7 +92,7 @@ class ScorerReportTests(unittest.TestCase):
         self.assertEqual(summary["final_results"]["scenarios"][0]["repeated_tool_calls"], 1)
         self.assertTrue(
             summary["final_results"]["comparison_note"].startswith(
-                "This report contains only the lint-ai arm"
+                "This report contains only the membrick arm"
             )
         )
         self.assertEqual(

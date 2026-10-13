@@ -1,6 +1,6 @@
 # Language support
 
-Lint-AI retrieves memories lexically (Tantivy BM25 plus heuristic
+Membrick retrieves memories lexically (Tantivy BM25 plus heuristic
 re-ranking) — there is no embedding model, so every language needs its own
 tokenization, normalization, and linguistic rules. This page documents what
 each supported language gets and, just as importantly, what it does not.

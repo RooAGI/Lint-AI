@@ -1,25 +1,25 @@
 {{- if ne (int .Values.replicaCount) 1 -}}
-{{- fail "Lint-AI currently supports exactly one server replica per data volume; set replicaCount: 1" -}}
+{{- fail "Membrick currently supports exactly one server replica per data volume; set replicaCount: 1" -}}
 {{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "lint-ai.fullname" . }}
+  name: {{ include "membrick.fullname" . }}
   labels:
-    {{- include "lint-ai.labels" . | nindent 4 }}
+    {{- include "membrick.labels" . | nindent 4 }}
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "lint-ai.selectorLabels" . | nindent 6 }}
+      {{- include "membrick.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
         {{- toYaml .Values.podAnnotations | nindent 8 }}
       labels:
-        {{- include "lint-ai.selectorLabels" . | nindent 8 }}
+        {{- include "membrick.selectorLabels" . | nindent 8 }}
     spec:
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
@@ -34,7 +34,7 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: lint-ai
+        - name: membrick
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
@@ -83,7 +83,7 @@ spec:
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "lint-ai.fullname" . }}
+            claimName: {{ include "membrick.fullname" . }}
           {{- else }}
           emptyDir: {}
           {{- end }}

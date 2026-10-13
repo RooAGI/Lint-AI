@@ -1,6 +1,6 @@
 # Antigravity CLI Integration Benchmark
 
-This directory contains test-only A/B scenarios for measuring Lint-AI as an
+This directory contains test-only A/B scenarios for measuring Membrick as an
 Antigravity (AGY) memory layer. The methodology and release gates follow the
 cross-client integration benchmark contract defined in
 [`docs/benchmark-integration.md`](../../docs/benchmark-integration.md).
@@ -27,7 +27,7 @@ Run the shared-harness AGY arms with:
 
 ```bash
 python3 benchmark/agy/scripts/run_benchmark.py \
-  --arms agy-native agy-lint-ai agy-lint-ai-disabled agy-mcp-only \
+  --arms agy-native agy-membrick agy-membrick-disabled agy-mcp-only \
   --scenario index-store-segmented-routing \
   --repetitions 1 \
   --timeout-scale 0.5 \
@@ -38,7 +38,7 @@ To run a multi-turn temporal-correction scenario:
 
 ```bash
 python3 benchmark/agy/scripts/run_benchmark.py \
-  --arms agy-native agy-lint-ai \
+  --arms agy-native agy-membrick \
   --scenario routing-decision-supersession \
   --repetitions 1 \
   --timeout-scale 0.5 \
@@ -47,10 +47,10 @@ python3 benchmark/agy/scripts/run_benchmark.py \
 
 ### Available Arms
 
-* **`agy-native`**: Baseline AGY without Lint-AI hooks or MCP configuration.
-* **`agy-lint-ai`**: Full integration with Lint-AI memory injection, lifecycle hooks, and durable recording.
-* **`agy-lint-ai-disabled`**: Hooks and session recording active, but memory injection toggled off via `disable_lint_ai` (isolates hook execution overhead).
-* **`agy-mcp-only`**: Lint-AI MCP server registered with lifecycle hooks removed (isolates tool discovery/calling overhead).
+* **`agy-native`**: Baseline AGY without Membrick hooks or MCP configuration.
+* **`agy-membrick`**: Full integration with Membrick memory injection, lifecycle hooks, and durable recording.
+* **`agy-membrick-disabled`**: Hooks and session recording active, but memory injection toggled off via `disable_membrick` (isolates hook execution overhead).
+* **`agy-mcp-only`**: Membrick MCP server registered with lifecycle hooks removed (isolates tool discovery/calling overhead).
 
 ---
 
@@ -73,7 +73,7 @@ the benchmark:
 The files are restored when the launcher exits, including normal failures.
 Run the benchmark without using AGY concurrently, and do not force-kill the
 launcher; a hard process kill can prevent restoration. The launcher resets the
-temporary hook and MCP configuration before every arm, so stale Lint-AI
+temporary hook and MCP configuration before every arm, so stale Membrick
 configuration cannot contaminate `agy-native` or another arm.
 
 The benchmark does not modify AGY permissions or bypass permission checks.
@@ -91,10 +91,10 @@ A scenario's `setup_messages` array controls the continuous chat lifecycle:
 
 ### Cross-Session Continuation Boundary
 To strictly measure cross-session memory retrieval (matching Claude Code and Codex harness methodology):
-* **Setup Phase**: Runs the setup message sequence (single-turn or multi-turn). When setup terminates, Lint-AI's `Stop` hook extracts and indexes the full conversation transcript into `.lint-ai/memory`.
+* **Setup Phase**: Runs the setup message sequence (single-turn or multi-turn). When setup terminates, Membrick's `Stop` hook extracts and indexes the full conversation transcript into `.membrick/memory`.
 * **Continuation Phase (Fresh Session)**: Continuation always executes as a **brand new session** with **no prior conversation history** passed in its prompt context.
   * In `agy-native`, the model receives only the continuation prompt without conversation history, requiring it to answer from pre-training or hallucinate.
-  * In `agy-lint-ai`, the `PreInvocation` hook intercepts the continuation turn, queries `.lint-ai/memory`, and injects the indexed setup decision as an `EPHEMERAL_MESSAGE`.
+  * In `agy-membrick`, the `PreInvocation` hook intercepts the continuation turn, queries `.membrick/memory`, and injects the indexed setup decision as an `EPHEMERAL_MESSAGE`.
 
 ---
 
@@ -104,7 +104,7 @@ To strictly measure cross-session memory retrieval (matching Claude Code and Cod
 
 One repetition each on AGY with Gemini 3.7 Flash:
 
-| Metric | `agy-native` | `agy-lint-ai` | Impact / Advantage |
+| Metric | `agy-native` | `agy-membrick` | Impact / Advantage |
 | :--- | :---: | :---: | :--- |
 | **Success** | true | true | Both passed validators |
 | **Recall** | 1/3 (33.3%) | **3/3 (100.0%)** | **+66.7% Recall Improvement** |
@@ -113,7 +113,7 @@ One repetition each on AGY with Gemini 3.7 Flash:
 | **Continuation Input Tokens** | 14,596 | **13,965** | **-631 input tokens** |
 | **Continuation Output Tokens** | 351 | **100** | **-71.5% output tokens (concise & factual)** |
 
-**Analysis**: Lacking prior conversation history in a fresh session, `agy-native` hallucinated memory APIs (`record_session`, `list_memories`) and routing architectures (`hierarchical, domain-partitioned routing`), only matching `global fallback` by coincidence. `agy-lint-ai` successfully injected the stored `IndexStore` and `SegmentRoutingStrategy::LocalDistinctiveness` decisions via `PreInvocation`, achieving 100% recall.
+**Analysis**: Lacking prior conversation history in a fresh session, `agy-native` hallucinated memory APIs (`record_session`, `list_memories`) and routing architectures (`hierarchical, domain-partitioned routing`), only matching `global fallback` by coincidence. `agy-membrick` successfully injected the stored `IndexStore` and `SegmentRoutingStrategy::LocalDistinctiveness` decisions via `PreInvocation`, achieving 100% recall.
 
 ---
 
@@ -121,7 +121,7 @@ One repetition each on AGY with Gemini 3.7 Flash:
 
 One repetition each on AGY with Gemini 3.7 Flash. `setup_messages` has 2 entries (initial `SparseOverlap` proposal, then a superseding `LocalDistinctiveness` decision with `query_top_n = 3`), running as two chained turns via `--conversation <id>`:
 
-| Metric | `agy-native` | `agy-lint-ai` | Impact / Advantage |
+| Metric | `agy-native` | `agy-membrick` | Impact / Advantage |
 | :--- | :---: | :---: | :--- |
 | **Success** | true | true | Both passed validators |
 | **Recall** | 1/3 (33.3%) | **3/3 (100.0%)** | **+66.7% Recall Improvement** |
@@ -131,17 +131,17 @@ One repetition each on AGY with Gemini 3.7 Flash. `setup_messages` has 2 entries
 | **Continuation Input Tokens** | 14,583 | 14,601 | Normalized usage |
 | **Continuation Output Tokens** | 990 | **99** | **-90.0% output tokens** |
 
-**Analysis**: In multi-turn continuous chat, `agy-lint-ai` accurately distinguished the active `LocalDistinctiveness` strategy and `query_top_n = 3` parameter from the superseded `SparseOverlap` proposal using only 99 output tokens, whereas `agy-native` required 990 output tokens and could not identify the current routing parameters across the session boundary.
+**Analysis**: In multi-turn continuous chat, `agy-membrick` accurately distinguished the active `LocalDistinctiveness` strategy and `query_top_n = 3` parameter from the superseded `SparseOverlap` proposal using only 99 output tokens, whereas `agy-native` required 990 output tokens and could not identify the current routing parameters across the session boundary.
 
 ---
 
 ## Memory Store Inspection
 
-Each scenario/arm worktree persists after the run so its `.lint-ai/memory` store remains inspectable. Inspect a run's captured memory with:
+Each scenario/arm worktree persists after the run so its `.membrick/memory` store remains inspectable. Inspect a run's captured memory with:
 
 ```bash
-target/debug/lint-ai \
-  --inspect-index benchmark/agy/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/memory \
+target/debug/membrick \
+  --inspect-index benchmark/agy/results/<arm>/<scenario>/rep-001/worktree/.membrick/memory \
   --inspect-view source-documents
 ```
 

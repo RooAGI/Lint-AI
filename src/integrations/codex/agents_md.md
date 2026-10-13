@@ -1,8 +1,8 @@
-<!-- lint-ai:memory-policy:start -->
-## Lint-AI memory policy
+<!-- membrick:memory-policy:start -->
+## Membrick memory policy
 
 For requests about project history, prior decisions, architectural choices,
-earlier work, or "why" something was implemented, call the `lint-ai` MCP
+earlier work, or "why" something was implemented, call the `membrick` MCP
 server's `search` tool before reading files or searching the repository.
 
 1. Call `search` with a concise query describing the missing context.
@@ -13,4 +13,4 @@ server's `search` tool before reading files or searching the repository.
 Recorded sessions are memory of this project, not documentation of it: a
 finding can be out of date. Check a conclusion against the code before relying
 on it, and prefer the most recent one when two disagree.
-<!-- lint-ai:memory-policy:end -->
+<!-- membrick:memory-policy:end -->

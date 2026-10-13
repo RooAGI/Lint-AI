@@ -1,6 +1,6 @@
 //! End-to-end characterization test for concurrent MCP startup.
 //!
-//! This exercises the real `lint-ai --codex-serve` subprocess boundary. The
+//! This exercises the real `membrick --codex-serve` subprocess boundary. The
 //! project root is shared by all clients, so a startup/index-lock regression
 //! should surface as an initialize or tools/list failure.
 
@@ -39,7 +39,7 @@ fn concurrent_codex_mcp_clients_initialize_and_open_shared_index() {
     fs::write(root.join("README.md"), "shared MCP startup test\n")
         .expect("temporary project should contain a document");
 
-    let executable = env!("CARGO_BIN_EXE_lint-ai");
+    let executable = env!("CARGO_BIN_EXE_membrick");
     let mut clients: Vec<(Child, ChildStdin, BufReader<_>)> = (0..4)
         .map(|_| {
             let mut child = Command::new(executable)
@@ -85,7 +85,7 @@ fn concurrent_codex_mcp_clients_initialize_and_open_shared_index() {
     for (_, _, reader) in &mut clients {
         let response = read_response(reader);
         assert_eq!(response["id"], 1);
-        assert_eq!(response["result"]["serverInfo"]["name"], "lint-ai");
+        assert_eq!(response["result"]["serverInfo"]["name"], "membrick");
     }
 
     for (_, stdin, _) in &mut clients {
@@ -119,12 +119,12 @@ fn concurrent_codex_lifecycle_hooks_record_all_events() {
         .expect("test directory should be available")
         .join("target")
         .join(format!("concurrent-hook-recording-{nonce}"));
-    let session_root = root.join(".lint-ai").join("codex-sessions");
+    let session_root = root.join(".membrick").join("codex-sessions");
     fs::create_dir_all(&session_root).expect("recording directory should be created");
     fs::write(session_root.join("recording.json"), r#"{"enabled":true}"#)
         .expect("recording should be enabled");
 
-    let executable = env!("CARGO_BIN_EXE_lint-ai");
+    let executable = env!("CARGO_BIN_EXE_membrick");
     let mut children = Vec::new();
     for _ in 0..8 {
         let mut child = Command::new(executable)

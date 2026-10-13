@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lint-ai.dev/schemas/codex-code-result.schema.json",
-  "title": "Lint-AI Codex performance result",
+  "$id": "https://membrick.dev/schemas/codex-code-result.schema.json",
+  "title": "Membrick Codex performance result",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,16 +18,16 @@
     "schema_version": { "const": 1 },
     "run_id": { "type": "string", "minLength": 1 },
     "scenario_id": { "type": "string", "minLength": 1 },
-    "arm": { "enum": ["baseline", "lint-ai", "oracle"] },
+    "arm": { "enum": ["baseline", "membrick", "oracle"] },
     "repetition": { "type": "integer", "minimum": 1 },
     "environment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["codex_version", "model", "lint_ai_revision", "fixture_revision"],
+      "required": ["codex_version", "model", "membrick_revision", "fixture_revision"],
       "properties": {
         "codex_version": { "type": "string" },
         "model": { "type": "string" },
-        "lint_ai_revision": { "type": "string" },
+        "membrick_revision": { "type": "string" },
         "fixture_revision": { "type": "string" },
         "fixture_diff_digest": { "type": ["string", "null"] }
       }

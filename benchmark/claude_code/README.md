@@ -1,6 +1,6 @@
 # Claude Code Performance Benchmarks
 
-This directory contains test-only A/B scenarios for measuring Lint-AI as a
+This directory contains test-only A/B scenarios for measuring Membrick as a
 Claude Code memory layer. The methodology and release gates are defined in
 [`docs/claude-code-performance-tests.md`](../../docs/claude-code-performance-tests.md).
 The cross-client integration benchmark methodology is defined in
@@ -18,7 +18,7 @@ benchmark/claude_code/
   results/         Generated results; ignored except for .gitkeep
 ```
 
-The initial scenarios use the Lint-AI repository itself as the fixture. A
+The initial scenarios use the Membrick repository itself as the fixture. A
 runner must resolve `repository.revision` to an exact commit and record a dirty
 diff digest before execution. It must use a disposable worktree rather than the
 developer's checkout. The Claude launcher reuses the shared orchestration in
@@ -28,50 +28,50 @@ Run one or more matching scenarios and memory arms with:
 
 ```bash
 python3 benchmark/claude_code/scripts/run_benchmark.py \
-  --arms claude-native claude-lint-ai claude-both \
+  --arms claude-native claude-membrick claude-both \
   --scenario index-store-segmented-routing \
   --results-dir benchmark/claude_code/results/shared-orchestration
 ```
 
 The report's `average_interaction_round_latency_ms` measures only the
 continuation prompt. The launcher runs three arms: Claude native memory only,
-Lint-AI memory with Claude auto-memory disabled, and both memory layers
-enabled. The Lint-AI arms use hooks and durable memory without the MCP
+Membrick memory with Claude auto-memory disabled, and both memory layers
+enabled. The Membrick arms use hooks and durable memory without the MCP
 code-index server, matching the Codex hooks-only latency comparison. The
-`hooks-only` profile no longer installs the `lint-ai-memory` skill, since that
-skill tells Claude to call `mcp__lint-ai__search`, a tool that does not exist
+`hooks-only` profile no longer installs the `membrick-memory` skill, since that
+skill tells Claude to call `mcp__membrick__search`, a tool that does not exist
 once MCP is stripped out of the isolated config. Installing it there only
 confused the model and inflated tokens/latency without helping recall.
 
 Each scenario/arm/repetition worktree persists after the run instead of being
-deleted, so its `.lint-ai/memory` store stays inspectable. A worktree
+deleted, so its `.membrick/memory` store stays inspectable. A worktree
 left over from a prior run of the same scenario/arm/repetition is removed
 automatically right before the next run of it starts. Inspect a run's
 captured memory with:
 
 ```bash
-target/release/lint-ai \
-  --inspect-index benchmark/claude_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/memory \
+target/release/membrick \
+  --inspect-index benchmark/claude_code/results/<arm>/<scenario>/rep-001/worktree/.membrick/memory \
   --inspect-view source-documents
 ```
 
 `--inspect-view` also accepts `summary`, `records`, and `segments`.
 
-To validate MCP with Lint-AI lifecycle hooks disabled, use the dedicated
+To validate MCP with Membrick lifecycle hooks disabled, use the dedicated
 MCP-only profile:
 
 ```bash
 python3 benchmark/claude_code/scripts/run_benchmark.py \
   --profile mcp-only \
-  --arms claude-lint-ai \
+  --arms claude-membrick \
   --scenario index-store-segmented-routing \
   --results-dir benchmark/claude_code/results/mcp-only
 ```
 
-This keeps the Lint-AI MCP server enabled and removes only Lint-AI hook
+This keeps the Membrick MCP server enabled and removes only Membrick hook
 commands from the isolated Claude settings. MCP tool selection remains
-model-controlled. The installed `lint-ai-memory` skill guides Claude to call
-`mcp__lint-ai__search` for prior project context, but it does not guarantee
+model-controlled. The installed `membrick-memory` skill guides Claude to call
+`mcp__membrick__search` for prior project context, but it does not guarantee
 that Claude will select the tool. In the recorded MCP-only run Claude called
 `info` but did not call `search`; use an explicit MCP-required prompt or a
 direct MCP client when measuring search/retrieval performance.
@@ -84,7 +84,7 @@ test design. It validated cross-session recall but is not a release benchmark.
 One repetition each, `hooks-only` profile, run 2026-08-16 after the SKILL.md
 and worktree-cleanup fixes above:
 
-| Metric | claude-native | claude-lint-ai | claude-both |
+| Metric | claude-native | claude-membrick | claude-both |
 |---|---|---|---|
 | Success | true | true | true |
 | Recall | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) |
@@ -97,9 +97,9 @@ and worktree-cleanup fixes above:
 All three arms recalled all 3 expected facts with identical accuracy, but the
 amount of work needed to get there differed sharply. Native Claude re-derived
 the architecture decision via repeated file reads/searches (9 tool calls).
-`claude-lint-ai` (Lint-AI memory, native auto-memory disabled) answered
+`claude-membrick` (Membrick memory, native auto-memory disabled) answered
 directly from 2 tool calls, using about a quarter of native's input tokens
-and roughly half its continuation latency. `claude-both` (Lint-AI memory and
+and roughly half its continuation latency. `claude-both` (Membrick memory and
 Claude's native auto-memory both enabled) went further still: 0 tool calls,
 the lowest latency, and the fewest tokens of the three. Having two
 independent memory sources available appears to reinforce recall rather than
@@ -128,7 +128,7 @@ the `match_any` substring scorer now strips Markdown emphasis markers
 `` **`query_top_n`:** `3` `` weren't matching a literal `query_top_n: 3`
 pattern.
 
-| Metric | claude-native | claude-lint-ai | claude-both |
+| Metric | claude-native | claude-membrick | claude-both |
 |---|---|---|---|
 | Success | true | true | true |
 | Recall | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) |
@@ -141,10 +141,10 @@ pattern.
 
 All three arms reach identical, perfect accuracy. No arm is "smarter" at
 recall. The gap is entirely in how much work it takes to get there:
-`claude-lint-ai` uses about a quarter of native's input tokens, is roughly
+`claude-membrick` uses about a quarter of native's input tokens, is roughly
 3x faster on continuation, and needs 7x fewer tool calls than
 `claude-native`. `claude-both` performs almost identically to
-`claude-lint-ai` here, suggesting Lint-AI's injected memory is doing the
+`claude-membrick` here, suggesting Membrick's injected memory is doing the
 work and Claude's own auto-memory adds little on top of it for this
 scenario. This is a single-repetition, single-scenario result, not a
 release benchmark. Treat it as directional pending a multi-scenario,
@@ -175,7 +175,7 @@ facts provide deterministic scoring targets. Commands in `validators` run only
 inside the disposable fixture worktree.
 
 `negative_control` scenarios intentionally contain no relevant memory. Their
-primary signal is whether Lint-AI avoids injecting unrelated context.
+primary signal is whether Membrick avoids injecting unrelated context.
 
 ## Current Scenarios
 

@@ -32,14 +32,14 @@ fn sample_doc(id: &str, content: &str) -> SourceDocument {
 #[test]
 fn workspace_watcher_publishes_relative_file_change_events_without_content() {
     let root = std::env::temp_dir().join(format!(
-        "lint-ai-workspace-watcher-{}-{}",
+        "membrick-workspace-watcher-{}-{}",
         std::process::id(),
         workspace_now_ms()
     ));
-    fs::create_dir_all(root.join(".lint-ai")).unwrap();
+    fs::create_dir_all(root.join(".membrick")).unwrap();
     let watcher = WorkspaceWatcher::new(&root, &[]).unwrap();
     fs::write(root.join("notes.md"), "private content").unwrap();
-    fs::write(root.join(".lint-ai").join("internal.json"), "internal").unwrap();
+    fs::write(root.join(".membrick").join("internal.json"), "internal").unwrap();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     let events = loop {
@@ -56,7 +56,7 @@ fn workspace_watcher_publishes_relative_file_change_events_without_content() {
     );
     assert!(events
         .iter()
-        .all(|event| event.file_path != ".lint-ai/internal.json"));
+        .all(|event| event.file_path != ".membrick/internal.json"));
     assert!(events.iter().all(|event| event.event.starts_with("file_")));
     drop(watcher);
     fs::remove_dir_all(root).unwrap();
@@ -71,7 +71,7 @@ fn workspace_watcher_ignores_access_events_on_the_root() {
     // discarded on every query and each query paid a full rebuild plus a
     // key-phrase re-extraction.
     let root = std::env::temp_dir().join(format!(
-        "lint-ai-workspace-watcher-access-{}-{}",
+        "membrick-workspace-watcher-access-{}-{}",
         std::process::id(),
         workspace_now_ms()
     ));
@@ -121,7 +121,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::current_dir()
         .expect("current directory should be available")
         .join("target")
-        .join(format!("lint-ai-{prefix}-{nanos}"))
+        .join(format!("membrick-{prefix}-{nanos}"))
 }
 
 fn reopen_store_after_writer_drop(index_root: &Path, options: PipelineOptions) -> IndexStore {
@@ -951,18 +951,18 @@ fn resolve_store_paths_under_corpus_root() {
         ..PipelineOptions::default()
     };
     let paths = resolve_store_paths(Some(&corpus_root), &options).expect("paths should resolve");
-    assert_eq!(paths.root, Some(corpus_root.join(".lint-ai")));
+    assert_eq!(paths.root, Some(corpus_root.join(".membrick")));
     assert_eq!(
         paths.lexical_dir,
-        Some(corpus_root.join(".lint-ai").join("lexical"))
+        Some(corpus_root.join(".membrick").join("lexical"))
     );
     assert_eq!(
         paths.semantic_dir,
-        Some(corpus_root.join(".lint-ai").join("semantic"))
+        Some(corpus_root.join(".membrick").join("semantic"))
     );
     assert_eq!(
         paths.metadata_path,
-        Some(corpus_root.join(".lint-ai").join("metadata.json"))
+        Some(corpus_root.join(".membrick").join("metadata.json"))
     );
 }
 
@@ -974,9 +974,9 @@ fn index_store_for_corpus_uses_corpus_local_semantic_store() {
     index.upsert(sample_doc("doc-1", "corpus rooted lexical index"));
     let results = index.query("lexical", 5).expect("query should succeed");
     assert!(!results.is_empty());
-    assert!(corpus_root.join(".lint-ai").join("semantic").exists());
-    assert!(!corpus_root.join(".lint-ai").join("lexical").exists());
-    let _ = fs::remove_dir_all(corpus_root.join(".lint-ai"));
+    assert!(corpus_root.join(".membrick").join("semantic").exists());
+    assert!(!corpus_root.join(".membrick").join("lexical").exists());
+    let _ = fs::remove_dir_all(corpus_root.join(".membrick"));
 }
 
 #[test]
@@ -987,13 +987,13 @@ fn index_store_for_corpus_writes_metadata() {
     index.upsert(sample_doc("doc-1", "metadata persistence test"));
     index.refresh().expect("refresh should succeed");
 
-    let metadata_path = corpus_root.join(".lint-ai").join("metadata.json");
+    let metadata_path = corpus_root.join(".membrick").join("metadata.json");
     assert!(metadata_path.exists());
     let metadata = fs::read_to_string(&metadata_path).expect("metadata should be readable");
     assert!(metadata.contains("\"schema_version\": 1"));
     assert!(metadata.contains("\"layout_version\": \"index-store-v1\""));
 
-    let _ = fs::remove_dir_all(corpus_root.join(".lint-ai"));
+    let _ = fs::remove_dir_all(corpus_root.join(".membrick"));
 }
 
 #[test]
@@ -1007,19 +1007,19 @@ fn index_store_persists_and_reloads_semantic_state() {
     assert_eq!(first_results[0].doc_id, "doc-1");
     drop(first);
 
-    let semantic_dir = corpus_root.join(".lint-ai").join("semantic");
+    let semantic_dir = corpus_root.join(".membrick").join("semantic");
     assert!(semantic_dir.join("records.json").exists());
     assert!(semantic_dir.join("core.bin").exists());
 
     let mut second =
-        reopen_store_after_writer_drop(&corpus_root.join(".lint-ai"), PipelineOptions::default());
+        reopen_store_after_writer_drop(&corpus_root.join(".membrick"), PipelineOptions::default());
     let second_results = second
         .query("persistence", 5)
         .expect("query should succeed");
     assert!(!second_results.is_empty());
     assert_eq!(second_results[0].doc_id, "doc-1");
 
-    let _ = fs::remove_dir_all(corpus_root.join(".lint-ai"));
+    let _ = fs::remove_dir_all(corpus_root.join(".membrick"));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed a Lint-AI server with one bulk /add request."""
+"""Seed a Membrick server with one bulk /add request."""
 import argparse
 import json
 import urllib.request

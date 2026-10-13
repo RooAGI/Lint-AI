@@ -1,4 +1,4 @@
-//! Guard: production memory access goes through [`lint_ai::memory_api::MemoryService`].
+//! Guard: production memory access goes through [`membrick::memory_api::MemoryService`].
 //!
 //! Direct `IndexStore` use is allowed only in:
 //! - `src/pipeline/*` — the core implementation the service owns,

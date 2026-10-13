@@ -4,7 +4,7 @@
 **Probe target:** OpenClaw **2026.9.6** (npm), installed at `~/workspace/openclaw-probe/node_modules/openclaw`
 **Environment:** Node v24.20.0, npm 10.9.4, loopback-only Gateway on port 18799, auth none
 **Rule honored:** every schema below was observed on a live host. Nothing is inferred from docs alone.
-**Scope:** research + design only. No changes to `~/lint-ai-demo`. No API keys entered (a deliberately
+**Scope:** research + design only. No changes to `~/membrick-demo`. No API keys entered (a deliberately
 fake `OPENAI_API_KEY=probe-dummy-key-not-a-real-credential` was used only to pass auth *resolution*;
 all model traffic went to a local stub server on 127.0.0.1:18798). No channels connected.
 
@@ -178,7 +178,7 @@ Fire per inbound message on the session key.
 
 | Hook | Why not triggered | Assessment |
 |---|---|---|
-| `command:stop` (internal) | Fires only inside `/stop` abort of an **active** run (code-read: `commands-handlers.runtime-*.mjs` → `handleStopCommand` → `beforeKill`). `/stop` via `sessions.send` with no active run was silently consumed; no event. | Minor for lint-ai: stop doesn't wipe the transcript; the next `agent_end`/`before_reset` captures it. |
+| `command:stop` (internal) | Fires only inside `/stop` abort of an **active** run (code-read: `commands-handlers.runtime-*.mjs` → `handleStopCommand` → `beforeKill`). `/stop` via `sessions.send` with no active run was silently consumed; no event. | Minor for membrick: stop doesn't wipe the transcript; the next `agent_end`/`before_reset` captures it. |
 | `session:patch` (internal) | Tied to the archive lifecycle op (`sessions.patch`); not exercised. | Not design-critical. |
 | `session:auto-reset` (internal) | Needs an idle-timeout auto-reset; impractical in a probe window. | Same capture path as `command:reset` presumably; treat as unverified. |
 | `session:compact:before` / `:after` (internal), `before_compaction` / `after_compaction` (typed) | Need a long-context session to trigger compaction. | Unverified; would be a natural capture trigger (pre-compaction transcript). |
@@ -208,21 +208,21 @@ Fire per inbound message on the session key.
    `runId`. Capture must be idempotent on `runId`.
 7. **No internal `session:start`/`session:end` events exist** in 2026.9.6 — the internal catalog has
    `command:new`/`command:reset` for lifecycle; true session boundaries are the **typed** `session_start`/
-   `session_end`. A lint-ai integration needs **both** systems: internal hooks for bootstrap injection
+   `session_end`. A membrick integration needs **both** systems: internal hooks for bootstrap injection
    (typed hooks have no bootstrap mutator — the closest typed hooks are `before_prompt_build`/
    `agent_turn_prepare`, which were not probed), typed hooks for session lifecycle + per-turn capture.
 
 ---
 
-## 5. Proposed hook → lint-ai mapping (design, not yet implemented)
+## 5. Proposed hook → membrick mapping (design, not yet implemented)
 
-| OpenClaw hook | Kind | lint-ai role | Notes |
+| OpenClaw hook | Kind | membrick role | Notes |
 |---|---|---|---|
-| internal `agent:bootstrap` | internal (mutating) | **Recall.** Query lint-ai for relevant memories for this session/turn; append as a synthetic `bootstrapFiles` entry (e.g. `{name:"LINTAI.md", ...}`). | Verified end-to-end. Idempotent content; fires per turn. |
-| typed `agent_end` | Observe | **Incremental capture.** Drain the turn's `messages` (user + assistant) into lint-ai (`record_session`-equivalent). Dedupe by `runId`. | Richest per-turn payload; `ctx` carries sessionId/agentId/channel. |
+| internal `agent:bootstrap` | internal (mutating) | **Recall.** Query membrick for relevant memories for this session/turn; append as a synthetic `bootstrapFiles` entry (e.g. `{name:"LINTAI.md", ...}`). | Verified end-to-end. Idempotent content; fires per turn. |
+| typed `agent_end` | Observe | **Incremental capture.** Drain the turn's `messages` (user + assistant) into membrick (`record_session`-equivalent). Dedupe by `runId`. | Richest per-turn payload; `ctx` carries sessionId/agentId/channel. |
 | typed `before_reset` | Observe | **Authoritative session-close capture.** `messages` = full departing transcript; `reason` ∈ {new, reset, ...}. | Fires before wipe — no re-fetch needed. |
-| typed `session_end` | Observe | **Lifecycle bookkeeping.** Mark session closed in lint-ai; `reason` distinguishes new/reset/shutdown. `nextSessionId` links parent→child on `reason=new`. | `messageCount` unreliable; don't use it. |
-| typed `session_start` | Observe | **Session open.** Register session in lint-ai; `resumedFrom` links child→parent. | Only fires for child-with-parent creation; plain creates have no typed start. |
+| typed `session_end` | Observe | **Lifecycle bookkeeping.** Mark session closed in membrick; `reason` distinguishes new/reset/shutdown. `nextSessionId` links parent→child on `reason=new`. | `messageCount` unreliable; don't use it. |
+| typed `session_start` | Observe | **Session open.** Register session in membrick; `resumedFrom` links child→parent. | Only fires for child-with-parent creation; plain creates have no typed start. |
 | internal `command:reset` / `command:new` | internal (observe) | **Fallback lifecycle signals** if only internal hooks are deployed. | No transcript in payload — pair with typed `before_reset` for capture. |
 | internal `gateway:shutdown` / typed `gateway_stop` + `session_end(shutdown)` | Observe | **Bounded final drain only.** Flush pending capture queue; crash-consistent, <2s total. | Never the primary capture path. |
 | internal `message:received` / `message:preprocessed` | Observe | Observation only (logging/metrics). | No transcript, no mutation — insufficient for capture or recall. |
@@ -248,7 +248,7 @@ typed plugin hooks observe lifecycle with structured payloads.
    long sessions; triggering one live needs a long-context run.
 3. **`command:stop`** capture semantics: a stopped run's partial transcript stays in the session and is
    picked up by the next `agent_end`/`before_reset` — confirm this is acceptable vs. an explicit stop hook.
-4. **Where lint-ai recall queries get their input:** `agent:bootstrap` fires per turn but the payload has no
+4. **Where membrick recall queries get their input:** `agent:bootstrap` fires per turn but the payload has no
    user message (it's pre-injection); the turn's message arrives via `message:received` just before.
    The recall hook likely needs to correlate the two (same `sessionKey`, message first, bootstrap second)
    or read the pending input from the session store.
@@ -257,15 +257,15 @@ typed plugin hooks observe lifecycle with structured payloads.
 
 ## 7. Lifecycle alignment with the Claude/Codex integrations (added per Luyi 2026-09-28)
 
-lint-ai's Claude Code and Codex integrations share one lifecycle model
-(`src/integrations/claude_code/hooks/mod.rs`, `src/integrations/codex/hooks/mod.rs` in `~/lint-ai-demo`):
+membrick's Claude Code and Codex integrations share one lifecycle model
+(`src/integrations/claude_code/hooks/mod.rs`, `src/integrations/codex/hooks/mod.rs` in `~/membrick-demo`):
 every hook is classified **retrieve** (memory → context) or **capture** (context → memory), and captures
 are typed **Checkpoint** (pre-compaction), **Outcome** (a finished unit of work), or **SessionSummary**
 (session close). The OpenClaw design below follows that same lifecycle so behavior — and the resulting
 document types — stay uniform across hosts. Capture payloads from OpenClaw hooks should be written as
 the same Checkpoint/Outcome/SessionSummary document types so retrieval treats all hosts identically.
 
-| Claude/Codex lifecycle | lint-ai action | OpenClaw equivalent (probed §2) | Status |
+| Claude/Codex lifecycle | membrick action | OpenClaw equivalent (probed §2) | Status |
 |---|---|---|---|
 | SessionStart → retrieve | inject session-scoped memories | internal `agent:bootstrap` → recall + inject synthetic bootstrap file | ✅ verified end-to-end (§2.1) |
 | UserPromptSubmit → retrieve | retrieve against the user's message | `agent:bootstrap` fires per turn right after `message:received`; correlate on `sessionKey` | ⚠️ needs correlation (§6 Q4) |

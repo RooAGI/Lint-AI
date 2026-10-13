@@ -1,18 +1,18 @@
 [package]
 autobins = false
-name = "lint-ai"
+name = "membrick"
 version = "0.4.0"
 edition = "2021"
 description = "Persistent memory layer for AI coding agents — MCP server with current-state retrieval and supersession tracking"
 license = "Apache-2.0"
-repository = "https://github.com/RooAGI/Lint-AI"
+repository = "https://github.com/RooAGI/Membrick"
 homepage = "https://www.rooagi.com"
 readme = "README.md"
 keywords = ["agent-memory", "mcp", "knowledge-base", "AI", "agents"]
 categories = ["text-processing", "command-line-utilities"]
 
 [lib]
-name = "lint_ai"
+name = "membrick"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
@@ -72,8 +72,13 @@ python = ["dep:pyo3"]
 experimental = []
 
 [[bin]]
-name = "lint-ai"
+name = "membrick"
 path = "src/main.rs"
+
+# Keep existing provider configurations working after the product rename.
+[[bin]]
+name = "lint-ai"
+path = "src/legacy_main.rs"
 
 [[bin]]
 name = "corpus_scale_benchmark"

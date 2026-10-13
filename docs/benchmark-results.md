@@ -1,6 +1,6 @@
-# Lint-AI Retrieval and Corpus Benchmarks
+# Membrick Retrieval and Corpus Benchmarks
 
-This is Lint-AI's standalone benchmark track: it measures retrieval quality,
+This is Membrick's standalone benchmark track: it measures retrieval quality,
 recency behavior, and corpus-scale performance without an agent client.
 
 ## Canonical LongMemEval-S comparison result
@@ -8,7 +8,7 @@ recency behavior, and corpus-scale performance without an agent client.
 The public headline uses the fair 500-question comparison track: both systems
 were evaluated with the same scorer and top-k protocol. These are **any-hit
 recall** values, meaning a question scores as a hit when any relevant session
-appears in the top *k*. The Lint-AI run uses the single index (not segmented),
+appears in the top *k*. The Membrick run uses the single index (not segmented),
 the default heuristic backend, and no embedding vectors. Measured 2026-09-28
 on commit dbf6496a.
 
@@ -21,7 +21,7 @@ on commit dbf6496a.
 | NDCG@10 | 85.0% |
 
 The canonical comparison artifact is
-[`retrieval-longmemeval-500.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-500.json).
+[`retrieval-longmemeval-500.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500.json).
 
 ## Miss-analysis run (2026-10-12)
 
@@ -58,9 +58,9 @@ cargo run --release --bin haystack_scoped_benchmark -- \
 
 For a standalone diagnostic using the current code and fractional recall (a
 different metric from the comparison headline), see
-[`retrieval-longmemeval-current.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current.json).
+[`retrieval-longmemeval-current.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-current.json).
 The rust-bert POS/NER branch is reported separately in
-[`benchmark/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/README.md).
+[`benchmark/README.md`](https://github.com/RooAGI/Membrick/blob/main/benchmark/README.md).
 
 ## Native event retrieval run (2026-10-12)
 
@@ -119,7 +119,7 @@ displayed precision; mean search latency is 2.58 ms.
 | NDCG@10 | 85.11% |
 | Mean search latency | 2.58 ms |
 
-Report: [latest 500-question run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz).
+Report: [latest 500-question run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz).
 
 ## Segmented-index comparison (500 questions)
 
@@ -145,7 +145,7 @@ to the standalone MemoryService timing in the 500-question headline above.
 Fused temporal + global had the strongest recall and MRR among these listed
 variants, with higher latency; the intent baseline was the fastest listed.
 
-Full report: [`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
+Full report: [`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 
 ### Historical Tantivy 0.26.2 segmented rerun (2026-10-05)
@@ -205,7 +205,7 @@ because it queries all segments.
 Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz`](../comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz).
 
 The earlier 133-query multi-session comparison is retained as a historical
-slice in [`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).
+slice in [`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-multisession-v0.2.0.json).
 ## Segment router comparison (full 500, top_n=5)
 
 Seven routing strategies were compared on the full 500-question LongMemEval-S
@@ -342,7 +342,7 @@ Three fixes landed for temporal queries, validated on the 133
 ```bash
 cargo run --release --bin haystack_scoped_benchmark -- \
   --longmemeval benchmark/data/longmemeval_s_raw.json \
-  --out benchmark/data/lintai_longmemeval_scoped_results.json
+  --out benchmark/data/membrick_longmemeval_scoped_results.json
 
 cargo run --release --bin corpus_scale_benchmark -- \
   --longmemeval benchmark/data/longmemeval_s_raw.json \
@@ -350,7 +350,7 @@ cargo run --release --bin corpus_scale_benchmark -- \
 ```
 
 For the full recorded outputs and comparison methodology, see the repository
-[`comparison/`](https://github.com/RooAGI/Lint-AI/tree/main/comparison) folder.
+[`comparison/`](https://github.com/RooAGI/Membrick/tree/main/comparison) folder.
 
 ## Tantivy upgrade throughput verification
 

@@ -27,7 +27,7 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
     top_k: usize,
     filters: &std::collections::BTreeMap<String, String>,
 ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
-    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let profile = std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some();
     let query_started = std::time::Instant::now();
     let Some(snapshot) = snapshot else {
         return Ok((

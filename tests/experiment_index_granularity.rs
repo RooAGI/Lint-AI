@@ -7,9 +7,9 @@
 //! so the retriever can't connect "dream job" (turn A) with "starting next
 //! month" (turn C). Session-level indexing keeps them together.
 
-use lint_ai::memory_api::{MemoryService, SearchRequest};
-use lint_ai::PipelineOptions;
-use lint_ai::SourceDocument;
+use membrick::memory_api::{MemoryService, SearchRequest};
+use membrick::PipelineOptions;
+use membrick::SourceDocument;
 use std::collections::BTreeMap;
 
 fn make_service() -> MemoryService {

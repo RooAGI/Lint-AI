@@ -2,7 +2,7 @@
 
 ## Overview
 
-Lint-AI integrates with Codex as a persistent memory layer. It captures
+Membrick integrates with Codex as a persistent memory layer. It captures
 useful outcomes from one session and retrieves relevant memories when a later
 session needs them. The expected benefit is less repeated repository
 exploration without reducing answer quality.
@@ -21,18 +21,18 @@ cover the continuation session only; setup is the memory-seeding phase.
 | Arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Codex native memory | 38.13 s | 151,000 | 99,840 | 1,505 | 5 | 2/3 | 0 ms |
-| Lint-AI only | 18.53 s | 62,478 | 43,264 | 604 | 2 | 2/3 | 1.33 s |
+| Membrick only | 18.53 s | 62,478 | 43,264 | 604 | 2 | 2/3 | 1.33 s |
 | Both layers | 13.98 s | 31,684 | 25,088 | 454 | 1 | 2/3 | 1.39 s |
 
-Compared with native memory, Lint-AI-only was `51%` faster and the combined
+Compared with native memory, Membrick-only was `51%` faster and the combined
 arm was `63%` faster in this run. Recall was equal across all three arms.
-Lint-AI hook execution added approximately `1.3-1.4 s` to continuation time.
+Membrick hook execution added approximately `1.3-1.4 s` to continuation time.
 
 The setup phase must not be used as a latency comparison. Codex native and
 combined setup consumed approximately `342k` and `347k` input tokens, while
-Lint-AI-only consumed `921k`; the model performed more repository exploration
+Membrick-only consumed `921k`; the model performed more repository exploration
 when Codex native memory was disabled. The native Codex memory file contained
-no relevant consolidated rollout memory, while Lint-AI injected the captured
+no relevant consolidated rollout memory, while Membrick injected the captured
 architecture decision during continuation.
 
 This is one repetition and is diagnostic evidence, not a release benchmark.
@@ -43,11 +43,11 @@ Preserved report:
 ## MCP Validation Run
 
 The Codex MCP path was validated separately with the same
-`index-store-segmented-routing` scenario and one `lint-ai` arm:
+`index-store-segmented-routing` scenario and one `membrick` arm:
 
 | Arm | MCP status | Continuation | Input tokens | Cached input | Output tokens | Reported tool calls | Recall | Hook time |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex + Lint-AI MCP | Connected | 9.38 s | 13,246 | 12,032 | 77 | 0 | 2/3 | 1.35 s |
+| Codex + Membrick MCP | Connected | 9.38 s | 13,246 | 12,032 | 77 | 0 | 2/3 | 1.35 s |
 
 The MCP server completed initialization and `tools/list`. The scenario used
 Codex lifecycle hooks for memory retrieval and did not invoke an MCP
@@ -63,18 +63,18 @@ Preserved report:
 
 ## MCP Performance Track
 
-The current three-arm results intentionally remove the Lint-AI MCP server so
+The current three-arm results intentionally remove the Membrick MCP server so
 they measure lifecycle memory-hook behavior only. MCP should be measured in a
 separate full-integration track because it adds repository code-search
 functionality and may build or load a repository index at startup.
 
 Use this additional matrix:
 
-| Arm | Codex memory | Lint-AI hooks | Lint-AI MCP |
+| Arm | Codex memory | Membrick hooks | Membrick MCP |
 | --- | --- | --- | --- |
 | Native | Enabled | Disabled | Disabled |
-| Lint-AI hooks | Disabled | Enabled | Disabled |
-| Lint-AI full | Disabled | Enabled | Enabled |
+| Membrick hooks | Disabled | Enabled | Disabled |
+| Membrick full | Disabled | Enabled | Enabled |
 | Combined full | Enabled | Enabled | Enabled |
 
 Record these MCP-specific metrics independently from continuation latency:
@@ -100,7 +100,7 @@ The benchmark is designed to answer four questions:
 ## Non-Goals
 
 - Comparing Codex models or Codex releases.
-- Comparing Lint-AI with unrelated coding agents.
+- Comparing Membrick with unrelated coding agents.
 - Using retrieval benchmark scores alone as evidence of agent improvement.
 - Optimizing Rust microbenchmarks without measuring end-to-end Codex tasks.
 - Persisting private transcripts as benchmark artifacts.
@@ -112,9 +112,9 @@ diagnostic arms below.
 
 | Arm | Hooks | MCP | Persisted memory |
 | --- | --- | --- | --- |
-| Codex-native | No Lint-AI hook commands | No Lint-AI MCP | Codex Memories enabled |
-| Lint-AI | Enabled | Excluded from hooks-only benchmark | Seeded by the setup session |
-| Lint-AI with Codex memory | Enabled | Excluded from hooks-only benchmark | Both layers enabled |
+| Codex-native | No Membrick hook commands | No Membrick MCP | Codex Memories enabled |
+| Membrick | Enabled | Excluded from hooks-only benchmark | Seeded by the setup session |
+| Membrick with Codex memory | Enabled | Excluded from hooks-only benchmark | Both layers enabled |
 | Baseline | Disabled | Disabled | None |
 | Oracle | Disabled | Disabled | Relevant facts inserted into the prompt |
 
@@ -122,33 +122,33 @@ The oracle arm estimates the best result available when the correct memory is
 known. It separates retrieval failures from model reasoning failures.
 
 Run order must be randomized. Each arm uses a fresh Codex session, fresh
-working copy, and isolated Codex configuration and Lint-AI store. Do not reuse
+working copy, and isolated Codex configuration and Membrick store. Do not reuse
 model context or generated files across arms.
 
 ## Apples-to-Apples Comparison
 
-The current apples-to-apples comparison is `Codex-native` versus `Lint-AI`.
+The current apples-to-apples comparison is `Codex-native` versus `Membrick`.
 Both use the same model, prompts, validators, fresh sessions, and isolated
-configuration. Codex-native enables Codex Memories and has no Lint-AI hook
-commands or MCP server. Lint-AI disables Codex Memories and enables only the
-Lint-AI hooks and MCP server. This measures the two competing memory layers
+configuration. Codex-native enables Codex Memories and has no Membrick hook
+commands or MCP server. Membrick disables Codex Memories and enables only the
+Membrick hooks and MCP server. This measures the two competing memory layers
 without stacking them.
 
-For direct comparison with the Claude benchmark, the Lint-AI Codex arm uses
+For direct comparison with the Claude benchmark, the Membrick Codex arm uses
 only the Claude-equivalent lifecycle events: `SessionStart`,
 `UserPromptSubmit`, `UserPromptExpansion`, `PreCompact`, `Stop`, and
 `SessionEnd`. Tool and subagent hooks are excluded from this benchmark profile.
 
 The clean comparison matrix is:
 
-| Arm | Codex hooks | Codex Memories | Lint-AI |
+| Arm | Codex hooks | Codex Memories | Membrick |
 | --- | --- | --- | --- |
 | Baseline | Disabled | Disabled | Disabled |
 | Codex-only | Disabled | Enabled | Disabled |
-| Lint-AI only | Enabled | Disabled | Enabled |
+| Membrick only | Enabled | Disabled | Enabled |
 | Combined | Enabled | Enabled | Enabled |
 
-Use Codex-native against Lint-AI to compare the two memory implementations. A
+Use Codex-native against Membrick to compare the two memory implementations. A
 no-memory baseline and combined arm remain useful diagnostic measurements, but
 are not the primary comparison in the current launcher.
 
@@ -191,7 +191,7 @@ Add Codex-specific tool-use coverage that the Claude suite does not need:
 - Subagent handoff: verify that `SubagentStart` retrieval and `SubagentStop`
   capture do not leak unrelated session memory.
 
-Include negative queries where no memory is relevant. Lint-AI should inject no
+Include negative queries where no memory is relevant. Membrick should inject no
 context or only context below a defined relevance threshold.
 
 ## Controlled Environment
@@ -200,7 +200,7 @@ Pin and record:
 
 - Codex version
 - model identifier
-- Lint-AI revision and feature set
+- Membrick revision and feature set
 - operating system and architecture
 - repository revision
 - Codex settings and permission mode
@@ -246,7 +246,7 @@ against precision.
 **Total model tokens**
 
 Sum input, cache-read, cache-write, and output tokens across the continuation
-session. Report each component separately and report injected Lint-AI context
+session. Report each component separately and report injected Membrick context
 bytes and estimated tokens. Missing telemetry is `null`, never zero.
 
 Report parent-session and all-model token components separately. Derive
@@ -320,7 +320,7 @@ raw Codex output. Its field names and token accounting match the Claude parser;
 Codex cached input is normalized into uncached input plus cache-read input
 before totals are calculated.
 
-### Lint-AI Measurements
+### Membrick Measurements
 
 Add structured measurements around these boundaries:
 
@@ -373,14 +373,14 @@ result files containing project content must not be committed.
 For each scenario repetition:
 
 1. Create an isolated repository worktree at the pinned revision.
-2. Create isolated Codex configuration and Lint-AI memory directories.
+2. Create isolated Codex configuration and Membrick memory directories.
 3. Run the setup session and validate that required facts were established.
-4. For the Lint-AI arm, verify expected capture documents and segments.
+4. For the Membrick arm, verify expected capture documents and segments.
 5. Reset generated repository changes required by the scenario definition.
 6. Start a fresh continuation session.
 7. Run the continuation prompt with a fixed timeout.
 8. Execute the deterministic task validator.
-9. Parse Codex and Lint-AI event data.
+9. Parse Codex and Membrick event data.
 10. Redact and write one structured result record.
 11. Destroy the isolated configuration, transcript, and memory directories.
 
@@ -400,7 +400,7 @@ results in addition to aggregate values.
   rate.
 
 Do not average successful and timed-out latency without reporting timeout rate.
-Do not discard failed Lint-AI runs. Infrastructure failures are classified
+Do not discard failed Membrick runs. Infrastructure failures are classified
 separately from task failures using predefined rules.
 
 ## Initial Release Gates
@@ -427,8 +427,8 @@ candidate's results, and record the rationale in this document.
 Every run includes synthetic canaries for API keys, bearer tokens, passwords,
 and PEM private keys. After capture, scan:
 
-- `.lint-ai/memory`
-- Lint-AI measurement JSONL
+- `.membrick/memory`
+- Membrick measurement JSONL
 - benchmark result records
 - generated reports
 
@@ -451,7 +451,7 @@ The generated report includes:
 - secret-canary scan result
 
 Reports must clearly separate measured results from interpretation. A report
-must not claim that Lint-AI reduces tokens or latency when the corresponding
+must not claim that Membrick reduces tokens or latency when the corresponding
 telemetry was missing.
 
 ## Implementation Phases

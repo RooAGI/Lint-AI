@@ -1,12 +1,12 @@
 # Comparison
 
-This comparison asks a specific question: how does Lint-AI's retrieval layer
+This comparison asks a specific question: how does Membrick's retrieval layer
 perform against another reproducible, retrieval-oriented memory system? It does
 not claim that every memory product or agent runtime can be reduced to one
 Recall@K score.
 
 The complete scripts and machine-readable artifacts live in the repository's
-[`comparison/`](https://github.com/RooAGI/Lint-AI/tree/main/comparison)
+[`comparison/`](https://github.com/RooAGI/Membrick/tree/main/comparison)
 directory.
 
 For a dedicated breakdown of the current `POST /search`, `POST /add`,
@@ -31,10 +31,10 @@ accounts for accepted work that became searchable before the run ended.
 The read-only, single-write, batch-write, and mixed-load figures are different
 workloads and should not be compared as if they ran together. The batch rate is
 not sustainable because admission rejected excess requests. Raw artifacts:
-[read layout/version run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json),
-[direct `/add` run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json),
-[128-record default-schedule run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json),
-and [concentrated sparse mixed-load run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json).
+[read layout/version run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json),
+[direct `/add` run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json),
+[128-record default-schedule run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json),
+and [concentrated sparse mixed-load run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json).
 
 ## System selection and scope
 
@@ -52,7 +52,7 @@ token use, and latency.
 
 | System | Role | Direct retrieval without a model? | Model required? | Embeddings required? | In this comparison? |
 |---|---|---:|---:|---:|---:|
-| Lint-AI | File-based retrieval and memory layer | Yes | No | No | Yes |
+| Membrick | File-based retrieval and memory layer | Yes | No | No | Yes |
 | AgentMemory | Retrieval-oriented memory layer | Yes, in BM25 mode | No | No, in BM25 mode | Yes |
 | Mem0 | Model-assisted memory layer | No, for its standard semantic pipeline | Yes | Yes | No |
 | LangMem | Memory toolkit for LangGraph | No | Yes | Yes | No |
@@ -70,7 +70,7 @@ Both systems can therefore be evaluated on the same 500-question
 LongMemEval-S set using the same any-hit Recall@K, MRR, and NDCG@10 scorer.
 
 The comparison uses AgentMemory's local `POST /agentmemory/smart-search`
-endpoint and its BM25 result artifact. Lint-AI uses local `POST /search` with
+endpoint and its BM25 result artifact. Membrick uses local `POST /search` with
 the same query set and top-k cutoffs (5, 10, and 20). Hosted Mem0 results and
 agent-runtime results are intentionally excluded because they answer a
 different evaluation question.
@@ -85,7 +85,7 @@ correct answer session appears in the top K results.
 
 | System | Any-hit Recall@5 | Any-hit Recall@10 | Any-hit Recall@20 | MRR | NDCG@10 |
 |---|---:|---:|---:|---:|---:|
-| Lint-AI | 94.2% | 96.8% | 97.6% | 87.0% | 85.0% |
+| Membrick | 94.2% | 96.8% | 97.6% | 87.0% | 85.0% |
 | AgentMemory | 87.0% | 94.8% | 98.4% | 71.6% | 73.0% |
 
 The full scorer and per-question outputs are available in
@@ -94,27 +94,27 @@ The full scorer and per-question outputs are available in
 ### HTTP search load
 
 The normalized service run used 23,366 records, 100 requests per cell,
-`top_k`/`limit` 20, and a keyword query on the same local machine. The Lint-AI
+`top_k`/`limit` 20, and a keyword query on the same local machine. The Membrick
 rows are the historical v0.1.9 single-index baseline. They predate the v0.2.0
 Axum/snapshot refactor and do not describe the current release.
 
 | System | Concurrency | p50 | p90 | p99 | Throughput |
 |---|---:|---:|---:|---:|---:|
-| Lint-AI | 1 | 6.96 ms | 7.65 ms | 28.17 ms | 140 req/s |
+| Membrick | 1 | 6.96 ms | 7.65 ms | 28.17 ms | 140 req/s |
 | AgentMemory | 1 | 7.04 ms | 10.53 ms | 16.94 ms | 130 req/s |
-| Lint-AI | 10 | 10.23 ms | 11.87 ms | 12.52 ms | 952 req/s |
+| Membrick | 10 | 10.23 ms | 11.87 ms | 12.52 ms | 952 req/s |
 | AgentMemory | 10 | 58.81 ms | 60.35 ms | 61.33 ms | 171 req/s |
 
-In this historical run at concurrency 10, Lint-AI delivered about 5.6× the
+In this historical run at concurrency 10, Membrick delivered about 5.6× the
 throughput. This measures service behavior, not retrieval quality; the endpoint
 implementations and corpus contents are not identical. The full run is in
-[`latency-23366.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/latency-23366.json).
+[`latency-23366.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/latency-23366.json).
 There is no separate throughput run against the exact v0.2.1 release artifact.
 
 ### v0.2.0 layout throughput
 
 The current uncached layout run is recorded in
-[`throughput-layout-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-layout-v0.2.0.json).
+[`throughput-layout-v0.2.0.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-layout-v0.2.0.json).
 It used release mode, 23,366 records, 100 requests per cell, `top_k: 20`, and
 the query `deployment configuration system decision`. The machine was an Intel
 Core i7-7700K with 8 logical CPUs running Ubuntu 22.04.5 LTS (kernel
@@ -170,7 +170,7 @@ LongMemEval rerun showed lower retrieval quality, so this project stays on
 0.25.0. These rates describe this specific machine and workload; they are not
 directly comparable with the shorter 100-request v0.2.0 runs above. Full
 measurements, latency percentiles, binary hashes, and protocol are in
-[`throughput-tantivy-upgrade-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json)
+[`throughput-tantivy-upgrade-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json)
 and the [Tantivy verification notes](releases/tantivy-0.26.2-verification.md).
 
 #### Current single-index optimization diagnostic
@@ -183,7 +183,7 @@ working tree on Darwin arm64; the exact hardware model was not recorded. Treat
 it as a diagnostic for that source state, not as a release result or a direct
 comparison with the five-run, cold-start v0.2.0 table. Details and raw values
 are in
-[`throughput-single-index-2026-10-03.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-single-index-2026-10-03.json).
+[`throughput-single-index-2026-10-03.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-single-index-2026-10-03.json).
 
 #### Routed segment throughput and Rayon investigation (2026-10-04)
 
@@ -248,13 +248,13 @@ internal timer but did not show a repeatable end-to-end gain. The detailed
 trial record and related artifacts are in the
 [server performance notes](server.md#multi-segment-routed-filter-cost).
 
-Artifacts: [matched one-vs-five run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-one-vs-five-2026-10-04.json),
-[fan-out and route-width sweep](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-concurrency-breadth-sweep-2026-10-04.json),
-[query-stage profile](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-query-stage-profile-2026-10-04.json),
-and [LongMemEval width 1](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-route-width-1-100-2026-10-04.json.gz),
-[2](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-route-width-2-100-2026-10-04.json.gz),
-[3](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-route-width-3-100-2026-10-04.json.gz),
-and [5](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-route-width-5-100-2026-10-04.json.gz).
+Artifacts: [matched one-vs-five run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-one-vs-five-2026-10-04.json),
+[fan-out and route-width sweep](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-concurrency-breadth-sweep-2026-10-04.json),
+[query-stage profile](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-query-stage-profile-2026-10-04.json),
+and [LongMemEval width 1](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-route-width-1-100-2026-10-04.json.gz),
+[2](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-route-width-2-100-2026-10-04.json.gz),
+[3](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-route-width-3-100-2026-10-04.json.gz),
+and [5](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-route-width-5-100-2026-10-04.json.gz).
 
 #### Mixed HTTP read/write load
 
@@ -276,7 +276,7 @@ python3 comparison/mixed_load.py \
 The paired control and mixed workload run against the same server and corpus;
 each repetition starts with a fresh temporary index. See the latest mixed-load
 artifact at
-[`throughput-mixed-read-write-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-mixed-read-write-2026-10-04.json).
+[`throughput-mixed-read-write-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-mixed-read-write-2026-10-04.json).
 
 The October 4 artifact is retained as historical diagnostic evidence. Its
 readers used `mixed-bench-user` while the seed belonged to `bench-user`, so its
@@ -304,9 +304,9 @@ Batching increased record throughput as batch size grew; 128 adds per request
 delivered about 27.5 times the single-add record rate, with higher request
 latency. No writes failed, and a final search found the last written record in
 every repetition. This is a working-tree diagnostic, not a release capacity
-claim. The [raw results](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-2026-10-05.json)
+claim. The [raw results](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-2026-10-05.json)
 include environment and per-repetition details; reproduction instructions are
-in the [comparison README](https://github.com/RooAGI/Lint-AI/blob/main/comparison/README.md#write-only-http-throughput).
+in the [comparison README](https://github.com/RooAGI/Membrick/blob/main/comparison/README.md#write-only-http-throughput).
 
 #### Write path optimization profile (2026-10-05)
 
@@ -328,9 +328,9 @@ meaningful gain. All 12 cells had zero errors and the last record was visible
 to search. These are working-tree diagnostics, not release capacity claims.
 The earlier exploratory run that skipped the lifecycle sidecar is not used as
 the comparison because it changed a documented persisted artifact. See the
-[compatibility-preserving rerun](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-compact-records-2026-10-05-rerun.json),
-[exploratory compact run](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-compact-records-2026-10-05.json),
-and [receipt-journal comparison](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-receipt-journal-2026-10-05.json).
+[compatibility-preserving rerun](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-compact-records-2026-10-05-rerun.json),
+[exploratory compact run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-compact-records-2026-10-05.json),
+and [receipt-journal comparison](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-receipt-journal-2026-10-05.json).
 
 #### Staged write flow (2026-10-05)
 
@@ -378,8 +378,8 @@ expected limitation of this simple sequential design, and the 250 ms trigger
 is not a 250 ms visibility guarantee. These are working-tree diagnostics on
 an Apple M5 Pro with Tantivy 0.25.0, not release capacity claims.
 
-Raw reports: [write-only](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-2026-10-05-final.json)
-and [corrected mixed workload](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-mixed-read-write-staged-2026-10-05.json).
+Raw reports: [write-only](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-staged-2026-10-05-final.json)
+and [corrected mixed workload](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-mixed-read-write-staged-2026-10-05.json).
 
 Reproduce the staged measurements after building the release server:
 
@@ -434,9 +434,9 @@ records/s for batches of 128, with 4,114.138 ms p99. This threshold is an
 experimental setting, not the production default; it trades publication
 frequency for longer visibility delays and larger refresh stalls.
 
-Raw reports: [default schedule](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-long-default-3rep-2026-10-05.json),
-[large-threshold diagnostic](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-long-batch32768-batched-sort-3rep-2026-10-05.json),
-and [earlier baseline](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-staged-long-baseline-2026-10-05.json).
+Raw reports: [default schedule](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-staged-long-default-3rep-2026-10-05.json),
+[large-threshold diagnostic](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-staged-long-batch32768-batched-sort-3rep-2026-10-05.json),
+and [earlier baseline](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-staged-long-baseline-2026-10-05.json).
 Reproduce with the benchmark schedule flags:
 
 ```bash
@@ -469,7 +469,7 @@ local diagnostics, not a capacity guarantee or a like-for-like historical
 comparison.
 
 The complete raw report records the binary SHA-256, seed size, latency values,
-errors, and each repetition: [background publication write-only report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-long-2026-10-05.json).
+errors, and each repetition: [background publication write-only report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-long-2026-10-05.json).
 
 The runner's completed-work rate is accepted records divided by measurement
 duration plus final-flush duration. It is useful for comparing the full run and
@@ -493,7 +493,7 @@ With 128 records per request, the median remained 2,528 accepted records/s,
 while median completed-work throughput was 1,927.65 records/s. This saturated the
 pending-write limit, with 24,992–27,110 rejected requests per run and final
 flushes of 17.0–23.8 seconds. It remains a burst measurement, not a sustainable
-write rate. [Copy-on-write rerun report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-cow-long-2026-10-05.json)
+write rate. [Copy-on-write rerun report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-cow-long-2026-10-05.json)
 contains all repetitions and per-run outcomes.
 
 The completed-work rate is accepted records divided by measurement time plus
@@ -508,7 +508,7 @@ runs measured 224.37 accepted / 217.54 completed single records/s, effectively
 unchanged from the copy-on-write run. Batch-128 median was 2,528.46 accepted /
 1,977.12 completed records/s, with 25,501–26,673 rejected requests. The temporal
 rebuild was not the dominant write bottleneck for this benchmark. [Temporal
-append report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json)
+append report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json)
 contains the binary hash and per-run results.
 
 We then raised the publication trigger from 250 ms / 512 documents to 1 second
@@ -517,7 +517,7 @@ We then raised the publication trigger from 250 ms / 512 documents to 1 second
 took 14.5–16.3 seconds, and each run still rejected 26,760–27,128 requests.
 Coalescing reduced rebuild overhead modestly but did not eliminate saturation.
 All flushes succeeded and the final accepted write was searchable. This is a
-diagnostic schedule, not a new default. [Coalescing report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-coalesced-2026-10-05.json)
+diagnostic schedule, not a new default. [Coalescing report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-coalesced-2026-10-05.json)
 records the schedule and binary hash.
 
 The write-only harness uses the production segmented layout and seeds 23
@@ -529,8 +529,8 @@ completed records/s; concentrated writes measured 5,683 / 3,945. These short
 cells still saturated admission (about 9,000 and 6,700–6,800 rejections per
 run respectively), and corpus growth makes them directional only. The completed
 rate includes final flush. Both reports contain raw run data:
-[round-robin](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-distribution-probe-2026-10-05.json)
-and [concentrated](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-concentrated-probe-2026-10-05.json).
+[round-robin](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-distribution-probe-2026-10-05.json)
+and [concentrated](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-concentrated-probe-2026-10-05.json).
 The write-only runner now accepts `--writer-session-group` for this comparison.
 
 #### Direct `/add` endpoint (2026-10-05)
@@ -544,7 +544,7 @@ latency. There were no 429s; every flush succeeded and the last accepted record
 was searchable. Both routes use the same durable staged writer, so this
 confirms the single-add API itself accepts about 220 writes/s under this local
 configuration. Acknowledgement means the journal was synced; search visibility
-is provided by later publication/flush. [Direct `/add` report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json)
+is provided by later publication/flush. [Direct `/add` report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json)
 includes the binary hash and per-run results.
 
 #### Read-heavy mixed-load checks (2026-10-05)
@@ -568,8 +568,8 @@ was not yet searchable when checked. That overload result is not representative
 of one write per second, but it shows the bounded publisher correctly applies
 backpressure while heavy writers compete with searches.
 
-Raw reports: [sparse mixed load](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-sparse-2026-10-05.json)
-and [saturated probe](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-probe-2026-10-05.json).
+Raw reports: [sparse mixed load](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-mixed-sparse-2026-10-05.json)
+and [saturated probe](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-mixed-probe-2026-10-05.json).
 The mixed-load runner supports `--write-interval-ms` to reproduce sparse rates.
 
 After adding a fixed writer-session option, we repeated the same paired
@@ -579,7 +579,7 @@ read throughput was 1,209 searches/s in control and 1,249 searches/s with
 writes; median search p99 changed from 17.445 to 18.352 ms. All 195 writes were
 accepted with no 429s, flushes took 0.212–0.215 seconds, and every final write
 was searchable. This measured no meaningful read-throughput loss for sparse,
-concentrated writes. [Concentrated mixed-load report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json)
+concentrated writes. [Concentrated mixed-load report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json)
 records the paired data, writer-segment distribution, and binary hash.
 
 The write-path changes also passed a retrieval control: a release-mode,
@@ -587,14 +587,14 @@ single-index rerun on the same 500 LongMemEval questions with `k=1,3,5,10,20`
 matched the Tantivy 0.25.0 control's top-10 session ranking for all 500
 questions. Recall@5/10/20 was 94.2%/96.8%/97.6%, MRR 0.86965, and NDCG@10
 0.85115 in both reports. The rerun and control are available as [write-path
-rerun](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz)
-and [Tantivy 0.25.0 control](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-tantivy-0.25.0-control.json.gz).
+rerun](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz)
+and [Tantivy 0.25.0 control](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 ### Reproduce the comparison
 
-See [`comparison/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/README.md)
+See [`comparison/README.md`](https://github.com/RooAGI/Membrick/blob/main/comparison/README.md)
 for setup, corpus seeding, AgentMemory instructions, and all caveats. To run
-the Lint-AI HTTP client after starting the server:
+the Membrick HTTP client after starting the server:
 
 ```bash
 python3 comparison/http_latency.py \
@@ -615,7 +615,7 @@ TMPDIR="$PWD/.benchmark-tmp" uv run python comparison/throughput.py \
 Repeat with `--mode global` and `--mode segment` for the complete comparison.
 
 The 2026-09-17 rerun is stored in
-[`throughput-layout-watcher-rerun-2026-09-17.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-layout-watcher-rerun-2026-09-17.json).
+[`throughput-layout-watcher-rerun-2026-09-17.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-layout-watcher-rerun-2026-09-17.json).
 It used the 23,366-record uncached workload through `uv`. The standalone HTTP
 server does not initialize provider MCP watchers, so this confirms the current
 server benchmark but is not an isolated watcher-overhead measurement.

@@ -1,4 +1,4 @@
-# Hermes hooks probe — lint-ai automatic capture/recall
+# Hermes hooks probe — membrick automatic capture/recall
 
 **Date:** 2026-09-28
 **Hermes:** NousResearch/hermes-agent @ `e408d363` (checkout at `~/workspace/hermes-probe/hermes-agent`)
@@ -33,12 +33,12 @@ Hooks receive exactly the kwargs from their fire sites. The dispatch layer adds 
 
 ### Key behavioral findings
 
-- **Dedupe keys.** `turn_id` = `{session_id}:{task_id}:{uuid4[:8]}` (`agent/turn_context.py:551-555`), fresh per turn. `post_llm_call` / `on_session_end`(hook) fire exactly once per turn in the normal path; an interrupted turn fires the shutdown variant instead. **`(session_id, turn_id)` is a safe idempotent write key** — replays/double-fires with the same turn_id are idempotent, new turns get new ids. This mirrors the OpenClaw `runId` dedupe and the lint-ai store's doc-ID idempotency, so the integration can stay stateless (no `state.json` equivalent needed).
+- **Dedupe keys.** `turn_id` = `{session_id}:{task_id}:{uuid4[:8]}` (`agent/turn_context.py:551-555`), fresh per turn. `post_llm_call` / `on_session_end`(hook) fire exactly once per turn in the normal path; an interrupted turn fires the shutdown variant instead. **`(session_id, turn_id)` is a safe idempotent write key** — replays/double-fires with the same turn_id are idempotent, new turns get new ids. This mirrors the OpenClaw `runId` dedupe and the membrick store's doc-ID idempotency, so the integration can stay stateless (no `state.json` equivalent needed).
 - **No authoritative full transcript reaches plugin hooks at session close.** `_notify_session_boundary` passes only `{session_id, platform, reason}`. The CLI copies `conversation_history` for the memory-provider boundary flush (`commit_session_boundary_async`), but plugins never see it. Per-turn capture via `post_llm_call` already carries each turn's `conversation_history`/`assistant_response`, so a full-session record can be reconstructed incrementally — but the plugin never gets Hermes' own authoritative boundary snapshot.
 - **Resume linking works.** `pre_llm_call` receives `parent_session_id` (set on resume/branch in `agent/session_persistence.py:356-360`); a plugin can chain `(session_id → parent_session_id)` for the session registry, like OpenClaw's `resumedFrom`.
-- **Fail-open everywhere.** `_invoke_hook_safely` swallows plugin exceptions; `_emit_terminal_post_tool_call` swallows everything. A broken lint-ai plugin can never break the agent.
+- **Fail-open everywhere.** `_invoke_hook_safely` swallows plugin exceptions; `_emit_terminal_post_tool_call` swallows everything. A broken membrick plugin can never break the agent.
 - **Timeouts (measured in `hermes_cli/plugins_dispatch.py`).** Default callback timeout 30s (`plugins.hook_callback_timeout`). Bounded (non-blocking) hooks: `pre_llm_call`, `post_llm_call`, `post_tool_call`, `transform_llm_output`, `transform_tool_result`, `transform_terminal_output`, `pre_api_request`, `post_api_request`, `api_request_error`, `pre_auxiliary_call`, `post_auxiliary_call`, `pre_verify`, `on_session_start`, `on_session_end`. After a timeout the same callback is suppressed 60s; max 3 abandoned workers. `pre_tool_call` is **fail-closed** (timeout blocks the tool). `on_session_finalize`/`on_session_reset` run on the caller thread (no timeout bound) — but they fire from the CLI, not the hot turn path, so a short synchronous flush is acceptable there; still, capture writes should be async/fire-and-forget with a bounded local queue.
-- **Plugin discovery.** User plugins: `$HERMES_HOME/plugins/<name>/`; project plugins: `./.hermes/plugins/<name>/` only with `HERMES_ENABLE_PROJECT_PLUGINS=1`; `plugin.yaml`/`plugin.yml` (portable `plugin.json` also accepted); opt-in via `plugins.enabled` in config.yaml; `register(ctx)` entry point. Project plugins are the natural per-repo install story for lint-ai (like `--hermes-install` writes the MCP config today).
+- **Plugin discovery.** User plugins: `$HERMES_HOME/plugins/<name>/`; project plugins: `./.hermes/plugins/<name>/` only with `HERMES_ENABLE_PROJECT_PLUGINS=1`; `plugin.yaml`/`plugin.yml` (portable `plugin.json` also accepted); opt-in via `plugins.enabled` in config.yaml; `register(ctx)` entry point. Project plugins are the natural per-repo install story for membrick (like `--hermes-install` writes the MCP config today).
 
 ## Complete `VALID_HOOKS` inventory (41, from `hermes_cli/plugins.py`)
 
@@ -63,25 +63,25 @@ The native provider lifecycle (`agent/memory_provider.py`, manager in `agent/mem
 | `on_session_end(messages)` | **Full transcript at real session boundary**, then `on_session_switch(new_session_id, parent_session_id, ...)` — serialized on one background worker (`commit_session_boundary_async`) | `on_session_finalize` / `on_session_reset` — **no transcript, no new-session id** |
 | `shutdown()` | Bounded cleanup | nothing reliable (shutdown hook path is best-effort `suppress(Exception)`) |
 
-**Verdict: hooks win for the lint-ai design, with one acknowledged gap.**
+**Verdict: hooks win for the membrick design, with one acknowledged gap.**
 
-- Hooks **preserve the user's existing memory setup**: Hermes allows exactly one external memory provider at a time (`memory.provider`); installing lint-ai as a provider would evict mem0/file/other providers. A directory plugin coexists with all of them — this is the decisive architectural point, matching how `--hermes-serve` coexists today.
-- The provider's only real advantage is the authoritative full-transcript boundary snapshot. But per-turn `post_llm_call` capture already accumulates every turn's content with a stable dedupe key, so the plugin reconstructs the session incrementally; the marginal value of the boundary snapshot is small, and lint-ai's retrieval is turn/segment-level anyway.
+- Hooks **preserve the user's existing memory setup**: Hermes allows exactly one external memory provider at a time (`memory.provider`); installing membrick as a provider would evict mem0/file/other providers. A directory plugin coexists with all of them — this is the decisive architectural point, matching how `--hermes-serve` coexists today.
+- The provider's only real advantage is the authoritative full-transcript boundary snapshot. But per-turn `post_llm_call` capture already accumulates every turn's content with a stable dedupe key, so the plugin reconstructs the session incrementally; the marginal value of the boundary snapshot is small, and membrick's retrieval is turn/segment-level anyway.
 - Hooks are fail-open, timeout-bounded, and need zero Hermes changes; a provider needs a `MemoryProvider` subclass (~500-700 lines, per the mem0 precedent) and occupies the single provider slot.
-- Note mem0's own precedent: mem0's Hermes plugin uses the provider path, but mem0 *is* the memory system. lint-ai's pitch is a memory *layer under* the agent's existing memory — hooks fit that positioning better.
+- Note mem0's own precedent: mem0's Hermes plugin uses the provider path, but mem0 *is* the memory system. membrick's pitch is a memory *layer under* the agent's existing memory — hooks fit that positioning better.
 
 ## Recommended minimal design (hooks-based, stateless)
 
-1. **`pre_llm_call` → recall + inject.** Query lint-ai with `user_message` (+ `session_id` scoping); return `{"context": ...}`. Keep it fast — the 30s timeout is generous but the turn blocks on it. Cache per `(session_id, turn_id)`.
+1. **`pre_llm_call` → recall + inject.** Query membrick with `user_message` (+ `session_id` scoping); return `{"context": ...}`. Keep it fast — the 30s timeout is generous but the turn blocks on it. Cache per `(session_id, turn_id)`.
 2. **`post_llm_call` → per-turn capture.** Write doc keyed by `(session_id, turn_id)` → idempotent under re-fire; no local state file needed (store-level doc-ID idempotency, per the OpenClaw purist fix).
-3. **`on_session_finalize` / `on_session_reset` → boundary marker.** Mark the session closed in lint-ai; full content already captured incrementally. On reset, link old→new session ids temporally (new `on_session_start` follows); on resume, `pre_llm_call.parent_session_id` gives the true parent link.
+3. **`on_session_finalize` / `on_session_reset` → boundary marker.** Mark the session closed in membrick; full content already captured incrementally. On reset, link old→new session ids temporally (new `on_session_start` follows); on resume, `pre_llm_call.parent_session_id` gives the true parent link.
 4. **`on_session_start` → session registry entry** (session_id, model, platform).
 5. **Capture path is async + bounded.** Hook callbacks enqueue to a local bounded queue flushed by a background thread; best-effort on shutdown (Hermes gives no reliable drain — same constraint as OpenClaw's 2s shared budget).
-6. **Install:** ship as a directory plugin `src/integrations/hermes/plugin/` in the lint-ai repo (`plugin.yaml` + provider class over the lint-ai provider-memory HTTP API — no Hermes changes), installed via `hermes plugins install` or project plugins with `HERMES_ENABLE_PROJECT_PLUGINS=1`. This is the same shape as the mem0 precedent, but using hooks instead of the provider slot.
+6. **Install:** ship as a directory plugin `src/integrations/hermes/plugin/` in the membrick repo (`plugin.yaml` + provider class over the membrick provider-memory HTTP API — no Hermes changes), installed via `hermes plugins install` or project plugins with `HERMES_ENABLE_PROJECT_PLUGINS=1`. This is the same shape as the mem0 precedent, but using hooks instead of the provider slot.
 
 ## Open questions for Luyi
 
 1. **Hooks (coexist with existing memory) vs native provider (occupies the single external-provider slot, gets the authoritative boundary transcript)?** I recommend hooks; the transcript gap is covered by incremental per-turn capture. Confirm.
 2. **Should capture default on?** Per-turn `post_llm_call` capture of every turn is the automatic-memory promise, but it's also the most data written. Default on, or opt-in per project?
-3. **Retention/privacy expectations:** capture stores user messages and assistant responses verbatim in the lint-ai store. Any redaction rules (secrets, paths) before this ships?
+3. **Retention/privacy expectations:** capture stores user messages and assistant responses verbatim in the membrick store. Any redaction rules (secrets, paths) before this ships?
 4. **Is per-turn capture alone acceptable as the session record**, given plugin boundary hooks never receive Hermes' authoritative full transcript (only the provider path does)?

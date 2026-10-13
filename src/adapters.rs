@@ -114,7 +114,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("lint-ai-adapters-{name}-{nanos}"));
+        let path = std::env::temp_dir().join(format!("membrick-adapters-{name}-{nanos}"));
         fs::create_dir_all(&path).unwrap();
         path
     }

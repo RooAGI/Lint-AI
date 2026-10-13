@@ -195,7 +195,7 @@ pub(crate) fn query_top_segments_with_corpus_stats_and_strategy(
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
 ) -> SegmentQueryOutput {
-    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let profile = std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some();
     let coordinator_started = std::time::Instant::now();
     let query_terms_started = std::time::Instant::now();
     let query_terms = query_tokens_expanded(query);
@@ -1018,7 +1018,7 @@ fn query_selected_segments_with_enrichment(
     cached_statistics: Option<&GlobalBm25Statistics>,
     snapshot_generation: u64,
 ) -> (SegmentQueryOutput, SegmentSpecificEnrichmentDiagnostics) {
-    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let profile = std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some();
     let coordinator_started = std::time::Instant::now();
     let query_terms = query_tokens(query);
     let mut merged = Vec::new();

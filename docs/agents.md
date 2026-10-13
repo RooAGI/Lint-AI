@@ -1,6 +1,6 @@
 # Agent Integrations
 
-Lint-AI connects to agent clients through lifecycle hooks and a shared
+Membrick connects to agent clients through lifecycle hooks and a shared
 file-based memory index. Each adapter preserves the host client protocol while
 using the same capture, indexing, and retrieval model.
 
@@ -8,24 +8,24 @@ using the same capture, indexing, and retrieval model.
 
 | Agent | Integration guide | Memory store |
 |---|---|---|
-| Claude Code | [Claude Code](claude-code.md) | `.lint-ai/memory` |
-| Codex | [Codex](codex.md) | `.lint-ai/memory` |
-| Gemini CLI | [Gemini CLI](gemini-cli.md) | `.lint-ai/memory` |
-| Antigravity CLI | [Antigravity CLI](agy.md) | `.lint-ai/memory` |
-| Muse Code | [Muse Code](muse-code.md) | `.lint-ai/memory` |
-| OpenClaw | [OpenClaw](openclaw.md) | `.lint-ai/memory` |
-| Hermes | [Hermes](hermes.md) | `.lint-ai/memory` |
-| RooAGI AgentFlow | [RooAGI AgentFlow](roo-runtime.md) | `.lint-ai/memory` |
+| Claude Code | [Claude Code](claude-code.md) | `.membrick/memory` |
+| Codex | [Codex](codex.md) | `.membrick/memory` |
+| Gemini CLI | [Gemini CLI](gemini-cli.md) | `.membrick/memory` |
+| Antigravity CLI | [Antigravity CLI](agy.md) | `.membrick/memory` |
+| Muse Code | [Muse Code](muse-code.md) | `.membrick/memory` |
+| OpenClaw | [OpenClaw](openclaw.md) | `.membrick/memory` |
+| Hermes | [Hermes](hermes.md) | `.membrick/memory` |
+| RooAGI AgentFlow | [RooAGI AgentFlow](roo-runtime.md) | `.membrick/memory` |
 
-All agents share the single project store at `.lint-ai/memory/` — a decision
+All agents share the single project store at `.membrick/memory/` — a decision
 recorded by Claude is visible to Codex, and vice versa. Provider attribution
 travels on each document (`integration`, `author_agent`,
 `{provider}-session:{id}` group ids), not in the directory layout.
 
 Upgrading from an older version? Legacy per-provider stores
-(`.lint-ai/claude-memory/`, `.lint-ai/codex-memory/`,
-`.lint-ai/gemini-cli-memory/`, `.lint-ai/agy-memory/`,
-`.lint-ai/muse-memory/`) are migrated into `.lint-ai/memory/` automatically on
+(`.membrick/claude-memory/`, `.membrick/codex-memory/`,
+`.membrick/gemini-cli-memory/`, `.membrick/agy-memory/`,
+`.membrick/muse-memory/`) are migrated into `.membrick/memory/` automatically on
 first run and removed once their migration succeeds. A failed migration leaves
 the legacy directory untouched, so no memory is lost.
 
@@ -54,7 +54,7 @@ sequenceDiagram
     participant U as User
     participant A as Agent<br/>(Codex · Claude Code · Gemini CLI · AGY)
     participant H as Lifecycle hook
-    participant I as Lint-AI
+    participant I as Membrick
 
     U->>A: Submit prompt
     A->>H: UserPromptSubmit
@@ -138,19 +138,19 @@ filtering, the hook returns no injected context and the agent continues normally
 ### Turning the integration on and off
 
 Memory behavior and session recording are independent controls exposed through
-the provider’s Lint-AI MCP server:
+the provider’s Membrick MCP server:
 
 | Control | Effect |
 |---|---|
-| `enable_lint_ai` | Turns retrieval and capture on; recording is enabled by default. |
-| `disable_lint_ai` | Turns Lint-AI retrieval/injection and automatic capture off; existing recordings and memories remain. |
+| `enable_membrick` | Turns retrieval and capture on; recording is enabled by default. |
+| `disable_membrick` | Turns Membrick retrieval/injection and automatic capture off; existing recordings and memories remain. |
 | `record_session` with `start` | Records hook events in capture-only mode without injecting memory. |
 | `record_session` with `stop` | Stops recording without disabling memory integration. |
-| `lint_ai_status` | Reports independent `Lint-AI:ON/OFF` and `Record:ON/OFF` state. |
+| `membrick_status` | Reports independent `Membrick:ON/OFF` and `Record:ON/OFF` state. |
 
 The controls are project- and provider-scoped. Disabling the integration does
 not uninstall hooks, delete the index, or delete session archives; it only
-prevents Lint-AI from participating in subsequent turns.
+prevents Membrick from participating in subsequent turns.
 
 ### Hook events recorded for replay (no index update)
 
@@ -169,10 +169,10 @@ not update the searchable `MemoryService`:
 
 | Provider | Capture-attempt events | Searchable store |
 |---|---|---|
-| Claude Code | `PreCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.lint-ai/memory` |
-| Codex | `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.lint-ai/memory` |
-| Gemini CLI | `AfterAgent`, `PreCompress`, `SessionEnd` | `.lint-ai/memory` |
-| Antigravity CLI | `Stop` (transcript capture) | `.lint-ai/memory` |
+| Claude Code | `PreCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.membrick/memory` |
+| Codex | `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `SubagentStop` | `.membrick/memory` |
+| Gemini CLI | `AfterAgent`, `PreCompress`, `SessionEnd` | `.membrick/memory` |
+| Antigravity CLI | `Stop` (transcript capture) | `.membrick/memory` |
 
 At a capture event, the adapter reads the transcript, extracts structured
 memory, calls `MemoryService::upsert`, and then calls `refresh`. This makes the

@@ -1,6 +1,6 @@
 # Spanish Language Support
 
-Lint-AI supports Spanish memories end-to-end: detection, tokenization,
+Membrick supports Spanish memories end-to-end: detection, tokenization,
 indexing, NER, question understanding, temporal expressions, stopwords,
 numbers, and aggregation. This document describes the implementation,
 the design decisions, and the known limitations.

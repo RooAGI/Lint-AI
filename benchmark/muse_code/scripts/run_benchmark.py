@@ -2,8 +2,8 @@
 """Run Muse Code scenarios through the shared benchmark orchestration.
 
 Arms:
-  muse-native   - no Lint-AI hooks, MCP, or memory policy
-  muse-lint-ai  - `lint-ai --muse-install` plus session recording, per worktree
+  muse-native   - no Membrick hooks, MCP, or memory policy
+  muse-membrick  - `membrick --muse-install` plus session recording, per worktree
 
 Each arm runs with an isolated HOME and XDG_CONFIG_HOME, mirroring the
 Codex benchmark. The runner checks out a fresh git worktree per
@@ -14,7 +14,7 @@ XDG_CONFIG_HOME. Muse has no validated resume API, so every benchmark
 turn runs as a fresh `muse exec` process; the wrapper accepts (and
 ignores) the runner's `--resume` argument.
 
-Authentication for real (non-echo) runs: set LINT_AI_MUSE_API_KEY, which
+Authentication for real (non-echo) runs: set MEMBRICK_MUSE_API_KEY, which
 the wrapper feeds to `muse exec --api-key-stdin`. Without it, the wrapper
 relies on whatever credentials `muse` can find; the isolated HOME hides
 the user's stored login, so a real benchmark needs the env key.
@@ -53,14 +53,14 @@ def load_report_module(path: Path):
 MUSE_INSTALL_BLOCK = """\
 # Project-local install: the runner uses a fresh worktree per repetition,
 # so AGENTS.md policy and recording state must be established here.
-marker="$LINT_AI_BENCHMARK_WORKTREE/.lint-ai/.bench-muse-installed"
+marker="$MEMBRICK_BENCHMARK_WORKTREE/.membrick/.bench-muse-installed"
 if [ ! -f "$marker" ]; then
-  lint-ai --muse-install --muse-config "$XDG_CONFIG_HOME/muse/settings.json" \\
-    "$LINT_AI_BENCHMARK_WORKTREE" >&2
+  membrick --muse-install --muse-config "$XDG_CONFIG_HOME/muse/settings.json" \\
+    "$MEMBRICK_BENCHMARK_WORKTREE" >&2
   # Hook events are only recorded while recording is enabled;
   # --muse-install leaves it off by default (opt-in capture).
   printf '%s\\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"record_session","arguments":{"action":"start"}}}' \\
-    | lint-ai --muse-serve "$LINT_AI_BENCHMARK_WORKTREE" >/dev/null
+    | membrick --muse-serve "$MEMBRICK_BENCHMARK_WORKTREE" >/dev/null
   mkdir -p "$(dirname "$marker")"
   touch "$marker"
 fi
@@ -75,18 +75,18 @@ def main() -> None:
     parser.add_argument(
         "--arms",
         nargs="+",
-        choices=("muse-native", "muse-lint-ai"),
-        default=("muse-native", "muse-lint-ai"),
-        help="Benchmark arms: no Lint-AI vs Lint-AI installed",
+        choices=("muse-native", "muse-membrick"),
+        default=("muse-native", "muse-membrick"),
+        help="Benchmark arms: no Membrick vs Membrick installed",
     )
     parser.add_argument(
         "--provider",
-        default=os.environ.get("LINT_AI_MUSE_PROVIDER", "meta"),
+        default=os.environ.get("MEMBRICK_MUSE_PROVIDER", "meta"),
         help="Muse provider: meta or echo (echo needs no auth, for smoke tests)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("LINT_AI_MUSE_MODEL", ""),
+        default=os.environ.get("MEMBRICK_MUSE_MODEL", ""),
         help="Model id for non-echo providers",
     )
     parser.add_argument("--results-dir", type=Path, default=None)
@@ -97,8 +97,8 @@ def main() -> None:
     benchmark_root = Path(__file__).resolve().parents[1]
     results_dir = (args.results_dir or benchmark_root / "results").resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
-    temp_root = Path(tempfile.mkdtemp(prefix="lint-ai-muse-perf."))
-    binary = repo_root / "target" / "debug" / "lint-ai"
+    temp_root = Path(tempfile.mkdtemp(prefix="membrick-muse-perf."))
+    binary = repo_root / "target" / "debug" / "membrick"
     runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
     report_module = load_report_module(repo_root / "benchmark" / "codex_code" / "src" / "report.py")
     host_home = Path.home()
@@ -137,13 +137,13 @@ def main() -> None:
                     "CARGO_HOME": str(host_cargo_home),
                     "RUSTUP_HOME": str(host_rustup_home),
                     "RUSTUP_TOOLCHAIN": "stable",
-                    "LINT_AI_MUSE_PROVIDER": args.provider,
-                    "LINT_AI_MUSE_MODEL": args.model,
+                    "MEMBRICK_MUSE_PROVIDER": args.provider,
+                    "MEMBRICK_MUSE_MODEL": args.model,
                 }
             )
-            api_key = os.environ.get("LINT_AI_MUSE_API_KEY")
+            api_key = os.environ.get("MEMBRICK_MUSE_API_KEY")
             if api_key:
-                env["LINT_AI_MUSE_API_KEY"] = api_key
+                env["MEMBRICK_MUSE_API_KEY"] = api_key
 
             if arm != "muse-native":
                 # Validate the install up front against a scratch project so a
@@ -161,7 +161,7 @@ def main() -> None:
                 )
                 installed = json.loads(settings_path.read_text(encoding="utf-8"))
                 hook_events = installed.get("hooks", {})
-                assert hook_events, f"{arm}: expected lint-ai hooks in {settings_path}"
+                assert hook_events, f"{arm}: expected membrick hooks in {settings_path}"
                 print(
                     f"step complete: install validated for events {sorted(hook_events)}",
                     flush=True,
@@ -182,12 +182,12 @@ def main() -> None:
                 "prompt_file=\"$(mktemp)\"\n"
                 "trap 'rm -f \"$prompt_file\"' EXIT\n"
                 "cat > \"$prompt_file\"\n"
-                "muse_args=(exec --json --provider \"${LINT_AI_MUSE_PROVIDER:-meta}\" --approval-mode never --prompt-file \"$prompt_file\")\n"
-                "if [ -n \"${LINT_AI_MUSE_MODEL:-}\" ]; then\n"
-                "  muse_args+=(--model \"$LINT_AI_MUSE_MODEL\")\n"
+                "muse_args=(exec --json --provider \"${MEMBRICK_MUSE_PROVIDER:-meta}\" --approval-mode never --prompt-file \"$prompt_file\")\n"
+                "if [ -n \"${MEMBRICK_MUSE_MODEL:-}\" ]; then\n"
+                "  muse_args+=(--model \"$MEMBRICK_MUSE_MODEL\")\n"
                 "fi\n"
-                "if [ -n \"${LINT_AI_MUSE_API_KEY:-}\" ]; then\n"
-                "  printf '%s' \"$LINT_AI_MUSE_API_KEY\" | muse \"${muse_args[@]}\" --api-key-stdin\n"
+                "if [ -n \"${MEMBRICK_MUSE_API_KEY:-}\" ]; then\n"
+                "  printf '%s' \"$MEMBRICK_MUSE_API_KEY\" | muse \"${muse_args[@]}\" --api-key-stdin\n"
                 "else\n"
                 "  muse \"${muse_args[@]}\"\n"
                 "fi\n",

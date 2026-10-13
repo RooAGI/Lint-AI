@@ -1,6 +1,6 @@
 # IndexStore and MemoryIndex Concurrency
 
-This note captures the recommended concurrency model for large Lint-AI
+This note captures the recommended concurrency model for large Membrick
 deployments.
 
 The [write publication implementation and verification plan](write-publication-plan.md)

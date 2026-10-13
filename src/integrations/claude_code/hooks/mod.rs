@@ -3,7 +3,7 @@ mod protocol;
 use super::document::{ClaudeCodeDocument, ClaudeCodeDocumentType};
 use crate::integrations::recall::{query_terms, relevant_excerpt, truncate_utf8};
 use crate::integrations::session_recording::{
-    lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
+    membrick_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
 use crate::memory_api::MemoryService;
@@ -98,7 +98,7 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
         kind.event_name(),
         payload,
     ) {
-        eprintln!("warning: Lint-AI session recording failed open: {error:#}");
+        eprintln!("warning: Membrick session recording failed open: {error:#}");
     }
     if matches!(kind, ClaudeHookKind::Stop) && !input.stop_hook_active {
         if let Err(error) = record_transcript_usage_if_available(
@@ -118,7 +118,7 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
     let output = match run_with_budget(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
-            eprintln!("warning: Lint-AI Claude hook failed open: {error:#}");
+            eprintln!("warning: Membrick Claude hook failed open: {error:#}");
             ClaudeHookOutput::default()
         }
     };
@@ -129,7 +129,7 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
 }
 
 fn hook_timeout_ms() -> u64 {
-    std::env::var("LINT_AI_HOOK_TIMEOUT_MS")
+    std::env::var("MEMBRICK_HOOK_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS)
@@ -149,13 +149,13 @@ fn run_with_budget(
     match receiver.recv_timeout(std::time::Duration::from_millis(hook_timeout_ms())) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => anyhow::bail!(
-            "Lint-AI {event} hook exceeded {timeout}ms budget",
+            "Membrick {event} hook exceeded {timeout}ms budget",
             event = kind.event_name(),
             timeout = hook_timeout_ms()
         ),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             anyhow::bail!(
-                "Lint-AI {event} hook worker disconnected",
+                "Membrick {event} hook worker disconnected",
                 event = kind.event_name()
             )
         }
@@ -163,7 +163,7 @@ fn run_with_budget(
 }
 
 fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHookOutput) {
-    let Ok(path) = std::env::var("LINT_AI_HOOK_TIMINGS_PATH") else {
+    let Ok(path) = std::env::var("MEMBRICK_HOOK_TIMINGS_PATH") else {
         return;
     };
     let operation = match kind {
@@ -211,7 +211,7 @@ fn handle_hook(
         );
     }
     let root = resolve_root(&input.cwd, fallback_root)?;
-    if !lint_ai_enabled(RecordingProvider::Claude, &root)? {
+    if !membrick_enabled(RecordingProvider::Claude, &root)? {
         return Ok(ClaudeHookOutput::default());
     }
     match kind {
@@ -748,7 +748,7 @@ fn current_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::session_recording::set_lint_ai_state;
+    use crate::integrations::session_recording::set_membrick_state;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -757,7 +757,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("lint-ai-claude-{name}-{nanos}"));
+        let path = std::env::temp_dir().join(format!("membrick-claude-{name}-{nanos}"));
         fs::create_dir_all(&path).unwrap();
         path.canonicalize().unwrap()
     }
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn disabled_memory_skips_retrieval_without_affecting_hook_success() {
         let root = temp_dir("memory-disabled");
-        set_lint_ai_state(RecordingProvider::Claude, &root, false).unwrap();
+        set_membrick_state(RecordingProvider::Claude, &root, false).unwrap();
         let mut prompt = input(&root, None, "UserPromptSubmit");
         prompt.prompt = Some("retrieve prior routing decision".to_string());
         let output = handle_hook(ClaudeHookKind::UserPromptSubmit, prompt, &root).unwrap();

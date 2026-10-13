@@ -1,7 +1,7 @@
 //! Gemini CLI integration.
 //!
 //! Gemini CLI hooks use JSON on stdin/stdout.  This adapter deliberately keeps
-//! stdout protocol-clean and fails open: a Lint-AI problem must not interrupt
+//! stdout protocol-clean and fails open: a Membrick problem must not interrupt
 //! the user's Gemini session.
 
 pub mod hooks;
@@ -15,7 +15,7 @@ use crate::integrations::mcp_transport::{
     self, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
 };
 use crate::integrations::session_recording::{
-    lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
+    membrick_enabled, recording_state, set_membrick_state, set_recording_state, RecordingProvider,
 };
 #[cfg(test)]
 use crate::pipeline::IndexStore;
@@ -27,7 +27,7 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SERVER_NAME: &str = "lint-ai";
+const SERVER_NAME: &str = "membrick";
 const HOOK_MARKER: &str = "--gemini-cli-hook";
 const HOOK_EVENTS: &[(&str, &str)] = &[
     ("SessionStart", "session-start"),
@@ -74,12 +74,13 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
-    let executable = env::current_exe().context("failed to locate lint-ai executable")?;
+    let executable = env::current_exe().context("failed to locate membrick executable")?;
     let mut settings = read_json_object(&path)?;
     let servers = settings.entry("mcpServers").or_insert_with(|| json!({}));
     let servers = servers
         .as_object_mut()
         .context("Gemini mcpServers must be an object")?;
+    servers.remove("lint-ai");
     servers.insert(
         SERVER_NAME.into(),
         json!({
@@ -99,7 +100,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     let _ = root
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
-    let executable = env::current_exe().context("failed to locate lint-ai executable")?;
+    let executable = env::current_exe().context("failed to locate membrick executable")?;
     let mut settings = read_json_object(&path)?;
     let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
     let hooks = hooks
@@ -110,7 +111,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         let entries = entries
             .as_array_mut()
             .with_context(|| format!("Gemini hook {event} must be an array"))?;
-        entries.retain(|entry| !contains_lint_ai_hook(entry));
+        entries.retain(|entry| !contains_membrick_hook(entry));
         let command = json!({
             "type": "command",
             "command": format!("{} {HOOK_MARKER} {name}", shell_quote(&executable.to_string_lossy()))
@@ -201,7 +202,7 @@ impl GeminiMcp {
             .map_err(|_| anyhow::anyhow!("Gemini MCP store lock poisoned"))?;
         anyhow::ensure!(
             !mcp_tools::resident_backend_enabled(),
-            "MCP memory indexes are owned by the resident Lint-AI server"
+            "MCP memory indexes are owned by the resident Membrick server"
         );
         let file_changes = self
             .workspace_watcher
@@ -425,17 +426,17 @@ impl GeminiMcp {
                     &serde_json::to_string_pretty(&service.list_memories_payload(limit))?,
                 ))
             }
-            "enable_lint_ai" => {
-                let state = set_lint_ai_state(self.provider, &self.root, true)?;
+            "enable_membrick" => {
+                let state = set_membrick_state(self.provider, &self.root, true)?;
                 set_recording_state(self.provider, &self.root, true)?;
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
-            "disable_lint_ai" => {
-                let state = set_lint_ai_state(self.provider, &self.root, false)?;
+            "disable_membrick" => {
+                let state = set_membrick_state(self.provider, &self.root, false)?;
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
-            "lint_ai_status" => {
-                let state = json!({"provider":self.provider_label, "enabled":lint_ai_enabled(self.provider, &self.root)?, "recording_enabled":recording_state(self.provider, &self.root)?["enabled"]});
+            "membrick_status" => {
+                let state = json!({"provider":self.provider_label, "enabled":membrick_enabled(self.provider, &self.root)?, "recording_enabled":recording_state(self.provider, &self.root)?["enabled"]});
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
             "record_session" => {
@@ -483,13 +484,13 @@ fn tool_definitions(provider_display_name: &str) -> Vec<ToolDefinition> {
             name: "search".into(),
             description: format!("Search {name} project memory."),
             input_schema: schema(
-                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema(),"session_id": {"type": "string", "description": "Optional conversation session id for follow-up resolution against prior session state. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search."}}),
+                json!({"query":{"type":"string"},"top_k":{"type":"integer"},"provider": mcp_tools::provider_argument_schema(),"session_id": {"type": "string", "description": "Optional conversation session id for follow-up resolution against prior session state. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Membrick hooks); omit entirely only for stateless search."}}),
                 vec!["query"],
             ),
         },
         ToolDefinition {
             name: "info".into(),
-            description: format!("Show {name} Lint-AI memory status."),
+            description: format!("Show {name} Membrick memory status."),
             input_schema: schema(json!({}), vec![]),
         },
         mcp_tools::list_memories_tool_definition(),
@@ -502,18 +503,18 @@ fn tool_definitions(provider_display_name: &str) -> Vec<ToolDefinition> {
             ),
         },
         ToolDefinition {
-            name: "enable_lint_ai".into(),
-            description: format!("Enable {name} Lint-AI memory and recording."),
+            name: "enable_membrick".into(),
+            description: format!("Enable {name} Membrick memory and recording."),
             input_schema: schema(json!({}), vec![]),
         },
         ToolDefinition {
-            name: "disable_lint_ai".into(),
-            description: format!("Disable {name} Lint-AI memory injection."),
+            name: "disable_membrick".into(),
+            description: format!("Disable {name} Membrick memory injection."),
             input_schema: schema(json!({}), vec![]),
         },
         ToolDefinition {
-            name: "lint_ai_status".into(),
-            description: format!("Show {name} Lint-AI and recording state."),
+            name: "membrick_status".into(),
+            description: format!("Show {name} Membrick and recording state."),
             input_schema: schema(json!({}), vec![]),
         },
     ];
@@ -574,7 +575,7 @@ fn write_json_object(path: &Path, value: &Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-fn contains_lint_ai_hook(value: &Value) -> bool {
+fn contains_membrick_hook(value: &Value) -> bool {
     serde_json::to_string(value)
         .map(|s| s.contains(HOOK_MARKER))
         .unwrap_or(false)
@@ -618,7 +619,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-gemini-mcp-{name}-{nonce}"));
+            .join(format!("membrick-gemini-mcp-{name}-{nonce}"));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -744,7 +745,7 @@ mod tests {
     #[test]
     fn installs_hooks_idempotently_and_preserves_settings() {
         let root = env::temp_dir().join(format!(
-            "lint-ai-gemini-{}",
+            "membrick-gemini-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -823,9 +824,9 @@ mod tests {
                 "search",
                 "list_memories",
                 "record_session",
-                "enable_lint_ai",
-                "disable_lint_ai",
-                "lint_ai_status",
+                "enable_membrick",
+                "disable_membrick",
+                "membrick_status",
                 // Bulletin-board tools and add_memory / get_memory are now
                 // opted in for all Gemini-compatible providers.
                 "board_open",
@@ -864,14 +865,14 @@ mod tests {
                 .unwrap()
                 .contains(label));
             assert_eq!(
-                call_tool(&mcp, "enable_lint_ai", json!({}))["enabled"],
+                call_tool(&mcp, "enable_membrick", json!({}))["enabled"],
                 true
             );
             assert_eq!(
                 call_tool(&mcp, "record_session", json!({"action": "stop"}))["enabled"],
                 false
             );
-            let status = call_tool(&mcp, "lint_ai_status", json!({}));
+            let status = call_tool(&mcp, "membrick_status", json!({}));
             assert_eq!(status["enabled"], true);
             assert_eq!(status["recording_enabled"], false);
             drop(mcp);

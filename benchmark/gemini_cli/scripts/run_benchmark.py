@@ -61,19 +61,19 @@ def main() -> None:
     repo_root = args.repo_root.resolve()
     results_dir = (args.results_dir or repo_root / "benchmark" / "gemini_cli" / "results" / "local-smoke").resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
-    binary = repo_root / "target" / "debug" / "lint-ai"
-    # macOS commonly exposes /var as a symlink to /private/var. Lint-AI
+    binary = repo_root / "target" / "debug" / "membrick"
+    # macOS commonly exposes /var as a symlink to /private/var. Membrick
     # intentionally rejects symlinked parent paths, so keep the benchmark
     # workspace below the canonical repository root.
-    temp_root = Path(tempfile.mkdtemp(prefix=".lint-ai-gemini-benchmark.", dir=repo_root))
+    temp_root = Path(tempfile.mkdtemp(prefix=".membrick-gemini-benchmark.", dir=repo_root))
     project = temp_root / "project"
     project.mkdir()
     try:
-        subprocess.run(["cargo", "build", "--quiet", "--features", "gemini-cli", "--bin", "lint-ai"], cwd=repo_root, check=True)
+        subprocess.run(["cargo", "build", "--quiet", "--features", "gemini-cli", "--bin", "membrick"], cwd=repo_root, check=True)
         requests = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "enable_lint_ai", "arguments": {}}},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "enable_membrick", "arguments": {}}},
             {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "record_session", "arguments": {"action": "start"}}},
             {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "info", "arguments": {}}},
             {"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "search", "arguments": {"query": "benchmark memory", "top_k": 3}}},
@@ -83,13 +83,13 @@ def main() -> None:
             "SessionStart": run_hook(binary, project, "SessionStart", "start benchmark session"),
             "BeforeAgent": run_hook(binary, project, "BeforeAgent", "retrieve benchmark memory"),
         }
-        events_path = project / ".lint-ai" / "gemini-cli-sessions" / "benchmark-gemini-session" / "events.jsonl"
+        events_path = project / ".membrick" / "gemini-cli-sessions" / "benchmark-gemini-session" / "events.jsonl"
         report = {
             "schema_version": 1,
             "provider": "gemini-cli",
             "benchmark": "local-mcp-hooks-smoke",
             "gemini_version": subprocess.run(["gemini", "--version"], capture_output=True, text=True, check=False).stdout.strip(),
-            "lint_ai_version": "local cargo build",
+            "membrick_version": "local cargo build",
             "mcp_requests": len(requests),
             "mcp_responses": len(responses),
             "mcp_roundtrip_ms": round(total_ms, 3),

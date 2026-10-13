@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 SERVER = "http://127.0.0.1:8099"
-LOCOMO = "/home/hatch/workspace/lint-ai-benchmark-logs/locomo10.json"
+LOCOMO = "/home/hatch/workspace/membrick-benchmark-logs/locomo10.json"
 
 
 def evidence_to_sessions(conv_id, evidence):

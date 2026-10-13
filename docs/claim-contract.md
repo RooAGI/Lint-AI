@@ -19,7 +19,7 @@ Missing optional values mean the producer could not establish them from the
 source. A document timestamp must not be copied into `event_time`: it describes
 when the source was recorded, not necessarily when the claimed event occurred.
 
-beKIND evidence signals are an optional enrichment. When enabled, Lint-AI
+beKIND evidence signals are an optional enrichment. When enabled, Membrick
 accepts signal protocol versions 1 and 2, verifies that the evidence span
 matches the stored document content, and stores the result in `top_claims`.
 Version 2 supplies status and explicitly stated event time. The core claim
@@ -28,9 +28,9 @@ model and old indexes do not require beKIND to be present.
 ## Native reasoning cues
 
 The first provider-neutral event, acquisition, and related query-language cues
-are stored as readable JSON in [`data/reasoning_rules.json`](../data/reasoning_rules.json).
-Lint-AI parses this bundled file once per process. The file contains vocabulary
+are stored as readable JSON in [`data/reasoning_rules.json`](https://github.com/RooAGI/Membrick/blob/main/data/reasoning_rules.json).
+Membrick parses this bundled file once per process. The file contains vocabulary
 and phrase patterns; typed Rust code still decides how they produce claims and
 query requirements, and still applies evidence and temporal checks. Changing
-the bundled rules currently requires rebuilding Lint-AI. Project-specific
+the bundled rules currently requires rebuilding Membrick. Project-specific
 runtime overrides are not part of this first step.

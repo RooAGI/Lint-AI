@@ -7,41 +7,41 @@ import time
 import unittest
 import urllib.request
 
-import lint_ai
+import membrick
 
 
 class MemoryBindingTests(unittest.TestCase):
     def test_public_surface_uses_memory_service(self):
-        self.assertTrue(hasattr(lint_ai, "Memory"))
-        self.assertTrue(hasattr(lint_ai, "version"))
+        self.assertTrue(hasattr(membrick, "Memory"))
+        self.assertTrue(hasattr(membrick, "version"))
         # 0.3.0 breaking change: RemoteMemory removed (Memory covers base_url).
-        self.assertFalse(hasattr(lint_ai, "RemoteMemory"))
-        self.assertFalse(hasattr(lint_ai, "IndexStore"))
+        self.assertFalse(hasattr(membrick, "RemoteMemory"))
+        self.assertFalse(hasattr(membrick, "IndexStore"))
 
     def test_version_reports_0_4_0(self):
         import importlib.metadata
 
-        self.assertEqual(lint_ai.version(), "0.4.0")
+        self.assertEqual(membrick.version(), "0.4.0")
         # Wheel metadata and the binding must agree.
-        self.assertEqual(importlib.metadata.version("lint-ai"), "0.4.0")
+        self.assertEqual(importlib.metadata.version("membrick"), "0.4.0")
 
     def test_constructor_rejects_bad_config(self):
         with self.assertRaises(ValueError):
-            lint_ai.Memory(ner_provider="bert")
+            membrick.Memory(ner_provider="bert")
         with self.assertRaises(ValueError):
-            lint_ai.Memory(path="/tmp/x", base_url="http://localhost:1")
+            membrick.Memory(path="/tmp/x", base_url="http://localhost:1")
 
     def test_constructor_accepts_config_knobs(self):
         for ner_provider in ("heuristic", "spacy"):
-            memory = lint_ai.Memory(ner_provider=ner_provider)
+            memory = membrick.Memory(ner_provider=ner_provider)
             memory.refresh()
-        memory = lint_ai.Memory(
+        memory = membrick.Memory(
             ner_provider="spacy", spacy_model="zh_core_web_sm"
         )
         memory.refresh()
 
     def test_memory_lifecycle(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
 
         added = memory.add(
             "request-1",
@@ -80,7 +80,7 @@ class MemoryBindingTests(unittest.TestCase):
         memory.refresh()
 
     def test_search_with_session_and_filters(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "request-s1",
             "user-b",
@@ -102,7 +102,7 @@ class MemoryBindingTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
 
     def test_add_batch_lifecycle(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         responses = memory.add_batch(
             [
                 {
@@ -138,7 +138,7 @@ class TestSessionAndScope(unittest.TestCase):
     """session_id drives follow-up resolution; scope never widens ownership."""
 
     def test_follow_up_resolves_against_conversation_state(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "sess-req-1",
             "user-s",
@@ -178,7 +178,7 @@ class TestSessionAndScope(unittest.TestCase):
         self.assertEqual(len(foreign), 0)
 
     def test_scope_does_not_widen_ownership(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "scope-req-a",
             "owner-a",
@@ -216,7 +216,7 @@ class TestAddBatchEdges(unittest.TestCase):
         return len(memory.list(user)["data"])
 
     def test_batch_size_limits(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         reqs = [self._req(f"lim-{i}") for i in range(128)]
         resps = memory.add_batch(reqs)
         self.assertEqual(len(resps), 128)
@@ -225,7 +225,7 @@ class TestAddBatchEdges(unittest.TestCase):
             memory.add_batch(reqs + [self._req("lim-129")])
 
     def test_malformed_entry_rejects_whole_batch_atomically(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         before = self._count(memory)
         # Second entry is missing required fields: serde rejects the entire
         # payload before the service sees anything, so nothing is stored.
@@ -239,7 +239,7 @@ class TestAddBatchEdges(unittest.TestCase):
             memory.add_batch(["not-a-dict"])
 
     def test_service_failure_mid_batch_has_no_rollback(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         # Entry 2 parses (empty messages is valid JSON) but fails service
         # validation ("messages must not be empty").
         bad = self._req("noroll-2")
@@ -274,7 +274,7 @@ class TestFilterContract(unittest.TestCase):
     """
 
     def test_request_id_filter_returns_exact_ids(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "flt-1", "user-f", "s",
             [{"role": "user", "content": "Apples are red fruits"}],
@@ -294,7 +294,7 @@ class TestFilterContract(unittest.TestCase):
         self.assertIn("Apples", found[0]["content"])
 
     def test_nonmatching_filter_value_is_dropped_not_exclusionary(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "flt-3", "user-f", "s",
             [{"role": "user", "content": "Apples are red fruits"}],
@@ -310,7 +310,7 @@ class TestFilterContract(unittest.TestCase):
         self.assertEqual(sorted(x["id"] for x in found), owned)
 
     def test_absent_filter_key_is_dropped(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "flt-4", "user-f", "s",
             [{"role": "user", "content": "Apples are red fruits"}],
@@ -324,7 +324,7 @@ class TestFilterContract(unittest.TestCase):
         self.assertEqual(sorted(x["id"] for x in found), owned)
 
     def test_ownership_filter_cannot_be_overridden(self):
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "flt-5", "owner-f", "s",
             [{"role": "user", "content": "Apples are red fruits"}],
@@ -346,7 +346,7 @@ class TestFilterContract(unittest.TestCase):
         # lexical path. Changing this is an engine retrieval change and
         # needs an explicit decision (measure-first rule) — see
         # docs/python-migration-0.3.0.md.
-        memory = lint_ai.Memory()
+        memory = membrick.Memory()
         memory.add(
             "g1", "user-g", "s",
             [{"role": "user", "content": "Gina went to Rome last summer"}],
@@ -387,7 +387,7 @@ class TestRemoteLifecycle(unittest.TestCase):
 
     Starts `target/debug/server` on a free loopback port with
     `--server-token` auth, runs a full CRUD lifecycle through
-    `lint_ai.Memory(base_url=..., api_key=...)`, then checks the
+    `membrick.Memory(base_url=..., api_key=...)`, then checks the
     unauthorized and missing-record paths. Hermetic: localhost only.
     Skips cleanly when the server binary has not been built
     (`cargo build --bin server`).
@@ -411,7 +411,7 @@ class TestRemoteLifecycle(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind(("127.0.0.1", 0))
             cls.port = probe.getsockname()[1]
-        cls.tmpdir = tempfile.mkdtemp(prefix="lintai-remote-test-")
+        cls.tmpdir = tempfile.mkdtemp(prefix="membrick-remote-test-")
         # Scrub ambient auth config so the test controls the server's
         # credentials exactly (JWT auth is env-only; token via CLI flag).
         env = {
@@ -461,7 +461,7 @@ class TestRemoteLifecycle(unittest.TestCase):
             shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def _memory(self, api_key=TOKEN):
-        return lint_ai.Memory(base_url=self.base_url, api_key=api_key)
+        return membrick.Memory(base_url=self.base_url, api_key=api_key)
 
     def test_remote_crud_lifecycle(self):
         memory = self._memory()

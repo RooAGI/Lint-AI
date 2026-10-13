@@ -21,7 +21,7 @@ these types can be tested.
 ## Deployment model
 
 `lint-service` is the cross-corpus coordinator. Each worker owns one corpus and
-runs a local `lint-ai` coordinator, which may itself route across segments.
+runs a local `membrick` coordinator, which may itself route across segments.
 Worker and segment identifiers are therefore scoped independently:
 
 ```text

@@ -3,7 +3,7 @@ set -euo pipefail
 
 DEMO_DIR="examples/demo-real-terminal"
 QUERY='How many retry attempts should we use for gateway timeouts?'
-BIN='./target/release/lint-ai'
+BIN='./target/release/membrick'
 
 prompt() {
   printf '\n\033[1;36m$ %s\033[0m\n' "$1"
@@ -17,7 +17,7 @@ run_cmd() {
 }
 
 clear
-printf '\033[1;37mLint-AI — real terminal recording\033[0m\n'
+printf '\033[1;37mMembrick — real terminal recording\033[0m\n'
 printf 'No supersedes metadata. Same policy domain. Newer file wins by chronology.\n'
 sleep 1.2
 
@@ -36,5 +36,5 @@ prompt "$BIN --llm-context \"$QUERY\" --result-count 5 $DEMO_DIR | jq '{current_
 sleep 1.8
 
 printf '\n\033[1;32mResult: the current value is 2; stale value 5 is excluded from agent context.\033[0m\n'
-printf '\033[2mRecorded live from the actual lint-ai CLI.\033[0m\n'
+printf '\033[2mRecorded live from the actual membrick CLI.\033[0m\n'
 sleep 2

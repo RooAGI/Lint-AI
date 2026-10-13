@@ -6,17 +6,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Repo = 'RooAGI/Lint-AI'
+$Repo = 'RooAGI/Membrick'
 $BaseUrl = "https://github.com/$Repo/releases/latest/download"
-$Asset = 'lint-ai-windows-x86_64.exe'
-$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("lint-ai-" + [guid]::NewGuid().ToString('N'))
+$Asset = 'membrick-windows-x86_64.exe'
+$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("membrick-" + [guid]::NewGuid().ToString('N'))
 $BinaryTemp = Join-Path $TempDir $Asset
 $ChecksumTemp = "$BinaryTemp.sha256"
-$InstalledBinary = Join-Path $InstallDir 'lint-ai.exe'
+$InstalledBinary = Join-Path $InstallDir 'membrick.exe'
 
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 try {
-    Write-Host 'Downloading official Lint-AI release for Windows x86_64...'
+    Write-Host 'Downloading official Membrick release for Windows x86_64...'
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset" -OutFile $BinaryTemp
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset.sha256" -OutFile $ChecksumTemp
 
@@ -38,7 +38,7 @@ try {
     if ($PathEntries -notcontains $InstallDir) {
         $NewUserPath = if ([string]::IsNullOrWhiteSpace($UserPath)) { $InstallDir } else { "$UserPath;$InstallDir" }
         [Environment]::SetEnvironmentVariable('Path', $NewUserPath, 'User')
-        Write-Host "Added $InstallDir to your user PATH. Open a new terminal to use lint-ai by name."
+        Write-Host "Added $InstallDir to your user PATH. Open a new terminal to use membrick by name."
     }
     if (($env:Path -split ';') -notcontains $InstallDir) {
         $env:Path = "$InstallDir;$env:Path"
@@ -64,17 +64,17 @@ try {
             }
         }
 
-        Write-Host "Configuring Lint-AI for $Agent in $Project..."
+        Write-Host "Configuring Membrick for $Agent in $Project..."
         & $InstalledBinary $InstallFlag $Project
-        if ($LASTEXITCODE -ne 0) { throw "Lint-AI $Agent configuration failed." }
+        if ($LASTEXITCODE -ne 0) { throw "Membrick $Agent configuration failed." }
 
-        Write-Host 'Verifying the Lint-AI MCP runtime...'
+        Write-Host 'Verifying the Membrick MCP runtime...'
         & $InstalledBinary $VerifyFlag $Project
-        if ($LASTEXITCODE -ne 0) { throw 'Lint-AI MCP verification failed.' }
+        if ($LASTEXITCODE -ne 0) { throw 'Membrick MCP verification failed.' }
 
-        Write-Host "Lint-AI is installed, configured for $Agent, and MCP verification passed."
+        Write-Host "Membrick is installed, configured for $Agent, and MCP verification passed."
     } else {
-        Write-Host 'Lint-AI is installed. Re-run with -Agent codex|claude|gemini|agy to configure an agent.'
+        Write-Host 'Membrick is installed. Re-run with -Agent codex|claude|gemini|agy to configure an agent.'
     }
 }
 finally {

@@ -11,7 +11,7 @@ use crate::integrations::mcp_transport::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
 };
 use crate::integrations::session_recording::{
-    lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
+    membrick_enabled, recording_state, set_membrick_state, set_recording_state, RecordingProvider,
 };
 #[cfg(test)]
 use crate::pipeline::IndexStore;
@@ -28,7 +28,7 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SERVER_NAME: &str = "lint-ai";
+const SERVER_NAME: &str = "membrick";
 const DEFAULT_QUERY_TOP_K: usize = 5;
 const HOOK_MARKER: &str = "--claude-code-hook";
 const HOOK_EVENTS: &[(&str, &str)] = &[
@@ -82,10 +82,11 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
-        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .context("failed to locate membrick executable; refusing PATH-based installation")?
         .to_string_lossy()
         .into_owned();
     let mut config = read_claude_config(&config_path)?;
+    config.mcp_servers.remove("lint-ai");
     let entry = config
         .mcp_servers
         .entry(SERVER_NAME.to_string())
@@ -113,7 +114,7 @@ pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
     let skill_path = root
         .join(".claude")
         .join("skills")
-        .join("lint-ai-memory")
+        .join("membrick-memory")
         .join("SKILL.md");
     if let Some(parent) = skill_path.parent() {
         fs::create_dir_all(parent)?;
@@ -122,11 +123,11 @@ pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
         let existing = fs::read_to_string(&skill_path)
             .with_context(|| format!("failed to read existing skill {}", skill_path.display()))?;
         let known_generated = existing == include_str!("skill.md")
-            || // Recognize the pre-marker skill shipped by earlier Lint-AI versions
+            || // Recognize the pre-marker skill shipped by earlier Membrick versions
                // so normal upgrades do not require a replacement flag.
-               (existing.starts_with("---\nname: lint-ai-memory\n")
-                   && existing.contains("mcp__lint-ai__search")
-                   && existing.contains("## Lint-AI Memory"));
+               (existing.starts_with("---\nname: membrick-memory\n")
+                   && existing.contains("mcp__membrick__search")
+                   && existing.contains("## Membrick Memory"));
         if !force && !known_generated {
             anyhow::bail!(
                 "refusing to overwrite existing Claude skill {}; it appears user-modified; use --claude-code-force-skill to replace it",
@@ -150,7 +151,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
-        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .context("failed to locate membrick executable; refusing PATH-based installation")?
         .to_string_lossy()
         .into_owned();
     let mut settings = read_json_object(&settings_path)?;
@@ -173,7 +174,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         // placeholders behind while migrating settings, so remove only those
         // malformed empty groups while preserving all actual user hooks.
         entries.retain(|entry| {
-            !entry.as_object().is_some_and(Map::is_empty) && !contains_lint_ai_hook(entry)
+            !entry.as_object().is_some_and(Map::is_empty) && !contains_membrick_hook(entry)
         });
         entries.push(json!({
             "hooks": [{
@@ -212,13 +213,13 @@ pub fn run_status_line() -> Result<()> {
         .or_else(|| payload.get("cwd").and_then(Value::as_str))
         .unwrap_or(".");
     let root = Path::new(cwd);
-    let memory_on = lint_ai_enabled(RecordingProvider::Claude, root)?;
+    let memory_on = membrick_enabled(RecordingProvider::Claude, root)?;
     let recording_on = recording_state(RecordingProvider::Claude, root)
         .ok()
         .and_then(|state| state.get("enabled").and_then(Value::as_bool))
         .unwrap_or(false);
     println!(
-        "Lint-AI:{} | Record:{}",
+        "Membrick:{} | Record:{}",
         if memory_on { "ON" } else { "OFF" },
         if recording_on { "ON" } else { "OFF" }
     );
@@ -255,7 +256,7 @@ impl ClaudeMcp {
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
         anyhow::ensure!(
             !mcp_tools::resident_backend_enabled(),
-            "MCP memory indexes are owned by the resident Lint-AI server"
+            "MCP memory indexes are owned by the resident Membrick server"
         );
         let file_changes = self
             .workspace_watcher
@@ -482,7 +483,7 @@ impl ClaudeMcp {
                     error: None,
                 })
             }
-            "enable_lint_ai" => {
+            "enable_membrick" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
                         id,
@@ -490,11 +491,11 @@ impl ClaudeMcp {
                         &format!("unknown argument: {name}"),
                     ));
                 }
-                let state = set_lint_ai_state(RecordingProvider::Claude, &self.root, true)?;
+                let state = set_membrick_state(RecordingProvider::Claude, &self.root, true)?;
                 set_recording_state(RecordingProvider::Claude, &self.root, true)?;
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
-            "disable_lint_ai" => {
+            "disable_membrick" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
                         id,
@@ -502,10 +503,10 @@ impl ClaudeMcp {
                         &format!("unknown argument: {name}"),
                     ));
                 }
-                let state = set_lint_ai_state(RecordingProvider::Claude, &self.root, false)?;
+                let state = set_membrick_state(RecordingProvider::Claude, &self.root, false)?;
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
-            "lint_ai_status" => {
+            "membrick_status" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
                         id,
@@ -513,7 +514,7 @@ impl ClaudeMcp {
                         &format!("unknown argument: {name}"),
                     ));
                 }
-                let memory_on = lint_ai_enabled(RecordingProvider::Claude, &self.root)?;
+                let memory_on = membrick_enabled(RecordingProvider::Claude, &self.root)?;
                 let recording_on = recording_state(RecordingProvider::Claude, &self.root)?
                     .get("enabled")
                     .and_then(Value::as_bool)
@@ -523,7 +524,7 @@ impl ClaudeMcp {
                     "enabled": memory_on,
                     "recording_enabled": recording_on,
                     "display": format!(
-                        "Lint-AI:{} | Record:{}",
+                        "Membrick:{} | Record:{}",
                         if memory_on { "ON" } else { "OFF" },
                         if recording_on { "ON" } else { "OFF" }
                     )
@@ -745,7 +746,7 @@ impl ClaudeMcp {
                         "query": { "type": "string" },
                         "top_k": { "type": "integer", "minimum": 1, "maximum": 20, "default": DEFAULT_QUERY_TOP_K },
                         "provider": mcp_tools::provider_argument_schema(),
-                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search." },
+                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Membrick hooks); omit entirely only for stateless search." },
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -773,18 +774,18 @@ impl ClaudeMcp {
                 }),
             },
             ToolDefinition {
-                name: "enable_lint_ai".to_string(),
-                description: "Enable Lint-AI memory retrieval and capture for future hook events. This also turns on session recording by default; use record_session stop to override recording independently.".to_string(),
+                name: "enable_membrick".to_string(),
+                description: "Enable Membrick memory retrieval and capture for future hook events. This also turns on session recording by default; use record_session stop to override recording independently.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
             ToolDefinition {
-                name: "disable_lint_ai".to_string(),
-                description: "Disable Lint-AI memory retrieval and capture for future hook events. Session recording remains unchanged and can be controlled with record_session.".to_string(),
+                name: "disable_membrick".to_string(),
+                description: "Disable Membrick memory retrieval and capture for future hook events. Session recording remains unchanged and can be controlled with record_session.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
             ToolDefinition {
-                name: "lint_ai_status".to_string(),
-                description: "Report whether Lint-AI memory behavior is enabled for this project.".to_string(),
+                name: "membrick_status".to_string(),
+                description: "Report whether Membrick memory behavior is enabled for this project.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
         ]
@@ -871,7 +872,7 @@ fn write_json_object(path: &Path, value: &Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
-fn contains_lint_ai_hook(entry: &Value) -> bool {
+fn contains_membrick_hook(entry: &Value) -> bool {
     entry
         .get("hooks")
         .and_then(Value::as_array)
@@ -924,7 +925,7 @@ mod tests {
         env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-{name}-{nanos}.json"))
+            .join(format!("membrick-{name}-{nanos}.json"))
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -936,11 +937,11 @@ mod tests {
     #[test]
     fn install_memory_skill_preserves_user_edits_without_force() {
         let root = temp_dir("claude-skill-preserve");
-        let skill_path = root.join(".claude/skills/lint-ai-memory/SKILL.md");
+        let skill_path = root.join(".claude/skills/membrick-memory/SKILL.md");
         fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
         fs::write(
             &skill_path,
-            "---\nname: lint-ai-memory\n---\n\nMy custom instructions\n",
+            "---\nname: membrick-memory\n---\n\nMy custom instructions\n",
         )
         .unwrap();
 
@@ -948,7 +949,7 @@ mod tests {
         assert!(error.contains("--claude-code-force-skill"));
         assert_eq!(
             fs::read_to_string(&skill_path).unwrap(),
-            "---\nname: lint-ai-memory\n---\n\nMy custom instructions\n"
+            "---\nname: membrick-memory\n---\n\nMy custom instructions\n"
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -956,14 +957,14 @@ mod tests {
     #[test]
     fn install_memory_skill_force_replaces_user_edits() {
         let root = temp_dir("claude-skill-force");
-        let skill_path = root.join(".claude/skills/lint-ai-memory/SKILL.md");
+        let skill_path = root.join(".claude/skills/membrick-memory/SKILL.md");
         fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
         fs::write(&skill_path, "custom").unwrap();
 
         install_memory_skill(&root, true).unwrap();
 
         let installed = fs::read_to_string(&skill_path).unwrap();
-        assert!(installed.contains("<!-- lint-ai-managed-skill -->"));
+        assert!(installed.contains("<!-- membrick-managed-skill -->"));
         assert!(!installed.contains("custom"));
         let _ = fs::remove_dir_all(root);
     }
@@ -1006,7 +1007,7 @@ mod tests {
         let config_path = temp_path("claude-config");
         fs::write(
             &config_path,
-            r#"{"mcpServers":{"existing":{"command":"npx","args":["-y","existing"],"env":{"A":"1"}},"lint-ai":{"env":{"KEEP":"yes"}}},"x":1}"#,
+            r#"{"mcpServers":{"existing":{"command":"npx","args":["-y","existing"],"env":{"A":"1"}},"membrick":{"env":{"KEEP":"yes"}}},"x":1}"#,
         )
         .unwrap();
         let root = env::current_dir().unwrap();
@@ -1022,15 +1023,15 @@ mod tests {
             Some("1")
         );
         assert_eq!(
-            parsed.mcp_servers["lint-ai"]["env"]["KEEP"].as_str(),
+            parsed.mcp_servers["membrick"]["env"]["KEEP"].as_str(),
             Some("yes")
         );
         assert_eq!(
-            parsed.mcp_servers["lint-ai"]["command"].as_str(),
+            parsed.mcp_servers["membrick"]["command"].as_str(),
             Some(env::current_exe().unwrap().to_string_lossy().as_ref())
         );
         assert_eq!(
-            parsed.mcp_servers["lint-ai"]["args"]
+            parsed.mcp_servers["membrick"]["args"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -1050,8 +1051,8 @@ mod tests {
         install_user_config(&root_a.join("src"), Some(&first)).unwrap();
         let after_b = read_claude_config(&first).unwrap();
         assert_ne!(
-            after_a.mcp_servers["lint-ai"]["args"],
-            after_b.mcp_servers["lint-ai"]["args"]
+            after_a.mcp_servers["membrick"]["args"],
+            after_b.mcp_servers["membrick"]["args"]
         );
     }
 
@@ -1144,9 +1145,9 @@ mod tests {
                 "info".to_string(),
                 "list_memories".to_string(),
                 "record_session".to_string(),
-                "enable_lint_ai".to_string(),
-                "disable_lint_ai".to_string(),
-                "lint_ai_status".to_string(),
+                "enable_membrick".to_string(),
+                "disable_membrick".to_string(),
+                "membrick_status".to_string(),
                 "board_open".to_string(),
                 "board_list".to_string(),
                 "board_info".to_string(),
@@ -1171,43 +1172,43 @@ mod tests {
             false
         );
         assert_eq!(
-            call_tool(&mcp, "enable_lint_ai", json!({}))["enabled"],
+            call_tool(&mcp, "enable_membrick", json!({}))["enabled"],
             true
         );
-        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        let status = call_tool(&mcp, "membrick_status", json!({}));
         assert_eq!(status["enabled"], true);
         assert_eq!(status["recording_enabled"], true);
-        assert_eq!(status["display"], "Lint-AI:ON | Record:ON");
+        assert_eq!(status["display"], "Membrick:ON | Record:ON");
         assert_eq!(
             call_tool(&mcp, "record_session", json!({"action": "stop"}))["enabled"],
             false
         );
-        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        let status = call_tool(&mcp, "membrick_status", json!({}));
         assert_eq!(status["enabled"], true);
         assert_eq!(status["recording_enabled"], false);
-        assert_eq!(status["display"], "Lint-AI:ON | Record:OFF");
+        assert_eq!(status["display"], "Membrick:ON | Record:OFF");
         assert_eq!(
-            call_tool(&mcp, "disable_lint_ai", json!({}))["enabled"],
+            call_tool(&mcp, "disable_membrick", json!({}))["enabled"],
             false
         );
         assert_eq!(
             call_tool(&mcp, "record_session", json!({"action": "start"}))["enabled"],
             true
         );
-        let status = call_tool(&mcp, "lint_ai_status", json!({}));
+        let status = call_tool(&mcp, "membrick_status", json!({}));
         assert_eq!(status["enabled"], false);
         assert_eq!(status["recording_enabled"], true);
-        assert_eq!(status["display"], "Lint-AI:OFF | Record:ON");
+        assert_eq!(status["display"], "Membrick:OFF | Record:ON");
         assert_eq!(
-            call_tool(&mcp, "enable_lint_ai", json!({}))["enabled"],
+            call_tool(&mcp, "enable_membrick", json!({}))["enabled"],
             true
         );
         assert_eq!(
             call_tool(&mcp, "record_session", json!({"action": "stop"}))["enabled"],
             false
         );
-        let status = call_tool(&mcp, "lint_ai_status", json!({}));
-        assert_eq!(status["display"], "Lint-AI:ON | Record:OFF");
+        let status = call_tool(&mcp, "membrick_status", json!({}));
+        assert_eq!(status["display"], "Membrick:ON | Record:OFF");
         fs::remove_dir_all(root).unwrap();
     }
 

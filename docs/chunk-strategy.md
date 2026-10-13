@@ -1,6 +1,6 @@
 # Chunk Strategy Design
 
-This document defines how Lint-AI chunks documents for Tier 1 indexing and query retrieval.
+This document defines how Membrick chunks documents for Tier 1 indexing and query retrieval.
 
 ## Goals
 - Keep chunks small enough for LLM context windows.
@@ -67,13 +67,13 @@ For general use:
 Build index with hybrid chunking:
 
 ```bash
-./target/debug/lint-ai --index /path/to/docs --chunk-strategy hybrid --chunk-lines 40 --chunk-overlap 10 --chunk-target-tokens 450 --chunk-max-tokens 800
+./target/debug/membrick --index /path/to/docs --chunk-strategy hybrid --chunk-lines 40 --chunk-overlap 10 --chunk-target-tokens 450 --chunk-max-tokens 800
 ```
 
 Query with same chunk strategy:
 
 ```bash
-./target/debug/lint-ai --query "linux install docker compose" /path/to/docs --chunk-strategy hybrid
+./target/debug/membrick --query "linux install docker compose" /path/to/docs --chunk-strategy hybrid
 ```
 
 ## Notes on Caching

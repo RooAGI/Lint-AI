@@ -1535,7 +1535,7 @@ impl MemoryIndex {
         }
         let ranking_ms = ranking_start.elapsed().as_secs_f64() * 1000.0;
         let rerank_ms = rerank_start.elapsed().as_secs_f64() * 1000.0;
-        if std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some() {
+        if std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some() {
             eprintln!(
                 "index_timing total={:.3} parse={:.3} sparse_setup={:.3} sparse={:.3} lexical={:.3} posting={:.3} accumulate={:.3} metadata={:.3} rank={:.3} graph={:.3} entity_graph={:.3} sequence={:.3} evidence={:.3} group_build={:.3} group_sort={:.3} candidates={}",
                 rerank_ms, parse_ms, sparse_setup_ms, sparse_scoring_ms, lexical_merge_ms, posting_scoring_ms,

@@ -7,13 +7,13 @@ agent adapters. The design below documents the current behavior and the
 remaining provider-specific constraints.
 
 This document defines an explicit, opt-in session recorder for Claude Code,
-Codex, Gemini CLI, and Antigravity CLI integrations. It is intentionally separate from Lint-AI memory
-retrieval: a user can record a session without allowing Lint-AI to inject
+Codex, Gemini CLI, and Antigravity CLI integrations. It is intentionally separate from Membrick memory
+retrieval: a user can record a session without allowing Membrick to inject
 context into that session.
 
 ## Motivation
 
-Lint-AI currently captures bounded, structured memories from lifecycle hooks.
+Membrick currently captures bounded, structured memories from lifecycle hooks.
 Those memories are optimized for future retrieval and are not a complete audit
 of what happened during a session.
 
@@ -24,13 +24,13 @@ Users need a safe way to:
 - run a clean A/B comparison against native memory;
 - collect a session for debugging or evaluation without changing agent
   behavior; and
-- decide later whether selected material should become durable Lint-AI memory.
+- decide later whether selected material should become durable Membrick memory.
 
 ## Goals
 
 - Support all adapters through one provider-neutral recording model.
 - Make recording project-scoped, defaulting on when the user explicitly enables
-  Lint-AI while preserving an independent recording override.
+  Membrick while preserving an independent recording override.
 - Preserve ordered session events as append-only JSONL.
 - Record prompts, assistant output, tool calls, tool results, and lifecycle
   metadata when the provider exposes them.
@@ -52,22 +52,22 @@ Users need a safe way to:
 
 Recording and retrieval are independent controls.
 
-| Mode | Record events | Retrieve/inject Lint-AI memory | Native provider memory |
+| Mode | Record events | Retrieve/inject Membrick memory | Native provider memory |
 | --- | --- | --- | --- |
 | `off` | No | No change | No change |
 | `capture-only` | Yes | No | No change |
 | `assist` | Yes | Yes | Configurable |
 | `ab` | Yes, isolated per arm | Configurable per arm | Configurable per arm |
 
-The default remains `off` until the user explicitly enables Lint-AI or starts
-recording. Enabling Lint-AI turns recording on by default; `capture-only` is
+The default remains `off` until the user explicitly enables Membrick or starts
+recording. Enabling Membrick turns recording on by default; `capture-only` is
 the recommended first-run mode.
 
 An A/B run must use fresh sessions and separate recording/memory directories.
 The primary comparison is:
 
 - Arm A: native provider memory only;
-- Arm B: Lint-AI recording and/or retrieval with native memory disabled; and
+- Arm B: Membrick recording and/or retrieval with native memory disabled; and
 - optional Arm C: both layers enabled.
 
 The same prompt, repository revision, model, and tool permissions should be
@@ -87,7 +87,7 @@ flowchart LR
     S --> H[Provider lifecycle hooks]
     H --> R[Normalize, redact, and bound]
     R --> A[(Session archive)]
-    S -. optional retrieval .-> M[Lint-AI memory]
+    S -. optional retrieval .-> M[Membrick memory]
     M -. optional context .-> S
     A --> I[Inspect or export]
     I --> P[Optional promote selected events]
@@ -103,7 +103,7 @@ Record session
 Provider       Claude Code
 Mode           Capture only
 Project        /work/project
-Session root   .lint-ai/claude-sessions
+Session root   .membrick/claude-sessions
 Retrieval      Off
 Native memory  Unchanged
 Redaction      Default policy
@@ -118,12 +118,12 @@ view.
 
 The Claude Code integration implements this through Claude's native persistent
 `statusLine`: when no user-defined status line exists, installation adds a
-command that renders `Lint-AI:ON | Record:OFF` (or the corresponding states).
+command that renders `Membrick:ON | Record:OFF` (or the corresponding states).
 The command reads the active project from Claude's status-line JSON input, so
 the indicator remains project-scoped, and existing Claude status lines are
 preserved. Codex does not currently expose an equivalent arbitrary command
 status-line hook. The Codex integration still exposes the same compact status
-through `mcp__lint-ai__lint_ai_status` and the hidden
+through `mcp__membrick__membrick_status` and the hidden
 `--codex-statusline` renderer for external terminal/status-bar integrations.
 
 After the session, show one compact result with clear next actions:
@@ -133,7 +133,7 @@ Session recorded
 
 Agent · capture-only · 12m 08s
 47 events · 38.2 KB · 6 redactions · complete
-Saved to .lint-ai/claude-sessions/claude-abc123/
+Saved to .membrick/claude-sessions/claude-abc123/
 
 [Inspect]  [Export]  [Promote to memory]  [Delete]
 ```
@@ -146,7 +146,7 @@ presenting one blended timeline:
                             |
              +--------------+--------------+
              |                             |
-       Arm A: native                 Arm B: Lint-AI
+       Arm A: native                 Arm B: Membrick
        native memory                 capture/retrieval
        archive A                     archive B
              |                             |
@@ -168,7 +168,7 @@ prompts, tool calls, outputs, usage, and timing.
 
 ```text
 baseline session A                    replay session B
-Lint-AI disabled                      Lint-AI enabled
+Membrick disabled                      Membrick enabled
 recorded archive                      recorded archive
         |                                      |
         +----------- compare A and B ----------+
@@ -177,10 +177,10 @@ recorded archive                      recorded archive
 The replay must:
 
 1. create a fresh provider `session_id`;
-2. create a fresh Lint-AI recording directory;
+2. create a fresh Membrick recording directory;
 3. run with isolated provider settings and memory roots;
 4. associate the new session with `replay_of_session_id`;
-5. record the replay regardless of whether Lint-AI retrieval is enabled; and
+5. record the replay regardless of whether Membrick retrieval is enabled; and
 6. leave the baseline archive and memory segment unchanged.
 
 Replay should be implemented by an orchestrator that starts a new provider
@@ -196,8 +196,8 @@ The replay manifest includes relationship and experiment metadata:
   "session_id": "replay-b",
   "replay_of_session_id": "baseline-a",
   "run_type": "replay",
-  "arm": "claude-lint-ai",
-  "lint_ai_enabled": true,
+  "arm": "claude-membrick",
+  "membrick_enabled": true,
   "recording_enabled": true
 }
 ```
@@ -208,12 +208,12 @@ same baseline, each with a distinct provider session ID and recording archive.
 The implemented command surface is:
 
 ```text
-lint-ai --replay-session baseline-a \
+membrick --replay-session baseline-a \
   --session-provider claude \
-  --replay-enable-lint-ai
+  --replay-enable-membrick
 ```
 
-For the no-memory arm, use `--replay-disable-lint-ai`. It is also the default
+For the no-memory arm, use `--replay-disable-membrick`. It is also the default
 when neither replay toggle is supplied.
 
 The command extracts all recorded user prompts. For Codex, it launches a
@@ -257,7 +257,7 @@ event log:
   "source_session": {
     "provider": "claude",
     "session_id": "abc123",
-    "archive": ".lint-ai/claude-sessions/abc123",
+    "archive": ".membrick/claude-sessions/abc123",
     "repository_revision": "abc123"
   },
   "setup_messages": [
@@ -296,7 +296,7 @@ modify either the session archive or the scenario definition.
 An eventual import command can be exposed as:
 
 ```text
-lint-ai --scenario-from-session abc123 \
+membrick --scenario-from-session abc123 \
   --session-provider claude \
   --scenario-out benchmark/claude_code/scenarios/review-session-abc123.json
 ```
@@ -304,19 +304,19 @@ lint-ai --scenario-from-session abc123 \
 ### Activation inside a supported agent
 
 After the provider integration is installed, recording remains dormant until
-the user explicitly enables Lint-AI or starts it from the active provider
-session through the Lint-AI MCP control tool:
+the user explicitly enables Membrick or starts it from the active provider
+session through the Membrick MCP control tool:
 
 ```json
 {"action":"start"}
 ```
 
-The tool is named `mcp__lint-ai__record_session` in the client. Stopping uses
+The tool is named `mcp__membrick__record_session` in the client. Stopping uses
 `{"action":"stop"}`, and checking the state uses `{"action":"status"}`.
 
 The provider skill and tool description must make these rules explicit:
 
-- enabling Lint-AI starts recording by default, or recording can be started
+- enabling Membrick starts recording by default, or recording can be started
   directly with `record_session`;
 - starting recording is capture-only and does not inject memory;
 - recording is scoped to the current project and provider; and
@@ -514,7 +514,7 @@ recover data that was intentionally omitted during recording.
 
 ### 9. Promote selected material into memory
 
-Recording does not automatically create Lint-AI memory records. Promotion is a
+Recording does not automatically create Membrick memory records. Promotion is a
 separate user action:
 
 1. select a session or event range;
@@ -534,22 +534,22 @@ The exact CLI surface may evolve, but the configuration needs equivalent
 controls to the following:
 
 ```text
-lint-ai --claude-code-install /path/to/project \
+membrick --claude-code-install /path/to/project \
   --session-recording capture-only \
-  --session-root /path/to/project/.lint-ai/claude-sessions
+  --session-root /path/to/project/.membrick/claude-sessions
 
-lint-ai --codex-install /path/to/project \
+membrick --codex-install /path/to/project \
   --session-recording capture-only \
-  --session-root /path/to/project/.lint-ai/codex-sessions
+  --session-root /path/to/project/.membrick/codex-sessions
 ```
 
 For experiments, settings and storage must be supplied explicitly or created
 under a disposable directory:
 
 ```text
-lint-ai --claude-code-install /path/to/project \
+membrick --claude-code-install /path/to/project \
   --session-recording ab \
-  --experiment-root /tmp/lint-ai-experiment/run-1
+  --experiment-root /tmp/membrick-experiment/run-1
 ```
 
 Installation must not silently overwrite global provider settings. It should
@@ -561,7 +561,7 @@ unrelated hooks, MCP servers, and settings remain untouched.
 Each provider and project has an independent session root:
 
 ```text
-.lint-ai/
+.membrick/
   claude-sessions/
     <session-id>/
       manifest.json
@@ -720,9 +720,9 @@ overhead separately from retrieval and MCP startup.
 Provide read-only commands for local review:
 
 ```text
-lint-ai --list-sessions /path/to/project
-lint-ai --inspect-session <session-id> --session-root .lint-ai/claude-sessions
-lint-ai --export-session <session-id> --format jsonl --out session.jsonl
+membrick --list-sessions /path/to/project
+membrick --inspect-session <session-id> --session-root .membrick/claude-sessions
+membrick --export-session <session-id> --format jsonl --out session.jsonl
 ```
 
 Inspection should show event counts, duration, provider, recording mode,

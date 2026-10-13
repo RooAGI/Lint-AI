@@ -1,5 +1,5 @@
 //! Exercise the supported API from a separate crate, with no internal imports.
-use lint_ai::{
+use membrick::{
     AddRequest, GetRequest, ListRequest, MemoryService, Message, PipelineOptions, SearchRequest,
     UpdateRequest,
 };
@@ -7,7 +7,7 @@ use lint_ai::{
 #[test]
 fn service_persists_searches_updates_and_deletes_without_store_access() -> anyhow::Result<()> {
     let root = std::fs::canonicalize(std::env::temp_dir())?.join(format!(
-        "lint-ai-public-service-{}-{}",
+        "membrick-public-service-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?

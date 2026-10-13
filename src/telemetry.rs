@@ -111,7 +111,7 @@ pub fn record_provider_lifecycle_event(
     event_name: &str,
     payload: &serde_json::Value,
 ) -> Result<()> {
-    let root = project_root.join(".lint-ai").join(PROVIDER_TELEMETRY_DIR);
+    let root = project_root.join(".membrick").join(PROVIDER_TELEMETRY_DIR);
     fs::create_dir_all(&root)?;
     let lock = acquire_telemetry_lock(&root.join(format!("{provider}.lock")))?;
     let path = root.join(format!("{provider}.json"));
@@ -499,7 +499,7 @@ pub fn provider_lifecycle_status(
     provider: &str,
 ) -> Result<Option<ProviderLifecycleStatus>> {
     let path = project_root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(PROVIDER_TELEMETRY_DIR)
         .join(format!("{provider}.json"));
     if !path.exists() {
@@ -637,7 +637,7 @@ pub fn record_project_query(
     error: bool,
     empty_results: bool,
 ) -> Result<()> {
-    let root = project_root.join(".lint-ai");
+    let root = project_root.join(".membrick");
     fs::create_dir_all(&root)?;
     let lock = acquire_telemetry_lock(&root.join("query-telemetry.lock"))?;
     let path = root.join(QUERY_TELEMETRY_FILE);
@@ -686,7 +686,7 @@ pub fn record_project_query(
 }
 
 pub fn project_query_snapshot(project_root: &Path) -> Result<Option<TelemetrySnapshot>> {
-    let path = project_root.join(".lint-ai").join(QUERY_TELEMETRY_FILE);
+    let path = project_root.join(".membrick").join(QUERY_TELEMETRY_FILE);
     if !path.exists() {
         return Ok(None);
     }
@@ -718,7 +718,7 @@ impl OperationalTelemetry {
         let (query_events, receiver) = mpsc::sync_channel::<QueryEvent>(QUERY_EVENT_QUEUE_CAPACITY);
         let worker_state = std::sync::Arc::clone(&state);
         thread::Builder::new()
-            .name("lint-ai-query-telemetry".to_string())
+            .name("membrick-query-telemetry".to_string())
             .spawn(move || {
                 while let Ok(event) = receiver.recv() {
                     record_query_in_state(
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn provider_lifecycle_ledger_is_bounded_and_opaque() {
-        let root = std::env::temp_dir().join(format!("lint-ai-provider-telemetry-{}", now_ms()));
+        let root = std::env::temp_dir().join(format!("membrick-provider-telemetry-{}", now_ms()));
         record_provider_lifecycle_event(
             &root,
             "codex",

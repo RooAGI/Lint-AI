@@ -132,7 +132,7 @@ pub fn serve_requests(
         let response = match handle_request(request) {
             Ok(response) => response,
             Err(error) => {
-                eprintln!("lint-ai MCP request '{method}' failed: {error:#}");
+                eprintln!("membrick MCP request '{method}' failed: {error:#}");
                 on_handler_error(&method, &error);
                 JsonRpcResponse {
                     jsonrpc: "2.0",

@@ -224,6 +224,7 @@ fn segment_lexical_dir(root: &Path, segment_id: &str, records: &[DocRecord]) -> 
     // lexical index is immutable once built; writes produce a new directory
     // for the changed content while existing readers keep their old snapshot.
     let mut hasher = Sha256::new();
+    // Preserve the legacy schema tag so existing segment IDs remain stable.
     hasher.update(b"lint-ai-segment-lexical-v1");
     hasher.update(segment_id.as_bytes());
     for record in records {

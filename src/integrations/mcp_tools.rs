@@ -19,6 +19,12 @@ pub(crate) const PROVIDER_FILTER_VALUES: &[&str] = &[
     "rooagi_runtime",
 ];
 
+fn env_compat(name: &str, legacy_name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .or_else(|| std::env::var(legacy_name).ok())
+}
+
 pub(crate) const fn resident_backend_enabled() -> bool {
     !cfg!(test)
 }
@@ -27,11 +33,11 @@ pub(crate) const fn resident_backend_enabled() -> bool {
 /// view on disk. Lifecycle hooks use this to avoid creating empty stores just
 /// to run their default session-start query.
 pub(crate) fn has_search_store(root: &Path) -> bool {
-    let lint_ai_root = root.join(".lint-ai");
-    lint_ai_root
+    let membrick_root = root.join(".membrick");
+    membrick_root
         .join(crate::integrations::mcp_index::SHARED_MEMORY_DIR)
         .is_dir()
-        || lint_ai_root
+        || membrick_root
             .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME)
             .is_dir()
 }
@@ -67,7 +73,7 @@ fn resident_error_response(id: Option<Value>, code: i64, message: &str) -> JsonR
     }
 }
 
-/// Forward workspace memory tools to the resident Lint-AI server.
+/// Forward workspace memory tools to the resident Membrick server.
 /// Provider MCP processes must not open a second workspace/provider index.
 pub(crate) fn call_resident_tool(
     id: Option<Value>,
@@ -77,8 +83,8 @@ pub(crate) fn call_resident_tool(
     arguments: &Value,
 ) -> anyhow::Result<JsonRpcResponse> {
     let root = root.canonicalize()?;
-    let base_url =
-        std::env::var("LINTAI_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let base_url = env_compat("MEMBRICK_SERVER_URL", "LINTAI_SERVER_URL")
+        .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
     let url = format!(
         "{}/provider-memory/mcp/tools/call",
         base_url.trim_end_matches('/')
@@ -88,12 +94,12 @@ pub(crate) fn call_resident_tool(
         .json(&json!({
             "workspace": root,
             "provider": provider,
-            "user_id": std::env::var("LINTAI_USER_ID").unwrap_or_else(|_| MCP_MEMORY_USER_ID.to_string()),
+            "user_id": env_compat("MEMBRICK_USER_ID", "LINTAI_USER_ID").unwrap_or_else(|| MCP_MEMORY_USER_ID.to_string()),
             "session_id": arguments.get("session_id"),
             "tool": tool,
             "arguments": arguments,
         }));
-    if let Ok(token) = std::env::var("LINTAI_SERVER_TOKEN") {
+    if let Some(token) = env_compat("MEMBRICK_SERVER_TOKEN", "LINTAI_SERVER_TOKEN") {
         if !token.trim().is_empty() {
             request = request.bearer_auth(token.trim());
         }
@@ -104,7 +110,7 @@ pub(crate) fn call_resident_tool(
             return Ok(resident_error_response(
                 id,
                 -32002,
-                &format!("resident Lint-AI server unavailable: {error}"),
+                &format!("resident Membrick server unavailable: {error}"),
             ));
         }
     };
@@ -160,8 +166,8 @@ pub(crate) fn upsert_hook_documents(
             "invalid provider"
         );
         let root = root.canonicalize()?;
-        let base_url = std::env::var("LINTAI_SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let base_url = env_compat("MEMBRICK_SERVER_URL", "LINTAI_SERVER_URL")
+            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
         let mut request = resident_http_client()
             .post(format!(
                 "{}/provider-memory/mcp/documents/upsert",
@@ -171,10 +177,10 @@ pub(crate) fn upsert_hook_documents(
                 "workspace": root,
                 "provider": provider,
                 "session_id": session_id,
-                "user_id": std::env::var("LINTAI_USER_ID").unwrap_or_else(|_| MCP_MEMORY_USER_ID.to_string()),
+                "user_id": env_compat("MEMBRICK_USER_ID", "LINTAI_USER_ID").unwrap_or_else(|| MCP_MEMORY_USER_ID.to_string()),
                 "documents": documents,
             }));
-        if let Ok(token) = std::env::var("LINTAI_SERVER_TOKEN") {
+        if let Some(token) = env_compat("MEMBRICK_SERVER_TOKEN", "LINTAI_SERVER_TOKEN") {
             if !token.trim().is_empty() {
                 request = request.bearer_auth(token.trim());
             }
@@ -212,8 +218,8 @@ pub(crate) fn replace_hook_documents(
             "invalid provider"
         );
         let root = root.canonicalize()?;
-        let base_url = std::env::var("LINTAI_SERVER_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let base_url = env_compat("MEMBRICK_SERVER_URL", "LINTAI_SERVER_URL")
+            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
         let mut request = resident_http_client()
             .post(format!(
                 "{}/provider-memory/mcp/documents/upsert",
@@ -223,11 +229,11 @@ pub(crate) fn replace_hook_documents(
                 "workspace": root,
                 "provider": provider,
                 "session_id": session_id,
-                "user_id": std::env::var("LINTAI_USER_ID").unwrap_or_else(|_| MCP_MEMORY_USER_ID.to_string()),
+                "user_id": env_compat("MEMBRICK_USER_ID", "LINTAI_USER_ID").unwrap_or_else(|| MCP_MEMORY_USER_ID.to_string()),
                 "replace_group":{"key":key,"value":value},
                 "documents": documents,
             }));
-        if let Ok(token) = std::env::var("LINTAI_SERVER_TOKEN") {
+        if let Some(token) = env_compat("MEMBRICK_SERVER_TOKEN", "LINTAI_SERVER_TOKEN") {
             if !token.trim().is_empty() {
                 request = request.bearer_auth(token.trim());
             }
@@ -486,6 +492,7 @@ fn is_recorded_memory(document: &SourceDocument) -> bool {
         || document.source.starts_with("muse://")
         || document.source.starts_with("openclaw://")
         || document.source.starts_with("hermes://")
+        || document.source.starts_with("membrick://")
         || document.source.starts_with("lint-ai://")
         || document
             .filters
@@ -1491,7 +1498,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join(format!(
-                "lint-ai-resolve-session-{}-{}",
+                "membrick-resolve-session-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1539,7 +1546,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join(format!(
-                "lint-ai-{}-{}-{}",
+                "membrick-{}-{}-{}",
                 name,
                 std::process::id(),
                 std::time::SystemTime::now()

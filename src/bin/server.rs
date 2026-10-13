@@ -38,7 +38,7 @@ const MAX_CONCURRENT_REQUESTS: usize = 128;
 const DEFAULT_MAX_ACTIVE_WORKSPACES: usize = 8;
 
 #[derive(Debug, Parser)]
-#[command(name = "lint-ai-server", about = "Memory Add/Search server backed by Lint-AI", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "membrick-server", about = "Memory Add/Search server backed by Membrick", version = env!("CARGO_PKG_VERSION"))]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:8080")]
     bind: String,
@@ -90,7 +90,7 @@ struct Args {
     /// statistics (plus Spanish signals for Latin text); pass `zh`/`ko`/`es`/`en` to force it.
     #[arg(long, value_enum, default_value = "auto")]
     lang: Lang,
-    /// Project root containing provider hook telemetry under `.lint-ai`.
+    /// Project root containing provider hook telemetry under `.membrick`.
     #[arg(long)]
     project_root: Option<PathBuf>,
     /// Additional exact project roots this server may open. Repeat for multiple projects.
@@ -321,7 +321,7 @@ fn open_workspace_runtime(
     schedule: server_writer::WriteSchedule,
 ) -> anyhow::Result<WorkspaceRuntime> {
     let workspace_index_root = project_root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME);
     let owner = open_workspace_owner_at(&project_root, &workspace_index_root, options.clone())?;
     let service = Arc::new(RwLock::new(owner));
@@ -531,7 +531,7 @@ fn provider_memory_ignore_paths() -> Vec<String> {
 #[cfg(test)]
 fn open_workspace_owner(root: &std::path::Path) -> anyhow::Result<MemoryService> {
     let workspace_root = root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME);
     open_workspace_owner_at(
         root,
@@ -607,7 +607,7 @@ pub(crate) async fn main() -> anyhow::Result<()> {
     options.lang = args.lang;
     let project_root = args
         .project_root
-        .or_else(|| std::env::var_os("LINT_AI_PROJECT_ROOT").map(PathBuf::from))
+        .or_else(|| std::env::var_os("MEMBRICK_PROJECT_ROOT").map(PathBuf::from))
         .unwrap_or(std::env::current_dir()?)
         .canonicalize()?;
     anyhow::ensure!(
@@ -655,7 +655,7 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             })
     });
     let workspace_index_root =
-        selected_index.unwrap_or_else(|| project_root.join(".lint-ai").join("workspace-memory"));
+        selected_index.unwrap_or_else(|| project_root.join(".membrick").join("workspace-memory"));
     let owner = open_workspace_owner_at(&project_root, &workspace_index_root, options.clone())?;
     let ignore_paths = provider_memory_ignore_paths();
     let watcher = crate::pipeline::WorkspaceWatcher::new(&project_root, &ignore_paths)?;
@@ -801,7 +801,7 @@ pub(crate) async fn main() -> anyhow::Result<()> {
     }
     let app = app_router(state.clone());
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
-    eprintln!("Lint-AI server listening on {}", args.bind);
+    eprintln!("Membrick server listening on {}", args.bind);
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             #[cfg(unix)]
@@ -1396,88 +1396,88 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         .unwrap_or_else(|| state.telemetry.snapshot())
         .query_summary;
     let integrations = dashboard_integrations(&state.project_root);
-    let mut body = String::from("# Lint-AI operational metrics\n");
-    body.push_str("# HELP lint_ai_query_requests_window Search requests in the retained telemetry window.\n# TYPE lint_ai_query_requests_window gauge\n");
+    let mut body = String::from("# Membrick operational metrics\n");
+    body.push_str("# HELP membrick_query_requests_window Search requests in the retained telemetry window.\n# TYPE membrick_query_requests_window gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_requests_window {}\n",
+        "membrick_query_requests_window {}\n",
         query.requests
     ));
-    body.push_str("# HELP lint_ai_query_errors_window Search errors in the retained telemetry window.\n# TYPE lint_ai_query_errors_window gauge\n");
-    body.push_str(&format!("lint_ai_query_errors_window {}\n", query.errors));
-    body.push_str("# HELP lint_ai_query_empty_results_window Searches with no results in the retained telemetry window.\n# TYPE lint_ai_query_empty_results_window gauge\n");
+    body.push_str("# HELP membrick_query_errors_window Search errors in the retained telemetry window.\n# TYPE membrick_query_errors_window gauge\n");
+    body.push_str(&format!("membrick_query_errors_window {}\n", query.errors));
+    body.push_str("# HELP membrick_query_empty_results_window Searches with no results in the retained telemetry window.\n# TYPE membrick_query_empty_results_window gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_empty_results_window {}\n",
+        "membrick_query_empty_results_window {}\n",
         query.empty_results
     ));
-    body.push_str("# HELP lint_ai_query_requests_per_second Search request rate over the retained telemetry window.\n# TYPE lint_ai_query_requests_per_second gauge\n");
+    body.push_str("# HELP membrick_query_requests_per_second Search request rate over the retained telemetry window.\n# TYPE membrick_query_requests_per_second gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_requests_per_second {}\n",
+        "membrick_query_requests_per_second {}\n",
         query.requests_per_second
     ));
-    body.push_str("# HELP lint_ai_query_error_rate Fraction of searches that returned errors in the retained telemetry window.\n# TYPE lint_ai_query_error_rate gauge\n");
-    body.push_str(&format!("lint_ai_query_error_rate {}\n", query.error_rate));
-    body.push_str("# HELP lint_ai_query_empty_result_rate Fraction of searches with no results in the retained telemetry window.\n# TYPE lint_ai_query_empty_result_rate gauge\n");
+    body.push_str("# HELP membrick_query_error_rate Fraction of searches that returned errors in the retained telemetry window.\n# TYPE membrick_query_error_rate gauge\n");
+    body.push_str(&format!("membrick_query_error_rate {}\n", query.error_rate));
+    body.push_str("# HELP membrick_query_empty_result_rate Fraction of searches with no results in the retained telemetry window.\n# TYPE membrick_query_empty_result_rate gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_empty_result_rate {}\n",
+        "membrick_query_empty_result_rate {}\n",
         query.empty_result_rate
     ));
-    body.push_str("# HELP lint_ai_query_latency_ms Estimated query latency quantile in milliseconds over the retained telemetry window.\n# TYPE lint_ai_query_latency_ms gauge\n");
+    body.push_str("# HELP membrick_query_latency_ms Estimated query latency quantile in milliseconds over the retained telemetry window.\n# TYPE membrick_query_latency_ms gauge\n");
     body.push_str(&format!(
-        "lint_ai_query_latency_ms{{quantile=\"0.5\"}} {}\n",
+        "membrick_query_latency_ms{{quantile=\"0.5\"}} {}\n",
         query.p50_ms
     ));
     body.push_str(&format!(
-        "lint_ai_query_latency_ms{{quantile=\"0.95\"}} {}\n",
+        "membrick_query_latency_ms{{quantile=\"0.95\"}} {}\n",
         query.p95_ms
     ));
-    body.push_str("# HELP lint_ai_provider_compiled Whether this server build includes the provider integration.\n# TYPE lint_ai_provider_compiled gauge\n");
-    body.push_str("# HELP lint_ai_provider_observed Whether Lint-AI has ever received lifecycle telemetry for the provider.\n# TYPE lint_ai_provider_observed gauge\n");
-    body.push_str("# HELP lint_ai_provider_events_total Lifecycle events recorded for the provider.\n# TYPE lint_ai_provider_events_total counter\n");
-    body.push_str("# HELP lint_ai_provider_sessions_started_total Provider sessions started.\n# TYPE lint_ai_provider_sessions_started_total counter\n");
-    body.push_str("# HELP lint_ai_provider_sessions_ended_total Provider sessions ended.\n# TYPE lint_ai_provider_sessions_ended_total counter\n");
-    body.push_str("# HELP lint_ai_provider_retrieval_events_total Provider lifecycle events categorized as retrieval.\n# TYPE lint_ai_provider_retrieval_events_total counter\n");
-    body.push_str("# HELP lint_ai_provider_capture_events_total Provider lifecycle events categorized as capture.\n# TYPE lint_ai_provider_capture_events_total counter\n");
-    body.push_str("# HELP lint_ai_provider_sessions_active Active provider sessions observed by Lint-AI.\n# TYPE lint_ai_provider_sessions_active gauge\n");
-    body.push_str("# HELP lint_ai_provider_last_seen_timestamp_seconds Unix timestamp of the last received provider event, or zero if none.\n# TYPE lint_ai_provider_last_seen_timestamp_seconds gauge\n");
-    body.push_str("# HELP lint_ai_provider_recent_events Events by bounded lifecycle category in the retained provider event ledger.\n# TYPE lint_ai_provider_recent_events gauge\n");
-    body.push_str("# HELP lint_ai_provider_token_usage_recent Tokens reported in the retained provider event ledger.\n# TYPE lint_ai_provider_token_usage_recent gauge\n");
+    body.push_str("# HELP membrick_provider_compiled Whether this server build includes the provider integration.\n# TYPE membrick_provider_compiled gauge\n");
+    body.push_str("# HELP membrick_provider_observed Whether Membrick has ever received lifecycle telemetry for the provider.\n# TYPE membrick_provider_observed gauge\n");
+    body.push_str("# HELP membrick_provider_events_total Lifecycle events recorded for the provider.\n# TYPE membrick_provider_events_total counter\n");
+    body.push_str("# HELP membrick_provider_sessions_started_total Provider sessions started.\n# TYPE membrick_provider_sessions_started_total counter\n");
+    body.push_str("# HELP membrick_provider_sessions_ended_total Provider sessions ended.\n# TYPE membrick_provider_sessions_ended_total counter\n");
+    body.push_str("# HELP membrick_provider_retrieval_events_total Provider lifecycle events categorized as retrieval.\n# TYPE membrick_provider_retrieval_events_total counter\n");
+    body.push_str("# HELP membrick_provider_capture_events_total Provider lifecycle events categorized as capture.\n# TYPE membrick_provider_capture_events_total counter\n");
+    body.push_str("# HELP membrick_provider_sessions_active Active provider sessions observed by Membrick.\n# TYPE membrick_provider_sessions_active gauge\n");
+    body.push_str("# HELP membrick_provider_last_seen_timestamp_seconds Unix timestamp of the last received provider event, or zero if none.\n# TYPE membrick_provider_last_seen_timestamp_seconds gauge\n");
+    body.push_str("# HELP membrick_provider_recent_events Events by bounded lifecycle category in the retained provider event ledger.\n# TYPE membrick_provider_recent_events gauge\n");
+    body.push_str("# HELP membrick_provider_token_usage_recent Tokens reported in the retained provider event ledger.\n# TYPE membrick_provider_token_usage_recent gauge\n");
     for integration in integrations {
         body.push_str(&format!(
-            "lint_ai_provider_events_total{{provider=\"{}\"}} {}\n",
+            "membrick_provider_events_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.events_total
         ));
         body.push_str(&format!(
-            "lint_ai_provider_compiled{{provider=\"{}\"}} {}\n",
+            "membrick_provider_compiled{{provider=\"{}\"}} {}\n",
             integration.recording_provider,
             u8::from(integration.compiled)
         ));
         body.push_str(&format!(
-            "lint_ai_provider_observed{{provider=\"{}\"}} {}\n",
+            "membrick_provider_observed{{provider=\"{}\"}} {}\n",
             integration.recording_provider,
             u8::from(integration.last_seen_ms.is_some())
         ));
         body.push_str(&format!(
-            "lint_ai_provider_sessions_started_total{{provider=\"{}\"}} {}\n",
+            "membrick_provider_sessions_started_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.sessions_started
         ));
         body.push_str(&format!(
-            "lint_ai_provider_sessions_ended_total{{provider=\"{}\"}} {}\n",
+            "membrick_provider_sessions_ended_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.sessions_ended
         ));
         body.push_str(&format!(
-            "lint_ai_provider_retrieval_events_total{{provider=\"{}\"}} {}\n",
+            "membrick_provider_retrieval_events_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.retrieval_events
         ));
         body.push_str(&format!(
-            "lint_ai_provider_capture_events_total{{provider=\"{}\"}} {}\n",
+            "membrick_provider_capture_events_total{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.capture_events
         ));
         body.push_str(&format!(
-            "lint_ai_provider_sessions_active{{provider=\"{}\"}} {}\n",
+            "membrick_provider_sessions_active{{provider=\"{}\"}} {}\n",
             integration.recording_provider, integration.sessions_active
         ));
         body.push_str(&format!(
-            "lint_ai_provider_last_seen_timestamp_seconds{{provider=\"{}\"}} {}\n",
+            "membrick_provider_last_seen_timestamp_seconds{{provider=\"{}\"}} {}\n",
             integration.recording_provider,
             integration.last_seen_ms.unwrap_or_default() as f64 / 1_000.0
         ));
@@ -1507,7 +1507,7 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         }
         for category in ["session", "retrieval", "compaction", "capture", "lifecycle"] {
             body.push_str(&format!(
-                "lint_ai_provider_recent_events{{provider=\"{}\",category=\"{}\"}} {}\n",
+                "membrick_provider_recent_events{{provider=\"{}\",category=\"{}\"}} {}\n",
                 integration.recording_provider,
                 category,
                 recent_categories.get(category).copied().unwrap_or_default()
@@ -1520,7 +1520,7 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
             "cache_read_input",
         ] {
             body.push_str(&format!(
-                "lint_ai_provider_token_usage_recent{{provider=\"{}\",kind=\"{}\"}} {}\n",
+                "membrick_provider_token_usage_recent{{provider=\"{}\",kind=\"{}\"}} {}\n",
                 integration.recording_provider,
                 kind,
                 recent_tokens.get(kind).copied().unwrap_or_default()
@@ -1528,17 +1528,17 @@ async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
         }
     }
 
-    body.push_str("# HELP lint_ai_index_source_documents Source documents in the project memory index.\n# TYPE lint_ai_index_source_documents gauge\n");
-    body.push_str("# HELP lint_ai_index_records Records in the project memory index.\n# TYPE lint_ai_index_records gauge\n");
-    body.push_str("# HELP lint_ai_index_dirty Whether the memory index has unpublished changes.\n# TYPE lint_ai_index_dirty gauge\n");
-    body.push_str("# HELP lint_ai_index_store_revision Current mutable store revision.\n# TYPE lint_ai_index_store_revision gauge\n");
-    body.push_str("# HELP lint_ai_index_snapshot_revision Published search snapshot revision.\n# TYPE lint_ai_index_snapshot_revision gauge\n");
-    body.push_str("# HELP lint_ai_index_revision_lag Difference between store and published snapshot revisions.\n# TYPE lint_ai_index_revision_lag gauge\n");
-    body.push_str("# HELP lint_ai_index_segments Number of segments in the published search snapshot.\n# TYPE lint_ai_index_segments gauge\n");
+    body.push_str("# HELP membrick_index_source_documents Source documents in the project memory index.\n# TYPE membrick_index_source_documents gauge\n");
+    body.push_str("# HELP membrick_index_records Records in the project memory index.\n# TYPE membrick_index_records gauge\n");
+    body.push_str("# HELP membrick_index_dirty Whether the memory index has unpublished changes.\n# TYPE membrick_index_dirty gauge\n");
+    body.push_str("# HELP membrick_index_store_revision Current mutable store revision.\n# TYPE membrick_index_store_revision gauge\n");
+    body.push_str("# HELP membrick_index_snapshot_revision Published search snapshot revision.\n# TYPE membrick_index_snapshot_revision gauge\n");
+    body.push_str("# HELP membrick_index_revision_lag Difference between store and published snapshot revisions.\n# TYPE membrick_index_revision_lag gauge\n");
+    body.push_str("# HELP membrick_index_segments Number of segments in the published search snapshot.\n# TYPE membrick_index_segments gauge\n");
     if let Ok(service) = state.service.read() {
         let inspection = service.memory_store(MemoryStore::Workspace).inspection();
         body.push_str(&format!(
-            "lint_ai_index_source_documents {}\nlint_ai_index_records {}\nlint_ai_index_dirty {}\nlint_ai_index_store_revision {}\nlint_ai_index_snapshot_revision {}\nlint_ai_index_revision_lag {}\nlint_ai_index_segments {}\n",
+            "membrick_index_source_documents {}\nmembrick_index_records {}\nmembrick_index_dirty {}\nmembrick_index_store_revision {}\nmembrick_index_snapshot_revision {}\nmembrick_index_revision_lag {}\nmembrick_index_segments {}\n",
             inspection.source_document_count,
             inspection.record_count,
             u8::from(inspection.dirty),
@@ -1658,7 +1658,7 @@ fn dashboard_integration(
 }
 
 fn discover_index_paths(root: &std::path::Path) -> Vec<PathBuf> {
-    let directory = root.join(".lint-ai");
+    let directory = root.join(".membrick");
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
@@ -1854,7 +1854,7 @@ async fn add_batch(
     StatusCode::SERVICE_UNAVAILABLE.into_response()
 }
 
-/// Provider hooks share `.lint-ai/memory` regardless of the server's primary
+/// Provider hooks share `.membrick/memory` regardless of the server's primary
 /// `--index`. Search composes that store with the workspace-memory index.
 #[cfg(any(
     feature = "claude-code",
@@ -2742,7 +2742,7 @@ mod tests {
     pub(super) fn security_test_root() -> PathBuf {
         static NEXT_ROOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "lint-ai-http-security-{}-{}-{}",
+            "membrick-http-security-{}-{}-{}",
             std::process::id(),
             now_unix_ms(),
             NEXT_ROOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -2752,6 +2752,13 @@ mod tests {
     }
 
     fn security_test_state(root: &std::path::Path) -> AppState {
+        security_test_state_with_allowed_workspaces(root, std::iter::empty::<PathBuf>())
+    }
+
+    fn security_test_state_with_allowed_workspaces(
+        root: &std::path::Path,
+        additional_roots: impl IntoIterator<Item = PathBuf>,
+    ) -> AppState {
         let owner = open_workspace_owner_at(
             root,
             root,
@@ -2766,10 +2773,13 @@ mod tests {
             batch_size: 512,
             checkpoint_interval: Duration::from_secs(30),
         };
+        let allowed_roots = std::iter::once(root.to_path_buf())
+            .chain(additional_roots)
+            .collect();
         let workspace_registry = Arc::new(WorkspaceRegistry::new(
             crate::memory_api::workspace::segmented_store_options(),
             schedule,
-            HashSet::from([root.to_path_buf()]),
+            allowed_roots,
             DEFAULT_MAX_ACTIVE_WORKSPACES,
         ));
         workspace_registry.register_primary(WorkspaceRuntime {
@@ -2795,7 +2805,14 @@ mod tests {
     }
 
     fn provider_memory_test_state(root: &std::path::Path) -> AppState {
-        let mut state = security_test_state(root);
+        provider_memory_test_state_with_allowed_workspaces(root, std::iter::empty::<PathBuf>())
+    }
+
+    fn provider_memory_test_state_with_allowed_workspaces(
+        root: &std::path::Path,
+        additional_roots: impl IntoIterator<Item = PathBuf>,
+    ) -> AppState {
+        let mut state = security_test_state_with_allowed_workspaces(root, additional_roots);
         state.jwt_secret = None;
         state
     }
@@ -3128,7 +3145,10 @@ mod tests {
         use tower::ServiceExt;
         let root = security_test_root();
         let other = security_test_root();
-        let app = app_router(provider_memory_test_state(&root));
+        let app = app_router(provider_memory_test_state_with_allowed_workspaces(
+            &root,
+            std::iter::once(other.clone()),
+        ));
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -3161,11 +3181,11 @@ mod tests {
         .unwrap();
         assert_eq!(response_body["ok"], true);
         assert!(other
-            .join(".lint-ai")
+            .join(".membrick")
             .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME)
             .exists());
         assert!(other
-            .join(".lint-ai")
+            .join(".membrick")
             .join(crate::integrations::mcp_index::SHARED_MEMORY_DIR)
             .exists());
         let _ = std::fs::remove_dir_all(root);
@@ -3322,7 +3342,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let mut states = crate::conversation_state::ConversationStateStore::open_under(
-            &root.join(".lint-ai").join("memory"),
+            &root.join(".membrick").join("memory"),
         );
         assert!(
             states
@@ -3402,7 +3422,7 @@ mod tests {
         let shared_root = crate::integrations::mcp_index::shared_memory_root(&root);
         assert!(
             shared_root.exists(),
-            "provider writes must use .lint-ai/memory"
+            "provider writes must use .membrick/memory"
         );
 
         // Use another integration's identity: server-token provider recall is
@@ -3441,7 +3461,11 @@ mod tests {
         use tower::ServiceExt;
 
         let root = security_test_root();
-        let app = app_router(provider_memory_test_state(&root));
+        let second_root = security_test_root();
+        let app = app_router(provider_memory_test_state_with_allowed_workspaces(
+            &root,
+            std::iter::once(second_root.clone()),
+        ));
         let context = |tool: &str, arguments: Value| {
             json!({
                 "workspace": root,
@@ -3505,7 +3529,6 @@ mod tests {
 
         // A second Codex process can use the same backend while keeping its
         // resident owner and captured memory isolated to its own project.
-        let second_root = security_test_root();
         let mut second_add = context(
             "add_memory",
             json!({
@@ -3839,10 +3862,10 @@ mod tests {
             .await
             .unwrap();
         });
-        let previous_url = std::env::var_os("LINTAI_SERVER_URL");
-        let previous_token = std::env::var_os("LINTAI_SERVER_TOKEN");
-        std::env::set_var("LINTAI_SERVER_URL", format!("http://{address}"));
-        std::env::remove_var("LINTAI_SERVER_TOKEN");
+        let previous_url = std::env::var_os("MEMBRICK_SERVER_URL");
+        let previous_token = std::env::var_os("MEMBRICK_SERVER_TOKEN");
+        std::env::set_var("MEMBRICK_SERVER_URL", format!("http://{address}"));
+        std::env::remove_var("MEMBRICK_SERVER_TOKEN");
 
         let session_id = "codex:resident-client-session";
         let add_root = root.clone();
@@ -3893,12 +3916,12 @@ mod tests {
         server.abort();
         let _ = server.await;
         if let Some(previous) = previous_url {
-            std::env::set_var("LINTAI_SERVER_URL", previous);
+            std::env::set_var("MEMBRICK_SERVER_URL", previous);
         } else {
-            std::env::remove_var("LINTAI_SERVER_URL");
+            std::env::remove_var("MEMBRICK_SERVER_URL");
         }
         if let Some(previous) = previous_token {
-            std::env::set_var("LINTAI_SERVER_TOKEN", previous);
+            std::env::set_var("MEMBRICK_SERVER_TOKEN", previous);
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -4049,7 +4072,7 @@ mod tests {
 
     #[test]
     fn server_defaults_to_coverage_local_routing() {
-        let args = Args::try_parse_from(["lint-ai-server"]).unwrap();
+        let args = Args::try_parse_from(["membrick-server"]).unwrap();
         assert_eq!(args.segment_routing, SegmentRoutingArg::CoverageLocal);
         assert_eq!(
             SegmentRoutingArg::CoverageLocal.strategy(),
@@ -4160,7 +4183,7 @@ mod tests {
             project_root: std::env::current_dir().unwrap(),
             workspace_index_root: std::env::current_dir()
                 .unwrap()
-                .join(".lint-ai")
+                .join(".membrick")
                 .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME),
             workspace_watcher: None,
             workspace_registry: Arc::new(WorkspaceRegistry::new(

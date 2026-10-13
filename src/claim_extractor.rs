@@ -165,7 +165,7 @@ fn claim_evidence(
 }
 
 /// Extract a small set of high-confidence event relations from first-person
-/// event clauses. This uses Lint-AI's native clause rules and the existing
+/// event clauses. This uses Membrick's native clause rules and the existing
 /// `Claim` model; it does not depend on a provider or an external NLP runtime.
 /// The rule is deliberately conservative: it only emits relations when a
 /// first-person role/action is connected to a recognizable event noun.

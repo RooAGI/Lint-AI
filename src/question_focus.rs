@@ -8,8 +8,8 @@
 //! The focus is the expandable concept terms. Constraints are names,
 //! pronouns, and other non-expandable terms.
 //!
-//! This lives in lint-ai (not behood) because question structure
-//! understanding is the caller's job. Behood judges entities; lint-ai
+//! This lives in membrick (not behood) because question structure
+//! understanding is the caller's job. Behood judges entities; membrick
 //! understands questions.
 
 use std::collections::HashSet;

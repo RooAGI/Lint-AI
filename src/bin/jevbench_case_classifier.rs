@@ -1,4 +1,4 @@
-//! Prototype: case-based classifier over lint-ai retrieval.
+//! Prototype: case-based classifier over membrick retrieval.
 //!
 //! Treats each labeled JevBench decision as a memory. For a new (unlabeled)
 //! decision, retrieves the most similar labeled decisions via

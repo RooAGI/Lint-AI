@@ -1,19 +1,19 @@
 # Telemetry
 
-Lint-AI telemetry is local operational data used to understand query behavior
+Membrick telemetry is local operational data used to understand query behavior
 and provider activity. It is separate from indexed memory and session archives.
 Telemetry is bounded, and provider payloads are not copied wholesale into its
 ledgers.
 
 ## Telemetry streams
 
-Lint-AI currently has three related streams:
+Membrick currently has three related streams:
 
 | Stream | What it records | Storage |
 | --- | --- | --- |
 | HTTP query telemetry | Request count, errors, empty results, and latency distribution | In-memory in the running HTTP server |
-| MCP query telemetry | The same project-level query aggregates for provider MCP processes | `.lint-ai/query-telemetry.json` |
-| Provider lifecycle telemetry | Provider hook events and available token usage | `.lint-ai/provider-telemetry/{provider}.json` |
+| MCP query telemetry | The same project-level query aggregates for provider MCP processes | `.membrick/query-telemetry.json` |
+| Provider lifecycle telemetry | Provider hook events and available token usage | `.membrick/provider-telemetry/{provider}.json` |
 
 HTTP query telemetry is process-local. Provider MCP processes persist their
 query aggregates so the dashboard can observe queries handled outside the HTTP

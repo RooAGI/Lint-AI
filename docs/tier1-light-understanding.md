@@ -125,11 +125,11 @@ Implementation design:
 CLI examples:
 
 ```bash
-./target/debug/lint-ai /path/to/repo --show-tier1-entities
+./target/debug/membrick /path/to/repo --show-tier1-entities
 ```
 
 ```bash
-./target/debug/lint-ai /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
+./target/debug/membrick /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
 ```
 
 Behavior:
@@ -143,11 +143,11 @@ Tier 1 important terms are now pluggable through the `ImportantTermRanker` trait
 CLI examples:
 
 ```bash
-./target/debug/lint-ai /path/to/repo --show-tier1-terms --tier1-term-ranker yake
+./target/debug/membrick /path/to/repo --show-tier1-terms --tier1-term-ranker yake
 ```
 
 ```bash
-./target/debug/lint-ai /path/to/repo --show-tier1-terms --tier1-term-ranker rake
+./target/debug/membrick /path/to/repo --show-tier1-terms --tier1-term-ranker rake
 ```
 
 Available rankers:

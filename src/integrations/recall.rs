@@ -2,7 +2,7 @@
 //!
 //! The MCP servers answer the same question over a long-lived stdio session.
 //! A remote worker cannot hold that session open, so this module runs the same
-//! retrieval once, writes JSON to stdout and returns, which makes `lint-ai`
+//! retrieval once, writes JSON to stdout and returns, which makes `membrick`
 //! usable as a plain subprocess.
 
 use crate::adapters::{
@@ -200,7 +200,7 @@ fn default_source() -> String {
 }
 
 /// Open each shared memory index where it already lives. All providers read
-/// and write one store per project (`.lint-ai/memory/`); the provider is
+/// and write one store per project (`.membrick/memory/`); the provider is
 /// attribution on the records, not the directory. These stores remain
 /// project-scoped; the desktop worker never creates a consolidated copy.
 fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<MemoryService>> {
@@ -224,13 +224,13 @@ fn open_memory_stores(root: &Path, _provider: &str) -> Result<Vec<MemoryService>
             continue;
         }
         // Only project memory roots count; an unrelated `memory/` directory
-        // elsewhere in the tree is not a Lint-AI store.
-        let is_lint_ai_memory = entry
+        // elsewhere in the tree is not a Membrick store.
+        let is_membrick_memory = entry
             .path()
             .parent()
             .and_then(|parent| parent.file_name())
-            .is_some_and(|name| name == ".lint-ai");
-        if !is_lint_ai_memory {
+            .is_some_and(|name| name == ".membrick");
+        if !is_membrick_memory {
             continue;
         }
         stores.push(MemoryService::at_path(
@@ -378,7 +378,7 @@ fn hit_from(result: &SearchResult, record: &DocRecord, query: &str) -> RecallHit
 /// memory store; the provider is attribution on the record, not the path.
 fn memory_corpus_path(_source: &str) -> String {
     format!(
-        ".lint-ai/{}",
+        ".membrick/{}",
         crate::integrations::mcp_index::SHARED_MEMORY_DIR
     )
 }
@@ -727,7 +727,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         let root = temp_base.join(format!(
-            "lint-ai-recall-shared-{}",
+            "membrick-recall-shared-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -797,7 +797,7 @@ mod tests {
         assert!(
             output.results.iter().all(|hit| {
                 hit.kind != RecallKind::Memory
-                    || hit.doc_id == format!(".lint-ai/{}", mcp_index::SHARED_MEMORY_DIR)
+                    || hit.doc_id == format!(".membrick/{}", mcp_index::SHARED_MEMORY_DIR)
             }),
             "memory hits must come from the shared store: {:?}",
             output.results

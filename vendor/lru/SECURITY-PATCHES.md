@@ -1,4 +1,4 @@
-# Lint-AI security backports
+# Membrick security backports
 
 This directory vendors the MIT-licensed crates.io `lru` 0.12.5 source so Tantivy 0.25 keeps its existing API and retrieval behavior.
 

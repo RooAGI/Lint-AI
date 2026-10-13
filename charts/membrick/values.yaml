@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/rooagi/lint-ai-server
+  repository: ghcr.io/rooagi/membrick-server
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -12,7 +12,7 @@ fullnameOverride: ""
 
 auth:
   # Create this Secret before installing the chart. It must contain SERVER_TOKEN.
-  existingSecret: lint-ai-auth
+  existingSecret: membrick-auth
 
 service:
   type: ClusterIP

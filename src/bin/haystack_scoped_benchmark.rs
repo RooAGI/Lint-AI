@@ -23,7 +23,7 @@ const SESSION_RESULT_OVERSAMPLE: usize = 4;
 
 #[derive(Debug, Parser)]
 #[command(name = "haystack-scoped-benchmark")]
-#[command(about = "Run a question-scoped LongMemEval haystack benchmark against Lint-AI")]
+#[command(about = "Run a question-scoped LongMemEval haystack benchmark against Membrick")]
 struct Args {
     /// Path to the raw LongMemEval-S dataset.
     #[arg(long)]

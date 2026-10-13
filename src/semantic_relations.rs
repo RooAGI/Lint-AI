@@ -1395,6 +1395,7 @@ fn source_kind(doc: &SourceDocument) -> &'static str {
         || doc.source.starts_with("agy://")
         || doc.source.starts_with("openclaw://")
         || doc.source.starts_with("hermes://")
+        || doc.source.starts_with("membrick://")
         || doc.source.starts_with("lint-ai://")
         || doc.filters.contains_key("document_type")
     {

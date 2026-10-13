@@ -35,7 +35,7 @@ struct McpProcess {
 }
 impl McpProcess {
     fn start(root: &Workspace) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_lint-ai"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_membrick"))
             .arg("--roo-runtime-serve")
             .arg(&root.0)
             .stdin(Stdio::piped())
@@ -87,7 +87,7 @@ impl Drop for McpProcess {
 }
 
 fn hook(payload: Value) -> (Value, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lint-ai"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_membrick"))
         .args(["--roo-runtime-hook", "post-tool-use"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

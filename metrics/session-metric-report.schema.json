@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Lint-AI Session Metric Report",
+  "title": "Membrick Session Metric Report",
   "type": "object",
   "required": ["report", "scenario", "sessions", "provenance"],
   "properties": {

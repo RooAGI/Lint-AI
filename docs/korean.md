@@ -1,6 +1,6 @@
 # Korean Language Support
 
-Lint-AI supports Korean (한국어) content across the full retrieval pipeline: indexing, search, NER, question understanding, temporal parsing, and aggregation. All language logic is implemented in Rust; the Python spaCy scripts only load the model name they're given.
+Membrick supports Korean (한국어) content across the full retrieval pipeline: indexing, search, NER, question understanding, temporal parsing, and aggregation. All language logic is implemented in Rust; the Python spaCy scripts only load the model name they're given.
 
 ## Quick start
 
@@ -11,7 +11,7 @@ No configuration is needed. Language is auto-detected per text from script stati
 - `--lang en`: force English.
 
 ```bash
-lint-ai serve --lang ko
+membrick serve --lang ko
 ```
 
 The search API also accepts a per-request override:

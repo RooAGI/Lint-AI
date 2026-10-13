@@ -24,14 +24,22 @@ target
 .codex
 target/release
 
-# Lint-AI local cache
+# Membrick local cache
+.membrick-cache/
+.membrick/
 .lint-ai-cache/
 .lint-ai/
 
 # Local workspace file
+membrick.code-workspace
 lint-ai.code-workspace
 
 # Generated graph artifacts
+membrick-graph.dot
+membrick-graph.png
+membrick-graph.svg
+membrick-graph.html
+membrick-chunk-graph.html
 lint-ai-graph.dot
 lint-ai-graph.png
 lint-ai-graph.svg
@@ -40,6 +48,7 @@ lint-ai-chunk-graph.html
 
 # Optional for library-style workflows
 Cargo.lock
+!bindings/node/Cargo.lock
 
 # Local Python environments and caches
 .venv/
@@ -72,7 +81,7 @@ data/memory-index/
 .benchmark-tmp/
 .codex-build/
 .codex-output/
-.lint-ai-agy-live.*/
+.membrick-agy-live.*/
 metrics-sess-*/
 # Keep raw copies of published LongMemEval reports out of Git; commit the .json.gz artifacts.
 comparison/results/retrieval-longmemeval-current-*.json

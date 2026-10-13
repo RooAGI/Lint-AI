@@ -1,4 +1,4 @@
-//! Long-lived Lint-AI search server over LoCoMo conversations (pillar-4 agent tool).
+//! Long-lived Membrick search server over LoCoMo conversations (pillar-4 agent tool).
 //!
 //! Builds one in-memory [`MemoryService`] per conversation at startup
 //! (production pipeline options, segmented layout with the gated-local

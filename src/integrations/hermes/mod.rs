@@ -1,8 +1,8 @@
 //! Hermes Agent integration. The MCP transport is the shared stdio server (same
 //! contract as the Gemini CLI / Agy / OpenClaw adapters): Hermes consumes
-//! lint-ai as a stdio MCP server registered under `mcp_servers` in
+//! membrick as a stdio MCP server registered under `mcp_servers` in
 //! `~/.hermes/config.yaml`. Tools surface to the Hermes agent as
-//! `mcp__lint-ai__*`.
+//! `mcp__membrick__*`.
 //!
 //! Hooks are deliberately out of scope for v1: per project policy, lifecycle
 //! hook entry schemas are probed against a live host binary before shipping.
@@ -16,11 +16,11 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SERVER_NAME: &str = "lint-ai";
+const SERVER_NAME: &str = "membrick";
 
 pub type HermesServerOptions<'a> = GeminiCliServerOptions<'a>;
 
-/// Install the lint-ai memory skill for Hermes.
+/// Install the membrick memory skill for Hermes.
 ///
 /// Hermes loads skills from project skill directories first, then from the
 /// active skills directory (`~/.hermes/skills/`). The skill is host-global
@@ -31,7 +31,7 @@ pub fn install_memory_skill(skill_dir: Option<&Path>, force: bool) -> Result<Pat
     let skill_path = skill_dir
         .map(Path::to_path_buf)
         .unwrap_or(default_skill_dir()?)
-        .join("lint-ai-memory")
+        .join("membrick-memory")
         .join("SKILL.md");
     if let Some(parent) = skill_path.parent() {
         fs::create_dir_all(parent)?;
@@ -52,11 +52,11 @@ pub fn install_memory_skill(skill_dir: Option<&Path>, force: bool) -> Result<Pat
     Ok(skill_path)
 }
 
-/// Merge the lint-ai stdio MCP server entry into the Hermes config.
+/// Merge the membrick stdio MCP server entry into the Hermes config.
 ///
-/// Hermes' config is YAML (`~/.hermes/config.yaml`). lint-ai ships no YAML
+/// Hermes' config is YAML (`~/.hermes/config.yaml`). membrick ships no YAML
 /// parser, so the merge is line-based and conservative: it only manages the
-/// top-level `mcp_servers:` mapping and the `lint-ai:` entry inside it, in
+/// top-level `mcp_servers:` mapping and the `membrick:` entry inside it, in
 /// the canonical two-space block style Hermes itself emits (entry indent is
 /// detected from existing servers when present). Anything shaped differently
 /// fails with the manual-install recipe instead of corrupting the file.
@@ -71,8 +71,8 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         merge_mcp_servers_yaml(existing.as_deref(), &root, &executable).with_context(|| {
             format!(
             "could not merge into {} (unexpected YAML shape); add the server manually instead:\n  \
-             hermes mcp add lint-ai --command {} --args --hermes-serve --args {}\n  \
-             hermes mcp test lint-ai",
+             hermes mcp add membrick --command {} --args --hermes-serve --args {}\n  \
+             hermes mcp test membrick",
             path.display(),
             executable.display(),
             root.display()
@@ -117,7 +117,7 @@ fn yaml_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Render the `lint-ai:` server block at the given entry indent.
+/// Render the `membrick:` server block at the given entry indent.
 fn server_block(name: &str, indent: &str, executable: &Path, root: &Path) -> String {
     format!(
         "{indent}{name}:\n\
@@ -209,7 +209,25 @@ fn merge_mcp_servers_yaml(
         }
     }
     let entry_indent_width = entry_indent.len();
-    // Find an existing `lint-ai:` entry in the section.
+    // Replace the prior product entry instead of leaving both MCP servers
+    // active after an upgrade.
+    let legacy_prefix = format!("{entry_indent}lint-ai:");
+    if let Some(legacy_idx) =
+        (key_idx + 1..section_end).find(|i| lines[*i].starts_with(&legacy_prefix))
+    {
+        let rest = lines[legacy_idx][legacy_prefix.len()..].trim();
+        let mut legacy_end = legacy_idx + 1;
+        if rest.is_empty() || rest.starts_with('#') {
+            while legacy_end < section_end
+                && is_continuation(&lines[legacy_end], entry_indent_width)
+            {
+                legacy_end += 1;
+            }
+        }
+        lines.drain(legacy_idx..legacy_end);
+        section_end -= legacy_end - legacy_idx;
+    }
+    // Find an existing `membrick:` entry in the section.
     let entry_prefix = format!("{entry_indent}{SERVER_NAME}:");
     let mut entry_idx = None;
     let mut entry_inline = false;
@@ -259,7 +277,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-hermes-{label}-{nonce}"));
+            .join(format!("membrick-hermes-{label}-{nonce}"));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -280,7 +298,7 @@ mod tests {
     fn memory_skill_preserves_user_edits_without_force() {
         let root = temp_root("skill");
         let skill_dir = root.join("skills");
-        let path = skill_dir.join("lint-ai-memory/SKILL.md");
+        let path = skill_dir.join("membrick-memory/SKILL.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "custom").unwrap();
 
@@ -298,9 +316,9 @@ mod tests {
         let skill_dir = root.join("skills");
 
         install_memory_skill(Some(&skill_dir), true).unwrap();
-        let path = skill_dir.join("lint-ai-memory/SKILL.md");
+        let path = skill_dir.join("membrick-memory/SKILL.md");
         let installed = fs::read_to_string(&path).unwrap();
-        assert!(installed.contains("<!-- lint-ai-managed-skill -->"));
+        assert!(installed.contains("<!-- membrick-managed-skill -->"));
         install_memory_skill(Some(&skill_dir), false).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), installed);
         fs::remove_dir_all(root).unwrap();
@@ -323,10 +341,10 @@ mod tests {
         assert!(merged.contains("theme: dark"));
         assert!(merged.contains("  other:\n    command: other"));
         // Only the verified command/args keys are written.
-        assert!(merged.contains("  lint-ai:\n    command: "));
+        assert!(merged.contains("  membrick:\n    command: "));
         assert!(merged.contains("\"--hermes-serve\""));
         assert!(merged.contains(&yaml_string(&root.to_string_lossy())));
-        assert_eq!(merged.matches("  lint-ai:").count(), 1);
+        assert_eq!(merged.matches("  membrick:").count(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -353,7 +371,7 @@ mod tests {
 
         let merged = fs::read_to_string(&config).unwrap();
         assert!(merged.contains("memory:\n  provider: mem0"));
-        assert!(merged.contains("\nmcp_servers:\n  lint-ai:\n"));
+        assert!(merged.contains("\nmcp_servers:\n  membrick:\n"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -366,7 +384,7 @@ mod tests {
         install_user_config(&root, Some(&config)).unwrap();
 
         let merged = fs::read_to_string(&config).unwrap();
-        assert!(merged.contains("mcp_servers:\n  lint-ai:\n"));
+        assert!(merged.contains("mcp_servers:\n  membrick:\n"));
         assert!(merged.contains("\"--hermes-serve\""));
         fs::remove_dir_all(root).unwrap();
     }
@@ -381,8 +399,8 @@ mod tests {
         let error = install_user_config(&root, Some(&config))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("hermes mcp add lint-ai"));
-        assert!(error.contains("hermes mcp test lint-ai"));
+        assert!(error.contains("hermes mcp add membrick"));
+        assert!(error.contains("hermes mcp test membrick"));
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
@@ -452,9 +470,9 @@ mod tests {
             "info",
             "list_memories",
             "record_session",
-            "enable_lint_ai",
-            "disable_lint_ai",
-            "lint_ai_status",
+            "enable_membrick",
+            "disable_membrick",
+            "membrick_status",
         ] {
             assert!(names.contains(&required), "hermes must expose {required}");
         }
@@ -473,7 +491,7 @@ mod tests {
             let description = tool["description"].as_str().unwrap_or("");
             if matches!(
                 name,
-                "search" | "info" | "enable_lint_ai" | "disable_lint_ai" | "lint_ai_status"
+                "search" | "info" | "enable_membrick" | "disable_membrick" | "membrick_status"
             ) {
                 assert!(
                     description.contains("Hermes"),
@@ -568,20 +586,20 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn stale_lint_ai_entry_is_replaced_not_duplicated() {
+    fn stale_membrick_entry_is_replaced_not_duplicated() {
         let root = temp_root("config-replace");
         let config = root.join("config.yaml");
         fs::write(
             &config,
-            "mcp_servers:\n  lint-ai:\n    command: /old/lint-ai\n    args: [\"--gemini-serve\", \"/old\"]\n",
+            "mcp_servers:\n  membrick:\n    command: /old/membrick\n    args: [\"--gemini-serve\", \"/old\"]\n",
         )
         .unwrap();
 
         install_user_config(&root, Some(&config)).unwrap();
 
         let merged = fs::read_to_string(&config).unwrap();
-        assert_eq!(merged.matches("  lint-ai:").count(), 1);
-        assert!(!merged.contains("/old/lint-ai"));
+        assert_eq!(merged.matches("  membrick:").count(), 1);
+        assert!(!merged.contains("/old/membrick"));
         assert!(merged.contains("\"--hermes-serve\""));
         fs::remove_dir_all(root).unwrap();
     }
@@ -595,7 +613,7 @@ mod tests {
         install_user_config(&root, Some(&config)).unwrap();
 
         let merged = fs::read_to_string(&config).unwrap();
-        assert!(merged.contains("    lint-ai:\n      command: "));
+        assert!(merged.contains("    membrick:\n      command: "));
         assert!(merged.contains("    other:\n      command: other"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -604,13 +622,13 @@ mod tests {
     fn tab_indented_config_fails_with_manual_recipe() {
         let root = temp_root("config-tabs");
         let config = root.join("config.yaml");
-        let original = "mcp_servers:\n\tlint-ai:\n\t\tcommand: x\n";
+        let original = "mcp_servers:\n\tmembrick:\n\t\tcommand: x\n";
         fs::write(&config, original).unwrap();
 
         let error = install_user_config(&root, Some(&config))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("hermes mcp add lint-ai"));
+        assert!(error.contains("hermes mcp add membrick"));
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
@@ -624,7 +642,7 @@ mod tests {
         install_user_config(&root, Some(&config)).unwrap();
 
         let merged = fs::read_to_string(&config).unwrap();
-        assert!(merged.contains("mcp_servers:\n  lint-ai:\n"));
+        assert!(merged.contains("mcp_servers:\n  membrick:\n"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -642,7 +660,7 @@ mod tests {
 
         install_memory_skill(Some(&skill_dir), true).unwrap();
 
-        let content = fs::read_to_string(skill_dir.join("lint-ai-memory/SKILL.md")).unwrap();
+        let content = fs::read_to_string(skill_dir.join("membrick-memory/SKILL.md")).unwrap();
         assert!(content.contains("Hermes"));
         assert!(content.contains("--hermes-serve"));
         fs::remove_dir_all(root).unwrap();

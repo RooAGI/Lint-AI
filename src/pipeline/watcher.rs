@@ -277,7 +277,7 @@ fn pipeline_workspace_path_is_ignored(relative: &Path, ignore_paths: &[String]) 
     workspace_path_is_sensitive(relative)
         || path
             .split('/')
-            .any(|component| component == ".git" || component == ".lint-ai")
+            .any(|component| component == ".git" || component == ".membrick")
         || ignore_paths.iter().any(|fragment| path.contains(fragment))
 }
 
@@ -288,7 +288,7 @@ mod security_tests {
     #[test]
     fn tracked_file_reads_reject_symlinks_and_linked_parents() {
         let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "lint-ai-watcher-links-{}-{}",
+            "membrick-watcher-links-{}-{}",
             std::process::id(),
             workspace_now_ms()
         ));

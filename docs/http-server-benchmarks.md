@@ -1,6 +1,6 @@
 # HTTP server benchmarks
 
-These measurements exercise Lint-AI through its HTTP API. They describe
+These measurements exercise Membrick through its HTTP API. They describe
 server throughput for specific workloads, not retrieval quality or a universal
 capacity guarantee. The runs used a local release build, a seeded corpus of
 23,366 records, and Tantivy 0.25.0 unless noted otherwise.
@@ -29,7 +29,7 @@ record was searchable in each repetition.
 
 The 128-record cell returned many HTTP 429 responses (2,609–4,115 per
 repetition). Its accepted rate is burst admission throughput, not sustainable
-write capacity. The [write-only artifact](../comparison/results/server-throughput-write-only-2026-10-12.json)
+write capacity. The [write-only artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/server-throughput-write-only-2026-10-12.json)
 contains per-repetition details.
 
 ### Direct single-record writes
@@ -38,14 +38,14 @@ With the default publication schedule, `/add` accepted 196.27 records/s and
 published 186.97 records/s after flush across three 65-second repetitions.
 Acknowledgement p50/p95/p99 was 3.88/4.11/6.02 ms, there were no rejections,
 and the last record was searchable in every run. The
-[single-add artifact](../comparison/results/server-single-add-investigation-2026-10-12.json)
+[single-add artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/server-single-add-investigation-2026-10-12.json)
 has the full results.
 
 A separate one-repetition configuration experiment used a 10-second refresh
 interval and a 32,768-document batch. It reached 259.46 accepted and 249.34
 published records/s, with 3.60/4.08/5.00 ms acknowledgement p50/p95/p99.
 Treat this as a schedule experiment, not the default result. See the
-[low-publication-frequency artifact](../comparison/results/server-single-add-low-publication-frequency-2026-10-12.json).
+[low-publication-frequency artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/server-single-add-low-publication-frequency-2026-10-12.json).
 
 ### Mixed search and write load
 
@@ -56,7 +56,7 @@ responses per repetition were empty because queries did not match the
 workload's changing write nonce. In addition, all three final flushes timed
 out with HTTP 408, and the final written records were not searchable. Treat
 this as a saturated queue/backlog diagnostic only. The
-[mixed-load artifact](../comparison/results/server-throughput-mixed-2026-10-12.json)
+[mixed-load artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/server-throughput-mixed-2026-10-12.json)
 preserves the raw results.
 
 ## Earlier reference results (through 2026-10-05)
@@ -90,7 +90,7 @@ requests per concurrency cell, `top_k: 20`, and a keyword query. At concurrency
 10, median throughput was 2,246.69 requests/s. The same report includes the
 routed-segment measurement and Tantivy 0.26.2 comparison.
 
-[Read throughput artifact](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json)
+[Read throughput artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-tantivy-upgrade-2026-10-04.json)
 
 ### `POST /add`
 
@@ -100,7 +100,7 @@ after final flush, median published throughput was 212.36 records/s. There were
 no HTTP 429 responses, and the final written record was searchable in every
 run.
 
-[Single-add artifact](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json)
+[Single-add artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-add-endpoint-2026-10-05.json)
 
 ### `POST /add/batch`
 
@@ -111,14 +111,14 @@ records/s. The server returned 25,501–26,673 HTTP 429 responses per run, so
 the accepted rate is a saturated burst rate. Use the published rate and the
 rejection count when evaluating this workload.
 
-[Batch-add artifact](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json)
+[Batch-add artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-temporal-incremental-2026-10-05.json)
 
 An additional publication-schedule diagnostic reached 2,583.54 accepted and
 2,077.75 published records/s with a custom one-second/4,096-document trigger.
 It also rejected 26,760–27,128 requests per run. That schedule was a tuning
 experiment, not the default configuration, so it is not the headline result.
 
-[Publication-schedule diagnostic](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-coalesced-2026-10-05.json)
+[Publication-schedule diagnostic](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-coalesced-2026-10-05.json)
 
 ### Search while adding
 
@@ -131,7 +131,7 @@ final write was confirmed searchable after flushing.
 The small difference between the control and write phases is an observation
 from this workload, not evidence that writes improve search performance.
 
-[Mixed-load artifact](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json)
+[Mixed-load artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-publication-mixed-concentrated-2026-10-05.json)
 
 ## How to read these numbers
 
@@ -143,4 +143,4 @@ from this workload, not evidence that writes improve search performance.
   [Benchmark overview](benchmark.md).
 - For the cross-system comparison and older runs, see
   [Comparison](comparison.md). The benchmark scripts and raw results are in
-  the repository's [`comparison/` directory](https://github.com/RooAGI/Lint-AI/tree/main/comparison).
+  the repository's [`comparison/` directory](https://github.com/RooAGI/Membrick/tree/main/comparison).

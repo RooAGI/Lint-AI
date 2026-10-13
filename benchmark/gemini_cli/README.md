@@ -1,6 +1,6 @@
 # Gemini CLI integration benchmark
 
-This benchmark measures the local Lint-AI integration path for Gemini CLI. It
+This benchmark measures the local Membrick integration path for Gemini CLI. It
 is intentionally separate from a model-quality or token-usage benchmark.
 
 The smoke track measures:

@@ -1,8 +1,8 @@
 //! Capture-only session recording hooks for Muse Code.
 //!
-//! Muse invokes hooks as `lint-ai --muse-hook <event>` with a JSON payload on
+//! Muse invokes hooks as `membrick --muse-hook <event>` with a JSON payload on
 //! stdin using the schema documented in `protocol.rs`. These hooks record the
-//! session lifecycle (start, prompts, stops, end) plus tool use into Lint-AI's
+//! session lifecycle (start, prompts, stops, end) plus tool use into Membrick's
 //! session store so a Muse session can later be replayed. Recording is
 //! capture-only: it never injects memory into the Muse context and never
 //! blocks the session. Every failure path warns to stderr and exits zero.
@@ -69,7 +69,7 @@ pub fn run_hook(kind: MuseHookKind, fallback_root: &Path) -> Result<()> {
     match run_hook_inner(kind, fallback_root) {
         Ok(()) => Ok(()),
         Err(error) => {
-            eprintln!("warning: Lint-AI Muse hook failed open: {error:#}");
+            eprintln!("warning: Membrick Muse hook failed open: {error:#}");
             Ok(())
         }
     }
@@ -138,9 +138,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("lint-ai-muse-hooks-{name}-{nanos}"));
+        let path = std::env::temp_dir().join(format!("membrick-muse-hooks-{name}-{nanos}"));
         fs::create_dir_all(&path).unwrap();
-        path
+        path.canonicalize().unwrap()
     }
 
     fn input(root: &Path, event: &str) -> MuseHookInput {
@@ -157,7 +157,7 @@ mod tests {
     }
 
     fn recorded_events(root: &Path) -> Vec<Value> {
-        let path = root.join(".lint-ai/muse-sessions/session-1/events.jsonl");
+        let path = root.join(".membrick/muse-sessions/session-1/events.jsonl");
         if !path.exists() {
             return Vec::new();
         }
@@ -178,7 +178,7 @@ mod tests {
         let events = recorded_events(&root);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["kind"].as_str(), Some("session_start"));
-        assert!(root.join(".lint-ai/muse-sessions/session-1").is_dir());
+        assert!(root.join(".membrick/muse-sessions/session-1").is_dir());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -200,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_is_skipped_when_lint_ai_is_disabled() {
+    fn recording_is_skipped_when_membrick_is_disabled() {
         let root = temp_dir("disabled");
         set_recording_state(RecordingProvider::Muse, &root, false).unwrap();
         let input = input(&root, "SessionStart");

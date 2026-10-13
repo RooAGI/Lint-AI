@@ -1,0 +1,124 @@
+name: Publish Python package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match release tag to Python package version
+        run: |
+          package_version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${GITHUB_REF_NAME#v}" = "$package_version"
+
+  build-wheels:
+    needs: verify-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build agent-capable CLI
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            cargo install cross --locked
+            cross build --release --bin membrick --features agent-integrations --target "${{ matrix.target }}"
+          else
+            cargo build --release --bin membrick --features agent-integrations --target "${{ matrix.target }}"
+          fi
+      - name: Stage CLI in wheel scripts
+        shell: bash
+        run: |
+          mkdir -p membrick.data/scripts
+          printf '%s\n' pip > membrick.data/scripts/membrick-install-method
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/membrick.exe" membrick.data/scripts/membrick.exe
+          else
+            cp "target/${{ matrix.target }}/release/membrick" membrick.data/scripts/membrick
+            chmod 755 membrick.data/scripts/membrick
+          fi
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          maturin-version: v1.9.4
+          args: --release --compatibility pypi --out dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify the CLI is in the wheel
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          assert len(wheels) == 1, f"expected one wheel, found {wheels}"
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              names = wheel.namelist()
+          assert any(".data/scripts/membrick" in name for name in names), "wheel is missing the Membrick CLI script"
+          assert any(".data/scripts/membrick-install-method" in name for name in names), "wheel is missing install metadata"
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    needs: verify-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source distribution
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          maturin-version: v1.9.4
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/membrick
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

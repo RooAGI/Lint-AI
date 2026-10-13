@@ -1,6 +1,6 @@
 # Semantic supersession
 
-Lint-AI treats supersession as a core semantic relationship. Source adapters
+Membrick treats supersession as a core semantic relationship. Source adapters
 and provider integrations only normalize content into `SourceDocument` records;
 the core decides how records relate over time.
 

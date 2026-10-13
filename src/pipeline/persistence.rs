@@ -7,9 +7,6 @@ use super::{
 };
 use crate::index::{DocRecord, MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult};
 use crate::query_plan::PreparedQuery;
-use crate::query_semantics::{
-    parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
-};
 use crate::segments::SegmentManifest;
 use crate::semantic_relations::SemanticRelationStore;
 use crate::source::SourceDocument;
@@ -30,7 +27,7 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
     top_k: usize,
     filters: &std::collections::BTreeMap<String, String>,
 ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
-    let profile = std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some();
+    let profile = std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some();
     let query_started = std::time::Instant::now();
     let Some(snapshot) = snapshot else {
         return Ok((
@@ -195,37 +192,6 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
                     }
                 };
             let mut context = prepared.temporal_context();
-            // Resolve the query's relative time anchor ("last Tuesday",
-            // "10 days ago") against the reference date so temporal scoring
-            // centers on the anchor instead of the question date itself, and
-            // pre-filtering can restrict routing to the anchor window (a
-            // point window for "last Tuesday", the [anchor, reference] range
-            // for "in the past two months"). No-op when the query carries no
-            // resolvable anchor phrase or no reference date.
-            let (anchor_date_string, anchor_window) = prepared
-                .analysis()
-                .temporal
-                .as_ref()
-                .and_then(|temporal| {
-                    let reference = prepared.reference_date().and_then(parse_reference_date)?;
-                    let anchor = resolve_temporal_anchor(&temporal.phrase, reference)?;
-                    let window = resolve_anchor_window(
-                        &temporal.phrase,
-                        prepared.search_query(),
-                        reference,
-                    )?;
-                    Some((anchor.format("%Y-%m-%d").to_string(), window))
-                })
-                .unzip();
-            // Only overwrite the context's anchor when this path resolves one:
-            // temporal_context() may already carry a seeded absolute anchor
-            // (no reference clock needed), and a None here must not wipe it.
-            if anchor_date_string.is_some() {
-                context.anchor_date = anchor_date_string.as_deref();
-            }
-            if anchor_window.is_some() {
-                context.anchor_window = anchor_window;
-            }
             context.allowed_doc_ids = allowed_doc_ids.as_ref();
             context.allowed_doc_bitmap = filter_bitmap.as_ref();
             context.allowed_segment_doc_bitmaps = filter_segment_bitmaps.as_ref();
@@ -870,6 +836,10 @@ fn write_bytes_file_atomic_with_permissions(
         file.sync_all()?;
     }
     fs::rename(&temp_path, path)?;
+    // Unix permits opening and syncing a directory to make the rename durable.
+    // Windows does not expose directory fsync through `File::open`; doing so
+    // fails with ERROR_ACCESS_DENIED after the destination was already replaced.
+    #[cfg(unix)]
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::File::open(parent)?.sync_all()?;
     }

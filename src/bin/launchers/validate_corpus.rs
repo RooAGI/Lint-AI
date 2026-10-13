@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    lint_ai::run_binary("validate_corpus")
+    membrick::run_binary("validate_corpus")
 }

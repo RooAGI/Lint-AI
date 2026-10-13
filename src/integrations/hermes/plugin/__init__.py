@@ -1,4 +1,4 @@
-"""lint-ai memory plugin for Hermes Agent.
+"""membrick memory plugin for Hermes Agent.
 
 Automatic capture/recall via hooks — the "next level" after the `--hermes-serve`
 MCP adapter. The MCP adapter makes memory available when the agent *chooses* to call
@@ -6,7 +6,7 @@ a tool; this plugin makes capture/recall *automatic*.
 
 How it works
 ------------
-* ``pre_llm_call``  -> recall: query the lint-ai server and return
+* ``pre_llm_call``  -> recall: query the membrick server and return
   ``{"context": ...}``; Hermes stamps it into the user message (verified live).
 * ``post_tool_call`` -> structured tool-event record (name/args/result/duration/status).
 * ``post_llm_call``  -> per-turn transcript record.
@@ -18,23 +18,23 @@ How it works
 
 Transport: the plugin is Python running inside Hermes' process, so it cannot call
 the Rust core in-process the way our Rust MCP adapters do. It talks to a running
-lint-ai server over HTTP keep-alive (``POST /provider-memory/search``,
+membrick server over HTTP keep-alive (``POST /provider-memory/search``,
 ``POST /provider-memory/add/batch``) —
 the same pattern mem0's Hermes plugin uses. No Hermes changes, no Rust changes.
 
 Dedupe is stateless (no state file): turns key on ``(session_id, turn_id)``,
-tool events on ``tool_call_id`` — the lint-ai ``request_id`` is the idempotency key.
+tool events on ``tool_call_id`` — the membrick ``request_id`` is the idempotency key.
 
 Fail-open: every handler swallows exceptions; a dead server degrades to "no
 automatic memory", never to a broken agent.
 
-Config (env wins over $HERMES_HOME/lintai.json wins over defaults):
-  LINTAI_SERVER_URL   default http://127.0.0.1:8080
-  LINTAI_USER_ID      default "hermes"
-  LINTAI_QUEUE_MAX    default 1000 (bounded write queue; drops oldest when full)
-  LINTAI_CAPTURE      on/off, default on
-  LINTAI_RECALL       on/off, default on
-  LINTAI_RECALL_TOP_K default 5
+Config (env wins over $HERMES_HOME/membrick.json wins over defaults):
+  MEMBRICK_SERVER_URL   default http://127.0.0.1:8080
+  MEMBRICK_USER_ID      default "hermes"
+  MEMBRICK_QUEUE_MAX    default 1000 (bounded write queue; drops oldest when full)
+  MEMBRICK_CAPTURE      on/off, default on
+  MEMBRICK_RECALL       on/off, default on
+  MEMBRICK_RECALL_TOP_K default 5
 """
 
 import http.client
@@ -61,6 +61,8 @@ _DEFAULTS = {
 }
 
 _ENV_MAP = {
+    # Legacy names are read first so Membrick names take precedence if both
+    # are present in an inherited environment.
     "LINTAI_SERVER_URL": "server_url",
     "LINTAI_SERVER_TOKEN": "server_token",
     "LINTAI_USER_ID": "user_id",
@@ -68,6 +70,13 @@ _ENV_MAP = {
     "LINTAI_CAPTURE": "capture",
     "LINTAI_RECALL": "recall",
     "LINTAI_RECALL_TOP_K": "recall_top_k",
+    "MEMBRICK_SERVER_URL": "server_url",
+    "MEMBRICK_SERVER_TOKEN": "server_token",
+    "MEMBRICK_USER_ID": "user_id",
+    "MEMBRICK_QUEUE_MAX": "queue_max",
+    "MEMBRICK_CAPTURE": "capture",
+    "MEMBRICK_RECALL": "recall",
+    "MEMBRICK_RECALL_TOP_K": "recall_top_k",
 }
 
 _INT_KEYS = {"queue_max", "recall_top_k"}
@@ -81,19 +90,21 @@ def _to_bool(value):
 
 
 def load_config(env=None, hermes_home=None):
-    """Resolve plugin config: defaults < $HERMES_HOME/lintai.json < env."""
+    """Resolve plugin config: defaults < config file < environment."""
     env = os.environ if env is None else env
     cfg = dict(_DEFAULTS)
     home = hermes_home or env.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-    try:
-        with open(os.path.join(home, "lintai.json"), "r", encoding="utf-8") as f:
-            file_cfg = json.load(f)
-        if isinstance(file_cfg, dict):
-            for key, value in file_cfg.items():
-                if key in cfg:
-                    cfg[key] = value
-    except (OSError, ValueError):
-        pass
+    for filename in ("membrick.json", "lintai.json"):
+        try:
+            with open(os.path.join(home, filename), "r", encoding="utf-8") as f:
+                file_cfg = json.load(f)
+            if isinstance(file_cfg, dict):
+                for key, value in file_cfg.items():
+                    if key in cfg:
+                        cfg[key] = value
+            break
+        except (OSError, ValueError):
+            continue
     for env_name, key in _ENV_MAP.items():
         if env_name in env:
             raw = env[env_name]
@@ -347,7 +358,7 @@ def build_agent_loop_stopped_record(session_key, platform, reason,
 
 def format_recall_context(hits, max_hits=5):
     """Format /search hits into the context block injected via pre_llm_call."""
-    lines = ["[lint-ai memory — recalled for this turn]"]
+    lines = ["[membrick memory — recalled for this turn]"]
     for hit in (hits or [])[:max_hits]:
         content = hit.get("content", "") if isinstance(hit, dict) else str(hit)
         score = hit.get("score") if isinstance(hit, dict) else None
@@ -362,7 +373,7 @@ def format_recall_context(hits, max_hits=5):
 # HTTP client (stdlib only, keep-alive per thread)
 # --------------------------------------------------------------------------
 
-class LintaiClient:
+class MembrickClient:
     def __init__(self, server_url, user_id, server_token="", timeout_s=5.0):
         self.server_url = server_url.rstrip("/")
         self.user_id = user_id
@@ -430,7 +441,7 @@ class WriteQueue:
         self.errors = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._drain, daemon=True,
-                                        name="lintai-write-queue")
+                                        name="membrick-write-queue")
         self._thread.start()
 
     def enqueue(self, record):
@@ -472,7 +483,7 @@ class WriteQueue:
                 except Exception as exc:
                     if attempt == 1:
                         self.errors += 1
-                        print("lintai: dropped batch of %d (write error: %s)"
+                        print("membrick: dropped batch of %d (write error: %s)"
                               % (len(batch), exc), flush=True)
                     else:
                         time.sleep(1.0)
@@ -498,10 +509,10 @@ class WriteQueue:
 # Plugin
 # --------------------------------------------------------------------------
 
-class LintaiPlugin:
+class MembrickPlugin:
     def __init__(self, config=None):
         self.config = config or load_config()
-        self.client = LintaiClient(self.config["server_url"],
+        self.client = MembrickClient(self.config["server_url"],
                                    self.config["user_id"],
                                    self.config["server_token"])
         self.writes = WriteQueue(self.client,
@@ -680,7 +691,7 @@ class LintaiPlugin:
 
 def register(ctx):
     """Hermes plugin entry point."""
-    plugin = LintaiPlugin()
+    plugin = MembrickPlugin()
     ctx.register_hook("pre_llm_call", plugin.on_pre_llm_call)
     ctx.register_hook("post_tool_call", plugin.on_post_tool_call)
     ctx.register_hook("post_llm_call", plugin.on_post_llm_call)

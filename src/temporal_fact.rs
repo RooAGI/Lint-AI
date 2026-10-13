@@ -603,6 +603,7 @@ mod tests {
                 predicate: "works_at".into(),
                 object: "Acme".into(),
                 confidence: 0.9,
+                ..Default::default()
             }],
         );
         let second = sample_record(
@@ -613,6 +614,7 @@ mod tests {
                 predicate: "works_at".into(),
                 object: "Beta".into(),
                 confidence: 0.95,
+                ..Default::default()
             }],
         );
         let third = sample_record(
@@ -623,6 +625,7 @@ mod tests {
                 predicate: "works_at".into(),
                 object: "Gamma".into(),
                 confidence: 0.97,
+                ..Default::default()
             }],
         );
         let lifecycle = HashMap::new();
@@ -662,6 +665,7 @@ mod tests {
                 predicate: "works_at".into(),
                 object: "Gamma".into(),
                 confidence: 0.97,
+                ..Default::default()
             }],
         );
         let older = sample_record(
@@ -672,6 +676,7 @@ mod tests {
                 predicate: "works_at".into(),
                 object: "Acme".into(),
                 confidence: 0.9,
+                ..Default::default()
             }],
         );
         let lifecycle = HashMap::new();
@@ -694,6 +699,7 @@ mod tests {
                 predicate: "works_at".to_string(),
                 object: "Acme".to_string(),
                 confidence: 0.9,
+                ..Default::default()
             }],
         );
         let record2 = sample_record(
@@ -704,6 +710,7 @@ mod tests {
                 predicate: "works_at".to_string(),
                 object: "Beta".to_string(),
                 confidence: 0.95,
+                ..Default::default()
             }],
         );
 
@@ -725,6 +732,7 @@ mod tests {
                 predicate: "works_at".to_string(),
                 object: "Acme".to_string(),
                 confidence: 0.9,
+                ..Default::default()
             },
             Some("doc-1::chunk-0"),
             1,
@@ -743,6 +751,7 @@ mod tests {
                 predicate: "lives_in".to_string(),
                 object: "Seattle".to_string(),
                 confidence: 0.8,
+                ..Default::default()
             }],
         );
         let record2 = sample_record(
@@ -753,6 +762,7 @@ mod tests {
                 predicate: "lives_in".to_string(),
                 object: "Portland".to_string(),
                 confidence: 0.8,
+                ..Default::default()
             }],
         );
         let store = TemporalFactStore::from_records([&record1, &record2], &HashMap::new());
@@ -774,6 +784,7 @@ mod tests {
                 predicate: "attended".to_string(),
                 object: "Charity Walk".to_string(),
                 confidence: 0.8,
+                ..Default::default()
             }],
         );
         let record2 = sample_record(
@@ -784,6 +795,7 @@ mod tests {
                 predicate: "attended".to_string(),
                 object: "Charity Bike Ride".to_string(),
                 confidence: 0.8,
+                ..Default::default()
             }],
         );
         let record3 = sample_record(
@@ -794,6 +806,7 @@ mod tests {
                 predicate: "attended".to_string(),
                 object: "Book Drive".to_string(),
                 confidence: 0.8,
+                ..Default::default()
             }],
         );
         let store =

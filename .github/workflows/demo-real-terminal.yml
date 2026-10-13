@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build merged Lint-AI code
-        run: cargo build --release --bin lint-ai
+      - name: Build merged Membrick code
+        run: cargo build --release --bin membrick
 
       - name: Install terminal recording tools
         run: |
@@ -42,15 +42,15 @@ jobs:
             --cols 100 \
             --rows 30 \
             -c 'bash scripts/run_real_terminal_demo.sh' \
-            demo-artifacts/lint-ai-real-terminal.cast
+            demo-artifacts/membrick-real-terminal.cast
 
       - name: Verify recorded behavior independently
         shell: bash
         run: |
           set -euo pipefail
           QUERY='How many retry attempts should we use for gateway timeouts?'
-          ./target/release/lint-ai --query "$QUERY" examples/demo-real-terminal > demo-artifacts/raw-query.json
-          ./target/release/lint-ai --llm-context "$QUERY" --result-count 5 examples/demo-real-terminal > demo-artifacts/llm-context.json
+          ./target/release/membrick --query "$QUERY" examples/demo-real-terminal > demo-artifacts/raw-query.json
+          ./target/release/membrick --llm-context "$QUERY" --result-count 5 examples/demo-real-terminal > demo-artifacts/llm-context.json
           python3 - <<'PY'
           import json
           q=json.load(open('demo-artifacts/raw-query.json'))
@@ -67,14 +67,14 @@ jobs:
       - name: Render recording to GIF and MP4
         run: |
           set -euo pipefail
-          agg demo-artifacts/lint-ai-real-terminal.cast demo-artifacts/lint-ai-real-terminal.gif
-          ffmpeg -y -i demo-artifacts/lint-ai-real-terminal.gif \
+          agg demo-artifacts/membrick-real-terminal.cast demo-artifacts/membrick-real-terminal.gif
+          ffmpeg -y -i demo-artifacts/membrick-real-terminal.gif \
             -movflags +faststart -pix_fmt yuv420p \
             -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' \
-            demo-artifacts/lint-ai-real-terminal.mp4
+            demo-artifacts/membrick-real-terminal.mp4
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lint-ai-real-terminal-recording
+          name: membrick-real-terminal-recording
           path: demo-artifacts/
           if-no-files-found: error

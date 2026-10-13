@@ -9,8 +9,8 @@ const VIEWS = {
 const state = { view: 'overview', status: null, series: [], provider: null, tool: null, hover: null };
 
 const tokenInput = document.querySelector('#token');
-tokenInput.value = localStorage.getItem('lint-ai-dashboard-token') || '';
-tokenInput.addEventListener('change', () => localStorage.setItem('lint-ai-dashboard-token', tokenInput.value));
+tokenInput.value = localStorage.getItem('membrick-dashboard-token') || '';
+tokenInput.addEventListener('change', () => localStorage.setItem('membrick-dashboard-token', tokenInput.value));
 document.querySelector('#refresh').addEventListener('click', refresh);
 
 async function api(path) {

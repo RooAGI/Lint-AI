@@ -55,6 +55,7 @@ impl OpenClawDocument {
             project_id, self.session_id, document_type
         );
         let mut filters = BTreeMap::from([
+            ("provider".to_string(), "openclaw".to_string()),
             ("integration".to_string(), "openclaw".to_string()),
             ("project_id".to_string(), project_id.clone()),
             ("session_id".to_string(), self.session_id.clone()),

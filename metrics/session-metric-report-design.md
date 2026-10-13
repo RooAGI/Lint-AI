@@ -6,7 +6,7 @@ The report answers four questions:
 
 1. Did the agent complete the task?
 2. How long and how many resources did it use?
-3. Did Lint-AI memory change the session?
+3. Did Membrick memory change the session?
 4. Was the recording complete and trustworthy?
 
 The report is derived data. The recorded session (`manifest.json` and

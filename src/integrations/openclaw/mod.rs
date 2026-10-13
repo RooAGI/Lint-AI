@@ -1,15 +1,15 @@
 //! OpenClaw integration. The MCP transport is the shared stdio server (same
-//! contract as the Gemini CLI / Agy adapters): OpenClaw consumes lint-ai as a
+//! contract as the Gemini CLI / Agy adapters): OpenClaw consumes membrick as a
 //! stdio MCP server registered under `mcp.servers` in `~/.openclaw/openclaw.json`.
 //!
 //! Lifecycle hooks are a second, complementary surface (verified against a
 //! live 2026.9.6 host):
 //!   - internal hooks (`agent:bootstrap` recall/injection) live under
-//!     `<stateDir>/hooks/lint-ai/` (`OPENCLAW_STATE_DIR`, else `~/.openclaw`),
+//!     `<stateDir>/hooks/membrick/` (`OPENCLAW_STATE_DIR`, else `~/.openclaw`),
 //!   - the typed plugin (`agent_end`/`before_reset`/`session_start`/
 //!     `session_end`/shutdown capture) lives under
-//!     `<configDir>/extensions/lint-ai/` (`~/.openclaw/extensions`).
-//! Both are thin JS shims around `lint-ai --openclaw-hook <kind>`; all
+//!     `<configDir>/extensions/membrick/` (`~/.openclaw/extensions`).
+//! Both are thin JS shims around `membrick --openclaw-hook <kind>`; all
 //! lifecycle logic is in [`hooks`].
 
 pub mod document;
@@ -23,11 +23,11 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SERVER_NAME: &str = "lint-ai";
+const SERVER_NAME: &str = "membrick";
 
 pub type OpenClawServerOptions<'a> = GeminiCliServerOptions<'a>;
 
-/// Install the lint-ai memory skill for OpenClaw.
+/// Install the membrick memory skill for OpenClaw.
 ///
 /// OpenClaw loads skills from project `skills/` directories first, then from
 /// `~/.openclaw/skills/`. The skill is host-global (unlike the per-project MCP
@@ -37,7 +37,7 @@ pub fn install_memory_skill(skill_dir: Option<&Path>, force: bool) -> Result<Pat
     let skill_path = skill_dir
         .map(Path::to_path_buf)
         .unwrap_or(default_skill_dir()?)
-        .join("lint-ai-memory")
+        .join("membrick-memory")
         .join("SKILL.md");
     if let Some(parent) = skill_path.parent() {
         fs::create_dir_all(parent)?;
@@ -58,7 +58,7 @@ pub fn install_memory_skill(skill_dir: Option<&Path>, force: bool) -> Result<Pat
     Ok(skill_path)
 }
 
-/// Merge the lint-ai stdio MCP server entry into the OpenClaw config.
+/// Merge the membrick stdio MCP server entry into the OpenClaw config.
 ///
 /// Only the `command`/`args` keys verified against OpenClaw's MCP docs are
 /// written; OpenClaw validates its config strictly, so no speculative keys.
@@ -103,14 +103,14 @@ pub fn run_server(root: &Path, options: OpenClawServerOptions<'_>) -> Result<()>
 /// Internal hooks live under `<stateDir>/hooks/<name>/`, where stateDir is
 /// `OPENCLAW_STATE_DIR` when set, else `~/.openclaw` (verified against the
 /// 2026.9.6 runtime). The installed `handler.js` is a thin wrapper around
-/// `lint-ai --openclaw-hook bootstrap`; `__LINT_AI_BIN__` is replaced with the
-/// current binary path and `__LINT_AI_ROOT__` with the canonicalized project
+/// `membrick --openclaw-hook bootstrap`; `__MEMBRICK_BIN__` is replaced with the
+/// current binary path and `__MEMBRICK_ROOT__` with the canonicalized project
 /// root at install time.
 pub fn install_hooks(hooks_dir: Option<&Path>, root: &Path, force: bool) -> Result<PathBuf> {
     let dir = hooks_dir
         .map(Path::to_path_buf)
         .unwrap_or(default_hooks_dir()?)
-        .join("lint-ai");
+        .join("membrick");
     let bin = env::current_exe()?.to_string_lossy().into_owned();
     let root = root.canonicalize().with_context(|| {
         format!(
@@ -123,8 +123,8 @@ pub fn install_hooks(hooks_dir: Option<&Path>, root: &Path, force: bool) -> Resu
     write_install_asset(
         &dir.join("handler.js"),
         &include_str!("hooks/handler.js")
-            .replace("__LINT_AI_BIN__", &bin)
-            .replace("__LINT_AI_ROOT__", &root),
+            .replace("__MEMBRICK_BIN__", &bin)
+            .replace("__MEMBRICK_ROOT__", &root),
         force,
     )?;
     Ok(dir)
@@ -143,7 +143,7 @@ pub fn install_plugin(plugin_dir: Option<&Path>, force: bool) -> Result<PathBuf>
     let dir = plugin_dir
         .map(Path::to_path_buf)
         .unwrap_or(default_plugin_dir()?)
-        .join("lint-ai");
+        .join("membrick");
     write_install_asset(
         &dir.join("openclaw.plugin.json"),
         include_str!("plugin/openclaw.plugin.json"),
@@ -163,10 +163,10 @@ pub fn install_plugin(plugin_dir: Option<&Path>, force: bool) -> Result<PathBuf>
 }
 
 /// Write the typed plugin's `projectRoot` into OpenClaw's plugin config
-/// (`plugins.entries.lint-ai.config` in `openclaw.json`), so a local
+/// (`plugins.entries.membrick.config` in `openclaw.json`), so a local
 /// `--openclaw-install` keeps working exactly as before without baked-in
 /// paths. The plugin resolves the binary at runtime
-/// (`binaryPath` → `LINT_AI_BIN` → `lint-ai` on `PATH`); only the project
+/// (`binaryPath` → `MEMBRICK_BIN` → `membrick` on `PATH`); only the project
 /// root needs recording here, and the event `workspaceDir` still takes
 /// precedence when present. Existing entry keys (e.g. `enabled`) are
 /// preserved; only `config.projectRoot` is set.
@@ -189,13 +189,14 @@ pub fn install_plugin_config(root: &Path, config_path: Option<&Path>) -> Result<
     let entries = entries
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("OpenClaw plugins.entries must be an object"))?;
+    entries.remove("lint-ai");
     let entry = entries.entry(SERVER_NAME).or_insert_with(|| json!({}));
     let entry = entry
         .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("OpenClaw plugins.entries.lint-ai must be an object"))?;
+        .ok_or_else(|| anyhow::anyhow!("OpenClaw plugins.entries.membrick must be an object"))?;
     let config = entry.entry("config").or_insert_with(|| json!({}));
     let config = config.as_object_mut().ok_or_else(|| {
-        anyhow::anyhow!("OpenClaw plugins.entries.lint-ai.config must be an object")
+        anyhow::anyhow!("OpenClaw plugins.entries.membrick.config must be an object")
     })?;
     config.insert("projectRoot".to_string(), json!(root.to_string_lossy()));
     write_json_object(&path, &settings)?;
@@ -211,9 +212,9 @@ fn write_install_asset(path: &Path, contents: &str, force: bool) -> Result<()> {
         if existing == contents {
             return Ok(());
         }
-        if !force && !existing.contains("lint-ai --openclaw-install") {
+        if !force && !existing.contains("membrick --openclaw-install") {
             anyhow::bail!(
-                "refusing to overwrite existing {}; it does not look like a lint-ai install; rerun with --openclaw-force-skill to replace it",
+                "refusing to overwrite existing {}; it does not look like a membrick install; rerun with --openclaw-force-skill to replace it",
                 path.display()
             );
         }
@@ -262,14 +263,14 @@ fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
         return Ok(Map::new());
     }
     // openclaw.json is JSON5 (comments, trailing commas, unquoted keys are
-    // common). lint-ai only speaks strict JSON, so instead of corrupting a
+    // common). membrick only speaks strict JSON, so instead of corrupting a
     // JSON5 file by rewriting it as strict JSON, fail with the manual-install
     // recipe taken from OpenClaw's own MCP docs.
     serde_json::from_str(&contents).with_context(|| {
         format!(
             "could not parse {} as JSON (it may use JSON5 features like comments); add the server manually instead:\n  \
-             openclaw mcp add lint-ai --command <lint-ai-binary> --arg --openclaw-serve --arg <project-root>\n  \
-             openclaw mcp doctor lint-ai --probe",
+             openclaw mcp add membrick --command <membrick-binary> --arg --openclaw-serve --arg <project-root>\n  \
+             openclaw mcp doctor membrick --probe",
             path.display()
         )
     })
@@ -294,7 +295,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-openclaw-{nonce}"));
+            .join(format!("membrick-openclaw-{nonce}"));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -315,7 +316,7 @@ mod tests {
     fn memory_skill_preserves_user_edits_without_force() {
         let root = temp_root();
         let skill_dir = root.join("skills");
-        let path = skill_dir.join("lint-ai-memory/SKILL.md");
+        let path = skill_dir.join("membrick-memory/SKILL.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "custom").unwrap();
 
@@ -333,9 +334,9 @@ mod tests {
         let skill_dir = root.join("skills");
 
         install_memory_skill(Some(&skill_dir), true).unwrap();
-        let path = skill_dir.join("lint-ai-memory/SKILL.md");
+        let path = skill_dir.join("membrick-memory/SKILL.md");
         let installed = fs::read_to_string(&path).unwrap();
-        assert!(installed.contains("<!-- lint-ai-managed-skill -->"));
+        assert!(installed.contains("<!-- membrick-managed-skill -->"));
         install_memory_skill(Some(&skill_dir), false).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), installed);
         fs::remove_dir_all(root).unwrap();
@@ -357,16 +358,16 @@ mod tests {
         let config: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(config["mcp"]["servers"]["other"]["command"], "other");
         assert_eq!(
-            config["mcp"]["servers"]["lint-ai"]["args"][0],
+            config["mcp"]["servers"]["membrick"]["args"][0],
             "--openclaw-serve"
         );
         assert_eq!(
-            config["mcp"]["servers"]["lint-ai"]["args"][1],
+            config["mcp"]["servers"]["membrick"]["args"][1],
             root.to_string_lossy().as_ref()
         );
         // Only the verified command/args keys are written; OpenClaw validates
         // its config strictly, so no speculative keys.
-        let entry = config["mcp"]["servers"]["lint-ai"].as_object().unwrap();
+        let entry = config["mcp"]["servers"]["membrick"].as_object().unwrap();
         assert!(entry.len() == 2 && entry.contains_key("command") && entry.contains_key("args"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -381,8 +382,8 @@ mod tests {
         let error = install_user_config(&root, Some(&config))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("openclaw mcp add lint-ai"));
-        assert!(error.contains("openclaw mcp doctor lint-ai --probe"));
+        assert!(error.contains("openclaw mcp add membrick"));
+        assert!(error.contains("openclaw mcp doctor membrick --probe"));
         assert_eq!(fs::read_to_string(&config).unwrap(), original);
         fs::remove_dir_all(root).unwrap();
     }
@@ -398,17 +399,17 @@ mod tests {
         let plugin_dir = root.join("extensions");
 
         install_plugin(Some(&plugin_dir), false).unwrap();
-        let dir = plugin_dir.join("lint-ai");
+        let dir = plugin_dir.join("membrick");
         // The published files ship verbatim: no install-time placeholders.
         let index = fs::read_to_string(dir.join("index.js")).unwrap();
         assert_eq!(index, include_str!("plugin/index.js"));
-        assert!(!index.contains("__LINT_AI_BIN__"));
-        assert!(!index.contains("__LINT_AI_ROOT__"));
+        assert!(!index.contains("__MEMBRICK_BIN__"));
+        assert!(!index.contains("__MEMBRICK_ROOT__"));
         // Manifest carries the binary release version and the new config keys.
         let manifest: Value =
             serde_json::from_str(&fs::read_to_string(dir.join("openclaw.plugin.json")).unwrap())
                 .unwrap();
-        assert_eq!(manifest["id"], "lint-ai");
+        assert_eq!(manifest["id"], "membrick");
         assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             manifest["configSchema"]["properties"]["projectRoot"]["type"],
@@ -434,7 +435,7 @@ mod tests {
         let config = root.join("openclaw.json");
         fs::write(
             &config,
-            r#"{"plugins":{"entries":{"lint-ai":{"enabled":true},"other":{}}}}"#,
+            r#"{"plugins":{"entries":{"membrick":{"enabled":true},"other":{}}}}"#,
         )
         .unwrap();
 
@@ -442,7 +443,7 @@ mod tests {
         install_plugin_config(&root, Some(&config)).unwrap();
 
         let config: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
-        let entry = &config["plugins"]["entries"]["lint-ai"];
+        let entry = &config["plugins"]["entries"]["membrick"];
         // Existing entry keys survive; only config.projectRoot is set.
         assert_eq!(entry["enabled"], true);
         assert_eq!(

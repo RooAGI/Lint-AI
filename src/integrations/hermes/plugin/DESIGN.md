@@ -1,4 +1,4 @@
-# DESIGN: `hermes-plugin-lintai` — automatic capture/recall for Hermes Agent via hooks
+# DESIGN: `hermes-plugin-membrick` — automatic capture/recall for Hermes Agent via hooks
 
 **Status:** design (approved pattern; implementation follows this document)
 **Date:** 2026-09-28
@@ -9,9 +9,9 @@ is inferred from docs.
 
 ## 1. Goal
 
-Give Hermes Agent automatic lint-ai memory — recall injected before every model call
+Give Hermes Agent automatic membrick memory — recall injected before every model call
 and capture of every turn and tool call — with **zero changes to Hermes and zero
-changes to the lint-ai Rust core**. This is the "next level" after the `--hermes-serve`
+changes to the membrick Rust core**. This is the "next level" after the `--hermes-serve`
 MCP adapter (PR #82): the MCP adapter makes memory available when the agent *chooses*
 to call a tool; the hooks plugin makes capture/recall *automatic*.
 
@@ -22,7 +22,7 @@ see §10). Hooks coexist with everything.
 ## 2. Why HTTP, not "direct" like Claude Code / Codex
 
 Our Claude Code / Codex / OpenClaw / `--hermes-serve` adapters are **Rust code compiled
-into the lint-ai binary** — the MCP server and the memory core share one process, so
+into the membrick binary** — the MCP server and the memory core share one process, so
 they call the core in-process.
 
 Hermes hooks are different: hook handlers **must be Python running inside the Hermes
@@ -30,15 +30,15 @@ process** (a directory plugin: `plugin.yaml` + `__init__.py::register(ctx)` is t
 plugin format Hermes loads). Python cannot reach into our Rust binary in-process. The
 bridge options are:
 
-1. **HTTP to a running lint-ai server** (chosen) — persistent keep-alive connection,
+1. **HTTP to a running membrick server** (chosen) — persistent keep-alive connection,
    tiny per-turn cost, and the provider-memory API already exists (`POST /provider-memory/add/batch`, `POST /provider-memory/search`,
-   `POST /delete` on the `lint-ai serve` binary, default `127.0.0.1:8080`). No Rust
+   `POST /delete` on the `membrick serve` binary, default `127.0.0.1:8080`). No Rust
    changes needed. This is exactly the pattern mem0's own Hermes plugin uses
    (HTTP/SDK, no subprocess).
-2. Spawning the lint-ai binary per hook event — a fresh process on every turn just to
+2. Spawning the membrick binary per hook event — a fresh process on every turn just to
    record a message. Rejected: wasteful and fragile.
 
-Tradeoff stated plainly: the user must run the lint-ai server alongside Hermes (one
+Tradeoff stated plainly: the user must run the membrick server alongside Hermes (one
 extra process); the `--hermes-serve` MCP adapter needs only the binary. The plugin
 fails open if the server is unreachable (see §7), so a missing server degrades to
 "no automatic memory", never to a broken agent.
@@ -73,7 +73,7 @@ frameworks have one unreliable-looking session hook; ours is the misleading name
 transcript; Hermes has no equivalent — the CLI keeps the transcript for the
 memory-*provider* boundary flush, which plugins never see.) Therefore **per-turn
 accumulation via `post_llm_call` is the authoritative session record**; boundary hooks
-only mark open/closed. This is acceptable: lint-ai retrieval is turn/segment-level,
+only mark open/closed. This is acceptable: membrick retrieval is turn/segment-level,
 and every turn's `conversation_history` is captured.
 
 ### Timeouts and failure mode (measured in `hermes_cli/plugins_dispatch.py`)
@@ -92,7 +92,7 @@ and every turn's `conversation_history` is captured.
 
 ## 4. The mapping
 
-| Hermes hook | lint-ai action | Details |
+| Hermes hook | membrick action | Details |
 |---|---|---|
 | `pre_llm_call` | **Recall + inject** | Query `POST /provider-memory/search` with `user_message` (scoped by `user_id` from config). Format top hits as a compact context block; return `{"context": block}`. Keep it fast — the turn blocks on this hook (bounded by the 30s timeout; target <1s via the local server). Cache per `(session_id, turn_id)` so double-fires don't double-query. `parent_session_id` (present on resume/branch) is recorded for resume linking. |
 | `post_tool_call` | **Structured tool-event records** | One record per tool call: `function_name`, args (truncated), `result` (truncated), `duration_ms`, `status` (+ `error_type`/`error_message` on failure). Dedupe by `tool_call_id`. Enqueued async — never blocks the agent. |
@@ -162,13 +162,13 @@ Hermes-specific deviations called out in §3.
 - **Fail-open everywhere:** every handler is wrapped so exceptions are swallowed and
   counted, never raised into Hermes.
 - **Config** (no new files in the repo; resolved at import):
-  `LINTAI_SERVER_URL` (default `http://127.0.0.1:8080`), `LINTAI_USER_ID` (default
-  `"hermes"`), `LINTAI_QUEUE_MAX` (default `1000`), `LINTAI_CAPTURE` (`on`/`off`,
-  default `on`), `LINTAI_RECALL` (`on`/`off`, default `on`), `LINTAI_RECALL_TOP_K`
-  (default `5`). Optionally `$HERMES_HOME/lintai.json` for the same keys (env wins).
+  `MEMBRICK_SERVER_URL` (default `http://127.0.0.1:8080`), `MEMBRICK_USER_ID` (default
+  `"hermes"`), `MEMBRICK_QUEUE_MAX` (default `1000`), `MEMBRICK_CAPTURE` (`on`/`off`,
+  default `on`), `MEMBRICK_RECALL` (`on`/`off`, default `on`), `MEMBRICK_RECALL_TOP_K`
+  (default `5`). Optionally `$HERMES_HOME/membrick.json` for the same keys (env wins).
 - **Never slow in `pre_tool_call`:** not subscribed (fail-closed hook).
 
-## 8. Document types written to the lint-ai store
+## 8. Document types written to the membrick store
 
 All writes go through `POST /provider-memory/add/batch` as `AddRequest { request_id, user_id,
 session_id, messages: [{role, timestamp, content}] }`. `user_id` comes from config;
@@ -214,7 +214,7 @@ Hermes session log remains the system of record.
 1. **Hooks (coexist) vs native provider (single slot, authoritative boundary
    transcript)?** This design recommends hooks. Confirm before we invest further.
 2. **Capture default-on?** Per-turn capture of every turn is the automatic-memory
-   promise, but it's the most data written. `LINTAI_CAPTURE` defaults `on`; flip to
+   promise, but it's the most data written. `MEMBRICK_CAPTURE` defaults `on`; flip to
    opt-in per project?
 3. **Retention/redaction:** capture stores user messages and assistant responses
    verbatim. Any redaction rules (secrets, absolute paths) before this ships?
@@ -224,11 +224,11 @@ Hermes session log remains the system of record.
 ## 10. Why not the native `MemoryProvider`
 
 Considered and rejected for now (probe §"Hooks vs native MemoryProvider"): Hermes
-allows exactly one external memory provider (`memory.provider`); installing lint-ai as
+allows exactly one external memory provider (`memory.provider`); installing membrick as
 a provider would evict the user's mem0/file/other provider. The provider's only real
 edge is the authoritative full-transcript boundary snapshot (`on_session_end(messages)`
 + `on_session_switch`), but per-turn capture already accumulates every turn and
-lint-ai retrieval is turn/segment-level. A provider also needs a `MemoryProvider`
+membrick retrieval is turn/segment-level. A provider also needs a `MemoryProvider`
 subclass (~500–700 lines, per the mem0 precedent) versus a directory plugin with zero
 Hermes changes. If Luyi later wants the provider slot, mem0's plugin is the template
 (`docs/hermes-mem0-integration.md`).
@@ -238,12 +238,12 @@ Hermes changes. If Luyi later wants the provider slot, mem0's plugin is the temp
 1. **Python unit tests** (`tests/test_plugin.py`, stdlib `unittest`, no deps):
    hook→record builders (turn/tool/session), dedupe key derivation, truncation caps,
    queue drop-oldest behavior, fail-open handler wrapping, config resolution
-   (env > lintai.json > defaults), HTTP client batching (mock transport).
+   (env > membrick.json > defaults), HTTP client batching (mock transport).
 2. **Live end-to-end** against the real Hermes CLI with an isolated `HERMES_HOME`
    (never the real `~/.hermes`): install the plugin from this directory, drive
    `pre_llm_call` (assert the returned context reaches the turn), fire
    `post_tool_call` + `post_llm_call` through the real `invoke_hook` dispatch against
-   a stub lint-ai HTTP server, and assert the exact JSON the plugin POSTed to
+   a stub membrick HTTP server, and assert the exact JSON the plugin POSTed to
    `/provider-memory/search` and `/provider-memory/add/batch`.
 3. **Rust gate untouched:** this plugin is Python-only; `cargo test --all-targets`
    is unaffected (no Rust changes in this design).

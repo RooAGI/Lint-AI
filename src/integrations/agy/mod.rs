@@ -11,14 +11,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SERVER_NAME: &str = "lint-ai";
+const SERVER_NAME: &str = "membrick";
 const HOOK_MARKER: &str = "--agy-hook";
+const UPDATE_PERMISSION: &str = "mcp(membrick/update_membrick)";
 
 pub type AgyServerOptions<'a> = GeminiCliServerOptions<'a>;
 
 pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
     let root = root.canonicalize()?;
-    let skill_path = root.join(".agents/skills/lint-ai-memory/SKILL.md");
+    let skill_path = root.join(".agents/skills/membrick-memory/SKILL.md");
     if let Some(parent) = skill_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -49,6 +50,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let servers = servers
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("AGY mcpServers must be an object"))?;
+    servers.remove("lint-ai");
     servers.insert(
         SERVER_NAME.into(),
         json!({
@@ -67,7 +69,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     let root = root.canonicalize()?;
     let executable = env::current_exe()?;
     let mut settings = read_json_object(&path)?;
-    let hooks = settings.entry("lint-ai").or_insert_with(|| json!({}));
+    let hooks = settings.entry("membrick").or_insert_with(|| json!({}));
     let hooks = hooks
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("AGY hooks must be an object"))?;
@@ -99,6 +101,30 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     Ok(path)
 }
 
+/// Require explicit AGY approval for the self-update MCP action.
+pub fn install_update_permission(settings_path: Option<&Path>) -> Result<PathBuf> {
+    let path = settings_path
+        .map(Path::to_path_buf)
+        .unwrap_or(default_permission_settings_path()?);
+    let mut settings = read_json_object(&path)?;
+    let permissions = settings.entry("permissions").or_insert_with(|| json!({}));
+    let permissions = permissions
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("AGY permissions must be an object"))?;
+    let ask = permissions.entry("ask").or_insert_with(|| json!([]));
+    let ask = ask
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("AGY permissions.ask must be an array"))?;
+    if !ask
+        .iter()
+        .any(|rule| rule.as_str() == Some(UPDATE_PERMISSION))
+    {
+        ask.push(Value::String(UPDATE_PERMISSION.to_string()));
+    }
+    write_json_object(&path, &settings)?;
+    Ok(path)
+}
+
 pub fn run_server(root: &Path, options: AgyServerOptions<'_>) -> Result<()> {
     gemini_cli::run_server_for(root, RecordingProvider::Agy, "agy", "Gemini", options)
 }
@@ -114,6 +140,9 @@ fn default_config_path() -> Result<PathBuf> {
 }
 fn default_settings_path() -> Result<PathBuf> {
     Ok(home_dir()?.join(".gemini/config/hooks.json"))
+}
+fn default_permission_settings_path() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".gemini/antigravity-cli/settings.json"))
 }
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {
@@ -155,7 +184,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-agy-{nonce}"));
+            .join(format!("membrick-agy-{nonce}"));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -174,7 +203,7 @@ mod tests {
     #[test]
     fn memory_skill_preserves_user_edits_without_force() {
         let root = temp_root();
-        let path = root.join(".agents/skills/lint-ai-memory/SKILL.md");
+        let path = root.join(".agents/skills/membrick-memory/SKILL.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "custom").unwrap();
 
@@ -189,9 +218,9 @@ mod tests {
         let root = temp_root();
 
         install_memory_skill(&root, true).unwrap();
-        let path = root.join(".agents/skills/lint-ai-memory/SKILL.md");
+        let path = root.join(".agents/skills/membrick-memory/SKILL.md");
         let installed = fs::read_to_string(&path).unwrap();
-        assert!(installed.contains("<!-- lint-ai-managed-skill -->"));
+        assert!(installed.contains("<!-- membrick-managed-skill -->"));
         install_memory_skill(&root, false).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), installed);
         fs::remove_dir_all(root).unwrap();
@@ -216,17 +245,17 @@ mod tests {
 
         let config: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(config["mcpServers"]["other"]["command"], "other");
-        assert_eq!(config["mcpServers"]["lint-ai"]["args"][0], "--agy-serve");
+        assert_eq!(config["mcpServers"]["membrick"]["args"][0], "--agy-serve");
         assert_eq!(
-            config["mcpServers"]["lint-ai"]["args"][1],
+            config["mcpServers"]["membrick"]["args"][1],
             root.to_string_lossy().as_ref()
         );
         let settings: Value =
             serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(settings["theme"], "dark");
-        assert_eq!(settings["lint-ai"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(settings["membrick"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(
-            settings["lint-ai"]["PreToolUse"].as_array().unwrap().len(),
+            settings["membrick"]["PreToolUse"].as_array().unwrap().len(),
             1
         );
         fs::remove_dir_all(root).unwrap();

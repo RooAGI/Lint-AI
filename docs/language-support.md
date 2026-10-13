@@ -1,6 +1,6 @@
 # Language support
 
-Lint-AI retrieves memories lexically (Tantivy BM25 plus heuristic
+Membrick retrieves memories lexically (Tantivy BM25 plus heuristic
 re-ranking) — there is no embedding model, so every language needs its own
 tokenization, normalization, and linguistic rules. This page documents what
 each supported language gets and, just as importantly, what it does not.
@@ -16,9 +16,17 @@ Spanish (`es`).
 Chinese, a Hangul majority Korean, otherwise English. Ambiguous or
 script-free text falls back to English.
 
-The language drives per-language defaults — most visibly the spaCy model.
-Unless `--spacy-model` is passed explicitly, the model is chosen in Rust
-(`src/lang.rs`):
+Language-aware retrieval does not require spaCy. Detection, tokenization,
+normalization, question handling, temporal parsing, and retrieval rules run in
+Rust. Stopword data generated using spaCy is vendored in the source tree, so
+it does not require Python or spaCy at runtime.
+
+spaCy is an optional enrichment path for NER and structured
+relation/key-phrase extraction. `PipelineOptions` defaults to the heuristic
+provider, which is Python-free and skips those spaCy-only enrichments. The CLI
+currently defaults `--tier1-ner-provider` to `spacy`. When that provider is
+selected, the model is chosen in Rust (`src/lang.rs`) unless `--spacy-model`
+overrides it:
 
 | Language | Default spaCy model |
 |----------|---------------------|
@@ -28,8 +36,8 @@ Unless `--spacy-model` is passed explicitly, the model is chosen in Rust
 | `en` / default | `en_core_web_sm` |
 
 The Python side (`scripts/spacy_ner.py`, `scripts/spacy_relations.py`)
-only allowlists these model names; all language *selection* logic lives in
-Rust. Install the model you need before use, e.g.
+allowlists these model names; language selection lives in Rust. Install the
+matching model only if you enable the spaCy provider, e.g.
 `python -m spacy download zh_core_web_sm` (the Chinese model also needs
 `spacy-pkuseg`).
 
@@ -99,7 +107,9 @@ at the character level throughout.
   is out of scope for the Rust-only language-support rule, so Chinese
   queries get no query-time entity evidence (fail-open) until the
   protocol is extended.
-- **Chinese relation extraction fails open ([E894]).** `spacy_ner.py`
+- **Chinese relation extraction fails open ([E894]).** This affects only the
+  optional spaCy relation-enrichment path; Rust lexical retrieval does not
+  depend on it. `spacy_ner.py`
   works with `zh_core_web_sm` (verified: `清华大学` → `ORG`), but
   `spacy_relations.py` uses `doc.noun_chunks`, which spaCy does not
   implement for Chinese — every Chinese relations call errors and the
@@ -119,7 +129,8 @@ at the character level throughout.
 Both languages share the same foundation (`src/lang.rs`,
 `src/index/cjk_tokenizer.rs`, `--lang` plumbing). Korean additionally
 gets Hangul eojeol tokenization with particle-stripped stems and Korean
-stopwords; Spanish currently uses the Latin pipeline with its spaCy model
-(`es_core_news_sm`) and language selection. Per-language interrogative,
+stopwords; Spanish uses the Latin pipeline with Rust language selection.
+Their spaCy models (`ko_core_news_sm`, `es_core_news_sm`) are used only when
+the optional spaCy provider is enabled. Per-language interrogative,
 temporal, and number handling for Korean and Spanish is tracked
 separately.

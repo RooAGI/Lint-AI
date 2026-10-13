@@ -1,0 +1,94 @@
+{
+  "benchmark": "security-review-segmented-http-throughput",
+  "records": 23366,
+  "sessions": 23,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 25,
+  "repetitions": 3,
+  "runs": [
+    {
+      "mode": "segment",
+      "records": 23366,
+      "seed_sessions": 23,
+      "requests_per_cell": 100,
+      "warmup_requests_per_cell": 25,
+      "server": "target/release/server",
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 100,
+          "p50_ms": 1.944,
+          "p90_ms": 2.025,
+          "p99_ms": 2.28,
+          "mean_ms": 1.952,
+          "throughput_per_s": 509.26
+        },
+        {
+          "concurrency": 10,
+          "requests": 100,
+          "p50_ms": 8.69,
+          "p90_ms": 11.701,
+          "p99_ms": 12.965,
+          "mean_ms": 8.244,
+          "throughput_per_s": 1148.72
+        }
+      ]
+    },
+    {
+      "mode": "segment",
+      "records": 23366,
+      "seed_sessions": 23,
+      "requests_per_cell": 100,
+      "warmup_requests_per_cell": 25,
+      "server": "target/release/server",
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 100,
+          "p50_ms": 1.955,
+          "p90_ms": 2.066,
+          "p99_ms": 2.508,
+          "mean_ms": 1.975,
+          "throughput_per_s": 503.27
+        },
+        {
+          "concurrency": 10,
+          "requests": 100,
+          "p50_ms": 8.04,
+          "p90_ms": 12.612,
+          "p99_ms": 15.019,
+          "mean_ms": 8.364,
+          "throughput_per_s": 1162.38
+        }
+      ]
+    },
+    {
+      "mode": "segment",
+      "records": 23366,
+      "seed_sessions": 23,
+      "requests_per_cell": 100,
+      "warmup_requests_per_cell": 25,
+      "server": "target/release/server",
+      "measurements": [
+        {
+          "concurrency": 1,
+          "requests": 100,
+          "p50_ms": 1.908,
+          "p90_ms": 1.994,
+          "p99_ms": 2.268,
+          "mean_ms": 1.923,
+          "throughput_per_s": 516.81
+        },
+        {
+          "concurrency": 10,
+          "requests": 100,
+          "p50_ms": 8.604,
+          "p90_ms": 12.265,
+          "p99_ms": 16.916,
+          "mean_ms": 8.41,
+          "throughput_per_s": 1140.71
+        }
+      ]
+    }
+  ]
+}

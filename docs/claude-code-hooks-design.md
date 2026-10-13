@@ -15,7 +15,7 @@ classification, cross-process MCP memory sharing, `PostToolUseFailure` capture,
 and a subagent parent/child segment split remain future work.
 
 The design deliberately keeps Claude-specific protocol types at the integration
-boundary. Lint-AI's public ingestion and query APIs remain `SourceDocument`,
+boundary. Membrick's public ingestion and query APIs remain `SourceDocument`,
 `MemoryService`, `MemoryIndexSnapshot`, and `SearchResult`.
 
 The entire adapter is compiled only with the non-default `claude-code` Cargo
@@ -24,7 +24,7 @@ surfaces unless they explicitly enable that feature.
 
 ## Goals
 
-The hook integration should let Lint-AI act as a persistent memory layer for
+The hook integration should let Membrick act as a persistent memory layer for
 Claude Code:
 
 - retrieve relevant project and session memory before Claude starts work
@@ -43,7 +43,7 @@ notifications, and tool-use blocks are not the durable memory contract.
 ## Ownership Boundary
 
 Claude Code owns hook names, hook payload JSON, matcher behavior, and hook
-response JSON. The Claude adapter translates those values into existing Lint-AI
+response JSON. The Claude adapter translates those values into existing Membrick
 operations.
 
 ```text
@@ -157,7 +157,7 @@ allows relevant older sessions to be selected.
 Claude interaction memory uses a dedicated persistent store:
 
 ```text
-<project>/.lint-ai/memory/
+<project>/.membrick/memory/
   lexical/
   semantic/
   metadata.json
@@ -194,10 +194,10 @@ let results = store.query(&retrieval_query, top_k)?;
 The same store can be inspected without reading internal persistence files:
 
 ```text
-lint-ai --inspect-index <project>/.lint-ai/memory
-lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view source-documents
-lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view records
-lint-ai --inspect-index <project>/.lint-ai/memory --inspect-view segments
+membrick --inspect-index <project>/.membrick/memory
+membrick --inspect-index <project>/.membrick/memory --inspect-view source-documents
+membrick --inspect-index <project>/.membrick/memory --inspect-view records
+membrick --inspect-index <project>/.membrick/memory --inspect-view segments
 ```
 
 With segmented layout, `MemoryService::search_with_filters()` routes over the configured top-N
@@ -238,7 +238,7 @@ Operation:
 
 1. Preserve the submitted prompt unchanged.
 2. Use the prompt as the base retrieval query.
-3. Apply Lint-AI's existing query analysis and expansion through the normal
+3. Apply Membrick's existing query analysis and expansion through the normal
    `MemoryIndex` query path.
 4. Route through the segmented `MemoryService` snapshot.
 5. Drop low-confidence, duplicate, or oversized results.
@@ -408,7 +408,7 @@ Retrieval hooks return structured Claude hook output:
 {
   "hookSpecificOutput": {
     "hookEventName": "UserPromptSubmit",
-    "additionalContext": "Relevant Lint-AI memory..."
+    "additionalContext": "Relevant Membrick memory..."
   }
 }
 ```
@@ -460,7 +460,7 @@ without changing the Claude protocol adapter.
 
 The installer will continue to preserve existing user configuration. It will:
 
-1. Install or update the `lint-ai` MCP entry.
+1. Install or update the `membrick` MCP entry.
 2. Merge the selected hook entries into Claude settings.
 3. Avoid replacing unrelated hooks or settings.
 4. Produce the same configuration on repeated installation.
@@ -468,16 +468,16 @@ The installer will continue to preserve existing user configuration. It will:
 Installed hook command shape:
 
 ```text
-lint-ai --claude-code-hook session-start /path/to/project
-lint-ai --claude-code-hook user-prompt-submit /path/to/project
-lint-ai --claude-code-hook user-prompt-expansion /path/to/project
-lint-ai --claude-code-hook pre-tool-use /path/to/project
-lint-ai --claude-code-hook post-tool-use /path/to/project
-lint-ai --claude-code-hook pre-compact /path/to/project
-lint-ai --claude-code-hook stop /path/to/project
-lint-ai --claude-code-hook session-end /path/to/project
-lint-ai --claude-code-hook subagent-start /path/to/project
-lint-ai --claude-code-hook subagent-stop /path/to/project
+membrick --claude-code-hook session-start /path/to/project
+membrick --claude-code-hook user-prompt-submit /path/to/project
+membrick --claude-code-hook user-prompt-expansion /path/to/project
+membrick --claude-code-hook pre-tool-use /path/to/project
+membrick --claude-code-hook post-tool-use /path/to/project
+membrick --claude-code-hook pre-compact /path/to/project
+membrick --claude-code-hook stop /path/to/project
+membrick --claude-code-hook session-end /path/to/project
+membrick --claude-code-hook subagent-start /path/to/project
+membrick --claude-code-hook subagent-stop /path/to/project
 ```
 
 Each command reads one Claude hook payload from stdin and writes one hook

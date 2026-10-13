@@ -1,0 +1,107 @@
+Indexing 59 haystack sessions for 'gpt4_e061b84g'...
+Indexed. Answer sessions: ["answer_8c64ce26_2", "answer_8c64ce26_1", "answer_8c64ce26_3"]
+Original question: I mentioned participating in a sports event two weeks ago. What was the event?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_8c64ce26_2 timestamp=Some("2023-06-02T00:00:00+00:00")
+    Spring Sprint Triathlon -[event_time]-> 2023-06-02T00:00:00+00:00 (confidence=0.70)
+    Spring Sprint Triathlon -[event_type]-> Triathlon (confidence=0.78)
+    user -[participated_in]-> Spring Sprint Triathlon (confidence=0.82)
+  answer_8c64ce26_1 timestamp=Some("2023-06-10T00:00:00+00:00")
+    Midsummer 5K Run -[event_time]-> 2023-06-10T00:00:00+00:00 (confidence=0.70)
+    Midsummer 5K Run -[event_type]-> Run (confidence=0.78)
+    user -[participated_in]-> Midsummer 5K Run (confidence=0.82)
+  answer_8c64ce26_3 timestamp=Some("2023-06-17T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: I mentioned participating in a sports event two weeks ago. What was the event?
+  reference date: Some("2023/07/01 (Sat) 13:38")
+  normalized query: mention particip in sport event two week ago what was the event
+  augmented/search query: I mentioned participating in a sports event two weeks ago. What was the event? sports event two weeks ago event mentioned participating was ago
+  kind: Statement
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: Some(Mixed)
+  temporal phrase: Some("two weeks ago")
+  temporal source: Some("fuzzydate")
+  resolved temporal anchor: Some("2023-06-17")
+  temporal window: None..None
+  anchor date: Some("2023-06-17")
+  anchor window: Some("2023-06-10..2023-06-24")
+  window days: 30
+  explicit temporal: true
+  hard temporal filter: false
+  spans:
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "sports event two weeks ago" => "sport event two week ago" (source=pos, score=0.400)
+    NounPhrase: "event" => "event" (source=pos, score=0.400)
+    VerbPhrase: "mentioned participating" => "mention particip" (source=pos, score=0.350)
+    VerbPhrase: "was" => "was" (source=pos, score=0.350)
+    Temporal: "two weeks ago" => "two week ago" (source=fuzzydate, score=0.800)
+    Subject: "What" => "what" (source=heuristic, score=0.750)
+    Object: "event" => "event" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=97 lexical_hits=140 candidates=283 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_8c64ce26_2: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_1: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_3: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_8c64ce26_2: candidate rank=46 score=3.542 doc_id=doc:memory:v2:337cfe4065ee301eed98611ac71831b8b4d115805ab4e55c816787e911ec6fb7
+    answer_8c64ce26_1: candidate rank=49 score=3.402 doc_id=doc:memory:v2:e837f7286ca95f23a4174c2f5681113738088273e8db8f4c58ccd2869de0deb2
+    answer_8c64ce26_3: candidate rank=22 score=9.069 doc_id=doc:memory:v2:0a5ad7457387444db969e32427e54f4ed0b81224b539e8c3f17c9fbc8520c1e8
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:d4ed959b77b91d23702272b484eea80af5961e91990698579ae0cf290be43d04 session=Some("3929e6cc_1") score=107.677 structured_evidence=[]
+    2. id=doc:memory:v2:4dcd08e32aada53048590f90edd40c0ae3bd353772857a903cde2d0293145775 session=Some("9dac9e37_1") score=65.587 structured_evidence=[]
+    3. id=doc:memory:v2:e24483d8a37e4ba9d4085eecfc1451d3f54131823526550ae6f0f8de0f9e9df4 session=Some("9dac9e37_1") score=59.799 structured_evidence=[]
+    4. id=doc:memory:v2:c2a7a6b6dd9959825baa27a7cb4ccf65f0396592c13128182ac758ae81e42142 session=Some("3929e6cc_1") score=56.943 structured_evidence=[]
+    5. id=doc:memory:v2:7140acffa07619c66f100607a51fbb4e4407f1f46fbd0bd09dd9e97ed6982a54 session=Some("7083fcb9_1") score=33.996 structured_evidence=[]
+    6. id=doc:memory:v2:c2f47ea8eeb647c7033bef3e9899a3707798ef62d653a658cd4f0d864a8c49e2 session=Some("ae15e8b6_1") score=33.964 structured_evidence=[]
+    7. id=doc:memory:v2:9517e047938760ec727e190fac935235e1372650cbdcb7e5619d35800e3507f5 session=Some("ae15e8b6_1") score=33.321 structured_evidence=[]
+    8. id=doc:memory:v2:8259bea7869a941a97464ededb50d37e5f23689de2f68f10f3bed86151f2b8c5 session=Some("68705467_1") score=21.401 structured_evidence=[]
+    9. id=doc:memory:v2:381fe4b44b0574a69355b65c2d0e4669a33d9685b7699bc0e8cfb73ad785f633 session=Some("68705467_1") score=18.889 structured_evidence=[]
+    10. id=doc:memory:v2:6a70a1e826901b94f85334d6d42204ac6a73bd2e8432516ee6dd909fcc2f4a8b session=Some("ultrachat_246504") score=15.799 structured_evidence=[]
+    11. id=doc:memory:v2:410aca529805004abe6e17c7909ddb198afcf876c38aaee64107ed8ce27b6ff4 session=Some("sharegpt_783Lb5V_0") score=14.630 structured_evidence=[]
+    12. id=doc:memory:v2:4acca8e1965fe1572b9b039f4a8830d0090fc7426a4a4a7ca49a72fc84fe42f5 session=Some("ce584ba0") score=14.331 structured_evidence=[]
+    13. id=doc:memory:v2:e5d55e26d2909026a86b389dfa4d7644a4e76cc4e34587517059c964d4b44a73 session=Some("7083fcb9_1") score=13.056 structured_evidence=[]
+    14. id=doc:memory:v2:ca5f7aa4c918f1793089f1fb42feff3b051957dd0a15bd0b06d300d78311e945 session=Some("0e3d8491_1") score=12.843 structured_evidence=[]
+    15. id=doc:memory:v2:2548acb6fd2f42f046285d8c4d4f39026774bc8640ff03b24a73ff32bddade6b session=Some("ce584ba0") score=12.119 structured_evidence=[]
+    16. id=doc:memory:v2:d610dd3a8637d3cc6d46e44dbffad9acb3f45136fc2950223549956e308a97dd session=Some("ultrachat_231231") score=12.109 structured_evidence=[]
+    17. id=doc:memory:v2:7e72b191258d0a7333f82a951b23e90ccc61505391648d76aedbd0e176b5b482 session=Some("ultrachat_547960") score=10.714 structured_evidence=[]
+    18. id=doc:memory:v2:781f15ef6305864e94df995fa698a525f3f56171ee6ad75164c7b48e9ca99364 session=Some("09d021e7_2") score=10.559 structured_evidence=[]
+    19. id=doc:memory:v2:8a6a1a04a1ea7f2433217455f2b97b8ea6795f3c2de4d8a9cdb3b01186d5f42c session=Some("0e3d8491_1") score=10.270 structured_evidence=[]
+    20. id=doc:memory:v2:d7c5a97a93d5ba4ab2c346e9379bd8fa487e3dc6871fce1a582b78517c0ebc21 session=Some("2640c1b0") score=9.446 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=140 candidates=283 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_8c64ce26_2: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_1: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_3: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_8c64ce26_2: absent from service-depth index results
+    answer_8c64ce26_1: absent from service-depth index results
+    answer_8c64ce26_3: absent from service-depth index results
+
+(120.6ms) top sessions:
+  1. 3929e6cc_1 (score 107.6774)
+  2. 9dac9e37_1 (score 65.5872)
+  3. 7083fcb9_1 (score 33.9963)
+  4. ae15e8b6_1 (score 33.9636)
+  5. 68705467_1 (score 21.4005)
+  6. ultrachat_246504 (score 15.7987)
+  7. sharegpt_783Lb5V_0 (score 14.6301)
+  8. ce584ba0 (score 14.3312)
+  9. 0e3d8491_1 (score 12.8429)
+  10. ultrachat_231231 (score 12.1085)
+  11. ultrachat_547960 (score 10.7136)
+  12. 09d021e7_2 (score 10.5591)
+  13. 2640c1b0 (score 9.4463)
+
+query>

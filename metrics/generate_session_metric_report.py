@@ -18,7 +18,7 @@ IMPLEMENTATION = (
 def main() -> int:
     if not IMPLEMENTATION.exists():
         raise SystemExit(f"metric implementation not found: {IMPLEMENTATION}")
-    spec = importlib.util.spec_from_file_location("lint_ai_session_metrics", IMPLEMENTATION)
+    spec = importlib.util.spec_from_file_location("membrick_session_metrics", IMPLEMENTATION)
     if spec is None or spec.loader is None:
         raise SystemExit(f"could not load metric implementation: {IMPLEMENTATION}")
     module = importlib.util.module_from_spec(spec)

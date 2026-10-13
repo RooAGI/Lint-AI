@@ -1,6 +1,6 @@
 # IndexStore and MemoryIndex Concurrency
 
-This note captures the recommended concurrency model for large Lint-AI
+This note captures the recommended concurrency model for large Membrick
 deployments.
 
 The [write publication implementation and verification plan](write-publication-plan.md)
@@ -23,10 +23,63 @@ the snapshot's Tantivy lexical index. It is not the right object to mutate
 incrementally in place.
 
 `IndexStore::refresh()` builds and publishes a complete immutable generation.
-The HTTP server has one mutable `MemoryService` owner and a detached published
-`MemoryService` read view. The indexes are shared through `Arc`; visibility
-and reranking metadata are captured with the same generation. Each search
-retains that view independently of the mutable owner's lock.
+One HTTP server can serve several explicitly configured project workspaces. For
+each open workspace, the server has one mutable `MemoryService` owner and a
+detached published `MemoryService` read view. The indexes are shared through
+`Arc`; visibility and reranking metadata are captured with the same generation.
+Each search retains that view independently of the mutable owner's lock. The
+workspace registry keeps these owners isolated by canonical project root.
+
+The resident workspace owner contains two private backing stores: workspace
+source documents and shared captured memories. Both use one bounded writer
+queue. Target facades select the store through `MemoryService`; they share
+admission capacity, the owner, the published snapshot, and one background
+builder. Board and lifecycle writes also enter this queue. A global flush
+waits for the captured target revisions of both stores, so a provider write
+cannot be left unpublished by a workspace-only flush.
+
+## Workspace Registry and Resource Bounds
+
+The primary `--project-root` is opened at startup and is allowed by default.
+Additional projects must be configured with repeatable `--workspace-root PATH`
+options. At request time, the registry canonicalizes the requested path and
+requires an exact match in that allowlist before opening stores, creating
+workspace data, or starting a watcher. A parent directory or unlisted sibling
+does not grant access to its projects.
+
+Workspace-aware MCP calls, provider searches, document upserts, and hooks use
+the same registry. The primary workspace and each additional workspace retain
+one `MemoryService`, writer queue, published search view, and watcher. The
+first request for an allowed additional root initializes it lazily. Calls for
+the same root share one initialization; opening a different root does not block
+searches against already-open roots.
+
+The number of resident workspaces is bounded by `--max-active-workspaces`,
+which defaults to 8 and includes the primary workspace. Opening a workspace
+reserves capacity while initialization is in progress. If the cap is full, an
+allowed but unopened workspace receives HTTP `429` and is not initialized.
+Active runtimes remain resident until server shutdown; idle eviction is not
+implemented. Restarting the server releases the resident workspace slots.
+
+```mermaid
+flowchart LR
+    Clients[Provider MCP clients and hooks] --> Backend[One HTTP server]
+    Backend --> Registry[Canonical-root allowlist and capacity cap]
+    Registry --> A[Workspace A runtime]
+    Registry --> B[Workspace B runtime]
+    A --> QA[One bounded writer queue]
+    QA --> MA[Resident MemoryService A]
+    MA --> SA[Published search view A]
+    B --> QB[One bounded writer queue]
+    QB --> MB[Resident MemoryService B]
+    MB --> SB[Published search view B]
+```
+
+The compatibility endpoint `POST /provider-memory/add/batch` has no workspace
+field and continues to write to the primary workspace. Workspace-aware MCP
+upserts and hook routes resolve the requested project through the registry.
+Provider search uses the requested workspace when supplied and otherwise
+searches the primary workspace.
 
 ## Staged HTTP writes
 

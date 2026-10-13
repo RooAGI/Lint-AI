@@ -196,6 +196,9 @@ impl ConversationStateStore {
         let Some(path) = self.current_session_pointer_path(provider) else {
             return;
         };
+        if crate::pipeline::persistence::ensure_safe_output_path(&path).is_err() {
+            return;
+        }
         if let Some(parent) = path.parent() {
             if std::fs::create_dir_all(parent).is_err() {
                 return;
@@ -207,7 +210,7 @@ impl ConversationStateStore {
         })) else {
             return;
         };
-        let _ = crate::pipeline::persistence::write_text_file_atomic(
+        let _ = crate::pipeline::persistence::write_private_text_file_atomic(
             &path,
             &String::from_utf8_lossy(&bytes),
         );
@@ -218,7 +221,12 @@ impl ConversationStateStore {
     /// is older than the session TTL. Never fails: every problem degrades to
     /// stateless search.
     pub fn current_session_id(&self, provider: &str) -> Option<String> {
-        let bytes = std::fs::read(self.current_session_pointer_path(provider)?).ok()?;
+        let mut file = crate::pipeline::file_access::open_regular_file(
+            &self.current_session_pointer_path(provider)?,
+        )
+        .ok()?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
         let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
         let session_id = value.get("session_id")?.as_str()?.trim();
         if session_id.is_empty() {
@@ -262,7 +270,9 @@ impl ConversationStateStore {
         now_ms: u64,
     ) -> Option<ConversationState> {
         let path = self.session_path(user_id, session_id)?;
-        let bytes = std::fs::read(&path).ok()?;
+        let mut file = crate::pipeline::file_access::open_regular_file(&path).ok()?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
         let state: ConversationState = serde_json::from_slice(&bytes).ok()?;
         // The filename is a hash; verify the payload really belongs to this
         // session before trusting it.
@@ -305,13 +315,19 @@ impl ConversationStateStore {
         let Some(path) = self.session_path(user_id, session_id) else {
             return Ok(None);
         };
+        let lock_path = path.with_extension("lock");
+        crate::pipeline::persistence::ensure_safe_output_path(&path)
+            .and_then(|_| crate::pipeline::persistence::ensure_safe_output_path(&lock_path))
+            .map_err(std::io::Error::other)?;
         std::fs::create_dir_all(path.parent().unwrap())?;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path.with_extension("lock"))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+        }
+        let file = options.open(lock_path)?;
         file.lock()?;
         Ok(Some(file))
     }
@@ -323,13 +339,19 @@ impl ConversationStateStore {
         let Some(path) = self.session_path(user_id, session_id) else {
             return false;
         };
-        let expired = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<ConversationState>(&bytes).ok())
-            .is_some_and(|s| {
-                s.user_id == user_id && s.session_id == session_id && s.is_expired(now_ms)
-            });
-        expired && std::fs::remove_file(path).is_ok()
+        let Ok(mut file) = crate::pipeline::file_access::open_regular_file(&path) else {
+            return false;
+        };
+        let mut bytes = Vec::new();
+        if std::io::Read::read_to_end(&mut file, &mut bytes).is_err() {
+            return false;
+        }
+        let expired = serde_json::from_slice::<ConversationState>(&bytes).is_ok_and(|s| {
+            s.user_id == user_id && s.session_id == session_id && s.is_expired(now_ms)
+        });
+        expired
+            && crate::pipeline::persistence::ensure_safe_output_path(&path).is_ok()
+            && std::fs::remove_file(path).is_ok()
     }
 
     /// Load the state for a session, or `None` when there is no live state.
@@ -435,8 +457,14 @@ impl ConversationStateStore {
                     if path.extension().and_then(|e| e.to_str()) != Some("json") {
                         continue;
                     }
-                    let expired = std::fs::read(&path)
+                    let expired = crate::pipeline::file_access::open_regular_file(&path)
                         .ok()
+                        .and_then(|mut file| {
+                            let mut bytes = Vec::new();
+                            std::io::Read::read_to_end(&mut file, &mut bytes)
+                                .ok()
+                                .map(|_| bytes)
+                        })
                         .and_then(|bytes| serde_json::from_slice::<ConversationState>(&bytes).ok())
                         .filter(|state| state.is_expired(now_ms));
                     if let Some(state) = expired {
@@ -673,12 +701,32 @@ mod tests {
         assert_eq!(state.temporal_anchor.as_deref(), Some("2026-09-14"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn conversation_lock_cannot_write_through_symlinked_state_directory() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "membrick-state-link-{}-{}",
+            std::process::id(),
+            ms()
+        ));
+        std::fs::create_dir_all(root.join("outside")).unwrap();
+        std::os::unix::fs::symlink(root.join("outside"), root.join("state")).unwrap();
+        let mut store = ConversationStateStore::new(Some(root.join("state")));
+        store.observe("alice", "session", "private query", &[], &[], None, ms());
+        assert_eq!(
+            std::fs::read_dir(root.join("outside")).unwrap().count(),
+            0,
+            "conversation state created a file outside its configured directory through a symlink"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn disk_round_trip_survives_new_store() {
         let dir = std::env::temp_dir()
             .canonicalize()
             .unwrap()
-            .join(format!("lint-ai-convstate-{}", std::process::id()));
+            .join(format!("membrick-convstate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         {
             let mut store = ConversationStateStore::new(Some(dir.clone()));
@@ -707,7 +755,7 @@ mod tests {
         let dir = std::env::temp_dir()
             .canonicalize()
             .unwrap()
-            .join(format!("lint-ai-convstate-lru-{}", std::process::id()));
+            .join(format!("membrick-convstate-lru-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut store = ConversationStateStore::new(Some(dir.clone()));
         for i in 0..(MAX_SESSIONS_IN_MEMORY + 10) {
@@ -733,7 +781,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         base.join(format!(
-            "lint-ai-pointer-{name}-{}-{}",
+            "membrick-pointer-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

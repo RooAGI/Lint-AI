@@ -8,7 +8,7 @@ use crate::integrations::mcp_transport::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolDefinition,
 };
 use crate::integrations::session_recording::{
-    lint_ai_enabled, recording_state, set_lint_ai_state, set_recording_state, RecordingProvider,
+    membrick_enabled, recording_state, set_membrick_state, set_recording_state, RecordingProvider,
 };
 #[cfg(test)]
 use crate::pipeline::IndexStore;
@@ -27,7 +27,7 @@ use std::sync::Mutex;
 
 pub mod hooks;
 
-const SERVER_NAME: &str = "lint-ai";
+const SERVER_NAME: &str = "membrick";
 const DEFAULT_QUERY_TOP_K: usize = 5;
 
 /// Muse hook entry marker: the validated schema uses matcher groups whose
@@ -70,7 +70,7 @@ struct MuseMcp {
     store: Mutex<Option<crate::memory_api::MemoryService>>,
 }
 
-/// Merge the `lint-ai` MCP server entry into Muse Code's `settings.json`.
+/// Merge the `membrick` MCP server entry into Muse Code's `settings.json`.
 ///
 /// Muse Code reads MCP servers only from the user/global `settings.json`
 /// (`~/.config/muse/settings.json`); there is no documented project-scoped MCP
@@ -93,7 +93,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
-        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .context("failed to locate membrick executable; refusing PATH-based installation")?
         .to_string_lossy()
         .into_owned();
     let mut settings = read_json_object(&config_path).with_context(|| {
@@ -133,6 +133,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     let mcp_servers = mcp_servers
         .as_object_mut()
         .context("Muse Code settings 'mcpServers' must be an object")?;
+    mcp_servers.remove("lint-ai");
     // Pin the project root explicitly so the MCP server does not depend on the
     // client's working directory (which may be the user's home directory).
     let entry = McpServerEntry {
@@ -145,7 +146,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         enabled: true,
     };
     mcp_servers.insert(
-        "lint-ai".to_string(),
+        "membrick".to_string(),
         serde_json::to_value(&entry).context("failed to serialize MCP server entry")?,
     );
 
@@ -157,9 +158,9 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
 ///
 /// Muse reads hooks from the same user/global `settings.json` as the MCP
 /// servers. Each event gets a matcher group that runs
-/// `lint-ai --muse-hook <event>` as a single shell command string (the only
+/// `membrick --muse-hook <event>` as a single shell command string (the only
 /// command shape Muse accepts). The hooks record the session lifecycle and
-/// tool use into Lint-AI's session store; they never inject memory into the
+/// tool use into Membrick's session store; they never inject memory into the
 /// context and never block the session. Existing user hooks are preserved and
 /// the install is idempotent.
 pub fn install_hook_settings(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
@@ -171,7 +172,7 @@ pub fn install_hook_settings(root: &Path, config_path: Option<&Path>) -> Result<
         .canonicalize()
         .with_context(|| format!("failed to canonicalize {}", root.display()))?;
     let executable = env::current_exe()
-        .context("failed to locate lint-ai executable; refusing PATH-based installation")?
+        .context("failed to locate membrick executable; refusing PATH-based installation")?
         .to_string_lossy()
         .into_owned();
     let mut settings = read_json_object(&config_path).with_context(|| {
@@ -202,7 +203,7 @@ pub fn install_hook_settings(root: &Path, config_path: Option<&Path>) -> Result<
             .with_context(|| format!("Muse Code hook event '{event_name}' must be an array"))?;
         // Remove our own previous entries so reinstalls stay idempotent;
         // every other matcher group is preserved untouched.
-        entries.retain(|entry| !contains_lint_ai_hook(entry));
+        entries.retain(|entry| !contains_membrick_hook(entry));
         entries.push(json!({
             "matcher": "*",
             "hooks": [{
@@ -217,7 +218,7 @@ pub fn install_hook_settings(root: &Path, config_path: Option<&Path>) -> Result<
     Ok(config_path)
 }
 
-fn contains_lint_ai_hook(entry: &Value) -> bool {
+fn contains_membrick_hook(entry: &Value) -> bool {
     entry
         .get("hooks")
         .and_then(Value::as_array)
@@ -243,8 +244,8 @@ fn shell_quote(path: &str) -> String {
 
 /// Delimiters so the block can be found and replaced without touching the rest of
 /// a file the user also writes in.
-const POLICY_START: &str = "<!-- lint-ai:memory-policy:start -->";
-const POLICY_END: &str = "<!-- lint-ai:memory-policy:end -->";
+const POLICY_START: &str = "<!-- membrick:memory-policy:start -->";
+const POLICY_END: &str = "<!-- membrick:memory-policy:end -->";
 
 /// Writes the memory policy into the project's `AGENTS.md`. Muse Code prefers
 /// `AGENTS.md` over `CLAUDE.md` when both exist, so the same delimited block
@@ -300,10 +301,14 @@ pub fn run_server(root: &Path, options: MuseServerOptions<'_>) -> Result<()> {
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
-        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
-            root,
-            options.ignore_paths,
-        )?),
+        workspace_watcher: if cfg!(test) {
+            Some(mcp_index::WorkspaceWatcher::new(
+                root,
+                options.ignore_paths,
+            )?)
+        } else {
+            None
+        },
         store: Mutex::new(None),
     };
     mcp.serve()
@@ -315,12 +320,19 @@ impl MuseMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        anyhow::ensure!(
+            !mcp_tools::resident_backend_enabled(),
+            "MCP memory indexes are owned by the resident Membrick server"
+        );
         let file_changes = self
             .workspace_watcher
             .as_ref()
             .map(mcp_index::WorkspaceWatcher::take_file_changes)
             .unwrap_or_default();
         if !file_changes.is_empty() {
+            let workspace_index_changed = file_changes
+                .iter()
+                .any(|change| change.affects_workspace_index(&self.root));
             if let Err(error) =
                 crate::integrations::session_recording::capture_workspace_file_changes(
                     RecordingProvider::Muse,
@@ -330,7 +342,9 @@ impl MuseMcp {
             {
                 eprintln!("warning: failed to save workspace file changes: {error:#}");
             }
-            *store = None;
+            if workspace_index_changed {
+                *store = None;
+            }
         }
         if store.is_none() {
             let graph = build_project_graph(&AdapterInput {
@@ -436,6 +450,32 @@ impl MuseMcp {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
+        if tool_name == "update_membrick" {
+            return mcp_tools::call_update_tool(id, &arguments);
+        }
+
+        if crate::integrations::mcp_tools::resident_backend_enabled()
+            && matches!(
+                tool_name,
+                "search"
+                    | "info"
+                    | "list_memories"
+                    | "board_open"
+                    | "board_list"
+                    | "board_info"
+                    | "board_post"
+                    | "board_read"
+                    | "board_get"
+                    | "board_search"
+                    | "add_memory"
+                    | "get_memory"
+            )
+        {
+            return crate::integrations::mcp_tools::call_resident_tool(
+                id, &self.root, "muse", tool_name, &arguments,
+            );
+        }
+
         match tool_name {
             "search" => {
                 if let Some(name) =
@@ -466,6 +506,7 @@ impl MuseMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // Stateful search: an explicit session id scopes follow-up
                 // resolution and temporal-anchor carry to this provider's
@@ -527,13 +568,14 @@ impl MuseMcp {
                     .clamp(1, 100) as usize;
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 Ok(text_response(
                     id,
                     &serde_json::to_string_pretty(&service.list_memories_payload(limit))?,
                 ))
             }
-            "enable_lint_ai" => {
+            "enable_membrick" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
                         id,
@@ -541,11 +583,11 @@ impl MuseMcp {
                         &format!("unknown argument: {name}"),
                     ));
                 }
-                let state = set_lint_ai_state(RecordingProvider::Muse, &self.root, true)?;
+                let state = set_membrick_state(RecordingProvider::Muse, &self.root, true)?;
                 set_recording_state(RecordingProvider::Muse, &self.root, true)?;
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
-            "disable_lint_ai" => {
+            "disable_membrick" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
                         id,
@@ -553,10 +595,10 @@ impl MuseMcp {
                         &format!("unknown argument: {name}"),
                     ));
                 }
-                let state = set_lint_ai_state(RecordingProvider::Muse, &self.root, false)?;
+                let state = set_membrick_state(RecordingProvider::Muse, &self.root, false)?;
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
-            "lint_ai_status" => {
+            "membrick_status" => {
                 if let Some(name) = unknown_argument(&arguments, &[]) {
                     return Ok(error_response(
                         id,
@@ -564,7 +606,7 @@ impl MuseMcp {
                         &format!("unknown argument: {name}"),
                     ));
                 }
-                let memory_on = lint_ai_enabled(RecordingProvider::Muse, &self.root)?;
+                let memory_on = membrick_enabled(RecordingProvider::Muse, &self.root)?;
                 let recording_on = recording_state(RecordingProvider::Muse, &self.root)?
                     .get("enabled")
                     .and_then(Value::as_bool)
@@ -574,7 +616,7 @@ impl MuseMcp {
                     "enabled": memory_on,
                     "recording_enabled": recording_on,
                     "display": format!(
-                        "Lint-AI:{} | Record:{}",
+                        "Membrick:{} | Record:{}",
                         if memory_on { "ON" } else { "OFF" },
                         if recording_on { "ON" } else { "OFF" }
                     )
@@ -658,7 +700,7 @@ impl MuseMcp {
                         "query": { "type": "string" },
                         "top_k": { "type": "integer", "minimum": 1, "maximum": 20, "default": DEFAULT_QUERY_TOP_K },
                         "provider": mcp_tools::provider_argument_schema(),
-                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Lint-AI hooks); omit entirely only for stateless search." },
+                        "session_id": { "type": "string", "description": "Optional conversation session id. When supplied, the search resolves follow-up phrasing and temporal anchors against the bounded prior state for this session before retrieval. When omitted, the search inherits the session most recently seen active in this workspace (tracked by Membrick hooks); omit entirely only for stateless search." },
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -686,20 +728,21 @@ impl MuseMcp {
                 }),
             },
             ToolDefinition {
-                name: "enable_lint_ai".to_string(),
-                description: "Enable Lint-AI memory retrieval and capture for future hook events. This also turns on session recording by default; use record_session stop to override recording independently.".to_string(),
+                name: "enable_membrick".to_string(),
+                description: "Enable Membrick memory retrieval and capture for future hook events. This also turns on session recording by default; use record_session stop to override recording independently.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
             ToolDefinition {
-                name: "disable_lint_ai".to_string(),
-                description: "Disable Lint-AI memory retrieval and capture for future hook events. Session recording remains unchanged and can be controlled with record_session.".to_string(),
+                name: "disable_membrick".to_string(),
+                description: "Disable Membrick memory retrieval and capture for future hook events. Session recording remains unchanged and can be controlled with record_session.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
             ToolDefinition {
-                name: "lint_ai_status".to_string(),
-                description: "Report whether Lint-AI memory behavior is enabled for this project.".to_string(),
+                name: "membrick_status".to_string(),
+                description: "Report whether Membrick memory behavior is enabled for this project.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
+            mcp_tools::update_tool_definition(),
         ]
     }
 }
@@ -798,7 +841,7 @@ mod tests {
         env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-{name}-{nanos}.json"))
+            .join(format!("membrick-{name}-{nanos}.json"))
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -853,7 +896,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
         // Muse only reads the camelCase key; the legacy key must not exist.
         assert!(settings.get("mcp_servers").is_none());
-        let entry = &settings["mcpServers"]["lint-ai"];
+        let entry = &settings["mcpServers"]["membrick"];
         assert_eq!(entry["transport"], json!("stdio"));
         assert!(entry["enabled"].as_bool().unwrap());
         assert!(entry.get("mode").is_none());
@@ -895,9 +938,9 @@ mod tests {
         // Legacy entries merge in; canonical entries win on conflict.
         assert!(servers["other"].is_object());
         assert_eq!(servers["existing"]["command"], json!("existing"));
-        assert!(servers["lint-ai"].is_object());
+        assert!(servers["membrick"].is_object());
 
-        // Reinstalling is idempotent: exactly one lint-ai entry.
+        // Reinstalling is idempotent: exactly one membrick entry.
         install_user_config(&root, Some(&config_path)).unwrap();
         let settings: Value =
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
@@ -906,7 +949,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .keys()
-                .filter(|key| *key == "lint-ai")
+                .filter(|key| *key == "membrick")
                 .count(),
             1
         );
@@ -942,7 +985,7 @@ mod tests {
         // The legacy key is migrated, not preserved in place.
         assert!(settings.get("mcp_servers").is_none());
         assert!(settings["mcpServers"]["other"].is_object());
-        let entry = &settings["mcpServers"]["lint-ai"];
+        let entry = &settings["mcpServers"]["membrick"];
         assert_eq!(entry["transport"], json!("stdio"));
         assert!(entry.get("mode").is_none());
         assert!(entry["enabled"].as_bool().unwrap());
@@ -950,7 +993,7 @@ mod tests {
         assert_eq!(args[0], json!("--muse-serve"));
         assert_eq!(args[1].as_str().unwrap(), root.to_string_lossy());
 
-        // Reinstalling is idempotent: exactly one lint-ai entry.
+        // Reinstalling is idempotent: exactly one membrick entry.
         install_user_config(&root, Some(&config_path)).unwrap();
         let settings: Value =
             serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
@@ -959,7 +1002,7 @@ mod tests {
                 .as_object()
                 .unwrap()
                 .keys()
-                .filter(|key| *key == "lint-ai")
+                .filter(|key| *key == "membrick")
                 .count(),
             1
         );
@@ -1057,12 +1100,12 @@ mod tests {
             let entries = hooks[event].as_array().unwrap();
             let ours: Vec<&Value> = entries
                 .iter()
-                .filter(|entry| contains_lint_ai_hook(entry))
+                .filter(|entry| contains_membrick_hook(entry))
                 .collect();
             assert_eq!(
                 ours.len(),
                 1,
-                "event {event} should have exactly one lint-ai hook"
+                "event {event} should have exactly one membrick hook"
             );
             let hook = &ours[0]["hooks"][0];
             assert_eq!(hook["type"], json!("command"));
@@ -1237,19 +1280,19 @@ mod tests {
     }
 
     #[test]
-    fn lint_ai_status_reports_provider_state() {
+    fn membrick_status_reports_provider_state() {
         let root = temp_dir("muse-status");
         let mcp = test_mcp(root.clone(), Vec::new());
 
-        let off = call_tool(&mcp, "lint_ai_status", json!({}));
+        let off = call_tool(&mcp, "membrick_status", json!({}));
         assert_eq!(off["provider"], json!("muse"));
 
-        call_tool(&mcp, "enable_lint_ai", json!({}));
-        let on = call_tool(&mcp, "lint_ai_status", json!({}));
+        call_tool(&mcp, "enable_membrick", json!({}));
+        let on = call_tool(&mcp, "membrick_status", json!({}));
         assert!(on["enabled"].as_bool().unwrap());
 
-        call_tool(&mcp, "disable_lint_ai", json!({}));
-        let off_again = call_tool(&mcp, "lint_ai_status", json!({}));
+        call_tool(&mcp, "disable_membrick", json!({}));
+        let off_again = call_tool(&mcp, "membrick_status", json!({}));
         assert!(!off_again["enabled"].as_bool().unwrap());
 
         fs::remove_dir_all(root).unwrap();

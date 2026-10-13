@@ -71,7 +71,7 @@ def score_result(result: dict[str, Any], scenario: dict[str, Any] | None = None)
         )
     return ScenarioScore(
         scenario_id=str(result.get("scenario_id", "")),
-        arm=str(result.get("arm", "lint-ai")),
+        arm=str(result.get("arm", "membrick")),
         repetition=int(result.get("repetition", 0) or 0),
         success=bool(result.get("success", False)),
         expected_fact_ids_found=expected_fact_ids_found

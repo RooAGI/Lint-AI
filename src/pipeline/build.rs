@@ -5,7 +5,9 @@ use super::{
 use crate::chunking::{
     chunk_document_hybrid, chunk_document_lines, chunk_document_sections, enrich_section_chunks,
 };
-use crate::claim_extractor::{ClaimExtractor, ConservativeClaimExtractor};
+use crate::claim_extractor::{
+    extract_native_event_claims, ClaimExtractor, ConservativeClaimExtractor,
+};
 use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::source::SourceDocument;
 use crate::temporal::extract_temporal_terms;
@@ -145,7 +147,7 @@ fn hash_opt_str(hasher: &mut Sha256, value: &Option<String>) {
 /// rebuild on the next refresh, after which the new hashes are stamped),
 /// so no separate version field on [`DocRecord`] is needed. Downgrades fail
 /// safe in the same direction (mismatch → rebuild).
-pub const DOC_RECORD_BUILD_VERSION: u32 = 2;
+pub const DOC_RECORD_BUILD_VERSION: u32 = 3;
 
 /// Content hash gating the doc-record rebuild short-circuit in
 /// `IndexStore::prepare_pending_changes`.
@@ -194,11 +196,10 @@ pub(crate) fn doc_record_content_hash_with_version(
     // Domain separator: bump if the hashed field set ever changes, so old
     // hashes never compare equal to new ones.
     //
-    // v2: key_phrases joined the field set. A backfilled document must
-    // compare hash-unequal to its phrase-less record, otherwise
-    // prepare_pending_changes skips reprocessing and the phrases never
-    // reach the segment profiles.
-    hash_len_prefixed(&mut hasher, b"lint-ai-doc-record-content-hash/v2");
+    // v3: the optional Bekind evidence extraction mode changes the derived
+    // top_claims. Toggling --bekind must rebuild records in either direction.
+    hash_len_prefixed(&mut hasher, b"membrick-doc-record-content-hash/v4");
+    hash_len_prefixed(&mut hasher, &[u8::from(crate::behood_query::is_enabled())]);
     // Build version pins the implementation behind the option identities;
     // any bump invalidates every stored hash (mismatch -> rebuild).
     hash_len_prefixed(&mut hasher, &build_version.to_le_bytes());
@@ -295,7 +296,96 @@ pub fn build_doc_records(
         ));
     }
 
+    attach_bekind_evidence_claims(&mut records);
+
     Ok(records)
+}
+
+/// Attach Bekind's explicit source-grounded relations to the existing
+/// persisted `top_claims` field. The batch call keeps this optional NLP work
+/// out of the per-document loop. No SourceDocument schema extension is
+/// needed: the claim points to evidence in the persisted document content.
+pub(crate) fn attach_bekind_evidence_claims(records: &mut [DocRecord]) {
+    if records.is_empty() || !crate::behood_query::is_enabled() {
+        return;
+    }
+    let contents: Vec<&str> = records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect();
+    let evidence_by_record = crate::behood_query::analyze_evidence_signals_bulk(&contents);
+    drop(contents);
+    for (record, signals) in records.iter_mut().zip(evidence_by_record) {
+        for signal in signals {
+            let status = signal
+                .status
+                .as_deref()
+                .and_then(crate::index::ClaimStatus::parse)
+                .or_else(|| {
+                    (signal.polarity == "negative").then_some(crate::index::ClaimStatus::Negated)
+                });
+            if !matches!(signal.schema_version, 1 | 2)
+                || signal.kind != "relation"
+                || signal.predicate != "participated_in"
+                || !matches!(signal.polarity.as_str(), "positive" | "negative")
+                || (signal.polarity == "negative"
+                    && status != Some(crate::index::ClaimStatus::Negated))
+                || (signal.polarity == "positive"
+                    && status == Some(crate::index::ClaimStatus::Negated))
+                || (signal.status.is_some() && status.is_none())
+                || signal.subject.trim().is_empty()
+                || signal.object.trim().is_empty()
+                || !signal.confidence.is_finite()
+                || signal.start_byte > signal.end_byte
+                || record.content.get(signal.start_byte..signal.end_byte)
+                    != Some(signal.evidence_text.as_str())
+            {
+                continue;
+            }
+            // Keep the predicate provider-neutral. Normalize first-person
+            // singular to the core subject used by the native extractor so
+            // the optional enrichment can complete an existing claim.
+            let subject = if signal.subject == "I" {
+                "user".to_string()
+            } else {
+                signal.subject
+            };
+            let predicate = signal.predicate;
+            let evidence = crate::index::ClaimEvidence {
+                source_document_id: record.doc_id.clone(),
+                source: record.source.clone(),
+                source_turn_id: record.filters.get("turn_id").cloned(),
+                source_chunk_id: None,
+                text: signal.evidence_text,
+                start_byte: Some(signal.start_byte),
+                end_byte: Some(signal.end_byte),
+            };
+            if let Some(claim) = record.top_claims.iter_mut().find(|claim| {
+                claim.subject == subject
+                    && claim.predicate == predicate
+                    && claim.object == signal.object
+            }) {
+                if claim.status.is_none() {
+                    claim.status = status;
+                }
+                if claim.event_time.is_none() {
+                    claim.event_time = signal.event_time;
+                }
+                claim.evidence = Some(evidence);
+                claim.confidence = claim.confidence.max(signal.confidence);
+                continue;
+            }
+            record.top_claims.push(crate::index::Claim {
+                subject,
+                predicate,
+                object: signal.object,
+                confidence: signal.confidence,
+                status,
+                event_time: signal.event_time,
+                evidence: Some(evidence),
+            });
+        }
+    }
 }
 
 /// Record assembly from precomputed NER key entities. Lets the refresh loop
@@ -452,10 +542,7 @@ fn assemble_doc_record(
     // judgments computed once at write time (MemoryService is the single
     // write path). Stored in DocRecord, read by the index builder.
     let semantic_tags: Vec<String> = {
-        let contents: Vec<&str> = section_chunks
-            .iter()
-            .map(|c| c.content.as_str())
-            .collect();
+        let contents: Vec<&str> = section_chunks.iter().map(|c| c.content.as_str()).collect();
         crate::semantic_tags::batch_doc_semantic_tags(&contents)
             .into_iter()
             .flatten()
@@ -517,10 +604,15 @@ fn assemble_doc_record(
         semantic_tags,
     };
 
-    if options.claim_extraction {
+    // Native event relations are a core part of the write path, independent
+    // of the optional generic claim extractor. They are cheap clause rules
+    // and make the same relationship evidence available to every query path.
+    record.top_claims = if options.claim_extraction {
         let extractor = ConservativeClaimExtractor;
-        record.top_claims = extractor.extract(&record).claims;
-    }
+        extractor.extract(&record).claims
+    } else {
+        extract_native_event_claims(&record)
+    };
     record
 }
 

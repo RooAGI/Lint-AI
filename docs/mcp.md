@@ -1,12 +1,12 @@
 # MCP Interface
 
 Each agent adapter exposes a provider-local MCP server over the host client's
-configured MCP transport. The server gives the agent direct access to Lint-AI
+configured MCP transport. The server gives the agent direct access to Membrick
 search, inspection, memory controls, and session controls.
 
 ## Where each mode applies
 
-MCP and server mode are general Lint-AI interfaces; they are not restricted to
+MCP and server mode are general Membrick interfaces; they are not restricted to
 agent clients:
 
 | Mode | Available to | What it provides |
@@ -27,12 +27,12 @@ Codex, Gemini CLI, or AGY to use the core index, HTTP API, or MCP interface.
 | `info` | Return basic information about the indexed workspace. |
 | `list_memories` | List bounded previews of indexed agent memories. Accepts `limit` (1–100, default 20). |
 | `record_session` | Start, stop, or inspect capture-only session recording. Use `action: start`, `stop`, or `status`. |
-| `enable_lint_ai` | Enable memory retrieval and capture for future hook events; recording is enabled by default. |
-| `disable_lint_ai` | Disable Lint-AI retrieval/injection and automatic capture; recording state is unchanged. |
-| `lint_ai_status` | Report independent memory and recording state. |
+| `enable_membrick` | Enable memory retrieval and capture for future hook events; recording is enabled by default. |
+| `disable_membrick` | Disable Membrick retrieval/injection and automatic capture; recording state is unchanged. |
+| `membrick_status` | Report independent memory and recording state. |
 
 The same tool names are available to Claude Code, Codex, Gemini CLI, and
-Antigravity CLI through their configured Lint-AI MCP integration.
+Antigravity CLI through their configured Membrick MCP integration.
 
 ## Search versus hooks
 

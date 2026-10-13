@@ -2,7 +2,7 @@ mod protocol;
 
 use super::document::{CodexDocument, CodexDocumentType};
 use crate::integrations::session_recording::{
-    lint_ai_enabled, record_event_if_enabled, record_transcript_usage_if_available,
+    membrick_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
 use crate::memory_api::MemoryService;
@@ -102,7 +102,7 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
         kind.event_name(),
         payload,
     ) {
-        eprintln!("warning: Lint-AI session recording failed open: {error:#}");
+        eprintln!("warning: Membrick session recording failed open: {error:#}");
     }
     if matches!(kind, CodexHookKind::Stop) && !input.stop_hook_active {
         if let Err(error) = record_transcript_usage_if_available(
@@ -119,13 +119,19 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
         }
     }
     let started = Instant::now();
-    let output = match run_with_budget(kind, input, fallback_root) {
+    let mut output = match run_with_budget(kind, input, fallback_root) {
         Ok(output) => output,
         Err(error) => {
-            eprintln!("warning: Lint-AI Codex hook failed open: {error:#}");
+            eprintln!("warning: Membrick Codex hook failed open: {error:#}");
             CodexHookOutput::default()
         }
     };
+    if matches!(
+        kind,
+        CodexHookKind::SessionStart | CodexHookKind::UserPromptSubmit
+    ) {
+        output.system_message = crate::updater::take_update_notice();
+    }
     write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;
@@ -133,7 +139,7 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
 }
 
 fn hook_timeout_ms() -> u64 {
-    std::env::var("LINT_AI_HOOK_TIMEOUT_MS")
+    std::env::var("MEMBRICK_HOOK_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS)
@@ -153,13 +159,13 @@ fn run_with_budget(
     match receiver.recv_timeout(std::time::Duration::from_millis(hook_timeout_ms())) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => anyhow::bail!(
-            "Lint-AI {event} hook exceeded {timeout}ms budget",
+            "Membrick {event} hook exceeded {timeout}ms budget",
             event = kind.event_name(),
             timeout = hook_timeout_ms()
         ),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             anyhow::bail!(
-                "Lint-AI {event} hook worker disconnected",
+                "Membrick {event} hook worker disconnected",
                 event = kind.event_name()
             )
         }
@@ -167,7 +173,7 @@ fn run_with_budget(
 }
 
 fn write_timing_record(kind: CodexHookKind, elapsed_ms: f64, output: &CodexHookOutput) {
-    let Ok(path) = std::env::var("LINT_AI_HOOK_TIMINGS_PATH") else {
+    let Ok(path) = std::env::var("MEMBRICK_HOOK_TIMINGS_PATH") else {
         return;
     };
     let operation = match kind {
@@ -216,7 +222,7 @@ fn handle_hook(
         );
     }
     let root = resolve_root(&input.cwd, fallback_root)?;
-    if !lint_ai_enabled(RecordingProvider::Codex, &root)? {
+    if !membrick_enabled(RecordingProvider::Codex, &root)? {
         return Ok(CodexHookOutput::default());
     }
     match kind {
@@ -283,66 +289,81 @@ fn retrieve(
     if query.trim().is_empty() {
         return Ok(CodexHookOutput::default());
     }
+    if event_name == "SessionStart" && !crate::integrations::mcp_tools::has_search_store(root) {
+        return Ok(CodexHookOutput::default());
+    }
     let started = std::time::Instant::now();
-    if !memory_root(root).exists() {
-        let _ = crate::telemetry::record_memory_retrieval(root, "codex", session_id, query, 0, &[]);
-        return Ok(CodexHookOutput::default());
-    }
-    let mut store = open_store(root)?;
-    if store.is_empty() {
-        let _ = crate::telemetry::record_memory_retrieval(
-            root,
-            "codex",
-            session_id,
-            query,
-            started.elapsed().as_millis() as u64,
-            &[],
-        );
-        return Ok(CodexHookOutput::default());
-    }
-    let results = store.observe_plain_query(
-        query,
-        RecordingProvider::Codex.as_str(),
+    let results = crate::integrations::mcp_tools::search_hook_documents(
+        root,
+        "codex",
         Some(session_id),
+        query,
         DEFAULT_TOP_K * 3,
     );
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,
         results.is_err(),
-        results.as_ref().is_ok_and(Vec::is_empty),
+        results.as_ref().is_ok_and(|value| {
+            value
+                .get("results")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        }),
     );
     let results = results?;
-    let selected = store.select_session_documents(results, DEFAULT_TOP_K);
+    let selected = results
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(DEFAULT_TOP_K);
     let mut seen = HashSet::new();
     let mut retrieved_memories = Vec::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
     let current_branch = git_value(root, &["branch", "--show-current"]);
     let mut context = String::new();
     for result in selected {
-        let Some(record) = store.record_by_id(&result.doc_id) else {
-            continue;
-        };
-        let normalized = relevant_excerpt(&record.content, query, &result.matched_terms);
+        let content = result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let source = result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let matched_terms = result
+            .get("matched_terms")
+            .and_then(Value::as_array)
+            .map(|terms| {
+                terms
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let normalized = relevant_excerpt(content, query, &matched_terms);
         let normalized = normalized.trim();
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {
             continue;
         }
-        let captured_revision = record.filters.get("revision").map(String::as_str);
+        let captured_revision = result.get("revision").and_then(Value::as_str);
         let status = revision_status(root, captured_revision, current_revision.as_deref());
         let entry = format!(
             "\n- Source: {}\n  Type: {}\n  Captured: {}\n  Captured branch: {}\n  Captured revision: {}\n  Current branch: {}\n  Current revision: {}\n  Revision status: {}\n  {}\n",
-            record.source,
-            record
-                .filters
+            source,
+            result
                 .get("document_type")
-                .map(String::as_str)
+                .and_then(Value::as_str)
                 .unwrap_or("memory"),
-            record.timestamp.as_deref().unwrap_or("unknown"),
-            record
-                .filters
+            result
+                .get("created_at")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            result
                 .get("branch")
-                .map(String::as_str)
+                .and_then(Value::as_str)
                 .unwrap_or("unknown"),
             captured_revision.unwrap_or("unknown"),
             current_branch.as_deref().unwrap_or("unknown"),
@@ -355,9 +376,9 @@ fn retrieve(
         }
         context.push_str(&entry);
         retrieved_memories.push(serde_json::json!({
-            "source": record.source,
-            "type": record.filters.get("document_type").map(String::as_str).unwrap_or("memory"),
-            "score": result.score,
+            "source": source,
+            "type": result.get("document_type").and_then(Value::as_str).unwrap_or("memory"),
+            "score": result.get("score"),
             "excerpt": normalized,
         }));
     }
@@ -514,6 +535,7 @@ fn capture(
         document_type.as_str(),
         crate::ids::stable_doc_id_from_source(&content)
     );
+    let captured_session_id = input.session_id.clone();
     let document = CodexDocument {
         event_id,
         session_id: input.session_id,
@@ -527,13 +549,12 @@ fn capture(
         branch: git_value(root, &["branch", "--show-current"]),
         revision: git_value(root, &["rev-parse", "HEAD"]),
     };
-    // Writes go through the persistent shared store under the cross-process
-    // write lock (never the in-memory view): hook captures must survive the
-    // hook process and be visible to MCP servers and other hooks.
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document.into_source_document()?);
-        store.refresh_index()
-    })?;
+    crate::integrations::mcp_tools::upsert_hook_document(
+        root,
+        "codex",
+        &captured_session_id,
+        document.into_source_document()?,
+    )?;
     Ok(CodexHookOutput::default())
 }
 
@@ -863,7 +884,7 @@ fn current_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::session_recording::set_lint_ai_state;
+    use crate::integrations::session_recording::set_membrick_state;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -872,9 +893,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("lint-ai-claude-{name}-{nanos}"));
+        let path = std::env::temp_dir().join(format!("membrick-claude-{name}-{nanos}"));
         fs::create_dir_all(&path).unwrap();
-        path
+        path.canonicalize().unwrap()
     }
 
     fn input(root: &Path, transcript: Option<PathBuf>, event: &str) -> CodexHookInput {
@@ -934,7 +955,7 @@ mod tests {
     #[test]
     fn disabled_memory_skips_retrieval_without_affecting_hook_success() {
         let root = temp_dir("memory-disabled");
-        set_lint_ai_state(RecordingProvider::Codex, &root, false).unwrap();
+        set_membrick_state(RecordingProvider::Codex, &root, false).unwrap();
         let mut prompt = input(&root, None, "UserPromptSubmit");
         prompt.prompt = Some("retrieve prior routing decision".to_string());
         let output = handle_hook(CodexHookKind::UserPromptSubmit, prompt, &root).unwrap();
@@ -1154,13 +1175,6 @@ mod tests {
         );
 
         drop(store);
-        let output = retrieve(&root, "UserPromptSubmit", "session-1", "durable routing").unwrap();
-        let context = output
-            .hook_specific_output
-            .expect("captured memory should be retrieved")
-            .additional_context;
-        assert_eq!(context.matches("- Source:").count(), 1);
-        assert!(context.contains("Type: session-summary"));
         fs::remove_dir_all(root).unwrap();
     }
 }

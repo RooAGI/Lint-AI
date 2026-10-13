@@ -3,8 +3,8 @@
 Status: single-process architecture under hardening; remote transport is a later
 deployment option
 
-This document is the architectural contract for segmented querying in `lint-ai`.
-It describes the system when one `lint-ai` process owns the complete corpus and
+This document is the architectural contract for segmented querying in `membrick`.
+It describes the system when one `membrick` process owns the complete corpus and
 how that coordinator can participate in a larger deployment. No network service
 is required for the local architecture below.
 
@@ -46,7 +46,7 @@ The following are correctness requirements, not implementation preferences:
 ## Runtime topology
 
 ```text
-                         one lint-ai process
+                         one membrick process
                                   |
                          immutable query snapshot
                                   |
@@ -251,7 +251,7 @@ The intended deployment has two distinct levels of distribution:
                  discovery / deadline / reduce
                        /         |         \
                       /          |          \
-             lint-ai worker A  lint-ai worker B  lint-ai worker C
+             membrick worker A  membrick worker B  membrick worker C
                  local                local              local
              coordinator            coordinator          coordinator
              route -> reduce        route -> reduce      route -> reduce
@@ -269,7 +269,7 @@ The existing service is useful transport infrastructure, but its current
 `RunLint` protocol is a generic command-dispatch protocol:
 
 - a request contains CLI `args`, `working_dir`, and `timeout_ms`;
-- a worker launches `lint-ai` and returns stdout/stderr and an exit code;
+- a worker launches `membrick` and returns stdout/stderr and an exit code;
 - the dispatcher extracts JSON `results` from stdout and merges local `score`
   values;
 - worker failures and deadlines are represented as unavailable worker results.

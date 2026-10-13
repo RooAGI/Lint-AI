@@ -1,8 +1,8 @@
 # Other agent frameworks
 
-Lint-AI can serve as the memory layer for an agent framework that is not one
+Membrick can serve as the memory layer for an agent framework that is not one
 of the built-in Claude Code, Codex, Gemini CLI, or Antigravity adapters. The
-framework owns the agent loop; Lint-AI owns durable memory, indexing, search,
+framework owns the agent loop; Membrick owns durable memory, indexing, search,
 and lifecycle operations.
 
 ## Choose an integration surface
@@ -10,10 +10,10 @@ and lifecycle operations.
 | Surface | Use it when | Framework responsibility |
 |---|---|---|
 | HTTP server | The framework can make HTTP requests or you want a service boundary. | Call `/add` after a turn and `/search` before the next model decision. |
-| MCP server | The framework supports MCP tools and you want the model to request memory explicitly. | Connect Lint-AI as an MCP server and expose its tools to the agent. |
-| Rust library | The framework is Rust-based and can embed Lint-AI. | Own one `MemoryService` and call its memory operations in the agent loop. |
+| MCP server | The framework supports MCP tools and you want the model to request memory explicitly. | Connect Membrick as an MCP server and expose its tools to the agent. |
+| Rust library | The framework is Rust-based and can embed Membrick. | Own one `MemoryService` and call its memory operations in the agent loop. |
 
-The HTTP and MCP paths work with any framework and do not require Lint-AI's
+The HTTP and MCP paths work with any framework and do not require Membrick's
 provider-specific lifecycle hooks.
 
 ## Recommended turn pattern
@@ -26,7 +26,7 @@ structured outcome with the same identity.
 ```text
 prompt arrives
     ↓
-Lint-AI /search (user_id + query)
+Membrick /search (user_id + query)
     ↓
 framework adds bounded results to model context
     ↓
@@ -34,7 +34,7 @@ agent runs tools and produces a response
     ↓
 framework extracts durable facts/outcome
     ↓
-Lint-AI /add (user_id + session_id + messages)
+Membrick /add (user_id + session_id + messages)
     ↓
 index refresh completes; the memory is available to later searches
 ```
@@ -78,7 +78,7 @@ limits, concurrency behavior, and measured performance.
 
 ## MCP example
 
-When the framework supports MCP, register Lint-AI as an MCP server and make
+When the framework supports MCP, register Membrick as an MCP server and make
 the `search` tool available to the agent. Use `record_session` only when you
 want capture-only event recording; it is independent from searchable memory.
 The [MCP interface guide](mcp.md) documents the available tools and state

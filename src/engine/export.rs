@@ -100,7 +100,7 @@ pub(crate) fn safe_write_text_file(out_path: &str, content: &str) -> Result<()> 
 
 pub(crate) fn export_graph_dot(graph: &Graph, out_path: &str) -> Result<String> {
     let mut lines = Vec::new();
-    lines.push("digraph lint_ai_graph {".to_string());
+    lines.push("digraph membrick_graph {".to_string());
     lines.push("  rankdir=LR;".to_string());
     lines.push("  node [shape=box, style=rounded];".to_string());
 
@@ -136,7 +136,7 @@ pub(crate) fn export_graph_dot(graph: &Graph, out_path: &str) -> Result<String> 
 
 pub(crate) fn export_chunk_graph_dot(graph: &Graph, out_path: &str) -> Result<String> {
     let mut lines = Vec::new();
-    lines.push("digraph lint_ai_chunk_graph {".to_string());
+    lines.push("digraph membrick_chunk_graph {".to_string());
     lines.push("  rankdir=LR;".to_string());
     lines.push("  node [shape=box, style=rounded];".to_string());
     for chunk in &graph.chunks {
@@ -166,7 +166,7 @@ pub(crate) fn export_chunk_graph_dot(graph: &Graph, out_path: &str) -> Result<St
 
 pub(crate) fn export_entity_graph_dot(graph: &Graph, out_path: &str) -> Result<String> {
     let mut lines = Vec::new();
-    lines.push("digraph lint_ai_entity_graph {".to_string());
+    lines.push("digraph membrick_entity_graph {".to_string());
     lines.push("  rankdir=LR;".to_string());
     lines.push("  node [shape=ellipse, style=filled, fillcolor=\"#e8f1ff\"];".to_string());
     for ent in graph.entity_index.keys() {
@@ -392,7 +392,7 @@ pub(crate) fn export_graph_cytoscape_html(graph: &Graph, out_path: &str) -> Resu
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Lint-AI Graph</title>
+  <title>Membrick Graph</title>
   <script src="./cytoscape.min.js"></script>
   <style>
     html, body {{ width: 100%; height: 100%; margin: 0; }}
@@ -470,7 +470,7 @@ pub(crate) fn export_chunk_graph_cytoscape_html(graph: &Graph, out_path: &str) -
         .join(",\n");
     let html = format!(
         r#"<!doctype html>
-<html><head><meta charset="utf-8" /><title>Lint-AI Chunk Graph</title>
+<html><head><meta charset="utf-8" /><title>Membrick Chunk Graph</title>
 <script src="./cytoscape.min.js"></script>
 <style>html, body {{ width: 100%; height: 100%; margin: 0; }} #cy {{ width:100%; height:100%; }}</style>
 </head><body><div id="cy"></div><script>
@@ -519,7 +519,7 @@ pub(crate) fn export_entity_graph_cytoscape_html(graph: &Graph, out_path: &str) 
         .join(",\n");
     let html = format!(
         r#"<!doctype html>
-<html><head><meta charset="utf-8" /><title>Lint-AI Entity Graph</title>
+<html><head><meta charset="utf-8" /><title>Membrick Entity Graph</title>
 <script src="./cytoscape.min.js"></script>
 <style>html, body {{ width:100%; height:100%; margin:0; }} #cy {{ width:100%; height:100%; }}</style>
 </head><body><div id="cy"></div><script>

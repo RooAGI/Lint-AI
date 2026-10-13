@@ -1,0 +1,58 @@
+{
+  "event_frames": [
+    { "phrase": " will participate in ", "prefer_named_event": false, "status": "planned" },
+    { "phrase": " participated in ", "prefer_named_event": false },
+    { "phrase": " participate in ", "prefer_named_event": false },
+    { "phrase": " participates in ", "prefer_named_event": false },
+    { "phrase": " took part in ", "prefer_named_event": false },
+    { "phrase": " attended ", "prefer_named_event": false },
+    { "phrase": " went to ", "prefer_named_event": false },
+    { "phrase": " joined ", "prefer_named_event": false },
+    { "phrase": " was at ", "prefer_named_event": false },
+    { "phrase": " completed ", "prefer_named_event": true },
+    { "phrase": " complete ", "prefer_named_event": true },
+    { "phrase": " finished ", "prefer_named_event": true },
+    { "phrase": " finish ", "prefer_named_event": true },
+    { "phrase": " ran in ", "prefer_named_event": false },
+    { "phrase": " played in ", "prefer_named_event": false },
+    { "phrase": " competed in ", "prefer_named_event": false }
+  ],
+  "event_nouns": [
+    "wedding", "funeral", "graduation", "ceremony", "party", "reception",
+    "conference", "competition", "tournament", "race", "marathon", "triathlon",
+    "run", "concert", "performance", "reunion", "celebration", "event"
+  ],
+  "first_person_words": ["i", "we", "i've", "i’d"],
+  "acquisition_subject_markers": ["i"],
+  "action_prefix_words": [
+    "i", "have", "had", "will", "just", "recently", "finally", "successfully",
+    "proudly", "also", "then", "even", "once", "personally"
+  ],
+  "acquisition_frames": [" bought ", " purchased ", " acquired ", " got "],
+  "acquisition_got_object_prefixes": ["a ", "an ", "the ", "my ", "some ", "this ", "that ", "new "],
+  "object_stop_words": ["today", "yesterday", "tonight", "this", "last", "next"],
+  "relative_time_numbers": ["a", "an", "few", "several", "couple", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"],
+  "direct_participation_phrases": [
+    "i participated in", "we participated in", "i took part in", "we took part in",
+    "i attended", "we attended", "i competed in", "we competed in", "i joined", "we joined",
+    "my participation", "our participation"
+  ],
+  "reported_participation_regex": "\\b(?:i|we)\\s+(?:mentioned|said|described|reported|recalled)\\s+(?:(?:that\\s+)?(?:i|we)\\s+)?(?:participat\\w*\\s+in|attend\\w*|compet\\w*\\s+in|join\\w*|tak(?:e|ing|en)\\s+part\\s+in)\\b",
+  "acquisition_query_phrases": ["did i buy", "did i purchase", "what did i buy", "what did i purchase", "i bought", "i purchased", "i acquired"],
+  "count_words": { "two": 2, "2": 2, "three": 3, "3": 3, "four": 4, "4": 4, "five": 5, "5": 5 },
+  "temporal_order_markers": [
+    "consecutive", "earliest", "latest", "first", "before", "after", "order", "ordered",
+    "sequence", "most recent", "oldest", "newest", "which happened first", "from earliest to latest"
+  ],
+  "query_time_units": ["day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours"],
+  "query_count_phrases": ["how many", "how much", "how long"],
+  "query_option_connectors": [" or "],
+  "query_option_prefixes": ["which "],
+  "query_option_phrases": ["which one", "should i choose"],
+  "query_temporal_diff_marker": "between",
+  "query_temporal_filter_markers": [" before ", " after "],
+  "query_both_marker": "both ",
+  "query_event_marker": "event",
+  "query_both_verbs": ["visit", "visited", "like", "use", "used", "have", "has", "share", "shared", "attend", "attended"],
+  "query_aggregate_phrases": ["in total", "combined", "altogether"]
+}

@@ -13,9 +13,12 @@ use crate::index::{
     MemoryIndex, QueryDiagnostics, QueryTimings, SearchResult, TemporalQueryContext,
     TemporalQueryHint,
 };
-use crate::query_semantics::{analyze_query, QueryAnalysis, QueryTimeHint};
+use crate::query_semantics::{
+    analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
+    temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+};
 use crate::semantic_relations::{is_historical_query, SemanticRelationStore, SemanticStatus};
-use chrono::{NaiveDate, TimeDelta};
+use chrono::{NaiveDate, TimeDelta, Utc};
 use std::collections::HashSet;
 
 /// A raw query plus the analysis derived from it.
@@ -25,22 +28,60 @@ use std::collections::HashSet;
 pub struct PreparedQuery {
     analysis: QueryAnalysis,
     reference_date: Option<String>,
+    resolved_anchor_date: Option<String>,
+    resolved_start: Option<String>,
+    resolved_end: Option<String>,
+    resolved_window: Option<(NaiveDate, NaiveDate)>,
 }
 
 impl PreparedQuery {
     pub fn new(query: &str) -> Self {
-        Self {
-            analysis: analyze_query(query),
-            reference_date: None,
-        }
+        Self::build(analyze_query(query), None)
     }
 
     /// Builds a query whose relative temporal language is resolved against
     /// `reference_date` instead of the machine clock.
     pub fn new_at(query: &str, reference_date: &str) -> Self {
+        Self::build(analyze_query(query), Some(reference_date.to_string()))
+    }
+
+    fn build(analysis: QueryAnalysis, reference_date: Option<String>) -> Self {
+        let resolution_date = reference_date
+            .as_deref()
+            .and_then(parse_reference_date)
+            .unwrap_or_else(|| Utc::now().date_naive());
+        let resolved = analysis.temporal.as_ref().and_then(|temporal| {
+            if temporal.source == "session-anchor" {
+                return None;
+            }
+            let anchor = resolve_temporal_anchor(&temporal.phrase, resolution_date)?;
+            let is_span = temporal_anchor_is_span(&temporal.phrase, &analysis.original_query);
+            let window =
+                resolve_anchor_window(&temporal.phrase, &analysis.original_query, resolution_date)?;
+            Some((anchor, is_span, window))
+        });
+        let (resolved_anchor_date, resolved_start, resolved_end, resolved_window) =
+            if let Some((anchor, is_span, window)) = resolved {
+                (
+                    Some(
+                        if is_span { window.1 } else { anchor }
+                            .format("%Y-%m-%d")
+                            .to_string(),
+                    ),
+                    is_span.then(|| window.0.format("%Y-%m-%d").to_string()),
+                    is_span.then(|| window.1.format("%Y-%m-%d").to_string()),
+                    Some(window),
+                )
+            } else {
+                (None, None, None, None)
+            };
         Self {
-            analysis: analyze_query(query),
-            reference_date: Some(reference_date.to_string()),
+            analysis,
+            reference_date,
+            resolved_anchor_date,
+            resolved_start,
+            resolved_end,
+            resolved_window,
         }
     }
 
@@ -51,10 +92,7 @@ impl PreparedQuery {
     /// Reuses an analysis the caller already computed, so no query is analyzed
     /// twice on paths that need the analysis for other reasons too.
     pub(crate) fn from_analysis(analysis: QueryAnalysis) -> Self {
-        Self {
-            analysis,
-            reference_date: None,
-        }
+        Self::build(analysis, None)
     }
 
     pub fn analysis(&self) -> &QueryAnalysis {
@@ -77,9 +115,8 @@ impl PreparedQuery {
         // absolute date, so it needs no reference clock: center temporal
         // scoring on it and pre-filter routing to its ±7-day point window,
         // mirroring resolve_anchor_window's point behavior. Relative phrases
-        // keep their existing path (wired with an explicit reference date by
-        // callers like persistence.rs).
-        let (anchor_date, anchor_window): (Option<&str>, Option<(NaiveDate, NaiveDate)>) = self
+        // are resolved once when this PreparedQuery is built.
+        let session_anchor = self
             .analysis
             .temporal
             .as_ref()
@@ -93,11 +130,16 @@ impl PreparedQuery {
                     date.checked_add_signed(TimeDelta::days(7))?,
                 );
                 Some((resolved_at, window))
-            })
-            .unzip();
+            });
+        let anchor_date = session_anchor
+            .map(|(date, _)| date)
+            .or(self.resolved_anchor_date.as_deref());
+        let anchor_window = session_anchor
+            .map(|(_, window)| window)
+            .or(self.resolved_window);
         TemporalQueryContext {
-            starts_from: None,
-            ends_at: None,
+            starts_from: self.resolved_start.as_deref(),
+            ends_at: self.resolved_end.as_deref(),
             window_days: match self.analysis.time_hint {
                 Some(QueryTimeHint::Past) => 365,
                 Some(QueryTimeHint::Present) => 30,
@@ -105,7 +147,12 @@ impl PreparedQuery {
                 Some(QueryTimeHint::Mixed) => 30,
                 None => 7,
             },
-            hard_filter: false,
+            // A resolved closed interval is an explicit query constraint.
+            // Enforce it during candidate collection so out-of-window
+            // documents cannot consume the ranking budget. Point dates keep
+            // their existing proximity behavior because their surrounding
+            // memories may still carry useful event context.
+            hard_filter: self.resolved_start.is_some() && self.resolved_end.is_some(),
             time_hint: self
                 .analysis
                 .time_hint
@@ -117,6 +164,7 @@ impl PreparedQuery {
                 })
                 .filter(|_| self.analysis.temporal.is_some()),
             query_routing_intent: self.analysis.query_routing_intent,
+            evidence_requirements: self.analysis.evidence_requirements,
             has_explicit_temporal: self.analysis.temporal.is_some(),
             anchor_date,
             anchor_window,
@@ -297,6 +345,29 @@ mod tests {
         let prepared = PreparedQuery::new_at("What happened two weeks ago?", "2024-05-10");
         assert_eq!(prepared.reference_date(), Some("2024-05-10"));
         assert!(PreparedQuery::new("anything").reference_date().is_none());
+    }
+
+    #[test]
+    fn relative_temporal_anchor_uses_explicit_reference_date() {
+        let prepared = PreparedQuery::new_at(
+            "What was the life event of one of my relatives that I participated in a week ago?",
+            "2023-06-22",
+        );
+
+        assert_eq!(
+            prepared
+                .analysis()
+                .temporal
+                .as_ref()
+                .and_then(|temporal| temporal.resolved_at.as_deref()),
+            None,
+            "relative phrases must not be pre-resolved against the machine clock"
+        );
+        let context = prepared.temporal_context();
+        assert_eq!(context.anchor_date, Some("2023-06-15"));
+        assert_eq!(context.starts_from, None);
+        assert_eq!(context.ends_at, None);
+        assert!(!context.hard_filter);
     }
 
     #[test]

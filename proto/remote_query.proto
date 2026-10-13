@@ -2,9 +2,9 @@ syntax = "proto3";
 
 // Transport schema for the typed distributed-query contract. This file is
 // intentionally separate from lint-service's legacy RunLint schema.
-package lintai.remote.v1;
+package membrick.remote.v1;
 
-service LintQueryService {
+service MembrickQueryService {
   rpc QueryStatistics(RemoteStatisticsRequest) returns (RemoteStatisticsResponse);
   rpc QueryCandidates(RemoteCandidateRequest) returns (RemoteCandidateResponse);
 }

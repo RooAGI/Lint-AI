@@ -1,6 +1,6 @@
 # Codex Performance Benchmarks
 
-This directory contains test-only A/B scenarios for measuring Lint-AI as a
+This directory contains test-only A/B scenarios for measuring Membrick as a
 Codex memory layer. The methodology and release gates are defined in
 [`docs/codex-performance-tests.md`](../../docs/codex-performance-tests.md).
 The cross-client integration benchmark methodology is defined in
@@ -18,7 +18,7 @@ benchmark/codex_code/
   results/         Generated results; ignored except for .gitkeep
 ```
 
-The initial scenarios should use the Lint-AI repository itself as the fixture.
+The initial scenarios should use the Membrick repository itself as the fixture.
 A runner must resolve `repository.revision` to an exact commit and record a
 dirty diff digest before execution. It must use a disposable worktree rather
 than the developer's checkout.
@@ -31,7 +31,7 @@ facts provide deterministic scoring targets. Commands in `validators` should
 run only inside the disposable fixture worktree.
 
 `negative_control` scenarios intentionally contain no relevant memory. Their
-primary signal is whether Lint-AI avoids injecting unrelated context.
+primary signal is whether Membrick avoids injecting unrelated context.
 
 ## Current Scenarios
 
@@ -51,18 +51,18 @@ The Codex benchmark scaffold now mirrors the Claude benchmark shape closely:
 - these scenarios provide the initial smoke set for Codex-specific behavior
 
 The launcher performs three comparisons: `codex-native`, with Codex Memories
-enabled and no Lint-AI configuration; `lint-ai`, with Codex Memories disabled
-and Lint-AI memory hooks enabled; and `lint-ai-with-codex-memory`, with both
+enabled and no Membrick configuration; `membrick`, with Codex Memories disabled
+and Membrick memory hooks enabled; and `membrick-with-codex-memory`, with both
 memory layers enabled.
 Both arms use the same model, prompts, fresh sessions, and validators.
-For this comparison, the Lint-AI arm limits its Codex hook configuration to
+For this comparison, the Membrick arm limits its Codex hook configuration to
 the Claude-equivalent lifecycle: `SessionStart`, `UserPromptSubmit`,
 `UserPromptExpansion`, `PreCompact`, `Stop`, and `SessionEnd`. Codex-only
 tool and subagent hook events are excluded so they do not bias the comparison.
-The launcher also removes Lint-AI's MCP server in this test configuration: it
+The launcher also removes Membrick's MCP server in this test configuration: it
 builds a repository code index at process startup, which is a separate
 code-search capability and would dominate memory interaction latency. Normal
-Lint-AI installations retain the MCP server.
+Membrick installations retain the MCP server.
 
 ## Parse Run Metrics
 
@@ -102,11 +102,11 @@ python3 benchmark/codex_code/scripts/run_benchmark.py \
   --results-dir benchmark/codex_code/results
 ```
 
-For an isolated diagnostic run, select the Lint-AI arm and one scenario:
+For an isolated diagnostic run, select the Membrick arm and one scenario:
 
 ```bash
 python3 benchmark/codex_code/scripts/run_benchmark.py \
-  --arms lint-ai \
+  --arms membrick \
   --scenario index-store-segmented-routing \
   --results-dir benchmark/codex_code/results/diagnostic
 ```
@@ -134,14 +134,14 @@ retrieval fields match the Claude parser. Codex cached input is converted to
 separate uncached-input and cache-read fields so totals do not double-count it.
 
 Each scenario/arm/repetition worktree persists after the run instead of being
-deleted, so its `.lint-ai/memory` store stays inspectable. A worktree
+deleted, so its `.membrick/memory` store stays inspectable. A worktree
 left over from a prior run of the same scenario/arm/repetition is removed
 automatically right before the next run of it starts. Inspect a run's
 captured memory with:
 
 ```bash
-target/release/lint-ai \
-  --inspect-index benchmark/codex_code/results/<arm>/<scenario>/rep-001/worktree/.lint-ai/memory \
+target/release/membrick \
+  --inspect-index benchmark/codex_code/results/<arm>/<scenario>/rep-001/worktree/.membrick/memory \
   --inspect-view source-documents
 ```
 
@@ -171,7 +171,7 @@ One repetition each, `hooks-only`-equivalent restricted hook configuration
 rejected Codex's UUIDv7 thread IDs) and loosening the `index-store-owner`
 `match_any` patterns (previously too brittle to match either arm's phrasing):
 
-| Metric | codex-native | lint-ai | lint-ai-with-codex-memory |
+| Metric | codex-native | membrick | membrick-with-codex-memory |
 |---|---|---|---|
 | Success | true | true | true |
 | Recall | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) |
@@ -182,12 +182,12 @@ rejected Codex's UUIDv7 thread IDs) and loosening the `index-store-owner`
 | Tool calls | 2 | 0 | 0 |
 
 All three arms recalled all 3 expected facts with identical accuracy.
-`lint-ai` and `lint-ai-with-codex-memory` both answered directly with 0 tool
+`membrick` and `membrick-with-codex-memory` both answered directly with 0 tool
 calls versus native's 2, using roughly a fifth of native's input tokens and
 noticeably lower continuation latency. Unlike Claude, where enabling both
 memory layers together (`claude-both`) beat every other arm on every metric,
 Codex's combined arm only marginally improved continuation latency over
-plain `lint-ai` and was slightly worse on setup time and tokens, within the
+plain `membrick` and was slightly worse on setup time and tokens, within the
 noise of a single repetition, not a clear win. This is a
 single-repetition, single-scenario result, not a release benchmark. Treat
 it as directional pending a multi-scenario, multi-repetition run.
@@ -202,7 +202,7 @@ above). This scenario also required loosening the `query-top-three` and
 single-turn fix: models phrase facts (e.g. `query_top_n: 3` with a colon)
 differently than the original literal-substring patterns expected.
 
-| Metric | codex-native | lint-ai | lint-ai-with-codex-memory |
+| Metric | codex-native | membrick | membrick-with-codex-memory |
 |---|---|---|---|
 | Success | true | true | true |
 | Recall | 3/3 (100%) | 3/3 (100%) | 3/3 (100%) |
@@ -213,13 +213,13 @@ differently than the original literal-substring patterns expected.
 | Tool calls | 6 | 0 | 0 |
 
 All three arms recalled all 3 expected facts, but the gap between native and
-Lint-AI is far larger here than in the single-turn scenario: to correctly
+Membrick is far larger here than in the single-turn scenario: to correctly
 distinguish the current decision from the superseded one, `codex-native`
 needed 6 tool calls and 216k input tokens re-deriving the temporal history
-from source, versus 0 tool calls and ~14k tokens for either `lint-ai` arm
+from source, versus 0 tool calls and ~14k tokens for either `membrick` arm
 answering directly from injected memory, roughly 15x fewer input tokens and
 6x lower continuation latency. Temporal-correction/multi-turn scenarios
-expose Lint-AI's advantage far more sharply than simple single-turn recall.
+expose Membrick's advantage far more sharply than simple single-turn recall.
 This is a single-repetition, single-scenario result, not a release
 benchmark. Treat it as directional pending a multi-scenario,
 multi-repetition run.

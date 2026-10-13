@@ -14,8 +14,8 @@ types. These data types do not provide independent storage access.
 - Use `inspection` for structural diagnostics without obtaining an index handle.
 
 Request and response types are available from the crate root and from
-`lint_ai::memory_api`. Configuration and document types are available from
-the crate root, for example `lint_ai::{PipelineOptions, Lang, SourceDocument}`.
+`membrick::memory_api`. Configuration and document types are available from
+the crate root, for example `membrick::{PipelineOptions, Lang, SourceDocument}`.
 
 ## Memory identity and compatibility
 

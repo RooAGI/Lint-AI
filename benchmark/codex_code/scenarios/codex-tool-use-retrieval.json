@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "codex-tool-use-retrieval",
   "category": "tool-use-recall",
-  "description": "Recall how Codex tool-use hooks route retrieval queries through Lint-AI.",
+  "description": "Recall how Codex tool-use hooks route retrieval queries through Membrick.",
   "negative_control": false,
   "repository": { "path": ".", "revision": "HEAD" },
   "setup_messages": [

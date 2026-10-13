@@ -18,7 +18,7 @@ import subprocess
 import sys
 from collections import Counter
 
-LOCOMO = "/home/hatch/workspace/lint-ai-benchmark-logs/locomo10.json"
+LOCOMO = "/home/hatch/workspace/membrick-benchmark-logs/locomo10.json"
 SPACY_SCRIPT = "/home/hatch/workspace/wt-snapshot-incr/scripts/spacy_relations.py"
 
 

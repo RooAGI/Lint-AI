@@ -20,7 +20,7 @@ use std::time::Instant;
 
 #[derive(Debug, Parser)]
 #[command(name = "haystack-scoped-benchmark")]
-#[command(about = "Run a question-scoped LongMemEval haystack benchmark against Lint-AI")]
+#[command(about = "Run a question-scoped LongMemEval haystack benchmark against Membrick")]
 struct Args {
     /// Path to the raw LongMemEval-S dataset.
     #[arg(long)]
@@ -500,6 +500,7 @@ fn run_scoped_benchmark(
             allowed_doc_bitmap: None,
             allowed_segment_doc_bitmaps: None,
             query_routing_intent: analysis.query_routing_intent,
+            evidence_requirements: analysis.evidence_requirements,
             has_explicit_temporal: analysis.temporal.is_some(),
         };
         let (results, timings, diagnostics) =

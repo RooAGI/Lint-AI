@@ -1,24 +1,24 @@
 [package]
 autobins = false
-name = "lint-ai"
-version = "0.3.0"
+name = "membrick"
+version = "0.4.0"
 edition = "2021"
 description = "Persistent memory layer for AI coding agents — MCP server with current-state retrieval and supersession tracking"
 license = "Apache-2.0"
-repository = "https://github.com/RooAGI/Lint-AI"
+repository = "https://github.com/RooAGI/Membrick"
 homepage = "https://www.rooagi.com"
 readme = "README.md"
 keywords = ["agent-memory", "mcp", "knowledge-base", "AI", "agents"]
 categories = ["text-processing", "command-line-utilities"]
 
 [lib]
-name = "lint_ai"
+name = "membrick"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 clap = { version = "4.4.18", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tokenizers = "0.20"
 toml = "0.8"
@@ -51,7 +51,8 @@ sha2 = "0.10"
 rayon = "1.11"
 libflate = "1.4"
 pyo3 = { version = "0.29", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+self_update = { version = "1.3", default-features = false, features = ["reqwest", "rustls", "github", "checksums"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -68,12 +69,17 @@ muse-code = []
 openclaw = []
 hermes = []
 roo-runtime = []
-python = ["dep:pyo3", "dep:reqwest"]
+python = ["dep:pyo3"]
 experimental = []
 
 [[bin]]
-name = "lint-ai"
+name = "membrick"
 path = "src/main.rs"
+
+# Keep existing provider configurations working after the product rename.
+[[bin]]
+name = "lint-ai"
+path = "src/legacy_main.rs"
 
 [[bin]]
 name = "corpus_scale_benchmark"
@@ -136,3 +142,6 @@ path = "src/bin/launchers/query_repl.rs"
 [dev-dependencies]
 # Only the SIGKILL crash test needs raw syscalls now; the lock itself is std.
 libc = "0.2"
+
+[patch.crates-io]
+lru = { path = "vendor/lru" }

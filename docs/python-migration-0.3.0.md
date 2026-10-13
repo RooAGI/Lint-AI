@@ -1,6 +1,6 @@
 # Python binding migration guide: 0.2.x → 0.3.0
 
-`lint-ai` 0.3.0 cleans up the Python binding around the one supported
+`membrick` 0.3.0 cleans up the Python binding around the one supported
 surface: `MemoryService`. Most existing `Memory` calls keep working, but
 there are two intentional breaks. This guide covers what changed, what
 stayed compatible, and what the new knobs actually do.
@@ -11,23 +11,23 @@ stayed compatible, and what the new knobs actually do.
 
 ```python
 # 0.2.x
-remote = lint_ai.RemoteMemory("http://127.0.0.1:8080", api_key="token")
+remote = membrick.RemoteMemory("http://127.0.0.1:8080", api_key="token")
 
 # 0.3.0 — same behavior, one class
-remote = lint_ai.Memory(base_url="http://127.0.0.1:8080", api_key="token")
+remote = membrick.Memory(base_url="http://127.0.0.1:8080", api_key="token")
 ```
 
 **Pitfall:** `base_url` must be passed by keyword. The first positional
 argument of `Memory(...)` is `path`, so
-`lint_ai.Memory("http://127.0.0.1:8080")` does **not** connect to a server —
+`membrick.Memory("http://127.0.0.1:8080")` does **not** connect to a server —
 it silently creates a *local* index in a directory literally named
 `http://127.0.0.1:8080`. This fails silently, not loudly; always use the
 keyword form.
 
 ### 2. Python `IndexStore` binding removed
 
-The `lint_ai.IndexStore` class no longer exists. Python applications must
-go through `lint_ai.Memory`, which is the only supported external API.
+The `membrick.IndexStore` class no longer exists. Python applications must
+go through `membrick.Memory`, which is the only supported external API.
 
 Rust integrations use `MemoryService`; stores and indexes are internal.
 If you were using `IndexStore` from Python, migrate to `Memory` or stay on
@@ -42,14 +42,14 @@ the 0.2.x line.
   `search(query, user_id)` is valid.
 - `add`, `get`, `list`, `update`, `delete`, `refresh` — argument order
   unchanged, including `delete(user_id, memory_id)`.
-- `lint_ai.version()` returns the package version (`"0.3.0"`).
+- `membrick.version()` returns the package version (`"0.3.0"`).
 
 ## New in 0.3.0
 
 ### Constructor options (local backend only)
 
 ```python
-memory = lint_ai.Memory(
+memory = membrick.Memory(
     path="./memory-index",
     ner_provider="heuristic",  # 'heuristic' (default, Python-free) | 'spacy'
     spacy_model=None,       # explicit override; default follows detected language

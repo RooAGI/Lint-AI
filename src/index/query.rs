@@ -1,6 +1,8 @@
 use crate::lang::Lang;
 use crate::query_expansion::normalize_for_index;
-use crate::query_semantics::QueryRoutingIntent;
+use crate::query_semantics::{
+    QueryEvidenceRelation, QueryEvidenceRequirements, QueryRoutingIntent,
+};
 use crate::temporal::{
     recency_boost, resolve_temporal_target, DEFAULT_RECENCY_HALF_LIFE_DAYS,
     DEFAULT_RECENCY_MAX_BOOST,
@@ -116,7 +118,34 @@ impl MemoryIndex {
             .or(temporal_end.and(temporal.ends_at))
             .or(temporal.starts_from)
             .or(temporal.ends_at);
-        let target = resolve_temporal_target(query, relative_anchor);
+        // A resolved interval is already a complete temporal constraint. Do
+        // not also apply the legacy point-target parser to the same phrase.
+        let target = if temporal_start.is_some() || temporal_end.is_some() {
+            None
+        } else {
+            resolve_temporal_target(query, relative_anchor)
+        };
+        // Materialize the strict time eligibility set before lexical BM25
+        // candidate collection. Applying the range only to the hybrid
+        // reranker lets out-of-range documents consume the lexical top-k.
+        let hard_temporal_docs = if temporal.hard_filter {
+            match (temporal_start, temporal_end) {
+                (Some(start), Some(end)) => Some(self.docs_in_temporal_range(
+                    start,
+                    end,
+                    temporal.allowed_doc_ids,
+                    temporal.allowed_doc_bitmap,
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let mut query_temporal = temporal;
+        if let Some((allowed_doc_ids, allowed_doc_bitmap)) = hard_temporal_docs.as_ref() {
+            query_temporal.allowed_doc_ids = Some(allowed_doc_ids);
+            query_temporal.allowed_doc_bitmap = Some(allowed_doc_bitmap);
+        }
         let apply_recency = !temporal.has_explicit_temporal
             && target.is_none()
             && temporal_start.is_none()
@@ -125,10 +154,11 @@ impl MemoryIndex {
         let (mut results, mut timings, diagnostics) = self.query_timed_with_context(
             query,
             search_k,
-            temporal,
+            query_temporal,
             apply_recency,
             statistics,
             local_terms,
+            query_temporal.allowed_doc_ids,
         );
         if target.is_none()
             && temporal_start.is_none()
@@ -249,6 +279,36 @@ impl MemoryIndex {
         (rescored, timings, diagnostics)
     }
 
+    fn docs_in_temporal_range(
+        &self,
+        start: NaiveDate,
+        end: NaiveDate,
+        existing_ids: Option<&HashSet<String>>,
+        existing_bitmap: Option<&RoaringBitmap>,
+    ) -> (HashSet<String>, RoaringBitmap) {
+        let mut allowed_ids = HashSet::new();
+        let mut allowed_bitmap = RoaringBitmap::new();
+        for (doc_id, doc) in &self.docs {
+            if existing_ids.is_some_and(|ids| !ids.contains(doc_id)) {
+                continue;
+            }
+            let Some(&doc_u32) = self.doc_id_to_u32.get(doc_id) else {
+                continue;
+            };
+            if existing_bitmap.is_some_and(|bitmap| !bitmap.contains(doc_u32)) {
+                continue;
+            }
+            let Some(doc_date) = doc_temporal_date(doc) else {
+                continue;
+            };
+            if (start..=end).contains(&doc_date) {
+                allowed_ids.insert(doc_id.clone());
+                allowed_bitmap.insert(doc_u32);
+            }
+        }
+        (allowed_ids, allowed_bitmap)
+    }
+
     #[deprecated(
         since = "0.1.9",
         note = "use `query_with_temporal_context`, which also carries query intent; \
@@ -266,6 +326,7 @@ impl MemoryIndex {
             true,
             None,
             &[],
+            None,
         )
     }
 
@@ -277,13 +338,15 @@ impl MemoryIndex {
         apply_recency: bool,
         statistics: Option<&GlobalBm25Statistics>,
         local_terms: &[String],
+        lexical_allowed_doc_ids: Option<&HashSet<String>>,
     ) -> (Vec<SearchResult>, QueryTimings, QueryDiagnostics) {
         let total_start = Instant::now();
         let lexical_start = Instant::now();
-        let lexical_hits = match self.lexical_bm25(
+        let lexical_hits = match self.lexical_bm25_with_doc_filter(
             query,
             top_k.saturating_mul(5).max(20),
             statistics.map(|value| value as &dyn Bm25StatisticsProvider),
+            lexical_allowed_doc_ids,
         ) {
             Ok(hits) => Some(hits),
             Err(err) => {
@@ -298,6 +361,7 @@ impl MemoryIndex {
             top_k,
             lexical_hits.as_ref(),
             temporal.query_routing_intent,
+            temporal.evidence_requirements,
             temporal.has_explicit_temporal,
             temporal.allowed_doc_ids,
             temporal.allowed_doc_bitmap,
@@ -328,6 +392,7 @@ impl MemoryIndex {
             top_k,
             lexical_hits,
             None,
+            QueryEvidenceRequirements::default(),
             false,
             None,
             None,
@@ -450,6 +515,7 @@ impl MemoryIndex {
             top_k,
             lexical_hits,
             None,
+            QueryEvidenceRequirements::default(),
             false,
             Some(&allowed),
             None,
@@ -499,6 +565,7 @@ impl MemoryIndex {
                     top_k,
                     Some(hits),
                     None,
+                    QueryEvidenceRequirements::default(),
                     false,
                     allowed_opt.as_ref(),
                     None,
@@ -517,6 +584,7 @@ impl MemoryIndex {
         top_k: usize,
         lexical_hits: Option<&HashMap<String, f32>>,
         query_routing_intent: Option<QueryRoutingIntent>,
+        evidence_requirements: QueryEvidenceRequirements,
         has_explicit_temporal: bool,
         allowed_doc_ids: Option<&HashSet<String>>,
         allowed_doc_bitmap: Option<&RoaringBitmap>,
@@ -534,6 +602,8 @@ impl MemoryIndex {
         };
         let q = prepared.normalized;
         let q_terms = prepared.terms;
+        let require_participation_evidence =
+            evidence_requirements.relation == Some(QueryEvidenceRelation::PersonalParticipation);
         let mut expanded_terms = prepared.expanded_terms;
         // Per-text language for stopword filtering on the routing paths.
         // Resolved from the raw query (accents intact); cached prepared
@@ -610,6 +680,29 @@ impl MemoryIndex {
             let entry = candidates.entry(doc_u32).or_default();
             entry.score += delta;
             apply(entry);
+        }
+
+        // This typed relation is selective evidence, so it can seed recall
+        // when the wording of a question has no lexical overlap with the
+        // source. The normal allowed-doc set still enforces routing and hard
+        // temporal filters before a candidate is admitted.
+        if require_participation_evidence {
+            if let Some(postings) = self.claim_to_docs.get(BEKIND_PARTICIPATION_POSTING) {
+                for posting in postings {
+                    if let Some(&doc_u32) = self.doc_id_to_u32.get(&posting.doc_id) {
+                        let delta = 0.7 * posting.score;
+                        score_doc(
+                            &mut candidates,
+                            doc_u32 as usize,
+                            delta,
+                            allowed_doc_u32s.as_ref(),
+                            |entry| {
+                                entry.breakdown.claim_score += delta;
+                            },
+                        );
+                    }
+                }
+            }
         }
 
         let lexical_merge_start = Instant::now();
@@ -1242,10 +1335,20 @@ impl MemoryIndex {
         });
         group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
         let evidence_start = Instant::now();
-        if let Some(intent) = query_routing_intent {
+        let mut evidence_groups = Vec::new();
+        // Typed relation requirements are useful even when query analysis has
+        // no aggregation/routing intent. Personal participation is a
+        // temporal event relation, so let its evidence use the existing
+        // sequence evidence scorer instead of silently skipping this stage.
+        let evidence_intent = query_routing_intent.or_else(|| {
+            (evidence_requirements.relation == Some(QueryEvidenceRelation::PersonalParticipation))
+                .then_some(QueryRoutingIntent::Sequence)
+        });
+        if let Some(intent) = evidence_intent {
             let evidence_terms = routing_content_terms(&q_terms, query_lang);
             let unit_terms = routing_unit_terms(&q_terms);
-            for (_group_key, score, items) in ranked_groups.iter_mut() {
+            for (rank, (group_key, score, items)) in ranked_groups.iter_mut().enumerate() {
+                let base_score = *score;
                 let mut evidence_supporting_docs = 0usize;
                 let mut evidence_score = 0.0f32;
                 let mut evidence_term_matches = 0usize;
@@ -1253,6 +1356,7 @@ impl MemoryIndex {
                 let mut evidence_units = 0usize;
                 let mut evidence_dates = 0usize;
                 let mut evidence_predicates = 0usize;
+                let mut evidence_required_relation_docs = 0usize;
                 let mut evidence_penalty = 0.0f32;
                 for (doc_u32, _) in items.iter() {
                     if let Some(features) = self.evidence_features_for_doc(
@@ -1260,6 +1364,7 @@ impl MemoryIndex {
                         &evidence_terms,
                         &unit_terms,
                         intent,
+                        evidence_requirements,
                     ) {
                         if features.score > 0.0 {
                             evidence_supporting_docs += 1;
@@ -1270,6 +1375,8 @@ impl MemoryIndex {
                             evidence_dates +=
                                 usize::from(features.has_date || features.has_temporal_terms);
                             evidence_predicates += usize::from(features.predicate_signal);
+                            evidence_required_relation_docs +=
+                                usize::from(features.required_relation_supported);
                             evidence_penalty += features.distractor_penalty;
                         }
                     }
@@ -1286,14 +1393,83 @@ impl MemoryIndex {
                     evidence_penalty,
                 );
                 *score = *score * 0.80 + evidence_boost;
+                evidence_groups.push(EvidenceGroupDiagnostics {
+                    group_id: group_key.clone(),
+                    pre_evidence_rank: rank + 1,
+                    base_score,
+                    evidence_score,
+                    evidence_boost,
+                    final_score: *score,
+                    supporting_docs: evidence_supporting_docs,
+                    term_matches: evidence_term_matches,
+                    numbers: evidence_numbers,
+                    units: evidence_units,
+                    dates: evidence_dates,
+                    predicates: evidence_predicates,
+                    required_relation_docs: evidence_required_relation_docs,
+                    penalty: evidence_penalty,
+                });
             }
             let group_sort_start = Instant::now();
+            let relation_support: HashMap<String, usize> = ranked_groups
+                .iter()
+                .map(|(group_key, _, items)| {
+                    (
+                        group_key.clone(),
+                        self.participation_objects_for_group(items).len(),
+                    )
+                })
+                .collect();
             ranked_groups.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    // Deterministic tie-break on the session key; see above.
+                let relation_order = if evidence_requirements.relation.is_some() {
+                    relation_support
+                        .get(&b.0)
+                        .copied()
+                        .unwrap_or_default()
+                        .cmp(&relation_support.get(&a.0).copied().unwrap_or_default())
+                } else {
+                    std::cmp::Ordering::Equal
+                };
+                relation_order
+                    .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
                     .then_with(|| a.0.cmp(&b.0))
             });
+            if let Some(required_objects) = evidence_requirements.minimum_distinct_objects {
+                // Sequence questions request coverage of distinct facts. Once
+                // explicit relation claims exist, select groups that add a
+                // new object before filling the remaining ranked results.
+                // This is a coverage rule, not another contribution to BM25.
+                let mut coverage_order = Vec::new();
+                let mut covered_objects = HashSet::new();
+                while covered_objects.len() < required_objects {
+                    let best = ranked_groups
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (group, score, items))| {
+                            let objects = self.participation_objects_for_group(items);
+                            let new_objects = objects
+                                .iter()
+                                .filter(|object| !covered_objects.contains(*object))
+                                .count();
+                            (index, group, score, objects, new_objects)
+                        })
+                        .filter(|(_, _, _, _, new_objects)| *new_objects > 0)
+                        .max_by(|a, b| {
+                            a.4.cmp(&b.4)
+                                .then_with(|| {
+                                    a.2.partial_cmp(b.2).unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .then_with(|| b.1.cmp(a.1))
+                        });
+                    let Some((index, _, _, objects, _)) = best else {
+                        break;
+                    };
+                    covered_objects.extend(objects);
+                    coverage_order.push(ranked_groups.remove(index));
+                }
+                coverage_order.append(&mut ranked_groups);
+                ranked_groups = coverage_order;
+            }
             group_sort_ms += group_sort_start.elapsed().as_secs_f64() * 1000.0;
         }
         let evidence_ms = evidence_start.elapsed().as_secs_f64() * 1000.0;
@@ -1359,7 +1535,7 @@ impl MemoryIndex {
         }
         let ranking_ms = ranking_start.elapsed().as_secs_f64() * 1000.0;
         let rerank_ms = rerank_start.elapsed().as_secs_f64() * 1000.0;
-        if std::env::var_os("LINT_AI_QUERY_TIMINGS").is_some() {
+        if std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some() {
             eprintln!(
                 "index_timing total={:.3} parse={:.3} sparse_setup={:.3} sparse={:.3} lexical={:.3} posting={:.3} accumulate={:.3} metadata={:.3} rank={:.3} graph={:.3} entity_graph={:.3} sequence={:.3} evidence={:.3} group_build={:.3} group_sort={:.3} candidates={}",
                 rerank_ms, parse_ms, sparse_setup_ms, sparse_scoring_ms, lexical_merge_ms, posting_scoring_ms,
@@ -1399,6 +1575,7 @@ impl MemoryIndex {
                 expanded_terms: expanded_terms.len(),
                 lexical_hits: lexical_hits.map_or(0, HashMap::len),
                 candidates: candidates.len(),
+                evidence_groups,
                 ..QueryDiagnostics::default()
             },
         )
@@ -1459,17 +1636,45 @@ impl MemoryIndex {
 }
 
 impl MemoryIndex {
+    fn participation_objects_for_group(&self, items: &[(usize, f32)]) -> HashSet<String> {
+        items
+            .iter()
+            .filter_map(|(doc_u32, _)| self.doc_u32_to_id.get(*doc_u32))
+            .filter_map(|doc_id| self.docs.get(doc_id))
+            .flat_map(|doc| {
+                doc.top_claims
+                    .iter()
+                    .filter(|claim| {
+                        is_participation_claim(&claim.predicate) && claim.confidence >= 0.35
+                    })
+                    .map(|claim| claim.object.trim().to_lowercase())
+            })
+            .filter(|object| !object.is_empty())
+            .collect()
+    }
+
     fn evidence_features_for_doc(
         &self,
         doc_u32: usize,
         content_terms: &[String],
         unit_terms: &[String],
         intent: QueryRoutingIntent,
+        evidence_requirements: QueryEvidenceRequirements,
     ) -> Option<EvidenceFeatures> {
         let doc_id = self.doc_u32_to_id.get(doc_u32)?;
         let doc = self.docs.get(doc_id)?;
         let normalized = cached_doc_rerank_text(self, doc_u32)?;
-        if normalized.is_empty() {
+        let has_participation_claim =
+            evidence_requirements.relation == Some(QueryEvidenceRelation::PersonalParticipation)
+                && doc.top_claims.iter().any(|claim| {
+                    is_participation_claim(&claim.predicate) && claim.confidence >= 0.35
+                });
+        let has_participation_text = evidence_requirements.relation
+            == Some(QueryEvidenceRelation::PersonalParticipation)
+            && has_participation_language(normalized);
+        let required_relation_supported = has_participation_claim || has_participation_text;
+        let has_participation_evidence = required_relation_supported;
+        if normalized.is_empty() && !has_participation_evidence {
             return None;
         }
 
@@ -1489,12 +1694,13 @@ impl MemoryIndex {
             && unit_terms
                 .iter()
                 .any(|unit| doc_terms.contains(unit.as_str()));
-        if matched_terms == 0 && !has_number && !has_unit {
+        if matched_terms == 0 && !has_number && !has_unit && !has_participation_evidence {
             return None;
         }
         let has_date = doc_temporal_date(doc).is_some();
         let has_temporal_terms = !doc.temporal_terms.is_empty();
-        let predicate_signal = has_predicate_signal(normalized, intent);
+        let predicate_signal =
+            has_predicate_signal(normalized, intent) || has_participation_evidence;
         let distractor_penalty = routing_distractor_penalty(normalized, intent);
 
         let mut score = matched_terms.min(6) as f32 * 0.18;
@@ -1535,6 +1741,7 @@ impl MemoryIndex {
             has_date,
             has_temporal_terms,
             predicate_signal,
+            required_relation_supported,
             distractor_penalty,
         })
     }

@@ -1,16 +1,16 @@
-// lint-ai OpenClaw typed plugin.
+// membrick OpenClaw typed plugin.
 //
-// Thin observer: forwards lifecycle events to the lint-ai server and does
+// Thin observer: forwards lifecycle events to the membrick server and does
 // nothing else. Capture and indexing live in the Rust binary, which is
 // stateless — idempotency comes from stable document IDs in the memory store.
 // Every failure path is silent (fail-open) so a broken install can never
 // block OpenClaw.
 //
 // This file is static: it ships as-is on ClawHub and is installed verbatim
-// by `lint-ai --openclaw-install`. The binary path and project root both
+// by `membrick --openclaw-install`. The binary path and project root both
 // resolve at runtime (see below); there are no install-time placeholders.
 //
-// Managed by lint-ai --openclaw-install; safe to reinstall.
+// Managed by membrick --openclaw-install; safe to reinstall.
 
 // Largest event payload forwarded to the binary (8 MiB, matches its stdin bound).
 const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
@@ -18,7 +18,7 @@ const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 //   1. the event's own workspaceDir (multi-workspace gateways: an event that
 //      names its workspace must stay in that workspace, never leak into the
 //      installer's project)
-//   2. plugin config `projectRoot` (plugins.entries.lint-ai.config.projectRoot)
+//   2. plugin config `projectRoot` (plugins.entries.membrick.config.projectRoot)
 // Returns null when nothing resolves; callers skip the event (fail open).
 function rootOf(config, ctx, event) {
   const root =
@@ -72,12 +72,12 @@ function fire(serverUrl, serverToken, kind, root, event, ctx) {
 }
 
 export default {
-  id: "lint-ai",
-  name: "Lint-AI memory",
+  id: "membrick",
+  name: "Membrick memory",
   register(api) {
     const config = api?.pluginConfig ?? {};
-    const serverUrl = (config.serverUrl ?? process.env.LINTAI_SERVER_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
-    const serverToken = config.serverToken ?? process.env.LINTAI_SERVER_TOKEN ?? "";
+    const serverUrl = (config.serverUrl ?? process.env.MEMBRICK_SERVER_URL ?? process.env.LINTAI_SERVER_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
+    const serverToken = config.serverToken ?? process.env.MEMBRICK_SERVER_TOKEN ?? process.env.LINTAI_SERVER_TOKEN ?? "";
     const capture = (kind) => (event, ctx) =>
       fire(serverUrl, serverToken, kind, rootOf(config, ctx, event), event, ctx);
     api.on("agent_end", capture("agent-end"));

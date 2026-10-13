@@ -80,7 +80,7 @@ def load_report_module(path: Path):
 
 
 def restrict_to_claude_equivalent_hooks(codex_home: Path) -> None:
-    """Keep the Lint-AI benchmark lifecycle aligned with the Claude arm."""
+    """Keep the Membrick benchmark lifecycle aligned with the Claude arm."""
     settings_path = codex_home / "hooks.json"
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     hooks = settings.get("hooks")
@@ -94,19 +94,19 @@ def restrict_to_claude_equivalent_hooks(codex_home: Path) -> None:
     write_json(settings_path, settings)
 
 
-def remove_lint_ai_mcp_server(codex_home: Path) -> None:
+def remove_membrick_mcp_server(codex_home: Path) -> None:
     """Keep the memory benchmark from measuring one-shot MCP code indexing."""
     config_path = codex_home / "config.toml"
     lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
     retained: list[str] = []
-    in_lint_ai_server = False
+    in_membrick_server = False
     for line in lines:
-        if line.strip() == "[mcp_servers.lint-ai]":
-            in_lint_ai_server = True
+        if line.strip() == "[mcp_servers.membrick]":
+            in_membrick_server = True
             continue
-        if in_lint_ai_server and line.lstrip().startswith("["):
-            in_lint_ai_server = False
-        if not in_lint_ai_server:
+        if in_membrick_server and line.lstrip().startswith("["):
+            in_membrick_server = False
+        if not in_membrick_server:
             retained.append(line)
     config_path.write_text("".join(retained).rstrip() + "\n", encoding="utf-8")
 
@@ -116,25 +116,25 @@ def configure_mcp_diagnostics(codex_home: Path, executable: Path, trace_path: Pa
     config_path = codex_home / "config.toml"
     lines = config_path.read_text(encoding="utf-8").splitlines()
     updated: list[str] = []
-    in_lint_ai_server = False
+    in_membrick_server = False
     env_written = False
     for line in lines:
         stripped = line.strip()
-        if stripped == "[mcp_servers.lint-ai]":
-            in_lint_ai_server = True
-        elif in_lint_ai_server and stripped.startswith("["):
+        if stripped == "[mcp_servers.membrick]":
+            in_membrick_server = True
+        elif in_membrick_server and stripped.startswith("["):
             if not env_written:
                 updated.append(
-                    f'env = {{ LINT_AI_MCP_TRACE_PATH = {json.dumps(str(trace_path))} }}'
+                    f'env = {{ MEMBRICK_MCP_TRACE_PATH = {json.dumps(str(trace_path))} }}'
                 )
                 env_written = True
-            in_lint_ai_server = False
-        if in_lint_ai_server and stripped.startswith("command"):
+            in_membrick_server = False
+        if in_membrick_server and stripped.startswith("command"):
             updated.append(f"command = {json.dumps(str(executable))}")
             continue
         updated.append(line)
-    if in_lint_ai_server and not env_written:
-        updated.append(f'env = {{ LINT_AI_MCP_TRACE_PATH = {json.dumps(str(trace_path))} }}')
+    if in_membrick_server and not env_written:
+        updated.append(f'env = {{ MEMBRICK_MCP_TRACE_PATH = {json.dumps(str(trace_path))} }}')
     config_path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
 
 
@@ -200,8 +200,8 @@ def main() -> None:
     parser.add_argument(
         "--arms",
         nargs="+",
-        choices=("codex-native", "lint-ai", "lint-ai-with-codex-memory"),
-        default=("codex-native", "lint-ai", "lint-ai-with-codex-memory"),
+        choices=("codex-native", "membrick", "membrick-with-codex-memory"),
+        default=("codex-native", "membrick", "membrick-with-codex-memory"),
         help="Benchmark arms to execute (default: both)",
     )
     parser.add_argument(
@@ -227,7 +227,7 @@ def main() -> None:
     host_home = Path.home()
     host_cargo_home = host_home / ".cargo"
     host_rustup_home = host_home / ".rustup"
-    temp_root = Path(tempfile.mkdtemp(prefix="lint-ai-codex-perf."))
+    temp_root = Path(tempfile.mkdtemp(prefix="membrick-codex-perf."))
     runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
     report_module = load_report_module(benchmark_root / "src" / "report.py")
     launcher_summary = results_dir / "launcher.json"
@@ -275,7 +275,7 @@ def main() -> None:
             prepare_codex_home(
                 Path.home() / ".codex",
                 codex_home,
-                memories_enabled=arm != "lint-ai",
+                memories_enabled=arm != "membrick",
                 mcp_feature_enabled=args.profile == "production" and arm != "codex-native",
             )
             launch_events.append({"step": f"prepare {arm} Codex configuration", "status": "completed"})
@@ -298,17 +298,17 @@ def main() -> None:
                 "if [ -n \"$resume_id\" ]; then\n"
                 "  codex_args=(exec resume \"$resume_id\" --json --dangerously-bypass-approvals-and-sandbox "
                 "--dangerously-bypass-hook-trust "
-                "--output-last-message \"$LINT_AI_BENCHMARK_RUN_DIR/${LINT_AI_BENCHMARK_PHASE}.last\" -)\n"
+                "--output-last-message \"$MEMBRICK_BENCHMARK_RUN_DIR/${MEMBRICK_BENCHMARK_PHASE}.last\" -)\n"
                 "else\n"
                 "  codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox "
-                "--dangerously-bypass-hook-trust --cd \"$LINT_AI_BENCHMARK_WORKTREE\" "
-                "--output-last-message \"$LINT_AI_BENCHMARK_RUN_DIR/${LINT_AI_BENCHMARK_PHASE}.last\" -)\n"
+                "--dangerously-bypass-hook-trust --cd \"$MEMBRICK_BENCHMARK_WORKTREE\" "
+                "--output-last-message \"$MEMBRICK_BENCHMARK_RUN_DIR/${MEMBRICK_BENCHMARK_PHASE}.last\" -)\n"
                 "fi\n"
-                "if [[ \"${LINT_AI_CODEX_ENABLE_MCP_FEATURE:-0}\" == \"1\" ]]; then\n"
+                "if [[ \"${MEMBRICK_CODEX_ENABLE_MCP_FEATURE:-0}\" == \"1\" ]]; then\n"
                 "  codex_args=(--enable mcp_2026_07_28 \"${codex_args[@]}\")\n"
                 "fi\n"
                 "printf '[codex-wrapper] phase=%s CODEX_HOME=%s command=codex' "
-                "\"$LINT_AI_BENCHMARK_PHASE\" \"$CODEX_HOME\" >&2\n"
+                "\"$MEMBRICK_BENCHMARK_PHASE\" \"$CODEX_HOME\" >&2\n"
                 "printf ' %q' \"${codex_args[@]}\" >&2\n"
                 "printf '\\n' >&2\n"
                 "exec codex \"${codex_args[@]}\"\n",
@@ -324,25 +324,25 @@ def main() -> None:
                     "RUSTUP_HOME": str(host_rustup_home),
                     "PATH": f"{repo_root / 'target' / 'debug'}:{env.get('PATH', '')}",
                     "RUSTUP_TOOLCHAIN": "stable",
-                    "LINT_AI_CODEX_ENABLE_MCP_FEATURE": (
+                    "MEMBRICK_CODEX_ENABLE_MCP_FEATURE": (
                         "1" if args.profile == "production" and arm != "codex-native" else "0"
                     ),
                 }
             )
 
             if arm != "codex-native":
-                print("step: install Codex integration into lint-ai worktree", flush=True)
+                print("step: install Codex integration into membrick worktree", flush=True)
                 subprocess.run(
-                    [str(repo_root / "target" / "debug" / "lint-ai"), "--codex-install", str(worktree)],
+                    [str(repo_root / "target" / "debug" / "membrick"), "--codex-install", str(worktree)],
                     cwd=repo_root,
                     env=env,
                     check=True,
                 )
                 restrict_to_claude_equivalent_hooks(codex_home)
                 if args.profile == "hooks-only":
-                    remove_lint_ai_mcp_server(codex_home)
+                    remove_membrick_mcp_server(codex_home)
                 print(
-                    "step complete: restricted Lint-AI to Claude-equivalent memory hooks "
+                    "step complete: restricted Membrick to Claude-equivalent memory hooks "
                     + ("without the code-indexing MCP server" if args.profile == "hooks-only" else "with MCP enabled"),
                     flush=True,
                 )
@@ -351,7 +351,7 @@ def main() -> None:
                 trace_path = arm_results / "mcp-trace.log"
                 configure_mcp_diagnostics(
                     codex_home,
-                    repo_root / "target" / "debug" / "lint-ai",
+                    repo_root / "target" / "debug" / "membrick",
                     trace_path,
                 )
             capture_codex_diagnostics(codex_home, env, arm_results / "client-diagnostics")

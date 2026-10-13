@@ -6,7 +6,7 @@
 //! that true facts are not wrongly retired. Cases expecting supersession are
 //! true-positive controls that keep the harness honest.
 
-use lint_ai::semantic_audit;
+use membrick::semantic_audit;
 
 fn main() {
     let results = semantic_audit::run_all();

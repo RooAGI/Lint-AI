@@ -143,7 +143,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "lint-ai-tantivy-lock-{}-{suffix}",
+            "membrick-tantivy-lock-{}-{suffix}",
             std::process::id()
         ));
         let index_dir = root.join("lexical");
@@ -173,7 +173,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!(
-            "lint-ai-tantivy-recovery-{}-{suffix}",
+            "membrick-tantivy-recovery-{}-{suffix}",
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();

@@ -15,7 +15,7 @@ const MAX_ARRAY_ITEMS: usize = 128;
 const MAX_REPLAY_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REPLAY_EVENTS: usize = 100_000;
 const MAX_REPLAY_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const REPLAY_SESSION_ENV: &str = "LINT_AI_REPLAY_SESSION_ID";
+const REPLAY_SESSION_ENV: &str = "MEMBRICK_REPLAY_SESSION_ID";
 const INTERRUPTED_SESSION_STALE_SECONDS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +44,7 @@ pub struct ReplayReport {
     pub baseline_session_id: String,
     pub replay_session_id: String,
     pub replay_archive: String,
-    pub lint_ai_enabled: bool,
+    pub membrick_enabled: bool,
     pub exit_code: Option<i32>,
     pub output_bytes: usize,
     pub prompt_count: usize,
@@ -59,7 +59,7 @@ pub fn replay_recorded_session(
     project_root: &Path,
     archive_override: Option<&Path>,
     session_id: &str,
-    enable_lint_ai: bool,
+    enable_membrick: bool,
 ) -> Result<ReplayReport> {
     let replay_workspace = ReplayWorkspace::create(project_root)?;
     let archive_root = archive_override
@@ -90,7 +90,7 @@ pub fn replay_recorded_session(
             "replay_of_session_id": session_id,
             "recording_mode": "replay",
             "recording_enabled": true,
-            "lint_ai_enabled": enable_lint_ai,
+            "membrick_enabled": enable_membrick,
             "prompt_count": prompts.len(),
             "event_count": 0,
             "redaction_policy": "default-v1"
@@ -98,7 +98,7 @@ pub fn replay_recorded_session(
     )?;
 
     set_recording_state(provider, replay_workspace.path(), true)?;
-    set_lint_ai_state(provider, replay_workspace.path(), enable_lint_ai)?;
+    set_membrick_state(provider, replay_workspace.path(), enable_membrick)?;
 
     let command_result = run_provider_process(
         provider,
@@ -160,7 +160,7 @@ pub fn replay_recorded_session(
         baseline_session_id: session_id.to_string(),
         replay_session_id,
         replay_archive: replay_dir.to_string_lossy().into_owned(),
-        lint_ai_enabled: enable_lint_ai,
+        membrick_enabled: enable_membrick,
         exit_code: execution.exit_code,
         output_bytes: execution.stdout.len() + execution.stderr.len(),
         prompt_count: prompts.len(),
@@ -176,7 +176,7 @@ struct ReplayWorkspace {
 impl ReplayWorkspace {
     fn create(source: &Path) -> Result<Self> {
         let path = source
-            .join(".lint-ai")
+            .join(".membrick")
             .join("replay-workspaces")
             .join(format!(
                 "replay-{}-{}",
@@ -206,7 +206,7 @@ fn copy_replay_tree(source: &Path, destination: &Path) -> Result<()> {
         let name = entry.file_name();
         if matches!(
             name.to_str(),
-            Some(".git" | ".lint-ai" | "target" | "node_modules")
+            Some(".git" | ".membrick" | "target" | "node_modules")
         ) {
             continue;
         }
@@ -331,7 +331,7 @@ fn run_provider_process(
 ) -> Result<ReplayExecution> {
     let mut execution = ReplayExecution::default();
     let mut provider_session_id = None;
-    let isolated_home = project_root.join(".lint-ai-replay-home");
+    let isolated_home = project_root.join(".membrick-replay-home");
     fs::create_dir_all(&isolated_home)?;
     let isolated_codex_home = isolated_home.join(".codex");
     fs::create_dir_all(&isolated_codex_home)?;
@@ -342,7 +342,7 @@ fn run_provider_process(
 
     for (index, prompt) in prompts.iter().enumerate() {
         eprintln!(
-            "lint-ai replay: starting turn {}/{} ({})",
+            "membrick replay: starting turn {}/{} ({})",
             index + 1,
             prompts.len(),
             provider.as_str()
@@ -437,7 +437,7 @@ fn run_provider_process(
         append_bounded(&mut execution.stdout, &stdout);
         append_bounded(&mut execution.stderr, &stderr);
         eprintln!(
-            "lint-ai replay: finished turn {}/{} in {:.1}s ({})",
+            "membrick replay: finished turn {}/{} in {:.1}s ({})",
             index + 1,
             prompts.len(),
             turn_started.elapsed().as_secs_f64(),
@@ -507,74 +507,76 @@ pub fn promote_recorded_session(
     let content = fs::read_to_string(&events_path)
         .with_context(|| format!("failed to read recorded session {}", events_path.display()))?;
     let group_id = format!("{}-session:{}", provider.as_str(), session_id);
-    // Promoted sessions land in the shared cross-provider memory store. The
-    // provider stays on the documents themselves (group id, `filters.provider`,
-    // `author_agent`, doc id) so attribution is preserved without a silo.
-    // The events file is read before taking the write lock; the whole
-    // upsert + refresh sequence runs under the cross-process lock so it
-    // cannot interleave with hook captures or MCP board/memory writes.
-    crate::memory_api::MemoryService::with_shared_memory(project_root, |store| {
-        let mut imported_document_ids = Vec::new();
-        let mut skipped_events = 0;
-
-        for line in content.lines() {
-            let event: Value = match serde_json::from_str(line) {
-                Ok(value) => value,
-                Err(_) => {
-                    skipped_events += 1;
-                    continue;
-                }
-            };
-            let kind = event.get("kind").and_then(Value::as_str).unwrap_or("event");
-            if matches!(kind, "session_start" | "session_end") {
+    // Promoted sessions land in the shared cross-provider memory store. Route
+    // them through the same resident owner as hook captures so publication
+    // cannot diverge from the provider's writable store.
+    let mut documents = Vec::new();
+    let mut imported_document_ids = Vec::new();
+    let mut skipped_events = 0;
+    for line in content.lines() {
+        let event: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => {
                 skipped_events += 1;
                 continue;
             }
-            let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
-            let doc_id = format!(
-                "session-recording:{}:{}:{}",
-                provider.as_str(),
-                safe_component(session_id),
-                sequence
-            );
-            let mut filters = BTreeMap::new();
-            filters.insert("provider".to_string(), provider.as_str().to_string());
-            filters.insert("session_id".to_string(), session_id.to_string());
-            filters.insert("event_kind".to_string(), kind.to_string());
-            filters.insert("source_type".to_string(), "recorded-session".to_string());
-            let document = SourceDocument {
-                source: format!(
-                    "lint-ai://{}/session/{}/{}",
-                    provider.as_str(),
-                    session_id,
-                    sequence
-                ),
-                concept: "recorded-session".to_string(),
-                headings: vec![kind.to_string()],
-                links: vec![],
-                timestamp: event
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                doc_length: event_content(&event).len(),
-                author_agent: Some(provider.as_str().to_string()),
-                filters,
-                group_id: Some(group_id.clone()),
-                doc_id: doc_id.clone(),
-                content: event_content(&event),
-                key_phrases: Vec::new(),
-                key_phrase_extraction_hash: String::new(),
-            };
-            store.upsert(document);
-            imported_document_ids.push(doc_id);
+        };
+        let kind = event.get("kind").and_then(Value::as_str).unwrap_or("event");
+        if matches!(kind, "session_start" | "session_end") {
+            skipped_events += 1;
+            continue;
         }
-        store.refresh_index()?;
-        Ok(SessionImportReport {
-            session_id: session_id.to_string(),
-            group_id,
-            imported_document_ids,
-            skipped_events,
-        })
+        let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+        let doc_id = format!(
+            "session-recording:{}:{}:{}",
+            provider.as_str(),
+            safe_component(session_id),
+            sequence
+        );
+        let mut filters = BTreeMap::new();
+        filters.insert("provider".to_string(), provider.as_str().to_string());
+        filters.insert("session_id".to_string(), session_id.to_string());
+        filters.insert("event_kind".to_string(), kind.to_string());
+        filters.insert("source_type".to_string(), "recorded-session".to_string());
+        let body = event_content(&event);
+        documents.push(SourceDocument {
+            source: format!(
+                "membrick://{}/session/{}/{}",
+                provider.as_str(),
+                session_id,
+                sequence
+            ),
+            concept: "recorded-session".to_string(),
+            headings: vec![kind.to_string()],
+            links: vec![],
+            timestamp: event
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            doc_length: body.len(),
+            author_agent: Some(provider.as_str().to_string()),
+            filters,
+            group_id: Some(group_id.clone()),
+            doc_id: doc_id.clone(),
+            content: body,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        });
+        imported_document_ids.push(doc_id);
+    }
+    if !documents.is_empty() {
+        crate::integrations::mcp_tools::upsert_hook_documents(
+            project_root,
+            provider.as_str(),
+            session_id,
+            documents,
+        )?;
+    }
+    Ok(SessionImportReport {
+        session_id: session_id.to_string(),
+        group_id,
+        imported_document_ids,
+        skipped_events,
     })
 }
 
@@ -592,6 +594,7 @@ pub fn set_recording_state(
     project_root: &Path,
     enabled: bool,
 ) -> Result<Value> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let root = session_root(provider, project_root);
     fs::create_dir_all(&root)?;
     let state = serde_json::json!({
@@ -606,6 +609,7 @@ pub fn set_recording_state(
 }
 
 pub fn recording_state(provider: RecordingProvider, project_root: &Path) -> Result<Value> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let path = session_root(provider, project_root).join("recording.json");
     if !path.exists() {
         return Ok(serde_json::json!({
@@ -617,11 +621,12 @@ pub fn recording_state(provider: RecordingProvider, project_root: &Path) -> Resu
     Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }
 
-pub fn set_lint_ai_state(
+pub fn set_membrick_state(
     provider: RecordingProvider,
     project_root: &Path,
     enabled: bool,
 ) -> Result<Value> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let root = provider_state_dir(provider, project_root);
     fs::create_dir_all(&root)?;
     let state = serde_json::json!({
@@ -635,7 +640,8 @@ pub fn set_lint_ai_state(
     Ok(state)
 }
 
-pub fn lint_ai_enabled(provider: RecordingProvider, project_root: &Path) -> Result<bool> {
+pub fn membrick_enabled(provider: RecordingProvider, project_root: &Path) -> Result<bool> {
+    crate::state_paths::migrate_legacy_state_dir(project_root)?;
     let path = provider_state_dir(provider, project_root).join("integration.json");
     if !path.exists() {
         return Ok(true);
@@ -655,7 +661,7 @@ pub(crate) fn capture_workspace_file_changes(
     project_root: &Path,
     changes: Vec<crate::pipeline::WorkspaceChangeEvent>,
 ) -> Result<()> {
-    if changes.is_empty() || !lint_ai_enabled(provider, project_root)? {
+    if changes.is_empty() || !membrick_enabled(provider, project_root)? {
         return Ok(());
     }
 
@@ -674,7 +680,7 @@ pub(crate) fn capture_workspace_file_changes(
                 change.after.as_deref(),
             );
             let doc_id = format!("workspace-file-change:{suffix}");
-            let source = format!("lint-ai://workspace/file-change/{suffix}");
+            let source = format!("membrick://workspace/file-change/{suffix}");
             let mut filters = BTreeMap::new();
             filters.insert(
                 "source_type".to_string(),
@@ -683,6 +689,11 @@ pub(crate) fn capture_workspace_file_changes(
             filters.insert("file_path".to_string(), change.file_path.clone());
             filters.insert("event".to_string(), change.event.clone());
             filters.insert("captured_by".to_string(), provider.as_str().to_string());
+            filters.insert("provider".to_string(), provider.as_str().to_string());
+            filters.insert(
+                "session_id".to_string(),
+                format!("{}:workspace-watcher", provider.as_str()),
+            );
 
             let diff = workspace_file_diff(change.before.as_deref(), change.after.as_deref());
             let content = format!(
@@ -710,12 +721,13 @@ pub(crate) fn capture_workspace_file_changes(
     if documents.is_empty() {
         return Ok(());
     }
-    crate::memory_api::MemoryService::with_shared_memory(project_root, |store| {
-        for document in documents {
-            store.upsert(document);
-        }
-        store.refresh_index()
-    })
+    let session_id = format!("{}:workspace-watcher", provider.as_str());
+    crate::integrations::mcp_tools::upsert_hook_documents(
+        project_root,
+        provider.as_str(),
+        &session_id,
+        documents,
+    )
 }
 
 fn workspace_file_change_id(path: &str, before: Option<&str>, after: Option<&str>) -> String {
@@ -888,17 +900,17 @@ pub fn record_event_if_enabled(
 
 fn session_root(provider: RecordingProvider, project_root: &Path) -> PathBuf {
     project_root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(format!("{}-sessions", provider.as_str()))
 }
 
 /// Directory for per-provider integration state (`integration.json`, the
-/// lint-ai on/off flag). This intentionally avoids the legacy
+/// membrick on/off flag). This intentionally avoids the legacy
 /// `{provider}-memory` name: those directories are migrated into the shared
 /// store and removed on first use, which would silently delete the state file.
 pub(crate) fn provider_state_dir(provider: RecordingProvider, project_root: &Path) -> PathBuf {
     project_root
-        .join(".lint-ai")
+        .join(".membrick")
         .join(format!("{}-state", provider.as_str()))
 }
 
@@ -929,15 +941,22 @@ pub fn record_event(
     let provider_name = provider.as_str();
     let session_key = safe_component(session_id);
     let session_dir = session_root.join(session_key);
+    let events_path = session_dir.join("events.jsonl");
+    let manifest_path = session_dir.join("manifest.json");
+    let lock_path = session_dir.join(".lock");
+    crate::pipeline::persistence::ensure_safe_output_path(&events_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&manifest_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&lock_path)?;
     fs::create_dir_all(&session_dir)?;
-    let lock = acquire_lock(&session_dir.join(".lock"))?;
+    crate::pipeline::persistence::ensure_safe_output_path(&events_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&manifest_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&lock_path)?;
+    let lock = acquire_lock(&lock_path)?;
 
     if event_name.eq_ignore_ascii_case("SessionStart") {
         mark_interrupted_sessions(session_root, project_root, session_id)?;
     }
 
-    let events_path = session_dir.join("events.jsonl");
-    let manifest_path = session_dir.join("manifest.json");
     if !manifest_path.exists() {
         write_manifest(
             &manifest_path,
@@ -996,6 +1015,7 @@ pub fn record_event(
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
+        .create_new(false)
         .open(&events_path)
         .with_context(|| format!("failed to open {}", events_path.display()))?;
     restrict_file_permissions(&file)?;
@@ -1004,7 +1024,10 @@ pub fn record_event(
     file.flush()?;
 
     let terminal = event_name.eq_ignore_ascii_case("SessionEnd");
-    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let mut manifest_file = crate::pipeline::file_access::open_regular_file(&manifest_path)?;
+    let mut manifest_bytes = Vec::new();
+    manifest_file.read_to_end(&mut manifest_bytes)?;
+    let mut manifest: Value = serde_json::from_slice(&manifest_bytes)?;
     manifest["event_count"] = Value::from(sequence);
     manifest["last_event"] = Value::String(event_name.to_string());
     manifest["last_event_at"] = Value::String(timestamp());
@@ -1036,10 +1059,18 @@ fn mark_interrupted_sessions(
             continue;
         }
         let manifest_path = path.join("manifest.json");
-        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+        if crate::pipeline::persistence::ensure_safe_output_path(&manifest_path).is_err() {
+            continue;
+        }
+        let Ok(mut manifest_file) = crate::pipeline::file_access::open_regular_file(&manifest_path)
+        else {
             continue;
         };
-        let Ok(mut manifest) = serde_json::from_str::<Value>(&contents) else {
+        let mut contents = Vec::new();
+        if manifest_file.read_to_end(&mut contents).is_err() {
+            continue;
+        }
+        let Ok(mut manifest) = serde_json::from_slice::<Value>(&contents) else {
             continue;
         };
         let same_project = manifest
@@ -1326,13 +1357,18 @@ fn safe_component(value: &str) -> String {
 }
 
 fn count_complete_lines(path: &Path) -> Result<usize> {
-    if !path.exists() {
-        return Ok(0);
-    }
-    Ok(fs::read_to_string(path)?.lines().count())
+    let mut file = match crate::pipeline::file_access::open_regular_file(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    Ok(content.lines().count())
 }
 
 fn write_manifest(path: &Path, value: &Value) -> Result<()> {
+    crate::pipeline::persistence::ensure_safe_output_path(path)?;
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
     restrict_path_permissions(&temporary)?;
@@ -1375,7 +1411,7 @@ fn acquire_lock(path: &Path) -> Result<RecordingLock> {
             Ok(_) => {
                 return Ok(RecordingLock {
                     path: path.to_path_buf(),
-                })
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 thread::sleep(Duration::from_millis(2));
@@ -1488,7 +1524,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-recording-{name}-{nonce}"));
+            .join(format!("membrick-recording-{name}-{nonce}"));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -1529,6 +1565,31 @@ mod tests {
         let manifest = fs::read_to_string(root.join("session-1/manifest.json")).unwrap();
         assert!(manifest.contains("capture-only"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn event_recording_rejects_symlinked_session_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("session-directory-symlink");
+        let outside = temp_root("session-directory-outside");
+        symlink(&outside, root.join("session-link")).unwrap();
+        let result = record_event(
+            RecordingProvider::Codex,
+            &root,
+            Path::new("/tmp/project"),
+            "session-link",
+            "UserPromptSubmit",
+            serde_json::json!({"prompt":"private prompt"}),
+        );
+        assert!(
+            result.is_err(),
+            "recording followed a symlinked session directory"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]
@@ -1605,7 +1666,7 @@ mod tests {
         let workspace = ReplayWorkspace::create(&root).unwrap();
         assert!(workspace
             .path()
-            .starts_with(root.join(".lint-ai/replay-workspaces")));
+            .starts_with(root.join(".membrick/replay-workspaces")));
         let path = workspace.path().to_path_buf();
         drop(workspace);
         assert!(!path.exists());
@@ -1672,7 +1733,7 @@ mod tests {
         )
         .unwrap());
         let telemetry =
-            fs::read_to_string(root.join(".lint-ai/provider-telemetry/claude.json")).unwrap();
+            fs::read_to_string(root.join(".membrick/provider-telemetry/claude.json")).unwrap();
         assert!(telemetry.contains("\"event\": \"TurnUsage\""));
         assert!(telemetry.contains("\"total_tokens\": 29"));
 
@@ -1689,7 +1750,7 @@ mod tests {
         )
         .unwrap());
         let events =
-            fs::read_to_string(root.join(".lint-ai/claude-sessions/session-1/events.jsonl"))
+            fs::read_to_string(root.join(".membrick/claude-sessions/session-1/events.jsonl"))
                 .unwrap();
         assert!(events.contains("\"kind\":\"turn_usage\""));
         assert!(events.contains("\"source\":\"claude-transcript\""));
@@ -1713,7 +1774,7 @@ mod tests {
         .unwrap();
 
         set_recording_state(RecordingProvider::Claude, &root, true).unwrap();
-        let telemetry_path = root.join(".lint-ai/provider-telemetry/claude.json");
+        let telemetry_path = root.join(".membrick/provider-telemetry/claude.json");
         let before = fs::read_to_string(&telemetry_path).unwrap_or_default();
         assert!(
             !before.contains("TurnUsage"),
@@ -1937,21 +1998,21 @@ mod tests {
             assert!(!recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
                 .unwrap());
-            assert!(lint_ai_enabled(provider, &root).unwrap());
+            assert!(membrick_enabled(provider, &root).unwrap());
 
             set_recording_state(provider, &root, true).unwrap();
-            set_lint_ai_state(provider, &root, false).unwrap();
+            set_membrick_state(provider, &root, false).unwrap();
             assert!(recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
                 .unwrap());
-            assert!(!lint_ai_enabled(provider, &root).unwrap());
+            assert!(!membrick_enabled(provider, &root).unwrap());
 
             set_recording_state(provider, &root, false).unwrap();
-            set_lint_ai_state(provider, &root, true).unwrap();
+            set_membrick_state(provider, &root, true).unwrap();
             assert!(!recording_state(provider, &root).unwrap()["enabled"]
                 .as_bool()
                 .unwrap());
-            assert!(lint_ai_enabled(provider, &root).unwrap());
+            assert!(membrick_enabled(provider, &root).unwrap());
             fs::remove_dir_all(root).unwrap();
         }
     }
@@ -1965,7 +2026,7 @@ mod tests {
             RecordingProvider::Agy,
         ] {
             let root = temp_root(provider.as_str());
-            set_lint_ai_state(provider, &root, false).unwrap();
+            set_membrick_state(provider, &root, false).unwrap();
             record_event_if_enabled(
                 provider,
                 &root,
@@ -1975,7 +2036,7 @@ mod tests {
             )
             .unwrap();
             let events = root
-                .join(".lint-ai")
+                .join(".membrick")
                 .join(format!("{}-sessions", provider.as_str()))
                 .join("session-off-memory/events.jsonl");
             assert!(!events.exists());
@@ -1990,7 +2051,7 @@ mod tests {
             )
             .unwrap();
             assert!(root
-                .join(".lint-ai")
+                .join(".membrick")
                 .join(format!("{}-sessions", provider.as_str()))
                 .join("session-on-recording/events.jsonl")
                 .exists());
@@ -2031,8 +2092,8 @@ mod tests {
         assert_eq!(report.session_id, "baseline");
         assert_eq!(report.imported_document_ids.len(), 2);
         // Promoted sessions land in the shared cross-provider store.
-        assert!(project_root.join(".lint-ai/memory").exists());
-        assert!(!project_root.join(".lint-ai/claude-memory").exists());
+        assert!(project_root.join(".membrick/memory").exists());
+        assert!(!project_root.join(".membrick/claude-memory").exists());
         fs::remove_dir_all(project_root).unwrap();
         fs::remove_dir_all(archive_root).unwrap();
     }

@@ -1,13 +1,13 @@
-# lint-ai — OpenClaw plugin
+# membrick — OpenClaw plugin
 
-Automatic Lint-AI memory for OpenClaw: captures agent outcomes and session
+Automatic Membrick memory for OpenClaw: captures agent outcomes and session
 summaries at lifecycle points, so project decisions and results persist
 across sessions.
 
 ## What it does
 
 This is a thin observer. On OpenClaw lifecycle events it forwards a JSON
-payload to the `lint-ai` binary (`lint-ai --openclaw-hook <event>`); all
+payload to the `membrick` binary (`membrick --openclaw-hook <event>`); all
 capture and indexing logic lives in that binary. It does nothing else.
 
 | Hook | Behavior |
@@ -23,42 +23,40 @@ observed on a live OpenClaw host (verified against 2026.9.6 payloads).
 ## Requirements
 
 - OpenClaw with plugin support.
-- The `lint-ai` binary, version 0.3.0 or later, resolvable at runtime —
+- The `membrick` binary, version 0.4.0 or later, resolvable at runtime —
   see "Binary resolution" below. Release binaries are published at
-  https://github.com/RooAGI/Lint-AI/releases.
+  https://github.com/RooAGI/Membrick/releases.
 
 ## Install
 
-Via ClawHub (recommended):
+Use the Membrick installer to configure the plugin together with its MCP
+server, hooks, and skill:
 
 ```bash
-openclaw plugins install clawhub:lintai
-openclaw plugins enable lint-ai
+membrick --openclaw-install /path/to/project
 ```
 
-Via the lint-ai installer (same plugin, plus MCP server, hooks, and skill):
-
-```bash
-lint-ai --openclaw-install /path/to/project
-```
+After the plugin is published to ClawHub, it can also be installed with
+`openclaw plugins install clawhub:membrick` and enabled with
+`openclaw plugins enable membrick`.
 
 ## Configuration
 
-Optional keys under `plugins.entries.lint-ai.config` in `openclaw.json`:
+Optional keys under `plugins.entries.membrick.config` in `openclaw.json`:
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `projectRoot` | Project root lint-ai captures for | The event's `workspaceDir` |
-| `binaryPath` | Absolute path to the `lint-ai` binary | `LINT_AI_BIN`, then `lint-ai` on `PATH` |
+| `projectRoot` | Project root membrick captures for | The event's `workspaceDir` |
+| `binaryPath` | Absolute path to the `membrick` binary | `MEMBRICK_BIN`, then `membrick` on `PATH` |
 
-`--openclaw-install` writes `projectRoot` for you. When installing via
-ClawHub, set `projectRoot` if your Gateway runs multiple workspaces and the
-events don't carry `workspaceDir`.
+`--openclaw-install` writes `projectRoot` for you. If your Gateway runs
+multiple workspaces and events don't carry `workspaceDir`, set `projectRoot`
+in the plugin configuration.
 
 ## Binary resolution
 
-In order: plugin config `binaryPath` → `LINT_AI_BIN` environment variable →
-`lint-ai` found on `PATH` (no shell). If none resolves, the plugin logs one
+In order: plugin config `binaryPath` → `MEMBRICK_BIN` environment variable →
+`membrick` found on `PATH` (no shell). If none resolves, the plugin logs one
 line to stderr and every event is skipped — it never throws into the host.
 
 ## Fail-open behavior

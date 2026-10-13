@@ -1,6 +1,6 @@
 # Korean Language Support
 
-Lint-AI supports Korean (한국어) content across the full retrieval pipeline: indexing, search, NER, question understanding, temporal parsing, and aggregation. All language logic is implemented in Rust; the Python spaCy scripts only load the model name they're given.
+Membrick supports Korean (한국어) content across indexing, search, question understanding, temporal parsing, and aggregation using Rust. These language features do not require spaCy. Korean NER is an optional spaCy enrichment (`ko_core_news_sm`); structured relation extraction has a documented model limitation below.
 
 ## Quick start
 
@@ -11,7 +11,7 @@ No configuration is needed. Language is auto-detected per text from script stati
 - `--lang en`: force English.
 
 ```bash
-lint-ai serve --lang ko
+membrick serve --lang ko
 ```
 
 The search API also accepts a per-request override:
@@ -36,9 +36,9 @@ All TEXT fields use a CJK-aware tokenizer: Han runs index as character bigrams, 
 
 Hangul is never romanized: `normalize_for_index` and the BM25 query sanitizer keep Han/Hangul runs in the original script (no Pinyin/romanization, no English Porter stemming on CJK).
 
-## Named entity recognition (spaCy)
+## Optional named entity recognition (spaCy)
 
-Korean documents use `ko_core_news_sm` (selected per-text in Rust; an explicit `--spacy-model` still overrides). Install it with:
+When the spaCy provider is enabled, Korean documents use `ko_core_news_sm` (selected per-text in Rust; an explicit `--spacy-model` still overrides). `PipelineOptions` defaults to the heuristic, Python-free provider; the CLI currently defaults `--tier1-ner-provider` to `spacy`. Install the model only if you use that provider:
 
 ```bash
 python3 -m pip install --break-system-packages spacy==3.8.16

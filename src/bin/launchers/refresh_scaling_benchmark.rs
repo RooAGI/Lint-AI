@@ -1,3 +1,3 @@
 fn main() -> anyhow::Result<()> {
-    lint_ai::run_binary("refresh_scaling_benchmark")
+    membrick::run_binary("refresh_scaling_benchmark")
 }

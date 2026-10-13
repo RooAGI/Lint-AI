@@ -1,0 +1,34 @@
+{
+  "benchmark": "provider-mcp-search-latency",
+  "date": "2026-10-11",
+  "workspace_document_count": 13974,
+  "provider": "codex",
+  "session_context": true,
+  "top_k": 5,
+  "server_binary": "target/release/server",
+  "cold_process": {
+    "startup_to_health_ms": 5528.2,
+    "first_search_ms": 177.2,
+    "process_start_to_first_results_ms": 5705.5,
+    "results": 5,
+    "persistent_index_caches": "populated"
+  },
+  "warm": {
+    "warmup_requests_per_concurrency": 3,
+    "requests_per_concurrency": 20,
+    "concurrency_1": {
+      "p50_ms": 101.848,
+      "p90_ms": 102.892,
+      "p99_ms": 103.887,
+      "mean_ms": 101.625,
+      "throughput_per_s": 9.84
+    },
+    "concurrency_10": {
+      "p50_ms": 239.86,
+      "p90_ms": 325.463,
+      "p99_ms": 333.697,
+      "mean_ms": 245.399,
+      "throughput_per_s": 37.16
+    }
+  }
+}

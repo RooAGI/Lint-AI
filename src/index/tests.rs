@@ -27,7 +27,7 @@ fn persistent_memory_index_build_waits_for_shared_tantivy_guard() {
         .unwrap()
         .as_nanos();
     let root = std::env::temp_dir().join(format!(
-        "lint-ai-index-build-lock-{}-{suffix}",
+        "membrick-index-build-lock-{}-{suffix}",
         std::process::id()
     ));
     let lexical_dir = root.join("lexical");

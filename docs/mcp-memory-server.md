@@ -5,15 +5,15 @@ meta:
   - property: og:title
     content: "MCP Memory Server: Agent Memory Over the Model Context Protocol"
   - property: og:description
-    content: "Lint-AI exposes persistent agent memory as an MCP server: search, session recording, and memory controls as tools any MCP-capable client can call."
+    content: "Membrick exposes persistent agent memory as an MCP server: search, session recording, and memory controls as tools any MCP-capable client can call."
   - property: og:image
-    content: https://rooagi.github.io/Lint-AI/assets/images/social/mcp-memory-server.png
+    content: https://rooagi.github.io/Membrick/assets/images/social/mcp-memory-server.png
   - property: og:image:width
     content: "1200"
   - property: og:image:height
     content: "630"
   - property: og:url
-    content: https://rooagi.github.io/Lint-AI/mcp-memory-server/
+    content: https://rooagi.github.io/Membrick/mcp-memory-server/
   - name: twitter:card
     content: summary_large_image
 ---
@@ -32,7 +32,7 @@ A typical memory MCP server gives your agent two operations: save this, find thi
 - **No evidence.** Results come back as bare text with no link to where they came from — no session, no revision, no provenance.
 - **Locked to one client.** Memory you build inside one agent's proprietary format doesn't travel.
 
-Lint-AI's MCP interface is built on the same retrieval core as everything else in the project: current-state ranking, evidence links, and supersession tracking — exposed as standard MCP tools any MCP-capable client can call.
+Membrick's MCP interface is built on the same retrieval core as everything else in the project: current-state ranking, evidence links, and supersession tracking — exposed as standard MCP tools any MCP-capable client can call.
 
 ## What the server gives your agent
 
@@ -44,8 +44,8 @@ Seven tools, same names across every supported agent:
 | `info` | Basic information about the indexed workspace. |
 | `list_memories` | Bounded previews of indexed agent memories (`limit` 1–100, default 20). |
 | `record_session` | Start, stop, or inspect capture-only session recording. |
-| `enable_lint_ai` / `disable_lint_ai` | Toggle memory retrieval and capture without touching config. |
-| `lint_ai_status` | Report independent memory and recording state. |
+| `enable_membrick` / `disable_membrick` | Toggle memory retrieval and capture without touching config. |
+| `membrick_status` | Report independent memory and recording state. |
 
 MCP calls are explicit agent actions — the model calls `search` when it needs workspace evidence. (For automatic injection without a tool call, see the [lifecycle hooks](claude-code.md).)
 
@@ -57,30 +57,30 @@ Each agent adapter exposes a provider-local MCP server over the host client's co
 
 ```bash
 # Claude Code: merges the MCP server entry into ~/.claude.json
-./lint-ai --claude-code-install /path/to/project
+./membrick --claude-code-install /path/to/project
 
-# Codex: merges mcp_servers.lint-ai into ~/.codex/config.toml
-./lint-ai --codex-install /path/to/project
+# Codex: merges mcp_servers.membrick into ~/.codex/config.toml
+./membrick --codex-install /path/to/project
 ```
 
 Or run a server directly — for example, to point any MCP-capable client at it:
 
 ```bash
-./lint-ai --claude-code-serve /path/to/repo
-./lint-ai --codex-serve /path/to/repo
+./membrick --claude-code-serve /path/to/repo
+./membrick --codex-serve /path/to/repo
 ```
 
 Memory and recording state are project- and provider-scoped. Recording is capture-only: it writes session events but never injects them as memory. Tool and hook failures are fail-open, so the host agent keeps working if the memory layer has a bad day.
 
 ## Try it — no building required
 
-Download the release binary for your platform (macOS, Linux, or Windows) from the [releases page](https://github.com/RooAGI/Lint-AI/releases), then start a server against any project:
+Download the release binary for your platform (macOS, Linux, or Windows) from the [releases page](https://github.com/RooAGI/Membrick/releases), then start a server against any project:
 
 ```bash
-./lint-ai --claude-code-serve /path/to/project
+./membrick --claude-code-serve /path/to/project
 ```
 
-We did exactly that against the real Lint-AI repo and sent a standard MCP `tools/call`. Verbatim exchange:
+We did exactly that against the real Membrick repo and sent a standard MCP `tools/call`. Verbatim exchange:
 
 ```json
 // client sends
@@ -105,7 +105,7 @@ We did exactly that against the real Lint-AI repo and sent a standard MCP `tools
 Ranked results with scores, sources, and a `semantic_status` verdict on every hit — over plain JSON-RPC, callable from any MCP client. To see what's in the index underneath, inspect it directly:
 
 ```bash
-lint-ai --inspect-index .lint-ai/claude-memory
+membrick --inspect-index .membrick/claude-memory
 ```
 
 For the full agent experience (automatic retrieval at session start, capture at session end), use the installer for your agent instead of running the server by hand.
@@ -116,10 +116,10 @@ For the full agent experience (automatic retrieval at session start, capture at 
 Any MCP-capable client. The same tool names are exposed through the Claude Code, Codex, Gemini CLI, and Antigravity CLI integrations, and the server speaks standard MCP JSON-RPC over the client's configured transport.
 
 **Do I need the agent CLIs installed to use it?**
-No. MCP and server mode are general Lint-AI interfaces — an application doesn't need Claude Code, Codex, Gemini CLI, or Antigravity to use the core index, the HTTP API, or the MCP tools. Only the lifecycle hooks are agent-specific.
+No. MCP and server mode are general Membrick interfaces — an application doesn't need Claude Code, Codex, Gemini CLI, or Antigravity to use the core index, the HTTP API, or the MCP tools. Only the lifecycle hooks are agent-specific.
 
 **How is this different from other memory MCP servers?**
-Current-state retrieval. Most memory servers rank by topical or vector similarity; Lint-AI ranks by what is still true, tracks supersession (new decisions replace old ones without deleting history), and returns evidence with every result. See [stale agent memory](stale-memory.md) for why that matters.
+Current-state retrieval. Most memory servers rank by topical or vector similarity; Membrick ranks by what is still true, tracks supersession (new decisions replace old ones without deleting history), and returns evidence with every result. See [stale agent memory](stale-memory.md) for why that matters.
 
 **Is the memory shared between agents?**
 Memory state is project- and provider-scoped: the same project indexed once serves every connected client through the same tools.

@@ -69,7 +69,8 @@ pub fn load_config(
     } else {
         target
     };
-    let candidate = root.join("lint-ai.json");
+    let candidate = root.join("membrick.json");
+    let legacy_candidate = root.join("lint-ai.json");
     match load_from_path(&candidate, max_bytes) {
         Ok(cfg) => return Ok(cfg),
         Err(err) => {
@@ -87,6 +88,24 @@ pub fn load_config(
                     err
                 );
             }
+        }
+    }
+
+    if legacy_candidate.exists() {
+        match load_from_path(&legacy_candidate, max_bytes) {
+            Ok(cfg) => return Ok(cfg),
+            Err(err) if strict => {
+                return Err(format!(
+                    "Failed to load legacy config at {}: {}",
+                    legacy_candidate.display(),
+                    err
+                ));
+            }
+            Err(err) => eprintln!(
+                "Warning: failed to load legacy config at {}: {}; using defaults",
+                legacy_candidate.display(),
+                err
+            ),
         }
     }
 
@@ -116,7 +135,8 @@ mod tests {
 
     #[test]
     fn malformed_config_falls_back_only_in_non_strict_mode() {
-        let path = std::env::temp_dir().join(format!("lint-ai-config-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("membrick-config-{}.json", std::process::id()));
         fs::write(&path, "{ malformed").unwrap();
         assert!(load_config(path.to_str(), ".", false, 1024).is_ok());
         assert!(load_config(path.to_str(), ".", true, 1024).is_err());

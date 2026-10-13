@@ -4,8 +4,8 @@
 .claude
 .codex
 .history
-.lint-ai
-.lint-ai-cache
+.membrick
+.membrick-cache
 target
 benchmark
 docs

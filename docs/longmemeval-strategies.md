@@ -9,7 +9,7 @@ labels do not imply that every variant is a server default.
 For commands and the complete score tables, see the
 [benchmark overview](benchmark.md#segmented-index-comparison). The latest
 per-query data is in
-[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
+[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
 
 ## Routing: choosing segments
 

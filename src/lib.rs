@@ -6,7 +6,7 @@
 //! and persistence are internal implementation details.
 //!
 //! ```no_run
-//! use lint_ai::{MemoryService, PipelineOptions, AddRequest, Message};
+//! use membrick::{MemoryService, PipelineOptions, AddRequest, Message};
 //!
 //! let mut memory = MemoryService::in_memory(PipelineOptions::default());
 //! memory.add(AddRequest {
@@ -27,22 +27,22 @@
 //! Direct storage access is intentionally unavailable:
 //!
 //! ```compile_fail
-//! use lint_ai::IndexStore;
+//! use membrick::IndexStore;
 //! ```
 //! ```compile_fail
-//! use lint_ai::index::MemoryIndex;
+//! use membrick::index::MemoryIndex;
 //! ```
 //! ```compile_fail
-//! use lint_ai::pipeline::build_index_store;
+//! use membrick::pipeline::build_index_store;
 //! ```
 //! ```compile_fail
-//! use lint_ai::MemoryIndexSnapshot;
+//! use membrick::MemoryIndexSnapshot;
 //! ```
 //! ```compile_fail
-//! use lint_ai::segments::SegmentedMemoryIndex;
+//! use membrick::segments::SegmentedMemoryIndex;
 //! ```
 //! ```compile_fail
-//! use lint_ai::build_query_snapshot;
+//! use membrick::build_query_snapshot;
 //! ```
 
 mod board;
@@ -83,6 +83,7 @@ pub mod semantic_audit;
 mod semantic_relations;
 mod session_prepare;
 mod source;
+mod state_paths;
 mod telemetry;
 mod temporal_fact;
 
@@ -91,6 +92,7 @@ mod temporal_fact;
 mod adapters;
 mod aggregation;
 mod behood_query;
+pub use behood_query::{analyze_evidence_signals_bulk, GroundedEvidenceSignal};
 mod chunking;
 mod claim_extractor;
 mod corpus_graph;
@@ -100,20 +102,22 @@ mod graph;
 mod ownership;
 mod query_expansion;
 pub(crate) use query_expansion::preload_lexical_store;
+mod bart_tokenizer;
+mod porter_stemmer;
 mod query_semantics;
 mod question_focus;
+mod reasoning_rules;
 mod report;
 mod review;
 mod rules;
 mod semantic_tags;
-mod bart_tokenizer;
-mod porter_stemmer;
 mod stopwords_data;
 mod symbols;
 mod temporal;
 mod tier1;
 mod tier1_ner_daemon;
 mod tokenizer;
+mod updater;
 mod usage;
 
 pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
@@ -166,6 +170,9 @@ mod executables;
 /// Launch a bundled executable. This process entry point exposes no memory internals.
 #[doc(hidden)]
 pub fn run_binary(name: &str) -> anyhow::Result<()> {
+    if matches!(name, "membrick" | "lint-ai") {
+        updater::check_for_update();
+    }
     executables::run(name)
 }
 
@@ -566,10 +573,10 @@ impl PyMemoryCore {
     }
 }
 
-/// Agent memory backed by lint-ai's `MemoryService`.
+/// Agent memory backed by membrick's `MemoryService`.
 ///
 /// Local mode keeps the index in-process (`path` selects a persistent
-/// directory, otherwise in-memory). Remote mode talks to a lint-ai server
+/// directory, otherwise in-memory). Remote mode talks to a membrick server
 /// over HTTP (`base_url`, optional `api_key`).
 ///
 /// `ner_provider` is `'heuristic'` (default, Python-free) or `'spacy'`,
@@ -763,7 +770,7 @@ fn json_error(error: impl std::fmt::Display) -> pyo3::PyErr {
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn lint_ai(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn membrick(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_class::<PyMemory>()?;
     Ok(())

@@ -4,12 +4,12 @@
 Pure spaCy parsing: one pass per text over the already-loaded model,
 emitting the noun-phrase descriptors (`mentions`, `np_mentions`) that
 bekind's JSON bridge judges. Judgment itself happens in the bekind
-`--serve` daemon, owned directly by lint-ai's Rust code — this process
+`--serve` daemon, owned directly by membrick's Rust code — this process
 never spawns a subprocess and never touches the bekind binary.
 
 This is the parse half of Luyi's design: "the behood provide people as
 the source, then we have place and thing." spaCy parses the question;
-bekind judges the descriptors; lint-ai uses the text for matching and
+bekind judges the descriptors; membrick uses the text for matching and
 the kind for filtering.
 
 Usage:
@@ -220,7 +220,7 @@ def serve():
     One {"parse_texts": [{"id", "text"}, ...]} per stdin line →
     one {"parsed": [{"id", "mentions", "np_mentions"}, ...]} per stdout
     line. The descriptors are bekind's Request payload pieces; judgment
-    happens in the bekind --serve daemon, owned directly by lint-ai's
+    happens in the bekind --serve daemon, owned directly by membrick's
     Rust code. This process never spawns a subprocess: spaCy is loaded
     once at startup, so per-request cost is milliseconds, not seconds.
     Exits non-zero when the backend cannot be initialized, so the caller

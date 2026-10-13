@@ -5,15 +5,15 @@ meta:
   - property: og:title
     content: "Stale AI Agent Memory: Why Agents Resurface Outdated Decisions"
   - property: og:description
-    content: "Your project says one thing on Monday and something different on Friday. Lint-AI keeps track of what is still true."
+    content: "Your project says one thing on Monday and something different on Friday. Membrick keeps track of what is still true."
   - property: og:image
-    content: https://rooagi.github.io/Lint-AI/assets/images/social/stale-memory.png
+    content: https://rooagi.github.io/Membrick/assets/images/social/stale-memory.png
   - property: og:image:width
     content: "1200"
   - property: og:image:height
     content: "630"
   - property: og:url
-    content: https://rooagi.github.io/Lint-AI/stale-memory/
+    content: https://rooagi.github.io/Membrick/stale-memory/
   - name: twitter:card
     content: summary_large_image
 ---
@@ -52,7 +52,7 @@ Now ask the neutral question:
 How many retry attempts should we use for gateway timeouts?
 ```
 
-A topical retriever can return either document — or both — and leave the model to guess which value is current. **Lint-AI keeps `2` as the current answer and preserves `5` as superseded history.**
+A topical retriever can return either document — or both — and leave the model to guess which value is current. **Membrick keeps `2` as the current answer and preserves `5` as superseded history.**
 
 That difference matters anywhere project truth changes over time: architecture decisions, API contracts, configuration values, runbooks, ownership, terminology, and implementation plans.
 
@@ -68,16 +68,16 @@ Answering "what should we do?" from project history requires more than similarit
 
 Ordinary retrieval answers the first and ignores the rest. That is how a decision from January keeps resurfacing in June as if nothing changed.
 
-## How Lint-AI tracks what is still true
+## How Membrick tracks what is still true
 
 - **Time awareness.** Evidence is ranked with its timestamp, not just its text similarity.
-- **Supersession tracking.** For simple configuration and value claims, Lint-AI can infer chronological replacement when documents establish the same semantic domain. Inferred supersession is domain-scoped, so unrelated settings that happen to share a field name (two different services' `timeout` values, for example) do not suppress one another. Explicit supersession metadata remains authoritative when you provide it. See [semantic supersession](semantic-supersession.md).
+- **Supersession tracking.** For simple configuration and value claims, Membrick can infer chronological replacement when documents establish the same semantic domain. Inferred supersession is domain-scoped, so unrelated settings that happen to share a field name (two different services' `timeout` values, for example) do not suppress one another. Explicit supersession metadata remains authoritative when you provide it. See [semantic supersession](semantic-supersession.md).
 - **Evidence links.** Retrieved context carries its source and relationship evidence, so the agent — and the human reviewing it — can check where an answer came from.
 - **History is preserved, not deleted.** A historical query can still retrieve superseded material *as history* rather than presenting it as current state.
 
 ## We ran it ourselves: the messy real data
 
-Claims are cheap, so we built `lint-ai` (v0.2.1) from source and ran this exact scenario. (You don't need to repeat any of this — the release binary does the same thing. We went through the messy part to show our work.) The unglamorous part: the build machine had no Rust toolchain, so we installed one; the first `cargo build --release` died halfway because `/tmp` was a 512MB ramdisk; we moved the clone, rebuilt, and 7 minutes 25 seconds later had a working binary compiled from the repository's actual source.
+Claims are cheap, so we built `membrick` (v0.2.1) from source and ran this exact scenario. (You don't need to repeat any of this — the release binary does the same thing. We went through the messy part to show our work.) The unglamorous part: the build machine had no Rust toolchain, so we installed one; the first `cargo build --release` died halfway because `/tmp` was a 512MB ramdisk; we moved the clone, rebuilt, and 7 minutes 25 seconds later had a working binary compiled from the repository's actual source.
 
 With the older file dated January and the newer file dated June, the real query returned:
 
@@ -102,7 +102,7 @@ And the LLM-ready context — the text an agent would actually receive — conta
 }
 ```
 
-One honest note: we set the file dates ourselves, because a fresh clone stamps both files with the same time. The repository's own [reproducible terminal demo](https://github.com/RooAGI/Lint-AI#reproducible-terminal-demo) does exactly the same thing to create its controlled scenario — run `bash scripts/run_real_terminal_demo.sh` to replay it.
+One honest note: we set the file dates ourselves, because a fresh clone stamps both files with the same time. The repository's own [reproducible terminal demo](https://github.com/RooAGI/Membrick#reproducible-terminal-demo) does exactly the same thing to create its controlled scenario — run `bash scripts/run_real_terminal_demo.sh` to replay it.
 
 The benchmark numbers get the same treatment. They are not one clean score; every result carries three independent labels — **scope** (the 500-question aggregate vs. the 133-question multi-session slice), **metric** (fractional recall vs. any-hit recall), and **cutoff** (`@5`, `@10`, `@20`) — and the documentation explicitly warns against comparing numbers across different labels. Messier to read than a single badge; harder to misuse.
 
@@ -171,7 +171,7 @@ print('recall@5:', q['recall_at_k']['5'], '| MRR:', q['mrr'])
 
 ## Try it yourself — no building required
 
-You don't need Rust, and you don't need to compile anything. Download the prebuilt binary for your platform (macOS, Linux, or Windows) from the [releases page](https://github.com/RooAGI/Lint-AI/releases), then:
+You don't need Rust, and you don't need to compile anything. Download the prebuilt binary for your platform (macOS, Linux, or Windows) from the [releases page](https://github.com/RooAGI/Membrick/releases), then:
 
 ```bash
 # 1. Create two files that disagree, the way real project docs do
@@ -181,14 +181,14 @@ sleep 2  # ensure the second file is newer, like a real update would be
 printf '# Gateway Retry Policy\n\nGateway timeout retry attempts: 2.\n' > decision-b.md
 
 # 2. Ask the neutral question
-lint-ai --query "How many retry attempts should we use for gateway timeouts?" .
+membrick --query "How many retry attempts should we use for gateway timeouts?" .
 ```
 
 You get `decision-b.md` back with `semantic_status: current`. The old file is still there as history — it just isn't presented as the truth anymore.
 
 ```bash
 # 3. See exactly what your agent would receive
-lint-ai --llm-context "How many retry attempts should we use for gateway timeouts?" .
+membrick --llm-context "How many retry attempts should we use for gateway timeouts?" .
 ```
 
 The context contains the current value (**2**); the stale value (**5**) is excluded. That's the moment it clicks: your agent can't act on the outdated decision, because it never sees it as current.
@@ -196,7 +196,7 @@ The context contains the current value (**2**); the stale value (**5**) is exclu
 Now point it at your own docs — especially the ones where you *know* a decision changed — and ask about them:
 
 ```bash
-lint-ai --query "what is our current deploy process?" /path/to/repo/docs
+membrick --query "what is our current deploy process?" /path/to/repo/docs
 ```
 
 Start with the [quickstart](quickstart.md), or read the [agent memory guide](agent-memory.md) for the bigger picture. If you want the full from-source reproduction with the benchmark data, the [reproduce-it steps above](#reproduce-it) have you covered.

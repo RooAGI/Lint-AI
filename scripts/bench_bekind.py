@@ -3,9 +3,9 @@
 
 Measures warm request throughput and latency at caller concurrency levels,
 with one or more independent bekind daemon processes. One process mirrors
-Lint-AI's current process-wide JsonLinesDaemon; larger pools show how a
+Membrick's current process-wide JsonLinesDaemon; larger pools show how a
 process pool would scale. Each daemon is driven through the same one-line-in,
-one-line-out protocol and each connection is serialized, as in Lint-AI.
+one-line-out protocol and each connection is serialized, as in Membrick.
 
 Example:
     python3 scripts/bench_bekind.py --bekind-bin /path/to/bekind \
@@ -89,7 +89,7 @@ class BekindClient:
             try:
                 response_line = self.responses.get(timeout=remaining)
             except queue.Empty as exc:
-                # Match Lint-AI: discard a timed-out child so a late reply
+                # Match Membrick: discard a timed-out child so a late reply
                 # cannot be mistaken for the next request's response.
                 self.close()
                 raise TimeoutError("bekind did not reply before the per-call timeout") from exc
@@ -217,8 +217,8 @@ def main() -> int:
         "warmup_requests_per_daemon": args.warmup,
         "results": [],
         "note": (
-            "One daemon mirrors Lint-AI's serialized JsonLinesDaemon. Larger pools are a scaling "
-            "comparison, not the current Lint-AI architecture."
+            "One daemon mirrors Membrick's serialized JsonLinesDaemon. Larger pools are a scaling "
+            "comparison, not the current Membrick architecture."
         ),
     }
 

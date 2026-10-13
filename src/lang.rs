@@ -1,4 +1,4 @@
-//! Language detection and per-language defaults for lint-ai's
+//! Language detection and per-language defaults for membrick's
 //! language-by-language internationalization.
 //!
 //! Detection is script-based for CJK (count Han vs Hangul vs Latin

@@ -67,15 +67,15 @@ fn query_cache_key(s: &CacheSettings<'_>) -> String {
 }
 
 fn query_cache_file(s: &CacheSettings<'_>) -> PathBuf {
-    Path::new(".lint-ai-cache").join(format!("{}.json", query_cache_key(s)))
+    Path::new(".membrick-cache").join(format!("{}.json", query_cache_key(s)))
 }
 
 pub(crate) fn query_cache_lexical_dir(s: &CacheSettings<'_>) -> PathBuf {
-    Path::new(".lint-ai-cache").join(format!("{}.tantivy", query_cache_key(s)))
+    Path::new(".membrick-cache").join(format!("{}.tantivy", query_cache_key(s)))
 }
 
 fn query_cache_core_file(s: &CacheSettings<'_>) -> PathBuf {
-    Path::new(".lint-ai-cache").join(format!("{}.core.bin", query_cache_key(s)))
+    Path::new(".membrick-cache").join(format!("{}.core.bin", query_cache_key(s)))
 }
 
 fn fingerprint_base_path(root_path: &str) -> PathBuf {

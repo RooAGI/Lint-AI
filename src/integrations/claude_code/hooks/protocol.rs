@@ -42,6 +42,8 @@ pub struct ClaudeHookInput {
 pub struct ClaudeHookOutput {
     #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
     pub hook_specific_output: Option<ClaudeHookSpecificOutput>,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +64,7 @@ impl ClaudeHookOutput {
                 hook_event_name: event_name.to_string(),
                 additional_context: context,
             }),
+            system_message: None,
         }
     }
 }
@@ -95,6 +98,18 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ClaudeHookOutput::default()).unwrap(),
             serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn update_notice_serializes_as_host_visible_system_message() {
+        let output = ClaudeHookOutput {
+            hook_specific_output: None,
+            system_message: Some("Membrick 0.4.1 is available".to_string()),
+        };
+        assert_eq!(
+            serde_json::to_value(output).unwrap(),
+            serde_json::json!({"systemMessage": "Membrick 0.4.1 is available"})
         );
     }
 

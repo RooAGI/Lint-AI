@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://lint-ai.dev/schemas/muse-code-scenario.schema.json",
-  "title": "Lint-AI Muse Code performance scenario",
+  "$id": "https://membrick.dev/schemas/muse-code-scenario.schema.json",
+  "title": "Membrick Muse Code performance scenario",
   "type": "object",
   "additionalProperties": false,
   "required": [

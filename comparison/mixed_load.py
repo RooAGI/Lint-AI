@@ -220,12 +220,21 @@ def run_once(args, repetition):
     temp_root = ROOT / ".benchmark-tmp"
     temp_root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(
-        prefix=f"lint-ai-mixed-load-{repetition}-", dir=temp_root
+        prefix=f"membrick-mixed-load-{repetition}-", dir=temp_root
     ) as index_tmp:
         port = args.port + repetition - 1
         bind = f"127.0.0.1:{port}"
         server = subprocess.Popen(
-            [str(args.server_bin), "--bind", bind, "--index", index_tmp], cwd=ROOT
+            [
+                str(args.server_bin),
+                "--bind",
+                bind,
+                "--index",
+                index_tmp,
+                "--project-root",
+                index_tmp,
+            ],
+            cwd=ROOT,
         )
         try:
             health = f"http://{bind}/health"
@@ -241,7 +250,7 @@ def run_once(args, repetition):
                 raise RuntimeError("server did not become healthy")
 
             subprocess.run([
-                "python3", str(ROOT / "comparison/seed_lint_ai.py"),
+                "python3", str(ROOT / "comparison/seed_membrick.py"),
                 "--url", f"http://{bind}/add", "--count", str(args.records),
                 "--batch-size", "1024", "--sessions", str(args.sessions), "--bulk",
             ], check=True, cwd=ROOT)

@@ -13,7 +13,7 @@ use std::time::Instant;
 
 #[derive(Debug, Parser)]
 #[command(name = "haystack-indexstore-benchmark")]
-#[command(about = "Run LongMemEval-S through Lint-AI's normal IndexStore query path")]
+#[command(about = "Run LongMemEval-S through Membrick's normal IndexStore query path")]
 struct Args {
     /// Path to the cleaned LongMemEval-S dataset.
     #[arg(long)]

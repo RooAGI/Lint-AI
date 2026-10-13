@@ -1,14 +1,14 @@
-# Lint-AI
+# Membrick
 
 **Open-source agent memory for coding agents.**
 
 > **AI memory that knows what is still true.** Your agent doesn't just forget; it can confidently remember outdated decisions.
 
-Lint-AI is an open-source **persistent agent memory** layer for Claude Code, Codex, Gemini CLI, Antigravity CLI (AGY), and Muse Code. It turns project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** when an agent needs it.
+Membrick is an open-source **persistent agent memory** layer for Claude Code, Codex, Gemini CLI, Antigravity CLI (AGY), and Muse Code. It turns project history — sessions, documents, decisions, traces, notes, and code — into **current, evidence-backed context** when an agent needs it.
 
-Search can find the right topic. Lint-AI helps an agent answer the harder question: **is this information still true?** It uses relevance, time, and semantic relationships to distinguish the latest truth from old-but-still-relevant history.
+Search can find the right topic. Membrick helps an agent answer the harder question: **is this information still true?** It uses relevance, time, and semantic relationships to distinguish the latest truth from old-but-still-relevant history.
 
-[Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Lint-AI/)
+[Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Membrick/)
 
 **Current benchmark:** 500 questions · 86.37% fractional Recall@5 ·
 96.8% any-hit Recall@10 · 2.58 ms mean search time · single CPU · no GPU
@@ -43,14 +43,14 @@ How many retry attempts should we use for gateway timeouts?
 
 A normal retriever can return either document — or both — and leave the model to guess which value is current.
 
-**Lint-AI keeps `2` as the current answer and preserves `5` as superseded history.**
+**Membrick keeps `2` as the current answer and preserves `5` as superseded history.**
 
 That difference matters anywhere project truth changes over time: architecture decisions, API contracts, configuration values, runbooks, ownership, terminology, and implementation plans.
 
-There is no required `supersedes:` frontmatter in this example. For simple configuration/value claims, Lint-AI can infer chronological replacement when the documents establish the same semantic domain. Inferred supersession is domain-scoped so unrelated settings such as two different services' `timeout` values do not suppress one another. Explicit supersession metadata remains authoritative when you provide it.
+There is no required `supersedes:` frontmatter in this example. For simple configuration/value claims, Membrick can infer chronological replacement when the documents establish the same semantic domain. Inferred supersession is domain-scoped so unrelated settings such as two different services' `timeout` values do not suppress one another. Explicit supersession metadata remains authoritative when you provide it.
 
 ```bash
-lint-ai --query \
+membrick --query \
   "How many retry attempts should we use for gateway timeouts?" \
   examples/demo-real-terminal
 ```
@@ -59,9 +59,9 @@ Current-state retrieval returns the newer decision with `semantic_status: curren
 
 ### Reproducible terminal demo
 
-![Lint-AI reproducible terminal demo](docs/assets/lint-ai-real-terminal.gif)
+![Membrick reproducible terminal demo](docs/assets/membrick-real-terminal.gif)
 
-The repository includes a reproducible **asciinema PTY recording** that builds the actual `lint-ai` binary, sets deterministic file mtimes for a controlled stale-memory scenario, runs the neutral query above, verifies the result, and renders the captured terminal session.
+The repository includes a reproducible **asciinema PTY recording** that builds the actual `membrick` binary, sets deterministic file mtimes for a controlled stale-memory scenario, runs the neutral query above, verifies the result, and renders the captured terminal session.
 
 ```bash
 bash scripts/run_real_terminal_demo.sh
@@ -71,7 +71,7 @@ See [`examples/demo-real-terminal/`](examples/demo-real-terminal/) and [`.github
 
 ---
 
-## Why Lint-AI?
+## Why Membrick?
 
 Agent memory is not only a retrieval problem. It is a **state problem**.
 
@@ -83,7 +83,7 @@ A useful memory layer has to answer:
 4. **Temporal intent** — is the user asking about now, last Tuesday, or a historical state?
 5. **Evidence** — where did the answer come from?
 
-| Ordinary retrieval | Lint-AI |
+| Ordinary retrieval | Membrick |
 |---|---|
 | Finds topically similar text | Ranks relevant **and current** evidence |
 | Can surface stale decisions as if they are current | Tracks time and supersession |
@@ -101,25 +101,25 @@ Historical evidence is not deleted. A historical query can still retrieve supers
 Install directly from GitHub:
 
 ```bash
-cargo install --git https://github.com/RooAGI/Lint-AI
+cargo install --git https://github.com/RooAGI/Membrick
 ```
 
 Lint or index a local corpus:
 
 ```bash
-lint-ai /path/to/repo
+membrick /path/to/repo
 ```
 
 Query it:
 
 ```bash
-lint-ai --query "what is the current retry policy?" /path/to/repo/docs
+membrick --query "what is the current retry policy?" /path/to/repo/docs
 ```
 
 Get LLM-ready context:
 
 ```bash
-lint-ai --llm-context "what is the current retry policy?" /path/to/repo/docs
+membrick --llm-context "what is the current retry policy?" /path/to/repo/docs
 ```
 
 For Docker, HTTP, Python, Rust, and MCP setup, see the [full quickstart](docs/quickstart.md).
@@ -128,7 +128,7 @@ For Docker, HTTP, Python, Rust, and MCP setup, see the [full quickstart](docs/qu
 
 ## Agent integrations
 
-Lint-AI provides opt-in integrations for major coding-agent clients.
+Membrick provides opt-in integrations for major coding-agent clients.
 
 | Integration | Project memory | Lifecycle capture | MCP tools | Replay / comparison |
 |---|---:|---:|---:|---:|
@@ -142,30 +142,30 @@ Build the Claude Code and Codex integrations:
 
 ```bash
 cargo build --release --features claude-code,codex
-./target/release/lint-ai --claude-code-install /path/to/project
-./target/release/lint-ai --codex-install /path/to/project
+./target/release/membrick --claude-code-install /path/to/project
+./target/release/membrick --codex-install /path/to/project
 ```
 
 All agents share one project-scoped memory store:
 
 ```text
-/path/to/project/.lint-ai/memory/
+/path/to/project/.membrick/memory/
 ```
 
 Upgrading from an older version? Legacy per-provider stores
-(`.lint-ai/claude-memory/`, `.lint-ai/codex-memory/`,
-`.lint-ai/gemini-cli-memory/`, `.lint-ai/agy-memory/`,
-`.lint-ai/muse-memory/`) are migrated into `.lint-ai/memory/` on first run
+(`.membrick/claude-memory/`, `.membrick/codex-memory/`,
+`.membrick/gemini-cli-memory/`, `.membrick/agy-memory/`,
+`.membrick/muse-memory/`) are migrated into `.membrick/memory/` on first run
 and removed once their migration succeeds.
 
 The shared MCP controls include session recording, memory listing, and runtime enable/disable controls:
 
 ```text
-mcp__lint-ai__record_session       {"action":"start|stop|status"}
-mcp__lint-ai__list_memories        {"limit":20}
-mcp__lint-ai__enable_lint_ai       {}
-mcp__lint-ai__disable_lint_ai      {}
-mcp__lint-ai__lint_ai_status        {}
+mcp__membrick__record_session       {"action":"start|stop|status"}
+mcp__membrick__list_memories        {"limit":20}
+mcp__membrick__enable_membrick       {}
+mcp__membrick__disable_membrick      {}
+mcp__membrick__membrick_status        {}
 ```
 
 See [agent integrations](docs/agents.md) and the [MCP guide](docs/mcp.md) for the complete setup.
@@ -174,7 +174,7 @@ See [agent integrations](docs/agents.md) and the [MCP guide](docs/mcp.md) for th
 
 ## Benchmark highlights
 
-Lint-AI is evaluated on **LongMemEval-S**, a public benchmark for long-context agent-memory retrieval over multi-session conversations.
+Membrick is evaluated on **LongMemEval-S**, a public benchmark for long-context agent-memory retrieval over multi-session conversations.
 
 ### How to read the benchmark numbers
 
@@ -276,9 +276,9 @@ The repository also includes reproducible Claude Code and Codex replay/performan
 | Provider / arm | Continuation | Input tokens | Tool calls | Scenario recall | Hook time |
 |---|---:|---:|---:|---:|---:|
 | Claude native memory | 22.47 s | 123,536 | 4 | 2/3 | 0 ms |
-| Claude Lint-AI only | 7.05 s | 15,914 | 0 | 3/3 | 1.40 s |
+| Claude Membrick only | 7.05 s | 15,914 | 0 | 3/3 | 1.40 s |
 | Codex native memory | 38.13 s | 151,000 | 5 | 2/3 | 0 ms |
-| Codex Lint-AI only | 18.53 s | 62,478 | 2 | 2/3 | 1.33 s |
+| Codex Membrick only | 18.53 s | 62,478 | 2 | 2/3 | 1.33 s |
 
 Read the full conditions and limitations:
 
@@ -289,7 +289,7 @@ Read the full conditions and limitations:
 
 ---
 
-## What Lint-AI can do
+## What Membrick can do
 
 - Recover the right past session or project note when an agent needs context
 - Rank current evidence ahead of superseded guidance
@@ -308,7 +308,7 @@ Read the full conditions and limitations:
 
 ## How it works
 
-Lint-AI treats project memory as more than a bag of text.
+Membrick treats project memory as more than a bag of text.
 
 ```text
 Sessions · docs · code · traces
@@ -335,7 +335,7 @@ Sessions · docs · code · traces
        4. Retrieve
 ```
 
-Under the hood, Lint-AI builds a lexical index plus sparse entity/term tables and overlays graph structure for links, symbols, ownership, semantic relations, and time.
+Under the hood, Membrick builds a lexical index plus sparse entity/term tables and overlays graph structure for links, symbols, ownership, semantic relations, and time.
 
 A single prepared-query path owns query analysis, augmented search text, temporal context, routing intent, reference-clock handling, semantic suppression, and provenance annotation. The CLI and `IndexStore` use the same semantic/temporal query policy so current-state behavior does not depend on which high-level entry point you call.
 
@@ -350,12 +350,12 @@ For implementation details, see:
 
 ---
 
-## Use Lint-AI from your stack
+## Use Membrick from your stack
 
 ### CLI
 
 ```bash
-lint-ai --query "what is the current retry policy?" /path/to/repo
+membrick --query "what is the current retry policy?" /path/to/repo
 ```
 
 ### Docker / HTTP
@@ -370,8 +370,16 @@ See the [HTTP server guide](docs/server.md).
 
 ### Python
 
-Build the optional Python extension with `uv` and `maturin`, then use the
-memory service from Python:
+Install the PyPI package to get both the Python `MemoryService` API and the
+Rust `membrick` CLI on supported platforms:
+
+```bash
+pipx install membrick
+membrick --codex-install .
+```
+
+For development from this checkout, build the optional Python extension with
+`uv` and `maturin`:
 
 ```bash
 uv venv --python 3.10
@@ -384,9 +392,9 @@ To build a distributable wheel instead, run `maturin build --release`; the
 wheel is written under `target/wheels/`.
 
 ```python
-import lint_ai
+import membrick
 
-memory = lint_ai.Memory(path="./memory-index")
+memory = membrick.Memory(path="./memory-index")
 memory.add(
     "request-1",
     "user-1",
@@ -395,10 +403,10 @@ memory.add(
 )
 print(memory.search("docker ubuntu", "user-1", 5))
 
-# Use the same API against a running lint-ai server:
+# Use the same API against a running membrick server:
 # NOTE: base_url must be passed by keyword. A positional first argument
 # is `path` and would silently create a local index instead of connecting.
-remote = lint_ai.Memory(base_url="http://127.0.0.1:8080", api_key="local-token")
+remote = membrick.Memory(base_url="http://127.0.0.1:8080", api_key="local-token")
 print(remote.search("docker ubuntu", "user-1", 5))
 ```
 
@@ -409,7 +417,7 @@ and configuration types are public; stores, indexes, snapshots, builders, and
 persistence modules are internal. See [the API migration guide](docs/memory-service-api.md).
 
 ```rust
-use lint_ai::{MemoryService, PipelineOptions, SourceDocument};
+use membrick::{MemoryService, PipelineOptions, SourceDocument};
 
 fn main() -> anyhow::Result<()> {
     let mut memory = MemoryService::in_memory(PipelineOptions::default());
@@ -436,9 +444,9 @@ See [docs/quickstart.md](docs/quickstart.md) for complete examples.
 
 ---
 
-## When is Lint-AI a good fit?
+## When is Membrick a good fit?
 
-Lint-AI is especially useful when you maintain:
+Membrick is especially useful when you maintain:
 
 - Long-running agent memory over conversations, notes, and decisions
 - Markdown knowledge bases with many cross-links
@@ -446,13 +454,13 @@ Lint-AI is especially useful when you maintain:
 - Codebases where symbols, ownership, usage, and review context matter
 - Fast-changing corpora where freshness matters as much as relevance
 
-If your only requirement is simple keyword search over a static set of documents, Lint-AI is probably more machinery than you need.
+If your only requirement is simple keyword search over a static set of documents, Membrick is probably more machinery than you need.
 
 ---
 
 ## Project status
 
-Lint-AI is under active development. The release query path uses the heuristic backend; experimental model-backed query semantics remain separate from the audited release dependency graph.
+Membrick is under active development. The release query path uses the heuristic backend; experimental model-backed query semantics remain separate from the audited release dependency graph.
 
 The security audit workflow runs `cargo audit`. Binary persistence uses
 `oxicode`, and the lexical index uses Tantivy 0.25 to preserve measured recall.
@@ -462,9 +470,9 @@ upstream fixes.
 
 Issues, benchmark reproductions, integration feedback, and contributions are welcome.
 
-- [Open an issue](https://github.com/RooAGI/Lint-AI/issues)
-- [Join a discussion](https://github.com/RooAGI/Lint-AI/discussions)
-- [Read the documentation](https://rooagi.github.io/Lint-AI/)
+- [Open an issue](https://github.com/RooAGI/Membrick/issues)
+- [Join a discussion](https://github.com/RooAGI/Membrick/discussions)
+- [Read the documentation](https://rooagi.github.io/Membrick/)
 
 ## License
 

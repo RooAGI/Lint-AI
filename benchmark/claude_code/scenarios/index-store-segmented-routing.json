@@ -11,7 +11,7 @@
       "establishes_fact_ids": ["index-store-owner", "local-distinctiveness"]
     }
   ],
-  "continuation_prompt": "Without asking me to repeat our previous architecture discussion, explain which existing Lint-AI API the Claude adapter should use for memory, which routing strategy we selected, and why a global index is still retained.",
+  "continuation_prompt": "Without asking me to repeat our previous architecture discussion, explain which existing Membrick API the Claude adapter should use for memory, which routing strategy we selected, and why a global index is still retained.",
   "expected_facts": [
     {
       "id": "index-store-owner",

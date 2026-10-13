@@ -2,8 +2,10 @@ use crate::index::{DocRecord, MemoryIndex, TemporalQueryContext};
 use crate::query_semantics::parse_reference_date;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use super::catalog::*;
@@ -50,6 +52,7 @@ pub(crate) const SEGMENT_CANDIDATE_OVERSAMPLE: usize = 2;
 pub(crate) const ROUTING_POSTINGS_PER_TERM: usize = 16;
 pub(crate) const ROUTING_CANDIDATE_POOL_LIMIT: usize = 64;
 
+#[derive(Clone)]
 pub struct MemoryIndexSegment {
     pub segment_id: String,
     pub doc_ids: Vec<String>,
@@ -180,20 +183,59 @@ pub(crate) fn build_segments_by_group_id(records: &[DocRecord]) -> Vec<MemoryInd
 
 pub(crate) fn build_memory_index_segment(
     segment_id: String,
+    segment_records: Vec<DocRecord>,
+) -> MemoryIndexSegment {
+    build_memory_index_segment_with_lexical_root(segment_id, segment_records, None)
+}
+
+pub(crate) fn build_memory_index_segment_with_lexical_root(
+    segment_id: String,
     mut segment_records: Vec<DocRecord>,
+    lexical_root: Option<&Path>,
 ) -> MemoryIndexSegment {
     segment_records.sort_by(|a, b| a.doc_id.cmp(&b.doc_id));
     let doc_ids = segment_records
         .iter()
         .map(|record| record.doc_id.clone())
         .collect::<Vec<_>>();
-    let index = Arc::new(MemoryIndex::from_records(segment_records));
+    let lexical_dir =
+        lexical_root.map(|root| segment_lexical_dir(root, &segment_id, &segment_records));
+    let index = Arc::new(if let Some(lexical_dir) = lexical_dir.as_deref() {
+        MemoryIndex::from_records_with_lexical_dir(
+            segment_records,
+            Some(lexical_dir),
+            false,
+            false,
+            false,
+        )
+    } else {
+        MemoryIndex::from_records(segment_records)
+    });
     MemoryIndexSegment {
         segment_id,
         doc_ids,
         index,
         record_dates: OnceLock::new(),
     }
+}
+
+fn segment_lexical_dir(root: &Path, segment_id: &str, records: &[DocRecord]) -> PathBuf {
+    // Include the segment's complete record identity in the cache path. The
+    // lexical index is immutable once built; writes produce a new directory
+    // for the changed content while existing readers keep their old snapshot.
+    let mut hasher = Sha256::new();
+    // Preserve the legacy schema tag so existing segment IDs remain stable.
+    hasher.update(b"lint-ai-segment-lexical-v1");
+    hasher.update(segment_id.as_bytes());
+    for record in records {
+        hasher.update(record.doc_id.as_bytes());
+        hasher.update(record.content_hash.as_bytes());
+        for tag in &record.semantic_tags {
+            hasher.update(tag.as_bytes());
+            hasher.update(&[0]);
+        }
+    }
+    root.join(format!("{:x}", hasher.finalize()))
 }
 
 impl MemoryIndexSegment {

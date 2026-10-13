@@ -2,7 +2,7 @@
 
 ## Overview
 
-Lint-AI integrates with Claude Code as a persistent memory layer. It captures
+Membrick integrates with Claude Code as a persistent memory layer. It captures
 useful outcomes from one session and retrieves relevant memories when a later
 session needs them. The expected benefit is less repeated repository
 exploration without reducing answer quality.
@@ -22,34 +22,34 @@ cover the continuation session only; setup is the memory-seeding phase.
 | Arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude native memory | 22.47 s | 123,536 | 123,526 | 1,239 | 4 | 2/3 | 0 ms |
-| Lint-AI only | 7.05 s | 15,914 | 15,912 | 376 | 0 | 3/3 | 1.40 s |
+| Membrick only | 7.05 s | 15,914 | 15,912 | 376 | 0 | 3/3 | 1.40 s |
 | Both layers | 7.17 s | 15,914 | 15,912 | 271 | 0 | 3/3 | 1.36 s |
 
 The native-versus-combined comparison was `15.30 s` lower for the combined
-arm in this run. The Lint-AI-only arm disabled Claude auto-memory with
+arm in this run. The Membrick-only arm disabled Claude auto-memory with
 `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; the native arm used an isolated
-auto-memory directory; and both Lint-AI arms excluded the MCP code-index
+auto-memory directory; and both Membrick arms excluded the MCP code-index
 server. These are smoke results, not statistically reliable product claims.
 
 Preserved reports:
 
 - `benchmark/claude_code/results/native-vs-both-fixed/comparison.json`
-- `benchmark/claude_code/results/lint-ai-only-fixed/comparison.json`
+- `benchmark/claude_code/results/membrick-only-fixed/comparison.json`
 
 ## MCP-Only Validation Run
 
 The Claude MCP-only path was validated with the same
-`index-store-segmented-routing` scenario and one `claude-lint-ai` arm. Lint-AI
+`index-store-segmented-routing` scenario and one `claude-membrick` arm. Membrick
 lifecycle hooks were disabled; the MCP server remained enabled:
 
-| Arm | MCP status | Continuation | Input tokens | Cached input | Output tokens | All tool calls | Lint-AI MCP calls | Recall | Hook time |
+| Arm | MCP status | Continuation | Input tokens | Cached input | Output tokens | All tool calls | Membrick MCP calls | Recall | Hook time |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude MCP-only | Connected | 47.09 s | 189,022 | 189,006 | 3,678 | 10 | 1 (`info`) | 3/3 | 0 ms |
 
-The MCP server completed initialization and Claude called the Lint-AI
+The MCP server completed initialization and Claude called the Membrick
 `info` tool. It did not call `search`; Claude selected local repository tools
-for the architecture question. The installed `lint-ai-memory` skill guides
-Claude to prefer `mcp__lint-ai__search`, but skills are model-invoked guidance
+for the architecture question. The installed `membrick-memory` skill guides
+Claude to prefer `mcp__membrick__search`, but skills are model-invoked guidance
 and do not force a tool call. This validates MCP availability with hooks
 disabled, but is not a measurement of MCP search/retrieval performance.
 The run also reported the `bare-memory-index` forbidden-fact match, despite
@@ -64,21 +64,21 @@ the Claude run is a model tool-selection outcome, not an MCP server failure.
 
 Preserved report:
 
-- `benchmark/claude_code/results/mcp-only/claude-lint-ai/report.json`
+- `benchmark/claude_code/results/mcp-only/claude-membrick/report.json`
 
 ## Current Findings
 
 The most representative comparison left Claude Code's normal repository tools
 and Agent delegation available. Both runs received the same prompt against the
-same Lint-AI repository revision. The only intended difference was whether
-Lint-AI's hooks, MCP server, and stored memory were enabled.
+same Membrick repository revision. The only intended difference was whether
+Membrick's hooks, MCP server, and stored memory were enabled.
 
 Both configurations produced a correct answer. Claude alone rediscovered the
-architectural decision by inspecting the repository. With Lint-AI enabled,
+architectural decision by inspecting the repository. With Membrick enabled,
 Claude received three memories from the exact repository revision and required
 less exploration.
 
-| Metric | Claude only | Claude + Lint-AI | Difference |
+| Metric | Claude only | Claude + Membrick | Difference |
 | --- | ---: | ---: | ---: |
 | Answer accuracy | 3/3 | 3/3 | Equal |
 | End-to-end wall time | 25.570 s | 21.272 s | 16.8% lower |
@@ -94,9 +94,9 @@ less exploration.
 | Hook latency | 0 | 189 ms | +189 ms |
 | Subagents | 0 | 0 | Equal |
 
-In this run, Lint-AI preserved answer accuracy while reducing tool use, model
+In this run, Membrick preserved answer accuracy while reducing tool use, model
 turns, elapsed time, and total token consumption. Its hooks accounted for less
-than 1% of the Lint-AI run's elapsed time.
+than 1% of the Membrick run's elapsed time.
 
 ### What Was Remembered
 
@@ -109,7 +109,7 @@ the user repeating it. The expected facts were:
 - A global index remains available as a fallback when segment routing does not
   select enough relevant content.
 
-Lint-AI retrieved all three facts from memories associated with the exact Git
+Membrick retrieved all three facts from memories associated with the exact Git
 revision under test. Claude still verified the retrieved information against
 the repository before answering.
 
@@ -127,11 +127,11 @@ the repository before answering.
 ## Controlled Smoke Test
 
 An earlier diagnostic run denied repository file and shell tools in both
-configurations. This tested whether Lint-AI could recover the decision when
+configurations. This tested whether Membrick could recover the decision when
 Claude could not rediscover it directly. Claude Code was version `2.1.143`; all
 other major model and repository settings matched the realistic comparison.
 
-| Metric | Claude only | Claude + Lint-AI | Difference |
+| Metric | Claude only | Claude + Membrick | Difference |
 | --- | ---: | ---: | ---: |
 | Expected facts answered correctly | 0/3 | 3/3 | +3 facts |
 | End-to-end time | 38.550 s | 37.811 s | 1.9% lower |
@@ -140,13 +140,13 @@ other major model and repository settings matched the realistic comparison.
 | Parent-session tokens | 81,504 | 47,651 | 41.5% lower |
 | Total model tokens | 184,353 | 211,982 | 15.0% higher |
 | Reported cost | USD 0.2868 | USD 0.2545 | 11.3% lower |
-| Memories supplied by Lint-AI | 0 | 7 | +7 |
-| Lint-AI context added | 0 bytes | 5,568 bytes | +5,568 bytes |
-| Lint-AI hook time | 0 ms | 207 ms | +207 ms |
+| Memories supplied by Membrick | 0 | 7 | +7 |
+| Membrick context added | 0 bytes | 5,568 bytes | +5,568 bytes |
+| Membrick hook time | 0 ms | 207 ms | +207 ms |
 | Subagents launched | 1 | 1 | Equal |
 
 Claude alone declined to state the decision because it had neither memory nor
-repository access. Lint-AI recovered the facts, but its Explore agent consumed
+repository access. Membrick recovered the facts, but its Explore agent consumed
 enough additional tokens that total model usage increased. This controlled run
 shows the value of memory for otherwise unavailable facts; it does not show a
 token-efficiency improvement.
@@ -188,18 +188,18 @@ release gates defined below.
 
 ## MCP Performance Track
 
-The current results intentionally exclude the Lint-AI MCP server so they
+The current results intentionally exclude the Membrick MCP server so they
 measure lifecycle memory-hook behavior only. MCP should be measured separately
 because it adds repository code-search functionality and may build or load a
 repository index at startup.
 
 Use a separate full-integration matrix:
 
-| Arm | Claude memory | Lint-AI hooks | Lint-AI MCP |
+| Arm | Claude memory | Membrick hooks | Membrick MCP |
 | --- | --- | --- | --- |
 | Native | Enabled | Disabled | Disabled |
-| Lint-AI hooks | Disabled | Enabled | Disabled |
-| Lint-AI full | Disabled | Enabled | Enabled |
+| Membrick hooks | Disabled | Enabled | Disabled |
+| Membrick full | Disabled | Enabled | Enabled |
 | Combined full | Enabled | Enabled | Enabled |
 
 Record these MCP-specific metrics independently from continuation latency:
@@ -222,14 +222,14 @@ The benchmark is designed to answer four questions:
 3. Does it reduce total model tokens after accounting for injected context?
 4. What latency does capture, retrieval, indexing, and MCP synchronization add?
 
-The primary comparison is Claude Code with Lint-AI disabled versus the same
+The primary comparison is Claude Code with Membrick disabled versus the same
 Claude Code version, model, repository state, prompts, and permissions with
-Lint-AI enabled.
+Membrick enabled.
 
 ### Non-Goals
 
 - Comparing Claude models or Claude Code releases.
-- Comparing Lint-AI with unrelated coding agents.
+- Comparing Membrick with unrelated coding agents.
 - Using retrieval benchmark scores alone as evidence of agent improvement.
 - Optimizing Rust microbenchmarks without measuring end-to-end Claude tasks.
 - Persisting private transcripts as benchmark artifacts.
@@ -241,14 +241,14 @@ Each scenario runs in two required arms and one optional diagnostic arm.
 | Arm | Hooks | MCP | Persisted memory |
 | --- | --- | --- | --- |
 | Baseline | Disabled | Disabled | None |
-| Lint-AI | Enabled | Enabled | Seeded by the setup session |
+| Membrick | Enabled | Enabled | Seeded by the setup session |
 | Oracle | Disabled | Disabled | Relevant facts inserted into the prompt |
 
 The oracle arm estimates the best result available when the correct memory is
 known. It distinguishes retrieval failures from Claude reasoning failures.
 
 Run order must be randomized. Each arm uses a fresh Claude session, fresh
-working copy, and isolated `CLAUDE_CONFIG_DIR` and Lint-AI store. Do not reuse
+working copy, and isolated `CLAUDE_CONFIG_DIR` and Membrick store. Do not reuse
 model context or generated files across arms.
 
 ## Workload
@@ -283,7 +283,7 @@ The initial suite should contain at least three scenarios in each category:
 - **Segment isolation:** retrieve the right session without leaking unrelated
   session facts.
 
-Include negative queries where no memory is relevant. Lint-AI should inject no
+Include negative queries where no memory is relevant. Membrick should inject no
 context or only context below a defined relevance threshold.
 
 ## Controlled Environment
@@ -292,7 +292,7 @@ Pin and record:
 
 - Claude Code version
 - Claude model identifier
-- Lint-AI revision and feature set
+- Membrick revision and feature set
 - operating system and architecture
 - repository revision
 - Claude settings and permission mode
@@ -326,7 +326,7 @@ against precision.
 **Total model tokens**
 
 Sum input, cache-read, cache-write, and output tokens across the continuation
-session. Report each component separately and report injected Lint-AI context
+session. Report each component separately and report injected Membrick context
 bytes and estimated tokens. Missing telemetry is `null`, never zero.
 
 Report parent-session and all-model token components separately. Derive
@@ -393,7 +393,7 @@ delegated prompt, counts `hook_additional_context` bytes once, and counts
 memories marked `Revision status: exact-match`. Its measurements are post-run
 observations and do not alter benchmark tool availability or Claude behavior.
 
-### Lint-AI Measurements
+### Membrick Measurements
 
 Add structured measurements around these boundaries:
 
@@ -446,14 +446,14 @@ result files containing project content must not be committed.
 For each scenario repetition:
 
 1. Create an isolated repository worktree at the pinned revision.
-2. Create isolated Claude configuration and Lint-AI memory directories.
+2. Create isolated Claude configuration and Membrick memory directories.
 3. Run the setup session and validate that required facts were established.
-4. For the Lint-AI arm, verify expected capture documents and segments.
+4. For the Membrick arm, verify expected capture documents and segments.
 5. Reset generated repository changes required by the scenario definition.
 6. Start a fresh continuation session.
 7. Run the continuation prompt with a fixed timeout.
 8. Execute the deterministic task validator.
-9. Parse Claude and Lint-AI event data.
+9. Parse Claude and Membrick event data.
 10. Redact and write one structured result record.
 11. Destroy the isolated configuration, transcript, and memory directories.
 
@@ -473,7 +473,7 @@ results in addition to aggregate values.
   rate.
 
 Do not average successful and timed-out latency without reporting timeout rate.
-Do not discard failed Lint-AI runs. Infrastructure failures are classified
+Do not discard failed Membrick runs. Infrastructure failures are classified
 separately from task failures using predefined rules.
 
 ## Initial Release Gates
@@ -500,8 +500,8 @@ candidate's results, and record the rationale in this document.
 Every run includes synthetic canaries for API keys, bearer tokens, passwords,
 and PEM private keys. After capture, scan:
 
-- `.lint-ai/memory`
-- Lint-AI measurement JSONL
+- `.membrick/memory`
+- Membrick measurement JSONL
 - benchmark result records
 - generated reports
 
@@ -523,7 +523,7 @@ The generated report includes:
 - secret-canary scan result
 
 Reports must clearly separate measured results from interpretation. A report
-must not claim that Lint-AI reduces tokens or latency when the corresponding
+must not claim that Membrick reduces tokens or latency when the corresponding
 telemetry was missing.
 
 ## Implementation Phases

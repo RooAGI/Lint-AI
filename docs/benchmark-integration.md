@@ -1,7 +1,7 @@
 # Agent Integration Benchmark
 
-This benchmark measures how Lint-AI behaves when integrated with an agent
-client. It is not a benchmark of the standalone Lint-AI retrieval engine and
+This benchmark measures how Membrick behaves when integrated with an agent
+client. It is not a benchmark of the standalone Membrick retrieval engine and
 it is not an academic corpus benchmark. It measures the complete client path:
 
 - the agent's setup turn;
@@ -56,8 +56,8 @@ leave unavailable telemetry as `null` rather than estimate it.
 The integration benchmark answers these questions:
 
 1. Can the client recall facts established in an earlier session?
-2. Does Lint-AI reduce repeated repository exploration?
-3. Does Lint-AI preserve the latest decision when earlier decisions are
+2. Does Membrick reduce repeated repository exploration?
+3. Does Membrick preserve the latest decision when earlier decisions are
    superseded?
 4. Does bounded transcript parsing preserve memory after oversized tool
    results?
@@ -104,9 +104,9 @@ benchmark/
 
 Client-specific details and command-line options remain in:
 
-- [`benchmark/claude_code/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/claude_code/README.md)
-- [`benchmark/codex_code/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/codex_code/README.md)
-- [`benchmark/agy/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/agy/README.md)
+- [`benchmark/claude_code/README.md`](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/README.md)
+- [`benchmark/codex_code/README.md`](https://github.com/RooAGI/Membrick/blob/main/benchmark/codex_code/README.md)
+- [`benchmark/agy/README.md`](https://github.com/RooAGI/Membrick/blob/main/benchmark/agy/README.md)
 - [`docs/claude-code-performance-tests.md`](claude-code-performance-tests.md)
 - [`docs/codex-performance-tests.md`](codex-performance-tests.md)
 
@@ -165,24 +165,24 @@ launcher must not be force-killed before cleanup.
 ## Comparison Arms
 
 The standard hooks-only comparison uses three logical roles per client:
-**Native** (the client's own built-in memory, no Lint-AI at all), **Lint-AI
-only** (Lint-AI hooks, client-native memory explicitly disabled where the
-client has one), and **Both** (client-native memory and Lint-AI hooks
+**Native** (the client's own built-in memory, no Membrick at all), **Membrick
+only** (Membrick hooks, client-native memory explicitly disabled where the
+client has one), and **Both** (client-native memory and Membrick hooks
 enabled together). Each client maps these roles onto its own `--arms` names:
 
-| Role | Claude arm | Codex arm | AGY arm | Native client memory | Lint-AI hooks | Lint-AI MCP |
+| Role | Claude arm | Codex arm | AGY arm | Native client memory | Membrick hooks | Membrick MCP |
 | --- | --- | --- | --- | --- | --- | --- |
 | Native | `claude-native` | `codex-native` | `agy-native` | Enabled (Claude auto-memory / Codex Memories) | Disabled | Disabled |
-| Lint-AI only | `claude-lint-ai` | `lint-ai` | `agy-lint-ai` | Disabled | Enabled | Disabled |
-| Both | `claude-both` | `lint-ai-with-codex-memory` | n/a | Enabled | Enabled | Disabled |
-| Matched-install disabled control | n/a | n/a | `agy-lint-ai-disabled` | Disabled | Installed but off (`disable_lint_ai`) | Disabled |
+| Membrick only | `claude-membrick` | `membrick` | `agy-membrick` | Disabled | Enabled | Disabled |
+| Both | `claude-both` | `membrick-with-codex-memory` | n/a | Enabled | Enabled | Disabled |
+| Matched-install disabled control | n/a | n/a | `agy-membrick-disabled` | Disabled | Installed but off (`disable_membrick`) | Disabled |
 | MCP-only track | (`--profile mcp-only`) | n/a | `agy-mcp-only` | Disabled | Disabled (hooks removed) | Enabled |
 
 AGY has no built-in "native memory" feature of its own to combine with
-Lint-AI, so it has no `Both` arm; `agy-native` is Lint-AI-absent entirely
-(`--agy-install` is not even run), and `agy-lint-ai-disabled` is a stricter
-control than `agy-native`. Lint-AI is installed identically to `agy-lint-ai`
-but toggled off via `disable_lint_ai`, isolating "installed but inactive"
+Membrick, so it has no `Both` arm; `agy-native` is Membrick-absent entirely
+(`--agy-install` is not even run), and `agy-membrick-disabled` is a stricter
+control than `agy-native`. Membrick is installed identically to `agy-membrick`
+but toggled off via `disable_membrick`, isolating "installed but inactive"
 from "never installed."
 
 The MCP server is disabled for the hooks-only table intentionally. MCP adds
@@ -193,18 +193,18 @@ Test Track" below).
 
 Concretely, each launcher configures its arms as follows:
 
-- `claude-native`: Claude auto-memory enabled, no Lint-AI configuration at all.
-- `claude-lint-ai`: Claude auto-memory disabled, Lint-AI hooks enabled, MCP excluded from `hooks-only` profile.
-- `claude-both`: Claude auto-memory enabled *and* Lint-AI hooks enabled together.
-- `codex-native`: `memories = true` in Codex's own `config.toml`, no Lint-AI hook installation (`--codex-install` is skipped entirely).
-- `lint-ai`: `memories = false`, Lint-AI hooks installed and restricted to the Claude-equivalent lifecycle (see below).
-- `lint-ai-with-codex-memory`: `memories = true` *and* Lint-AI hooks installed. This is the Codex analogue of `claude-both`.
-- `agy-native`: no `--agy-install` step at all; pure AGY with nothing Lint-AI-related present.
-- `agy-lint-ai`: Lint-AI installed and explicitly enabled (`enable_lint_ai`), MCP server config emptied so only hooks are active.
-- `agy-lint-ai-disabled`: Lint-AI installed identically to `agy-lint-ai` but explicitly disabled (`disable_lint_ai`). This is a matched-installation control.
-- `agy-mcp-only`: Lint-AI installed with hook settings emptied (no hooks fire) and the MCP server config left in place. This isolates the MCP path.
+- `claude-native`: Claude auto-memory enabled, no Membrick configuration at all.
+- `claude-membrick`: Claude auto-memory disabled, Membrick hooks enabled, MCP excluded from `hooks-only` profile.
+- `claude-both`: Claude auto-memory enabled *and* Membrick hooks enabled together.
+- `codex-native`: `memories = true` in Codex's own `config.toml`, no Membrick hook installation (`--codex-install` is skipped entirely).
+- `membrick`: `memories = false`, Membrick hooks installed and restricted to the Claude-equivalent lifecycle (see below).
+- `membrick-with-codex-memory`: `memories = true` *and* Membrick hooks installed. This is the Codex analogue of `claude-both`.
+- `agy-native`: no `--agy-install` step at all; pure AGY with nothing Membrick-related present.
+- `agy-membrick`: Membrick installed and explicitly enabled (`enable_membrick`), MCP server config emptied so only hooks are active.
+- `agy-membrick-disabled`: Membrick installed identically to `agy-membrick` but explicitly disabled (`disable_membrick`). This is a matched-installation control.
+- `agy-mcp-only`: Membrick installed with hook settings emptied (no hooks fire) and the MCP server config left in place. This isolates the MCP path.
 
-For the fair cross-client comparison, Lint-AI uses the Claude-equivalent
+For the fair cross-client comparison, Membrick uses the Claude-equivalent
 lifecycle events on Codex (`SessionStart`, `UserPromptSubmit`,
 `UserPromptExpansion`, `PreCompact`, `Stop`, `SessionEnd`). Codex-only tool
 and subagent hook events are excluded from that comparison so they do not
@@ -264,13 +264,13 @@ context.
 
 | Concern | Lifecycle hooks | MCP server |
 | --- | --- | --- |
-| Invocation | Client lifecycle event invokes Lint-AI automatically | Model or client explicitly calls an MCP tool |
+| Invocation | Client lifecycle event invokes Membrick automatically | Model or client explicitly calls an MCP tool |
 | Model choice | No model decision is required for retrieval/capture | Tool selection is model-controlled unless the prompt/client requires it |
 | Retrieval timing | At prompt/session lifecycle events before or around model work | When `search` is selected during the model turn |
 | Capture timing | Stop, compaction, and session-end lifecycle events | MCP itself does not automatically capture a conversation |
 | Primary purpose | Durable session memory across agent turns | Explicit workspace and memory search |
 | Typical data | Bounded conversation/session records | Current repository index plus persisted memory |
-| Persistence | Writes provider-specific memory under `.lint-ai/` | Opens/synchronizes the provider-specific persistent index |
+| Persistence | Writes provider-specific memory under `.membrick/` | Opens/synchronizes the provider-specific persistent index |
 | Failure behavior | Should fail open and not block the client | Server/tool failure is reported to the MCP client |
 | Benchmark track | Hooks-only A/B memory comparison | MCP availability, tool-use, and search performance |
 
@@ -278,10 +278,10 @@ context.
 
 The hook path is event-driven:
 
-1. A client lifecycle event starts a short-lived Lint-AI hook process.
+1. A client lifecycle event starts a short-lived Membrick hook process.
 2. Retrieval hooks build a bounded query from the event payload and read the
    provider memory store.
-3. Lint-AI returns bounded additional context to the client.
+3. Membrick returns bounded additional context to the client.
 4. Capture hooks extract bounded conversational content, exclude tool-result
    blocks, and persist a compact structured memory record.
 5. The next session can retrieve that record without requiring the model to
@@ -295,7 +295,7 @@ and explicit code search do not contaminate the lifecycle-memory measurement.
 
 The MCP path is a long-running JSON-RPC server:
 
-1. The client starts the configured provider-specific Lint-AI process.
+1. The client starts the configured provider-specific Membrick process.
 2. The server completes `initialize` and `tools/list`.
 3. The persistent index is opened or initialized before store-dependent tools
    are served.
@@ -331,28 +331,28 @@ MCP must be measured separately from the hooks-only table.
 
 ### Agent MCP-only run
 
-The Claude `mcp-only` profile keeps the Lint-AI MCP server enabled and removes
-Lint-AI lifecycle hooks. It tests whether the client can discover and call the
+The Claude `mcp-only` profile keeps the Membrick MCP server enabled and removes
+Membrick lifecycle hooks. It tests whether the client can discover and call the
 server without automatic hook retrieval.
 
 ```bash
 python3 benchmark/claude_code/scripts/run_benchmark.py \
   --profile mcp-only \
-  --arms claude-lint-ai \
+  --arms claude-membrick \
   --scenario index-store-segmented-routing \
   --results-dir benchmark/claude_code/results/mcp-only
 ```
 
 MCP tool selection remains model-controlled. The installed
-`.claude/skills/lint-ai-memory/SKILL.md` guides Claude to call
-`mcp__lint-ai__search` for project-memory questions, but a skill cannot force
+`.claude/skills/membrick-memory/SKILL.md` guides Claude to call
+`mcp__membrick__search` for project-memory questions, but a skill cannot force
 the model to select that tool.
 
 Therefore, a report must distinguish these outcomes:
 
 - **MCP server connected**: `initialize` and `tools/list` succeeded.
 - **MCP tool called**: the transcript contains a call such as
-  `mcp__lint-ai__search` or `mcp__lint-ai__info`.
+  `mcp__membrick__search` or `mcp__membrick__info`.
 - **MCP search performed**: the transcript contains an actual `search` call.
 - **MCP server functional**: a direct MCP client successfully calls `search`.
 
@@ -365,8 +365,8 @@ Use the provider health command to validate process startup, `initialize`, and
 `tools/list`:
 
 ```bash
-./lint-ai --claude-code-verify-mcp /path/to/repo --mcp-timeout-ms 30000
-./lint-ai --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick --claude-code-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
 ```
 
 To validate the search path, use an MCP client to call:
@@ -503,7 +503,7 @@ Expected fact: `benchmark/python_smoke_benchmark.py`.
 Forbidden facts: unrelated routing terms such as `LocalDistinctiveness` or
 `query_top_n`.
 
-The primary signal is that Lint-AI does not inject unrelated memory into an
+The primary signal is that Membrick does not inject unrelated memory into an
 unrelated answer. The scenario's `max_injected_context_bytes` is zero.
 
 ### `codex-tool-use-retrieval` (Codex)
@@ -583,7 +583,7 @@ Run a Claude hooks-only smoke comparison:
 
 ```bash
 python3 benchmark/claude_code/scripts/run_benchmark.py \
-  --arms claude-native claude-lint-ai claude-both \
+  --arms claude-native claude-membrick claude-both \
   --scenario index-store-segmented-routing \
   --repetitions 1 \
   --results-dir benchmark/claude_code/results/smoke
@@ -602,7 +602,7 @@ Run an AGY hooks-only smoke comparison:
 
 ```bash
 python3 benchmark/agy/scripts/run_benchmark.py \
-  --arms agy-native agy-lint-ai \
+  --arms agy-native agy-membrick \
   --scenario index-store-segmented-routing \
   --repetitions 1 \
   --results-dir benchmark/agy/results/smoke
@@ -655,7 +655,7 @@ Interpret results in this order:
 7. Inspect transcripts when a model selected repository tools instead of MCP.
 
 Do not attribute a model's failure to call MCP to the server without a direct
-MCP-client check. Do not attribute a latency difference to Lint-AI without
+MCP-client check. Do not attribute a latency difference to Membrick without
 separating client startup, model generation, tool execution, hook work, MCP
 startup, and index initialization.
 
@@ -665,7 +665,7 @@ Record the following with every performance run:
 
 - client name and version;
 - model identifier and model settings;
-- Lint-AI revision and feature flags;
+- Membrick revision and feature flags;
 - repository revision and dirty-diff digest;
 - operating system and architecture;
 - scenario IDs and repetition count;

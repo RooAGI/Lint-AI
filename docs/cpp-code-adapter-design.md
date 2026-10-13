@@ -1,7 +1,7 @@
 # C++ Code Adapter Design
 
 This document describes the intended design for supporting a C++ repository
-through the `lint-ai` adapter layer.
+through the `membrick` adapter layer.
 
 The goal is to make C++ a first-class code source without changing the current
 Markdown pipeline or the downstream indexing model.
@@ -41,7 +41,7 @@ flowchart TD
 
 The recommended split is:
 
-- `lint-ai`
+- `membrick`
   - adapter trait and registry
   - generic ingestion shape
   - graph construction
@@ -51,7 +51,7 @@ The recommended split is:
   - symbol extraction
   - language-specific relationship detection
 
-The code adapter in `lint-ai` should remain thin and delegate to the language
+The code adapter in `membrick` should remain thin and delegate to the language
 parser package.
 
 ## Canonical Output Shape
@@ -171,7 +171,7 @@ For a query like `variableName`, expected retrieval should include:
 
 ## Adapter Contract
 
-The `SourceAdapter` trait in `lint-ai` should remain simple:
+The `SourceAdapter` trait in `membrick` should remain simple:
 
 ```rust
 pub trait SourceAdapter {
@@ -180,7 +180,7 @@ pub trait SourceAdapter {
     fn ingest(
         &self,
         input: &AdapterInput<'_>,
-    ) -> anyhow::Result<Vec<lint_ai::SourceDocument>>;
+    ) -> anyhow::Result<Vec<membrick::SourceDocument>>;
 }
 ```
 
@@ -206,5 +206,5 @@ document or crate:
 - base types
 - includes
 
-That contract should be stable enough for both `lint-ai` and any future
+That contract should be stable enough for both `membrick` and any future
 language-specific repo.

@@ -1,14 +1,14 @@
 ---
-name: lint-ai-memory
-description: Use the Lint-AI MCP server as the first source for project memory, prior decisions, and earlier work before inspecting the repository.
+name: membrick-memory
+description: Use the Membrick MCP server as the first source for project memory, prior decisions, and earlier work before inspecting the repository.
 ---
 
-<!-- lint-ai-managed-skill -->
+<!-- membrick-managed-skill -->
 
-# Lint-AI Memory
+# Membrick Memory
 
 For requests about project history, prior decisions, architectural choices,
-earlier work, or why something was implemented, call the `lint-ai` MCP
+earlier work, or why something was implemented, call the `membrick` MCP
 server's `search` tool before reading files or searching the repository.
 
 Use returned results as context, distinguish retrieved facts from current

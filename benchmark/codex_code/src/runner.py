@@ -523,15 +523,15 @@ def build_phase_env(
     env = base_env.copy()
     env.update(
         {
-            "LINT_AI_BENCHMARK_PHASE": phase,
-            "LINT_AI_BENCHMARK_ROOT": str(benchmark_root),
-            "LINT_AI_BENCHMARK_SCENARIO_ID": str(scenario["id"]),
-            "LINT_AI_BENCHMARK_SCENARIO_PATH": str(scenario_path),
-            "LINT_AI_BENCHMARK_RUN_DIR": str(run_dir),
-            "LINT_AI_BENCHMARK_WORKTREE": str(worktree_path),
-            "LINT_AI_BENCHMARK_REVISION": revision,
-            "LINT_AI_BENCHMARK_DIRTY_DIFF_DIGEST": dirty_digest,
-            "LINT_AI_HOOK_TIMINGS_PATH": str(run_dir / f"{phase}.hook-timings.jsonl"),
+            "MEMBRICK_BENCHMARK_PHASE": phase,
+            "MEMBRICK_BENCHMARK_ROOT": str(benchmark_root),
+            "MEMBRICK_BENCHMARK_SCENARIO_ID": str(scenario["id"]),
+            "MEMBRICK_BENCHMARK_SCENARIO_PATH": str(scenario_path),
+            "MEMBRICK_BENCHMARK_RUN_DIR": str(run_dir),
+            "MEMBRICK_BENCHMARK_WORKTREE": str(worktree_path),
+            "MEMBRICK_BENCHMARK_REVISION": revision,
+            "MEMBRICK_BENCHMARK_DIRTY_DIFF_DIGEST": dirty_digest,
+            "MEMBRICK_HOOK_TIMINGS_PATH": str(run_dir / f"{phase}.hook-timings.jsonl"),
         }
     )
     return env
@@ -738,9 +738,9 @@ def execute_scenario(
         run_dir.mkdir(parents=True, exist_ok=True)
         log(f"scenario {scenario['id']} repetition {repetition}: preparing worktree")
         worktree_path = prepare_worktree(repo_root, revision, run_dir)
-        skill_source = os.environ.get("LINT_AI_BENCHMARK_SKILL_PATH")
+        skill_source = os.environ.get("MEMBRICK_BENCHMARK_SKILL_PATH")
         if skill_source:
-            skill_target = worktree_path / ".claude" / "skills" / "lint-ai-memory" / "SKILL.md"
+            skill_target = worktree_path / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
             skill_target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(skill_source, skill_target)
             log(f"installed benchmark skill at {skill_target}")
@@ -962,7 +962,7 @@ def main() -> None:
         default=[],
         help="Scenario id to execute; repeat to select multiple scenarios",
     )
-    parser.add_argument("--arm", default="lint-ai")
+    parser.add_argument("--arm", default="membrick")
     parser.add_argument("--metrics", choices=("codex", "claude", "agy", "muse", "none"), default="codex")
     parser.add_argument("--execution-mode", choices=("pipe", "pty"), default="pipe")
     parser.add_argument("--metrics-root", type=Path, default=None)

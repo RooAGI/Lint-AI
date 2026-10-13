@@ -1,4 +1,4 @@
-# Comparison: Lint-AI and AgentMemory
+# Comparison: Membrick and AgentMemory
 
 This directory contains reproducible retrieval and HTTP throughput comparisons.
 Each artifact records its date, workload, and environment; older comparison
@@ -24,7 +24,7 @@ latencies, mixed read/write results, and artifacts are in the
 ## Latency comparison
 
 The normalized run used 23,366 records, 100 requests per concurrency level,
-`top_k`/`limit` 20, and a keyword query. Lint-AI used `POST /search` and
+`top_k`/`limit` 20, and a keyword query. Membrick used `POST /search` and
 AgentMemory used `POST /agentmemory/smart-search`. AgentMemory was running in
 keyless BM25 mode (no embeddings provider).
 
@@ -40,11 +40,11 @@ python3 comparison/http_latency.py \
   --payload '{"query":"deployment configuration system decision","limit":20}'
 ```
 
-For a fresh Lint-AI corpus, use the bounded batch seeder (it refreshes once per
+For a fresh Membrick corpus, use the bounded batch seeder (it refreshes once per
 batch; the API caps each request at 1,024 messages):
 
 ```bash
-python3 comparison/seed_lint_ai.py --count 23366 --batch-size 1024 --bulk
+python3 comparison/seed_membrick.py --count 23366 --batch-size 1024 --bulk
 ```
 
 ### Layout throughput comparison
@@ -66,6 +66,9 @@ TMPDIR="$PWD/.benchmark-tmp" uv run --no-project python comparison/throughput_ha
 Use `--skip-build` when the release binary is already built. Use
 `--repetitions`, `--requests`, and `--warmup-requests` to control the workload.
 The lower-level `throughput.py` remains available for testing one layout.
+Both `throughput.py` and `write_only.py` allow a longer cold server startup via
+`--startup-timeout-seconds` (default 120); this matters when the resident server
+loads a large workspace before it opens its listener.
 
 On macOS, run the Python benchmark through `uv` and provide a real temporary
 directory. Some macOS environments expose `/tmp` through a symlink, while the
@@ -260,7 +263,7 @@ tree diagnostic, not a release build claim.
 
 At C=10, five routed searches are slower than a single search even though the
 five segment tasks run in parallel. Route scoring itself is small. With
-`LINT_AI_QUERY_TIMINGS=1`, route scoring had a 0.066 ms median (0.088 ms p95)
+`MEMBRICK_QUERY_TIMINGS=1`, route scoring had a 0.066 ms median (0.088 ms p95)
 at C=10, while selected-segment execution had a 6.003 ms median (7.832 ms
 p95). The query-term preparation median was 0.012 ms. These stage timings are
 instrumented diagnostics and are not throughput results; their instrumentation
@@ -331,13 +334,13 @@ behind this repository's scripts.
 
 ## Recorded results
 
-The current v0.2.0 post-refactor Lint-AI-only rerun is in
+The current v0.2.0 post-refactor Membrick-only rerun is in
 [`results/latency-23366-v0.2.0.json`](results/latency-23366-v0.2.0.json):
 
 | System | C | p50 (ms) | p90 (ms) | p99 (ms) | req/s |
 |---|---:|---:|---:|---:|---:|
-| Lint-AI v0.2.0 | 1 | 10.39 | 10.90 | 12.21 | 95.00 |
-| Lint-AI v0.2.0 | 10 | 23.71 | 38.02 | 45.89 | 386.55 |
+| Membrick v0.2.0 | 1 | 10.39 | 10.90 | 12.21 | 95.00 |
+| Membrick v0.2.0 | 10 | 23.71 | 38.02 | 45.89 | 386.55 |
 
 The older artifact below is the 0.1.9 single-index baseline used for the
 cross-system comparison:
@@ -346,12 +349,12 @@ cross-system comparison:
 
 | System | C | p50 (ms) | p90 (ms) | p99 (ms) | req/s |
 |---|---:|---:|---:|---:|---:|
-| Lint-AI | 1 | 6.96 | 7.65 | 28.17 | 139.52 |
+| Membrick | 1 | 6.96 | 7.65 | 28.17 | 139.52 |
 | AgentMemory | 1 | 7.04 | 10.53 | 16.94 | 130.34 |
-| Lint-AI | 10 | 10.23 | 11.87 | 12.52 | 952.07 |
+| Membrick | 10 | 10.23 | 11.87 | 12.52 | 952.07 |
 | AgentMemory | 10 | 58.81 | 60.35 | 61.33 | 171.26 |
 
-The earlier 5,000-record Lint-AI run is preserved in
+The earlier 5,000-record Membrick run is preserved in
 [`results/latency-5000.json`](results/latency-5000.json).
 The pre-optimization baseline is preserved in
 [`results/latency-5000-before-fix.json`](results/latency-5000-before-fix.json),
@@ -370,7 +373,7 @@ The canonical retrieval headline is:
 
 | System | Any-hit Recall@5 | Any-hit Recall@10 | Any-hit Recall@20 | MRR | NDCG@10 |
 |---|---:|---:|---:|---:|---:|
-| Lint-AI | 92.4% | 95.6% | 97.0% | 84.0% | 81.8% |
+| Membrick | 92.4% | 95.6% | 97.0% | 84.0% | 81.8% |
 | AgentMemory | 87.0% | 94.8% | 98.4% | 71.6% | 73.0% |
 
 These comparison values are the numbers used on the Home page and in the
@@ -393,3 +396,7 @@ The mixed runner searches the seeded `bench-user` and writes as
 `mixed-bench-user`; `empty_search_responses` detects an accidentally empty read
 workload. The October 4 mixed artifact used the wrong reader user and must not
 be used as a populated-corpus read baseline.
+
+The HTTP query and write harnesses give each server a temporary project root,
+workspace index, and shared captured-memory store. Benchmark writes and file
+watchers therefore stay isolated from the repository's installed memory.

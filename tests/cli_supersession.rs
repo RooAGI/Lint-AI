@@ -8,7 +8,7 @@ fn temp_dir() -> std::path::PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("lint-ai-cli-supersession-{nanos}"));
+    let path = std::env::temp_dir().join(format!("membrick-cli-supersession-{nanos}"));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -27,7 +27,7 @@ fn cli_query_and_llm_context_suppress_explicitly_superseded_markdown() {
     )
     .unwrap();
 
-    let bin = env!("CARGO_BIN_EXE_lint-ai");
+    let bin = env!("CARGO_BIN_EXE_membrick");
     let query = "How many retry attempts should we use for gateway timeouts?";
 
     let output = Command::new(bin)
@@ -122,7 +122,7 @@ fn cli_uses_file_timeline_to_supersede_scalar_configuration_without_metadata() {
         .set_times(std::fs::FileTimes::new().set_modified(new_time))
         .unwrap();
 
-    let bin = env!("CARGO_BIN_EXE_lint-ai");
+    let bin = env!("CARGO_BIN_EXE_membrick");
     let query = "How many retry attempts should we use for gateway timeouts?";
     let output = Command::new(bin)
         .current_dir(&root)

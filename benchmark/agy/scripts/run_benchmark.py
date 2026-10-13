@@ -38,8 +38,8 @@ def main() -> None:
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument(
         "--arms", nargs="+",
-        choices=("agy-native", "agy-lint-ai", "agy-lint-ai-disabled", "agy-mcp-only"),
-        default=("agy-native", "agy-lint-ai", "agy-lint-ai-disabled", "agy-mcp-only"),
+        choices=("agy-native", "agy-membrick", "agy-membrick-disabled", "agy-mcp-only"),
+        default=("agy-native", "agy-membrick", "agy-membrick-disabled", "agy-mcp-only"),
     )
     parser.add_argument("--results-dir", type=Path, default=None)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
@@ -48,8 +48,8 @@ def main() -> None:
     benchmark_root = repo / "benchmark" / "agy"
     results = (args.results_dir or benchmark_root / "results" / "shared").resolve()
     results.mkdir(parents=True, exist_ok=True)
-    temp = Path(tempfile.mkdtemp(prefix="lint-ai-agy-perf."))
-    binary = repo / "target" / "debug" / "lint-ai"
+    temp = Path(tempfile.mkdtemp(prefix="membrick-agy-perf."))
+    binary = repo / "target" / "debug" / "membrick"
     host_gemini = Path.home() / ".gemini"
     host_hooks = host_gemini / "config" / "hooks.json"
     host_mcp = host_gemini / "config" / "mcp_config.json"
@@ -64,7 +64,7 @@ def main() -> None:
         for arm in args.arms:
             # AGY does not currently provide a supported per-run config home.
             # Keep the authenticated host profile, but make the configuration
-            # used by each arm deterministic and free of stale Lint-AI state.
+            # used by each arm deterministic and free of stale Membrick state.
             # The original files are restored in the outer finally block.
             host_hooks.write_text("{}\n", encoding="utf-8")
             host_mcp.write_text(json.dumps({"mcpServers": {}}, indent=2) + "\n", encoding="utf-8")
@@ -123,11 +123,11 @@ def main() -> None:
             for scenario in args.scenario:
                 command.extend(["--scenario", scenario])
             env = arm_env
-            if arm == "agy-lint-ai-disabled":
-                set_integration_state(binary, worktree, "disable_lint_ai", env)
+            if arm == "agy-membrick-disabled":
+                set_integration_state(binary, worktree, "disable_membrick", env)
                 set_integration_state(binary, worktree, "record_session", env, {"action": "start"})
-            elif arm == "agy-lint-ai":
-                set_integration_state(binary, worktree, "enable_lint_ai", env)
+            elif arm == "agy-membrick":
+                set_integration_state(binary, worktree, "enable_membrick", env)
                 set_integration_state(binary, worktree, "record_session", env, {"action": "start"})
             subprocess.run(command, cwd=repo, env=env, check=True)
             reports[arm] = json.loads((arm_results / "report.json").read_text(encoding="utf-8"))

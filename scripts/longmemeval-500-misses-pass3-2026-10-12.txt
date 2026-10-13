@@ -1,0 +1,2352 @@
+   Compiling membrick v0.3.0 (/Users/louis/sources/Membrick)
+warning: unused imports: `TextFieldIndexing` and `TextOptions`
+  --> src/index/build.rs:16:39
+   |
+16 |     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT,
+   |                                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/agy/hooks.rs:7:5
+  |
+7 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/agy/hooks.rs:8:23
+  |
+8 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/agy/hooks.rs:9:5
+  |
+9 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/claude_code/hooks/mod.rs:15:24
+   |
+15 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/codex/hooks/mod.rs:14:24
+   |
+14 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/gemini_cli/hooks.rs:4:5
+  |
+4 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/gemini_cli/hooks.rs:5:23
+  |
+5 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/gemini_cli/hooks.rs:6:5
+  |
+6 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Serialize`
+  --> src/integrations/openclaw/hooks.rs:27:26
+   |
+27 | use serde::{Deserialize, Serialize};
+   |                          ^^^^^^^^^
+
+warning: unused import: `std::collections::HashSet`
+  --> src/integrations/openclaw/hooks.rs:29:5
+   |
+29 | use std::collections::HashSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::fs`
+  --> src/integrations/openclaw/hooks.rs:30:5
+   |
+30 | use std::fs;
+   |     ^^^^^^^
+
+warning: unused import: `SearchRequest`
+ --> src/integrations/roo_runtime.rs:5:40
+  |
+5 | use crate::memory_api::{MemoryService, SearchRequest};
+  |                                        ^^^^^^^^^^^^^
+
+warning: unused import: `Tier1NerProvider`
+ --> src/memory_api.rs:5:40
+  |
+5 | use crate::pipeline::{PipelineOptions, Tier1NerProvider};
+  |                                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `is_stopword`
+  --> src/segments/intent.rs:29:24
+   |
+29 | use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
+   |                        ^^^^^^^^^^^
+
+warning: unused import: `intent::*`
+  --> src/segments/mod.rs:19:9
+   |
+19 | pub use intent::*;
+   |         ^^^^^^^^^
+
+warning: unused import: `relations::*`
+  --> src/segments/mod.rs:23:9
+   |
+23 | pub use relations::*;
+   |         ^^^^^^^^^^^^
+
+warning: unused imports: `Decoder` and `PostProcessor`
+  --> src/bart_tokenizer.rs:15:18
+   |
+15 | use tokenizers::{Decoder, PostProcessor};
+   |                  ^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `stable_chunk_id` and `stable_doc_id_from_source`
+   --> src/lib.rs:120:29
+    |
+120 | pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
+    |                             ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `build_aggregate_output`
+   --> src/lib.rs:140:37
+    |
+140 | pub(crate) use crate::aggregation::{build_aggregate_output, AggregateOutput};
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GlobalBm25Statistics` and `MemoryIndex`
+   --> src/lib.rs:141:31
+    |
+141 | pub(crate) use crate::index::{GlobalBm25Statistics, MemoryIndex, TemporalQueryContext};
+    |                               ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `IndexDump`, `MemoryIndexSnapshot`, `StorePaths`, `build_doc_records`, `build_query_snapshot_from_records`, and `resolve_store_paths`
+   --> src/lib.rs:143:5
+    |
+143 |     build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
+    |     ^^^^^^^^^^^^^^^^^                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+144 |     build_query_snapshot_from_source_documents, default_production_pipeline_options,
+145 |     resolve_store_paths, IndexDump, IndexStore, MemoryIndexSnapshot, StorePaths,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `crate::query_expansion::normalize_for_index`
+   --> src/lib.rs:148:16
+    |
+148 | pub(crate) use crate::query_expansion::normalize_for_index;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `QueryAnalysis`, `QueryTimeHint`, `resolve_anchor_window`, `resolve_temporal_anchor`, and `temporal_anchor_is_span`
+   --> src/lib.rs:150:42
+    |
+150 |     analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
+    |                                          ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+151 |     temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `SegmentManifestEntry` and `SegmentManifest`
+   --> src/lib.rs:153:34
+    |
+153 | pub(crate) use crate::segments::{SegmentManifest, SegmentManifestEntry};
+    |                                  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DocumentSemanticState`, `SemanticClaim`, `SemanticRelationKind`, `SemanticRelationStore`, and `SemanticRelation`
+   --> src/lib.rs:155:5
+    |
+155 |     DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
+    |     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+156 |     SemanticRelationStore,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TemporalFactStore`, `TemporalFact`, `TimelineEvent`, and `TimelinePair`
+   --> src/lib.rs:160:5
+    |
+160 |     TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
+    |     ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `RankedTerm` and `Tier1Entity`
+   --> src/lib.rs:162:31
+    |
+162 | pub(crate) use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+    |                               ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused variable: `is_synthetic_f`
+    --> src/index/build.rs:1073:9
+     |
+1073 |         is_synthetic_f: Field,
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_synthetic_f`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tag_links_f`
+    --> src/index/build.rs:1074:9
+     |
+1074 |         tag_links_f: Field,
+     |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tag_links_f`
+
+warning: unreachable pattern
+   --> src/integrations/session_recording.rs:920:13
+    |
+919 |             Self::Agy => "agy",
+    |             --------- matches all the relevant values
+920 |             Self::Agy => "agy",
+    |             ^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/memory_api.rs:2097:13
+     |
+2097 |         let mut prepared = if session_id.is_none() {
+     |             ----^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:280:5
+    |
+280 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:340:5
+    |
+340 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:400:5
+    |
+400 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:477:5
+    |
+477 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:554:5
+    |
+554 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:929:13
+    |
+929 |         let mut search_scored = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:958:13
+    |
+958 |         let mut search = |service: &mut MemoryService,
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:966:13
+    |
+966 |         let mut search_scored_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:995:13
+    |
+995 |         let mut search_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: methods `remove_expired_file` and `evict_expired` are never used
+   --> src/conversation_state.rs:335:8
+    |
+145 | impl ConversationStateStore {
+    | --------------------------- methods in this implementation
+...
+335 |     fn remove_expired_file(&self, user_id: &str, session_id: &str, now_ms: u64) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^
+...
+437 |     pub fn evict_expired(&mut self, now_ms: u64) -> usize {
+    |            ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `lexical_bm25` is never used
+    --> src/index/build.rs:1136:19
+     |
+ 161 | impl MemoryIndex {
+     | ---------------- method in this implementation
+...
+1136 |     pub(crate) fn lexical_bm25(
+     |                   ^^^^^^^^^^^^
+
+warning: field `chunk_u32` is never read
+   --> src/index/model.rs:344:16
+    |
+341 | pub(crate) struct IntervalEntry {
+    |                   ------------- field in this struct
+...
+344 |     pub(crate) chunk_u32: u32,
+    |                ^^^^^^^^^
+    |
+    = note: `IntervalEntry` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `center`, `overlaps`, `left`, and `right` are never read
+   --> src/index/model.rs:349:5
+    |
+348 | struct IntervalNode {
+    |        ------------ fields in this struct
+349 |     center: usize,
+    |     ^^^^^^
+350 |     overlaps: Vec<IntervalEntry>,
+    |     ^^^^^^^^
+351 |     left: Option<Box<IntervalNode>>,
+    |     ^^^^
+352 |     right: Option<Box<IntervalNode>>,
+    |     ^^^^^
+    |
+    = note: `IntervalNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `root` is never read
+   --> src/index/model.rs:357:5
+    |
+356 | pub(crate) struct IntervalTree {
+    |                   ------------ field in this struct
+357 |     root: Option<Box<IntervalNode>>,
+    |     ^^^^
+    |
+    = note: `IntervalTree` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `query` is never used
+   --> src/index/model.rs:396:19
+    |
+360 | impl IntervalTree {
+    | ----------------- method in this implementation
+...
+396 |     pub(crate) fn query(&self, start: usize, end: usize) -> Vec<u32> {
+    |                   ^^^^^
+
+warning: field `doc_interval_trees` is never read
+   --> src/index/model.rs:469:16
+    |
+420 | pub struct MemoryIndex {
+    |            ----------- field in this struct
+...
+469 |     pub(crate) doc_interval_trees: Vec<IntervalTree>,
+    |                ^^^^^^^^^^^^^^^^^^
+
+warning: fields `subword_f`, `is_synthetic_f`, and `tag_links_f` are never read
+   --> src/index/model.rs:508:16
+    |
+492 | pub(crate) struct LexicalIndex {
+    |                   ------------ fields in this struct
+...
+508 |     pub(crate) subword_f: Field,
+    |                ^^^^^^^^^
+...
+511 |     pub(crate) is_synthetic_f: Field,
+    |                ^^^^^^^^^^^^^^
+...
+514 |     pub(crate) tag_links_f: Field,
+    |                ^^^^^^^^^^^
+
+warning: method `shard_count` is never used
+   --> src/index/model.rs:558:12
+    |
+533 | impl GlobalBm25Statistics {
+    | ------------------------- method in this implementation
+...
+558 |     pub fn shard_count(&self) -> usize {
+    |            ^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src/index/query.rs:50:12
+     |
+  35 | impl MemoryIndex {
+     | ---------------- methods in this implementation
+...
+  50 |     pub fn query_with_temporal_context_and_statistics(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 317 |     pub fn query_timed(
+     |            ^^^^^^^^^^^
+...
+ 384 |     pub fn query_with_lexical_hits(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 413 |     pub fn query_with_filters(
+     |            ^^^^^^^^^^^^^^^^^^
+...
+ 503 |     pub fn query_with_filters_and_lexical(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 537 |     pub fn query_with_filters_multi(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1611 |     pub fn impacted_chunks_for_line_range(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `LEXICAL_SUBWORD_BOOST` is never used
+  --> src/index/query_terms.rs:26:18
+   |
+26 | pub(crate) const LEXICAL_SUBWORD_BOOST: f32 = 0.1;
+   |                  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/claude_code/hooks/mod.rs:435:4
+    |
+435 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/codex/hooks/mod.rs:593:4
+    |
+593 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: field `tool_input` is never read
+  --> src/integrations/gemini_cli/hooks.rs:59:9
+   |
+47 | pub struct GeminiHookInput {
+   |            --------------- field in this struct
+...
+59 |     pub tool_input: Option<Value>,
+   |         ^^^^^^^^^^
+   |
+   = note: `GeminiHookInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `transcript_path` is never read
+  --> src/integrations/muse_code/hooks/protocol.rs:18:9
+   |
+15 | pub struct MuseHookInput {
+   |            ------------- field in this struct
+...
+18 |     pub transcript_path: Option<PathBuf>,
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `MuseHookInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Checkpoint` is never constructed
+  --> src/integrations/openclaw/document.rs:20:5
+   |
+16 | pub enum OpenClawDocumentType {
+   |          -------------------- variant in this enum
+...
+20 |     Checkpoint,
+   |     ^^^^^^^^^^
+   |
+   = note: `OpenClawDocumentType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `process_http_hook` is never used
+   --> src/integrations/openclaw/hooks.rs:121:8
+    |
+121 | pub fn process_http_hook(kind: OpenClawHookKind, value: Value, fallback_root: &Path) -> Value {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `memory_root` is never used
+   --> src/integrations/openclaw/hooks.rs:309:4
+    |
+309 | fn memory_root(root: &Path) -> PathBuf {
+    |    ^^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/openclaw/hooks.rs:315:4
+    |
+315 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: methods `published_search_view`, `observe_plain_query`, and `select_session_documents` are never used
+    --> src/memory_api.rs:2312:19
+     |
+ 869 | impl MemoryService {
+     | ------------------ methods in this implementation
+...
+2312 |     pub(crate) fn published_search_view(&self) -> anyhow::Result<Option<Arc<MemoryService>>> {
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+...
+3122 |     pub(crate) fn observe_plain_query(
+     |                   ^^^^^^^^^^^^^^^^^^^
+...
+3165 |     pub(crate) fn select_session_documents(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `open_workspace_owner` is never used
+    --> src/memory_api.rs:6661:19
+     |
+6642 | impl MemoryService {
+     | ------------------ associated function in this implementation
+...
+6661 |     pub(crate) fn open_workspace_owner(
+     |                   ^^^^^^^^^^^^^^^^^^^^
+
+warning: method `publish_staged` is never used
+   --> src/memory_api/staged.rs:369:19
+    |
+ 27 | impl MemoryService {
+    | ------------------ method in this implementation
+...
+369 |     pub(crate) fn publish_staged(&mut self) -> anyhow::Result<()> {
+    |                   ^^^^^^^^^^^^^^
+
+warning: function `record_content_text` is never used
+  --> src/pipeline/build.rs:25:4
+   |
+25 | fn record_content_text(record: &DocRecord) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: methods `single_index`, `is_segmented`, and `segment_count` are never used
+   --> src/pipeline/config.rs:220:12
+    |
+219 | impl MemoryIndexSnapshot {
+    | ------------------------ methods in this implementation
+220 |     pub fn single_index(&self) -> Option<&MemoryIndex> {
+    |            ^^^^^^^^^^^^
+...
+227 |     pub fn is_segmented(&self) -> bool {
+    |            ^^^^^^^^^^^^
+...
+231 |     pub fn segment_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+
+warning: function `is_directory_empty` is never used
+   --> src/pipeline/persistence.rs:462:15
+    |
+462 | pub(crate) fn is_directory_empty(dir: &Path) -> Result<bool> {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: struct `DocumentLifecycleMeta` is never constructed
+  --> src/pipeline/store.rs:54:19
+   |
+54 | pub(crate) struct DocumentLifecycleMeta {
+   |                   ^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+    --> src/pipeline/store.rs:711:12
+     |
+ 352 | impl IndexStore {
+     | --------------- associated items in this implementation
+...
+ 711 |     pub fn for_corpus(corpus_root: &Path, mut options: PipelineOptions) -> Result<Self> {
+     |            ^^^^^^^^^^
+...
+ 854 |     pub(crate) fn dump(&mut self) -> Result<IndexDump> {
+     |                   ^^^^
+...
+1039 |     pub fn len(&self) -> usize {
+     |            ^^^
+...
+1047 |     pub fn is_dirty(&self) -> bool {
+     |            ^^^^^^^^
+...
+1121 |     pub fn chunk_lifecycle(&self) -> Vec<&ChunkLifecycleMeta> {
+     |            ^^^^^^^^^^^^^^^
+...
+1127 |     pub(crate) fn document_lifecycle(&self) -> Vec<DocumentLifecycleMeta> {
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+1162 |     pub fn temporal_facts(&self) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^
+...
+1181 |     pub fn temporal_facts_as_of(&self, date: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+1185 |     pub fn temporal_timeline(&self, subject: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^^^^
+...
+1189 |     pub fn temporal_timeline_window_around(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1199 |     pub fn temporal_events_between(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1207 |     pub fn temporal_adjacent_pairs_between(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1331 |     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
+     |            ^^^^^
+...
+1336 |     pub fn query_timed(
+     |            ^^^^^^^^^^^
+...
+1360 |     pub fn query_prepared_timed(
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+1410 |     pub fn query_filtered(
+     |            ^^^^^^^^^^^^^^
+...
+1440 |     pub fn query_filtered_multi(
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MAX_PENDING_CHANGES` is never used
+  --> src/pipeline/watcher.rs:14:7
+   |
+14 | const MAX_PENDING_CHANGES: usize = 64;
+   |       ^^^^^^^^^^^^^^^^^^^
+
+warning: method `take_change` is never used
+   --> src/pipeline/watcher.rs:212:12
+    |
+ 63 | impl WorkspaceWatcher {
+    | --------------------- method in this implementation
+...
+212 |     pub fn take_change(&self) -> bool {
+    |            ^^^^^^^^^^^
+
+warning: associated items `from_analysis`, `into_analysis`, and `execute_on_index_with_semantics` are never used
+   --> src/query_plan.rs:94:19
+    |
+ 37 | impl PreparedQuery {
+    | ------------------ associated items in this implementation
+...
+ 94 |     pub(crate) fn from_analysis(analysis: QueryAnalysis) -> Self {
+    |                   ^^^^^^^^^^^^^
+...
+102 |     fn into_analysis(self) -> QueryAnalysis {
+    |        ^^^^^^^^^^^^^
+...
+288 |     pub fn execute_on_index_with_semantics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `REMOTE_QUERY_PROTOCOL_VERSION` is never used
+  --> src/remote_query.rs:11:11
+   |
+11 | pub const REMOTE_QUERY_PROTOCOL_VERSION: u32 = 1;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryRequest` is never constructed
+  --> src/remote_query.rs:14:12
+   |
+14 | pub struct RemoteQueryRequest {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteTemporalContext` is never constructed
+  --> src/remote_query.rs:31:12
+   |
+31 | pub struct RemoteTemporalContext {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsRequest` is never constructed
+  --> src/remote_query.rs:41:12
+   |
+41 | pub struct RemoteStatisticsRequest {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsResponse` is never constructed
+  --> src/remote_query.rs:48:12
+   |
+48 | pub struct RemoteStatisticsResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteFieldStatistics` is never constructed
+  --> src/remote_query.rs:60:12
+   |
+60 | pub struct RemoteFieldStatistics {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteCandidateRequest` is never constructed
+  --> src/remote_query.rs:66:12
+   |
+66 | pub struct RemoteCandidateRequest {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsSnapshot` is never constructed
+  --> src/remote_query.rs:73:12
+   |
+73 | pub struct RemoteStatisticsSnapshot {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteCandidateResponse` is never constructed
+  --> src/remote_query.rs:79:12
+   |
+79 | pub struct RemoteCandidateResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteSearchResult` is never constructed
+  --> src/remote_query.rs:90:12
+   |
+90 | pub struct RemoteSearchResult {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryCompleteness` is never constructed
+  --> src/remote_query.rs:99:12
+   |
+99 | pub struct RemoteQueryCompleteness {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryFailure` is never constructed
+   --> src/remote_query.rs:106:12
+    |
+106 | pub struct RemoteQueryFailure {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:160:12
+    |
+159 | impl RemoteQueryRequest {
+    | ----------------------- method in this implementation
+160 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:184:12
+    |
+183 | impl RemoteStatisticsRequest {
+    | ---------------------------- method in this implementation
+184 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:193:12
+    |
+192 | impl RemoteCandidateRequest {
+    | --------------------------- method in this implementation
+193 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate_against` is never used
+   --> src/remote_query.rs:203:12
+    |
+202 | impl RemoteStatisticsResponse {
+    | ----------------------------- method in this implementation
+203 |     pub fn validate_against(&self, request: &RemoteStatisticsRequest) -> Result<(), String> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: method `validate_against` is never used
+   --> src/remote_query.rs:219:12
+    |
+218 | impl RemoteCandidateResponse {
+    | ---------------------------- method in this implementation
+219 |     pub fn validate_against(&self, request: &RemoteCandidateRequest) -> Result<(), String> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: associated items `validate`, `is_complete`, and `merge` are never used
+   --> src/remote_query.rs:238:12
+    |
+237 | impl RemoteQueryCompleteness {
+    | ---------------------------- associated items in this implementation
+238 |     pub fn validate(&self) -> Result<(), String> {
+    |            ^^^^^^^^
+...
+272 |     pub fn is_complete(&self) -> bool {
+    |            ^^^^^^^^^^^
+...
+280 |     fn merge<I>(responses: I) -> Self
+    |        ^^^^^
+
+warning: function `aggregate_statistics` is never used
+   --> src/remote_query.rs:310:8
+    |
+310 | pub fn aggregate_statistics(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reduce_candidates` is never used
+   --> src/remote_query.rs:366:8
+    |
+366 | pub fn reduce_candidates(
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `canonical_result_key` is never used
+   --> src/remote_query.rs:411:4
+    |
+411 | fn canonical_result_key(result: &RemoteSearchResult) -> (String, Option<String>, String) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_response_identity` is never used
+   --> src/remote_query.rs:419:4
+    |
+419 | fn validate_response_identity(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_unique_names` is never used
+   --> src/remote_query.rs:439:4
+    |
+439 | fn validate_unique_names(kind: &str, names: &[String]) -> Result<(), String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: type alias `IntentOperation` is never used
+  --> src/segments/intent.rs:39:10
+   |
+39 | pub type IntentOperation = QueryIntent;
+   |          ^^^^^^^^^^^^^^^
+
+warning: struct `OperandScope` is never constructed
+  --> src/segments/intent.rs:43:12
+   |
+43 | pub struct OperandScope {
+   |            ^^^^^^^^^^^^
+
+warning: struct `ScopeEntity` is never constructed
+  --> src/segments/intent.rs:54:12
+   |
+54 | pub struct ScopeEntity {
+   |            ^^^^^^^^^^^
+
+warning: struct `SharedRelationQuery` is never constructed
+  --> src/segments/intent.rs:63:12
+   |
+63 | pub struct SharedRelationQuery {
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RevealedQuestion` is never constructed
+  --> src/segments/intent.rs:74:12
+   |
+74 | pub struct RevealedQuestion {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: method `rendered` is never used
+  --> src/segments/intent.rs:90:12
+   |
+87 | impl RevealedQuestion {
+   | --------------------- method in this implementation
+...
+90 |     pub fn rendered(&self) -> String {
+   |            ^^^^^^^^
+
+warning: struct `IntentDiagnostics` is never constructed
+   --> src/segments/intent.rs:112:12
+    |
+112 | pub struct IntentDiagnostics {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `paren_acronyms` is never used
+   --> src/segments/intent.rs:126:4
+    |
+126 | fn paren_acronyms(text: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `is_connector` is never used
+   --> src/segments/intent.rs:152:4
+    |
+152 | fn is_connector(lower: &str) -> bool {
+    |    ^^^^^^^^^^^^
+
+warning: function `is_cap_word` is never used
+   --> src/segments/intent.rs:156:4
+    |
+156 | fn is_cap_word(w: &str) -> bool {
+    |    ^^^^^^^^^^^
+
+warning: function `name_spans` is never used
+   --> src/segments/intent.rs:163:4
+    |
+163 | fn name_spans(text: &str) -> Vec<String> {
+    |    ^^^^^^^^^^
+
+warning: function `normalize_mention` is never used
+   --> src/segments/intent.rs:202:4
+    |
+202 | fn normalize_mention(text: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `is_month_token` is never used
+   --> src/segments/intent.rs:206:4
+    |
+206 | fn is_month_token(lower: &str) -> bool {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `find_ci` is never used
+   --> src/segments/intent.rs:237:4
+    |
+237 | fn find_ci(hay: &str, needle: &str) -> Option<usize> {
+    |    ^^^^^^^
+
+warning: function `rfind_ci` is never used
+   --> src/segments/intent.rs:246:4
+    |
+246 | fn rfind_ci(hay: &str, needle: &str) -> Option<usize> {
+    |    ^^^^^^^^
+
+warning: function `is_word_char` is never used
+   --> src/segments/intent.rs:257:4
+    |
+257 | fn is_word_char(c: char) -> bool {
+    |    ^^^^^^^^^^^^
+
+warning: function `find_word_ci` is never used
+   --> src/segments/intent.rs:262:4
+    |
+262 | fn find_word_ci(hay: &str, word: &str) -> Option<usize> {
+    |    ^^^^^^^^^^^^
+
+warning: function `rsplit_and` is never used
+   --> src/segments/intent.rs:278:4
+    |
+278 | fn rsplit_and(text: &str) -> Option<(String, String)> {
+    |    ^^^^^^^^^^
+
+warning: function `quoted_spans` is never used
+   --> src/segments/intent.rs:287:4
+    |
+287 | fn quoted_spans(text: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^
+
+warning: function `scope_entities` is never used
+   --> src/segments/intent.rs:318:4
+    |
+318 | fn scope_entities(scope: &str) -> Vec<ScopeEntity> {
+    |    ^^^^^^^^^^^^^^
+
+warning: enum `SplitKind` is never used
+   --> src/segments/intent.rs:374:6
+    |
+374 | enum SplitKind {
+    |      ^^^^^^^^^
+
+warning: function `split_scopes` is never used
+   --> src/segments/intent.rs:388:4
+    |
+388 | fn split_scopes(question: &str) -> (SplitKind, Vec<String>) {
+    |    ^^^^^^^^^^^^
+
+warning: function `scope_time_tokens` is never used
+   --> src/segments/intent.rs:489:4
+    |
+489 | fn scope_time_tokens(scope: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `time_constraint` is never used
+   --> src/segments/intent.rs:532:4
+    |
+532 | fn time_constraint(question: &str, operands: &[OperandScope]) -> Option<String> {
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `has_any` is never used
+   --> src/segments/intent.rs:555:4
+    |
+555 | fn has_any(hay: &str, needles: &[&str]) -> bool {
+    |    ^^^^^^^
+
+warning: function `single_scope_answer_type` is never used
+   --> src/segments/intent.rs:564:4
+    |
+564 | fn single_scope_answer_type(q_lower: &str) -> Option<&'static str> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `detect_shared_relation` is never used
+   --> src/segments/intent.rs:588:4
+    |
+588 | fn detect_shared_relation(question: &str) -> Option<SharedRelationQuery> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reveal_question` is never used
+   --> src/segments/intent.rs:646:8
+    |
+646 | pub fn reveal_question(question: &str) -> RevealedQuestion {
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `reveal_question_with_analysis` is never used
+   --> src/segments/intent.rs:654:8
+    |
+654 | pub fn reveal_question_with_analysis(question: &str, analysis: &QueryAnalysis) -> RevealedQuestion {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `corpus_entity_mentions` is never used
+   --> src/segments/intent.rs:776:4
+    |
+776 | fn corpus_entity_mentions(index: &SegmentedMemoryIndex) -> HashSet<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `fan_out_operand` is never used
+   --> src/segments/intent.rs:797:4
+    |
+797 | fn fan_out_operand(
+    |    ^^^^^^^^^^^^^^^
+
+warning: method `query_with_intent` is never used
+   --> src/segments/intent.rs:867:12
+    |
+862 | impl SegmentedMemoryIndex {
+    | ------------------------- method in this implementation
+...
+867 |     pub fn query_with_intent(
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `build_segments_by_group_id` is never used
+   --> src/segments/model.rs:164:15
+    |
+164 | pub(crate) fn build_segments_by_group_id(records: &[DocRecord]) -> Vec<MemoryIndexSegment> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_memory_index_segment` is never used
+   --> src/segments/model.rs:184:15
+    |
+184 | pub(crate) fn build_memory_index_segment(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segment` is never used
+   --> src/segments/query.rs:114:15
+    |
+114 | pub(crate) fn query_top_segment(
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments` is never used
+   --> src/segments/query.rs:122:15
+    |
+122 | pub(crate) fn query_top_segments(
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_all_segments` is never used
+   --> src/segments/query.rs:131:4
+    |
+131 | fn query_all_segments(
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments_with_diagnostics` is never used
+   --> src/segments/query.rs:139:4
+    |
+139 | fn query_top_segments_with_diagnostics(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments_with_diagnostics_and_strategy` is never used
+   --> src/segments/query.rs:161:4
+    |
+161 | fn query_top_segments_with_diagnostics_and_strategy(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple variants are never constructed
+   --> src/segments/query.rs:447:5
+    |
+446 | pub(crate) enum SegmentEnrichmentKind<'a> {
+    |                 --------------------- variants in this enum
+447 |     Segment,
+    |     ^^^^^^^
+448 |     RouteAware,
+    |     ^^^^^^^^^^
+449 |     SessionAggregated,
+    |     ^^^^^^^^^^^^^^^^^
+450 |     TemporalPath,
+    |     ^^^^^^^^^^^^
+451 |     ConnectedSegment,
+    |     ^^^^^^^^^^^^^^^^
+452 |     MissingCoverageRecovery,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+...
+458 |     AdaptiveRouteAware {
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_all_segments_with_diagnostics` is never used
+    --> src/segments/query.rs:1621:4
+     |
+1621 | fn query_all_segments_with_diagnostics(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `turn_idx` is never read
+   --> src/segments/relations.rs:169:9
+    |
+162 | pub struct RawKeyPhrase {
+    |            ------------ field in this struct
+...
+169 |     pub turn_idx: usize,
+    |         ^^^^^^^^
+    |
+    = note: `RawKeyPhrase` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `coref` is never read
+   --> src/segments/relations.rs:205:9
+    |
+181 | pub struct RawRelation {
+    |            ----------- field in this struct
+...
+205 |     pub coref: Option<String>,
+    |         ^^^^^
+    |
+    = note: `RawRelation` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `EntityRelation` is never constructed
+   --> src/segments/relations.rs:220:12
+    |
+220 | pub struct EntityRelation {
+    |            ^^^^^^^^^^^^^^
+
+warning: method `as_str` is never used
+   --> src/segments/relations.rs:258:12
+    |
+257 | impl PredicateFamily {
+    | -------------------- method in this implementation
+258 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+
+warning: function `extract_key_phrases_via_spacy` is never used
+   --> src/segments/relations.rs:375:8
+    |
+375 | pub fn extract_key_phrases_via_spacy(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extractor_model_for_turns` is never used
+   --> src/segments/relations.rs:425:15
+    |
+425 | pub(crate) fn extractor_model_for_turns(turns: &[RelationTurn]) -> &'static str {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `len`, `is_empty`, `triple_count`, and `place_keywords_for_activity` are never used
+   --> src/segments/relations.rs:710:12
+    |
+654 | impl RelationIndex {
+    | ------------------ methods in this implementation
+...
+710 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+714 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+719 |     pub fn triple_count(&self) -> usize {
+    |            ^^^^^^^^^^^^
+...
+751 |     pub fn place_keywords_for_activity(&self, person: &str, activity_verb: &str) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `route_segments` is never used
+  --> src/segments/routing.rs:22:15
+   |
+22 | pub(crate) fn route_segments(query: &str, segments: &[MemoryIndexSegment]) -> Vec<SegmentRoute> {
+   |               ^^^^^^^^^^^^^^
+
+warning: function `route_segments_with_strategy` is never used
+  --> src/segments/routing.rs:26:15
+   |
+26 | pub(crate) fn route_segments_with_strategy(
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `segment_id` is never read
+   --> src/segments/routing.rs:723:16
+    |
+721 | pub(crate) struct RouteAwareCandidate {
+    |                   ------------------- field in this struct
+722 |     pub(crate) result: SearchResult,
+723 |     pub(crate) segment_id: String,
+    |                ^^^^^^^^^^
+    |
+    = note: `RouteAwareCandidate` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple associated items are never used
+   --> src/segments/segmented.rs:114:12
+    |
+ 56 | impl SegmentedMemoryIndex {
+    | ------------------------- associated items in this implementation
+...
+114 |     pub fn from_segments(segments: Vec<MemoryIndexSegment>) -> Result<Self, String> {
+    |            ^^^^^^^^^^^^^
+...
+198 |     pub fn from_records_by_group_id(records: &[DocRecord]) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+202 |     pub fn from_records_by_group_id_with_generation(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+237 |     pub fn from_records_by_manifest(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+306 |     pub fn refresh_incremental(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+321 |     pub(crate) fn refresh_incremental_with_lexical_root(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+403 |     pub(crate) fn refresh_changed(
+    |                   ^^^^^^^^^^^^^^^
+...
+519 |     pub fn generation(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+534 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+538 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+542 |     pub fn route(&self, query: &str) -> Vec<SegmentRoute> {
+    |            ^^^^^
+...
+551 |     pub fn route_with_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+559 |     pub fn route_with_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+574 |     pub fn query(&self, query: &str, top_k: usize, segment_limit: usize) -> Vec<SearchResult> {
+    |            ^^^^^
+...
+579 |     pub fn query_with_diagnostics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+593 |     pub fn query_with_diagnostics_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+615 |     pub fn query_with_temporal_context_and_diagnostics_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+657 |     pub fn query_with_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+673 |     pub fn query_with_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+695 |     pub fn query_with_route_aware_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+717 |     pub fn query_with_session_aggregated_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+767 |     pub fn query_with_adaptive_route_aware_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+795 |     pub fn query_with_temporal_path_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+817 |     pub fn query_with_connected_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+839 |     pub fn query_with_missing_coverage_recovery_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+861 |     pub fn query_all_segments(&self, query: &str, top_k: usize) -> Vec<SearchResult> {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+866 |     pub fn query_all_segments_with_diagnostics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `from_documents` is never used
+   --> src/semantic_relations.rs:139:12
+    |
+123 | impl SemanticRelationStore {
+    | -------------------------- associated function in this implementation
+...
+139 |     pub fn from_documents<'a, I>(documents: I, options: SupersessionOptions) -> Self
+    |            ^^^^^^^^^^^^^^
+
+warning: struct `TimelineEvent` is never constructed
+ --> src/temporal_fact.rs:9:12
+  |
+9 | pub struct TimelineEvent<'a> {
+  |            ^^^^^^^^^^^^^
+
+warning: struct `TimelinePair` is never constructed
+  --> src/temporal_fact.rs:15:12
+   |
+15 | pub struct TimelinePair<'a> {
+   |            ^^^^^^^^^^^^
+
+warning: methods `valid_to_date` and `active_at` are never used
+  --> src/temporal_fact.rs:93:8
+   |
+47 | impl TemporalFact {
+   | ----------------- methods in this implementation
+...
+93 |     fn valid_to_date(&self) -> Option<NaiveDate> {
+   |        ^^^^^^^^^^^^^
+...
+99 |     fn active_at(&self, date: NaiveDate) -> bool {
+   |        ^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/temporal_fact.rs:124:12
+    |
+123 | impl TemporalFactStore {
+    | ---------------------- associated items in this implementation
+124 |     pub fn empty() -> Self {
+    |            ^^^^^
+...
+208 |     pub fn facts(&self) -> &[TemporalFact] {
+    |            ^^^^^
+...
+305 |     pub fn as_of(&self, date: &str) -> Vec<&TemporalFact> {
+    |            ^^^^^
+...
+323 |     pub fn timeline_events_between(&self, start: &str, end: &str) -> Vec<TimelineEvent<'_>> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+357 |     pub fn timeline_window_around(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+409 |     pub fn adjacent_pairs_between(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+441 |     pub fn timeline(&self, subject: &str) -> Vec<&TemporalFact> {
+    |            ^^^^^^^^
+
+warning: function `normalize_range` is never used
+   --> src/temporal_fact.rs:468:4
+    |
+468 | fn normalize_range(start: &str, end: &str) -> Option<(NaiveDate, NaiveDate)> {
+    |    ^^^^^^^^^^^^^^^
+
+warning: trait `SourceAdapter` is never used
+  --> src/adapters.rs:17:11
+   |
+17 | pub trait SourceAdapter {
+   |           ^^^^^^^^^^^^^
+
+warning: function `default_source_adapters` is never used
+  --> src/adapters.rs:25:8
+   |
+25 | pub fn default_source_adapters() -> Vec<Box<dyn SourceAdapter>> {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `MarkdownAdapter` is never constructed
+  --> src/adapters/markdown.rs:32:12
+   |
+32 | pub struct MarkdownAdapter;
+   |            ^^^^^^^^^^^^^^^
+
+warning: field `category` is never read
+   --> src/behood_query.rs:291:5
+    |
+288 | struct FusedActivity {
+    |        ------------- field in this struct
+...
+291 |     category: String,
+    |     ^^^^^^^^
+    |
+    = note: `FusedActivity` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `activity_phrase` and `where_phrase` are never read
+   --> src/behood_query.rs:567:9
+    |
+561 | pub struct ScopeVerdict {
+    |            ------------ fields in this struct
+...
+567 |     pub activity_phrase: String,
+    |         ^^^^^^^^^^^^^^^
+...
+574 |     pub where_phrase: String,
+    |         ^^^^^^^^^^^^
+    |
+    = note: `ScopeVerdict` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `text` is never read
+   --> src/behood_query.rs:615:9
+    |
+613 | pub struct KindHit {
+    |            ------- field in this struct
+614 |     /// Entity text as it appears in the judged span.
+615 |     pub text: String,
+    |         ^^^^
+    |
+    = note: `KindHit` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `name` is never used
+  --> src/claim_extractor.rs:10:8
+   |
+ 8 | pub trait ClaimExtractor {
+   |           -------------- method in this trait
+ 9 |     fn extract(&self, record: &DocRecord) -> ExtractedClaims;
+10 |     fn name(&self) -> &'static str;
+   |        ^^^^
+
+warning: struct `CorpusGraph` is never constructed
+ --> src/corpus_graph.rs:8:12
+  |
+8 | pub struct CorpusGraph {
+  |            ^^^^^^^^^^^
+
+warning: associated items `new`, `from_bundle`, `with_ownership`, `symbol_usage_summary`, and `symbols_for_doc` are never used
+  --> src/corpus_graph.rs:15:12
+   |
+14 | impl CorpusGraph {
+   | ---------------- associated items in this implementation
+15 |     pub fn new(documents: MemoryIndex, symbols: SymbolStore, usage: UsageGraph) -> Self {
+   |            ^^^
+...
+23 |     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
+   |            ^^^^^^^^^^^
+...
+39 |     pub fn with_ownership(mut self, records: impl IntoIterator<Item = OwnershipRecord>) -> Self {
+   |            ^^^^^^^^^^^^^^
+...
+44 |     pub fn symbol_usage_summary(&self, symbol_id: &str) -> UsageSummary {
+   |            ^^^^^^^^^^^^^^^^^^^^
+...
+48 |     pub fn symbols_for_doc(&self, doc_id: &str) -> Vec<&SymbolRecord> {
+   |            ^^^^^^^^^^^^^^^
+
+warning: field `path` is never read
+  --> src/graph.rs:14:9
+   |
+12 | pub struct Page {
+   |            ---- field in this struct
+13 |     /// Absolute path to the file.
+14 |     pub path: String,
+   |         ^^^^
+   |
+   = note: `Page` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `content` is never read
+  --> src/graph.rs:42:9
+   |
+30 | pub struct ChunkNode {
+   |            --------- field in this struct
+...
+42 |     pub content: String,
+   |         ^^^^^^^
+   |
+   = note: `ChunkNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `chunk_index` and `doc_entities` are never read
+  --> src/graph.rs:73:9
+   |
+61 | pub struct Graph {
+   |            ----- fields in this struct
+...
+73 |     pub chunk_index: HashMap<String, NodeIndex>,
+   |         ^^^^^^^^^^^
+...
+83 |     pub doc_entities: HashMap<String, Vec<String>>,
+   |         ^^^^^^^^^^^^
+
+warning: enum `OwnershipKind` is never used
+ --> src/ownership.rs:7:10
+  |
+7 | pub enum OwnershipKind {
+  |          ^^^^^^^^^^^^^
+
+warning: enum `FlowState` is never used
+  --> src/ownership.rs:19:10
+   |
+19 | pub enum FlowState {
+   |          ^^^^^^^^^
+
+warning: enum `FlowEdgeKind` is never used
+  --> src/ownership.rs:30:10
+   |
+30 | pub enum FlowEdgeKind {
+   |          ^^^^^^^^^^^^
+
+warning: struct `FlowEdge` is never constructed
+  --> src/ownership.rs:41:12
+   |
+41 | pub struct FlowEdge {
+   |            ^^^^^^^^
+
+warning: struct `OwnershipRecord` is never constructed
+  --> src/ownership.rs:48:12
+   |
+48 | pub struct OwnershipRecord {
+   |            ^^^^^^^^^^^^^^^
+
+warning: struct `LeakFinding` is never constructed
+  --> src/ownership.rs:69:12
+   |
+69 | pub struct LeakFinding {
+   |            ^^^^^^^^^^^
+
+warning: fields `original_terms` and `unexpanded_non_english_terms` are never read
+  --> src/query_expansion.rs:11:9
+   |
+10 | pub struct ExpandedQuery {
+   |            ------------- fields in this struct
+11 |     pub original_terms: Vec<String>,
+   |         ^^^^^^^^^^^^^^
+...
+17 |     pub unexpanded_non_english_terms: Vec<String>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ExpandedQuery` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: constant `BART_VOCAB` is never used
+  --> src/bart_tokenizer.rs:18:7
+   |
+18 | const BART_VOCAB: &str = include_str!("../tokenizers/bart/vocab.json");
+   |       ^^^^^^^^^^
+
+warning: constant `BART_MERGES` is never used
+  --> src/bart_tokenizer.rs:20:7
+   |
+20 | const BART_MERGES: &str = include_str!("../tokenizers/bart/merges.txt");
+   |       ^^^^^^^^^^^
+
+warning: static `BART` is never used
+  --> src/bart_tokenizer.rs:22:8
+   |
+22 | static BART: OnceLock<Tokenizer> = OnceLock::new();
+   |        ^^^^
+
+warning: function `build_bart` is never used
+  --> src/bart_tokenizer.rs:25:4
+   |
+25 | fn build_bart() -> Tokenizer {
+   |    ^^^^^^^^^^
+
+warning: function `bart` is never used
+  --> src/bart_tokenizer.rs:50:4
+   |
+50 | fn bart() -> &'static Tokenizer {
+   |    ^^^^
+
+warning: function `bart_subwords` is never used
+  --> src/bart_tokenizer.rs:59:8
+   |
+59 | pub fn bart_subwords(text: &str) -> Vec<String> {
+   |        ^^^^^^^^^^^^^
+
+warning: function `bart_subwords_joined` is never used
+  --> src/bart_tokenizer.rs:82:8
+   |
+82 | pub fn bart_subwords_joined(text: &str) -> String {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `as_str` and `is_multi_operand` are never used
+  --> src/query_semantics.rs:66:19
+   |
+65 | impl QueryIntent {
+   | ---------------- methods in this implementation
+66 |     pub(crate) fn as_str(self) -> &'static str {
+   |                   ^^^^^^
+...
+78 |     pub(crate) fn is_multi_operand(self) -> bool {
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: enum `ReviewSeverity` is never used
+  --> src/review.rs:10:10
+   |
+10 | pub enum ReviewSeverity {
+   |          ^^^^^^^^^^^^^^
+
+warning: enum `ReviewCategory` is never used
+  --> src/review.rs:19:10
+   |
+19 | pub enum ReviewCategory {
+   |          ^^^^^^^^^^^^^^
+
+warning: struct `ReviewRepoRef` is never constructed
+  --> src/review.rs:32:12
+   |
+32 | pub struct ReviewRepoRef {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewHunk` is never constructed
+  --> src/review.rs:43:12
+   |
+43 | pub struct ReviewHunk {
+   |            ^^^^^^^^^^
+
+warning: struct `ReviewFileChange` is never constructed
+  --> src/review.rs:61:12
+   |
+61 | pub struct ReviewFileChange {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewFileSummary` is never constructed
+  --> src/review.rs:81:12
+   |
+81 | pub struct ReviewFileSummary {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewSummary` is never constructed
+  --> src/review.rs:87:12
+   |
+87 | pub struct ReviewSummary {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewDiffSummary` is never constructed
+  --> src/review.rs:97:12
+   |
+97 | pub struct ReviewDiffSummary {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `DocumentSummary` is never constructed
+   --> src/review.rs:105:12
+    |
+105 | pub struct DocumentSummary {
+    |            ^^^^^^^^^^^^^^^
+
+warning: struct `SymbolSummary` is never constructed
+   --> src/review.rs:130:12
+    |
+130 | pub struct SymbolSummary {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `OwnershipSummary` is never constructed
+   --> src/review.rs:163:12
+    |
+163 | pub struct OwnershipSummary {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewUsageNodeSummary` is never constructed
+   --> src/review.rs:195:12
+    |
+195 | pub struct ReviewUsageNodeSummary {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewUsageSummary` is never constructed
+   --> src/review.rs:210:12
+    |
+210 | pub struct ReviewUsageSummary {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewEvidence` is never constructed
+   --> src/review.rs:238:12
+    |
+238 | pub struct ReviewEvidence {
+    |            ^^^^^^^^^^^^^^
+
+warning: struct `ReviewFinding` is never constructed
+   --> src/review.rs:253:12
+    |
+253 | pub struct ReviewFinding {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewContext` is never constructed
+   --> src/review.rs:267:12
+    |
+267 | pub struct ReviewContext {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewPacket` is never constructed
+   --> src/review.rs:281:12
+    |
+281 | pub struct ReviewPacket {
+    |            ^^^^^^^^^^^^
+
+warning: struct `ReviewDiff` is never constructed
+   --> src/review.rs:297:12
+    |
+297 | pub struct ReviewDiff {
+    |            ^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/review.rs:304:12
+    |
+303 | impl ReviewPacket {
+    | ----------------- associated function in this implementation
+304 |     pub fn new(
+    |            ^^^
+
+warning: enum `SymbolKind` is never used
+  --> src/symbols.rs:11:10
+   |
+11 | pub enum SymbolKind {
+   |          ^^^^^^^^^^
+
+warning: enum `SymbolRelationKind` is never used
+  --> src/symbols.rs:27:10
+   |
+27 | pub enum SymbolRelationKind {
+   |          ^^^^^^^^^^^^^^^^^^
+
+warning: struct `SymbolLocation` is never constructed
+  --> src/symbols.rs:39:12
+   |
+39 | pub struct SymbolLocation {
+   |            ^^^^^^^^^^^^^^
+
+warning: struct `SymbolRecord` is never constructed
+  --> src/symbols.rs:52:12
+   |
+52 | pub struct SymbolRecord {
+   |            ^^^^^^^^^^^^
+
+warning: associated items `new`, `declared`, `referenced`, and `with_attribute` are never used
+   --> src/symbols.rs:77:12
+    |
+ 76 | impl SymbolRecord {
+    | ----------------- associated items in this implementation
+ 77 |     pub fn new(
+    |            ^^^
+...
+101 |     pub fn declared(
+    |            ^^^^^^^^
+...
+116 |     pub fn referenced(
+    |            ^^^^^^^^^^
+...
+137 |     pub fn with_attribute(mut self, key: impl Into<String>, value: Value) -> Self {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `symbol_id_for` is never used
+   --> src/symbols.rs:143:4
+    |
+143 | fn symbol_id_for(
+    |    ^^^^^^^^^^^^^
+
+warning: struct `SymbolStore` is never constructed
+   --> src/symbols.rs:153:12
+    |
+153 | pub struct SymbolStore {
+    |            ^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/symbols.rs:168:12
+    |
+167 | impl SymbolStore {
+    | ---------------- associated items in this implementation
+168 |     pub fn new() -> Self {
+    |            ^^^
+...
+172 |     pub fn from_records(records: impl IntoIterator<Item = SymbolRecord>) -> Self {
+    |            ^^^^^^^^^^^^
+...
+178 |     pub fn extend(&mut self, records: impl IntoIterator<Item = SymbolRecord>) {
+    |            ^^^^^^
+...
+184 |     pub fn insert(&mut self, record: SymbolRecord) {
+    |            ^^^^^^
+...
+205 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+209 |     pub fn lookup_by_name<'a>(&'a self, name: &str) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^
+...
+220 |     pub fn lookup_by_doc<'a>(&'a self, doc_id: &str) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^
+...
+224 |     pub fn lookup_by_kind<'a>(&'a self, kind: &SymbolKind) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^
+...
+228 |     pub fn lookup_by_relation<'a>(
+    |            ^^^^^^^^^^^^^^^^^^
+...
+235 |     pub fn lookup_by_attribute<'a>(&'a self, key: &str, value: &Value) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+246 |     fn append_matches<'a>(
+    |        ^^^^^^^^^^^^^^
+...
+257 |     fn append_normalized_matches<'a>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+268 |     fn lookup_indices<'a>(&'a self, indices: Option<&Vec<usize>>) -> Vec<&'a SymbolRecord> {
+    |        ^^^^^^^^^^^^^^
+...
+277 |     fn append_indices<'a>(
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `IngestBundle` is never constructed
+   --> src/symbols.rs:294:12
+    |
+294 | pub struct IngestBundle {
+    |            ^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/symbols.rs:300:12
+    |
+299 | impl IngestBundle {
+    | ----------------- associated function in this implementation
+300 |     pub fn new(documents: Vec<SourceDocument>, symbols: Vec<SymbolRecord>) -> Self {
+    |            ^^^
+
+warning: struct `CorpusIndex` is never constructed
+   --> src/symbols.rs:305:12
+    |
+305 | pub struct CorpusIndex {
+    |            ^^^^^^^^^^^
+
+warning: associated functions `new` and `from_bundle` are never used
+   --> src/symbols.rs:311:12
+    |
+310 | impl CorpusIndex {
+    | ---------------- associated functions in this implementation
+311 |     pub fn new(documents: MemoryIndex, symbols: SymbolStore) -> Self {
+    |            ^^^
+...
+315 |     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
+    |            ^^^^^^^^^^^
+
+warning: function `augment_query_with_temporal_context` is never used
+  --> src/temporal.rs:35:8
+   |
+35 | pub fn augment_query_with_temporal_context(query: &str, question_date: Option<&str>) -> String {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `UsageNodeKind` is never used
+ --> src/usage.rs:8:10
+  |
+8 | pub enum UsageNodeKind {
+  |          ^^^^^^^^^^^^^
+
+warning: enum `UsageEdgeKind` is never used
+  --> src/usage.rs:14:10
+   |
+14 | pub enum UsageEdgeKind {
+   |          ^^^^^^^^^^^^^
+
+warning: struct `UsageNode` is never constructed
+  --> src/usage.rs:29:12
+   |
+29 | pub struct UsageNode {
+   |            ^^^^^^^^^
+
+warning: struct `UsageEdge` is never constructed
+  --> src/usage.rs:43:12
+   |
+43 | pub struct UsageEdge {
+   |            ^^^^^^^^^
+
+warning: struct `UsageGraph` is never constructed
+  --> src/usage.rs:60:12
+   |
+60 | pub struct UsageGraph {
+   |            ^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/usage.rs:74:12
+    |
+ 73 | impl UsageGraph {
+    | --------------- associated items in this implementation
+ 74 |     pub fn new() -> Self {
+    |            ^^^
+...
+ 82 |     pub fn from_bundle(bundle: &crate::symbols::IngestBundle) -> Self {
+    |            ^^^^^^^^^^^
+...
+ 88 |     pub fn insert_node(&mut self, node: UsageNode) -> usize {
+    |            ^^^^^^^^^^^
+...
+ 94 |     pub fn insert_edge(&mut self, edge: UsageEdge) {
+    |            ^^^^^^^^^^^
+...
+113 |     pub fn lookup_by_node(&self, node_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^
+...
+117 |     pub fn lookup_by_doc(&self, doc_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^
+...
+121 |     pub fn lookup_by_symbol(&self, symbol_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^^^
+...
+125 |     pub fn lookup_by_kind(&self, kind: UsageEdgeKind) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^
+...
+129 |     fn lookup_indices(&self, indices: Option<&Vec<usize>>) -> Vec<&UsageEdge> {
+    |        ^^^^^^^^^^^^^^
+...
+137 |     pub fn ingest_symbols(&mut self, symbols: impl IntoIterator<Item = SymbolRecord>) {
+    |            ^^^^^^^^^^^^^^
+...
+172 |     pub fn ingest_ownership(&mut self, records: impl IntoIterator<Item = OwnershipRecord>) {
+    |            ^^^^^^^^^^^^^^^^
+...
+206 |     pub fn connected_symbols(&self, symbol_id: &str) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+220 |     pub fn summary_for_symbol(&self, symbol_id: &str) -> UsageSummary {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `UsageSummary` is never constructed
+   --> src/usage.rs:251:12
+    |
+251 | pub struct UsageSummary {
+    |            ^^^^^^^^^^^^
+
+warning: `membrick` (lib) generated 218 warnings (run `cargo fix --lib -p membrick` to apply 40 suggestions)
+    Finished `release` profile [optimized] target(s) in 19.34s
+     Running `target/release/haystack_scoped_benchmark --longmemeval benchmark/data/longmemeval_s_raw.json --k 1 --k 3 --k 5 --k 10 --k 20 --ner-provider heuristic --structured-fact-retrieval --out scripts/longmemeval-500-misses-pass3-2026-10-12.json`
+loading raw LongMemEval data...
+running 500 scoped questions...
+[1/1] e47becba candidates=54 retrieved=10 search=90.19ms mrr=1.000
+[2/2] 118b2229 candidates=47 retrieved=15 search=1.73ms mrr=0.500
+[3/3] 51a45a95 candidates=51 retrieved=10 search=1.70ms mrr=1.000
+[4/4] 58bf7951 candidates=62 retrieved=10 search=1.96ms mrr=1.000
+[5/5] 1e043500 candidates=53 retrieved=10 search=1.73ms mrr=1.000
+[6/6] c5e8278d candidates=45 retrieved=10 search=1.32ms mrr=1.000
+[7/7] 6ade9755 candidates=52 retrieved=14 search=1.30ms mrr=1.000
+[8/8] 6f9b354f candidates=52 retrieved=10 search=1.57ms mrr=1.000
+[9/9] 58ef2f1c candidates=54 retrieved=13 search=1.98ms mrr=0.500
+[10/10] f8c5f88b candidates=51 retrieved=10 search=1.85ms mrr=1.000
+[11/11] 5d3d2817 candidates=55 retrieved=10 search=1.42ms mrr=1.000
+[12/12] 7527f7e2 candidates=46 retrieved=10 search=2.19ms mrr=0.500
+[13/13] c960da58 candidates=48 retrieved=10 search=2.03ms mrr=1.000
+[14/14] 3b6f954b candidates=52 retrieved=11 search=1.63ms mrr=1.000
+[15/15] 726462e0 candidates=48 retrieved=10 search=1.96ms mrr=0.333
+[16/16] 94f70d80 candidates=51 retrieved=14 search=1.73ms mrr=1.000
+[17/17] 66f24dbb candidates=55 retrieved=11 search=1.84ms mrr=1.000
+[18/18] ad7109d1 candidates=49 retrieved=10 search=1.77ms mrr=1.000
+[19/19] af8d2e46 candidates=54 retrieved=10 search=4.78ms mrr=1.000
+[20/20] dccbc061 candidates=51 retrieved=11 search=1.44ms mrr=1.000
+[21/21] c8c3f81d candidates=56 retrieved=10 search=1.65ms mrr=1.000
+[22/22] 8ebdbe50 candidates=48 retrieved=14 search=1.78ms mrr=1.000
+[23/23] 6b168ec8 candidates=52 retrieved=10 search=1.85ms mrr=1.000
+[24/24] 75499fd8 candidates=52 retrieved=10 search=1.51ms mrr=1.000
+[25/25] 21436231 candidates=52 retrieved=11 search=4.13ms mrr=1.000
+[26/26] 95bcc1c8 candidates=50 retrieved=10 search=4.62ms mrr=1.000
+[27/27] 0862e8bf candidates=53 retrieved=10 search=1.53ms mrr=1.000
+[28/28] 853b0a1d candidates=52 retrieved=13 search=1.90ms mrr=1.000
+[29/29] a06e4cfe candidates=57 retrieved=10 search=2.22ms mrr=1.000
+[30/30] 37d43f65 candidates=49 retrieved=11 search=2.13ms mrr=1.000
+[31/31] b86304ba candidates=43 retrieved=10 search=3.43ms mrr=1.000
+[32/32] d52b4f67 candidates=54 retrieved=11 search=1.60ms mrr=0.500
+[33/33] 25e5aa4f candidates=48 retrieved=10 search=2.23ms mrr=1.000
+[34/34] caf9ead2 candidates=46 retrieved=15 search=1.65ms mrr=1.000
+[35/35] 8550ddae candidates=46 retrieved=12 search=1.77ms mrr=0.333
+[36/36] 60d45044 candidates=57 retrieved=10 search=1.48ms mrr=1.000
+[37/37] 3f1e9474 candidates=55 retrieved=10 search=1.43ms mrr=1.000
+[38/38] 86b68151 candidates=49 retrieved=11 search=1.64ms mrr=1.000
+[39/39] 577d4d32 candidates=49 retrieved=15 search=1.94ms mrr=1.000
+[40/40] ec81a493 candidates=53 retrieved=10 search=4.01ms mrr=1.000
+[41/41] 15745da0 candidates=50 retrieved=13 search=1.67ms mrr=1.000
+[42/42] e01b8e2f candidates=58 retrieved=15 search=1.57ms mrr=0.333
+[43/43] bc8a6e93 candidates=48 retrieved=10 search=1.88ms mrr=0.500
+[44/44] ccb36322 candidates=47 retrieved=10 search=1.72ms mrr=0.500
+[45/45] 001be529 candidates=55 retrieved=14 search=1.87ms mrr=0.500
+[46/46] b320f3f8 candidates=50 retrieved=10 search=2.06ms mrr=1.000
+[47/47] 19b5f2b3 candidates=45 retrieved=16 search=1.38ms mrr=1.000
+[48/48] 4fd1909e candidates=57 retrieved=10 search=2.09ms mrr=1.000
+[49/49] 545bd2b5 candidates=44 retrieved=10 search=4.18ms mrr=1.000
+[50/50] 8a137a7f candidates=51 retrieved=11 search=1.67ms mrr=1.000
+[51/51] 76d63226 candidates=49 retrieved=10 search=1.69ms mrr=1.000
+[52/52] 86f00804 candidates=46 retrieved=10 search=1.50ms mrr=1.000
+[53/53] 8e9d538c candidates=50 retrieved=11 search=3.29ms mrr=1.000
+[54/54] 311778f1 candidates=55 retrieved=13 search=4.45ms mrr=1.000
+[55/55] c19f7a0b candidates=48 retrieved=10 search=1.74ms mrr=0.500
+[56/56] 4100d0a0 candidates=51 retrieved=10 search=1.19ms mrr=1.000
+[57/57] 29f2956b candidates=51 retrieved=10 search=4.22ms mrr=1.000
+[58/58] 1faac195 candidates=46 retrieved=11 search=1.81ms mrr=1.000
+[59/59] faba32e5 candidates=50 retrieved=13 search=1.95ms mrr=1.000
+[60/60] f4f1d8a4 candidates=58 retrieved=10 search=2.05ms mrr=1.000
+[61/61] c14c00dd candidates=54 retrieved=10 search=1.70ms mrr=1.000
+[62/62] 36580ce8 candidates=61 retrieved=11 search=1.78ms mrr=1.000
+[63/63] 3d86fd0a candidates=57 retrieved=11 search=1.57ms mrr=1.000
+[64/64] a82c026e candidates=48 retrieved=14 search=1.60ms mrr=0.333
+[65/65] 0862e8bf_abs candidates=55 retrieved=10 search=1.24ms mrr=0.000
+[66/66] 15745da0_abs candidates=51 retrieved=16 search=1.79ms mrr=1.000
+[67/67] bc8a6e93_abs candidates=52 retrieved=11 search=1.88ms mrr=0.500
+[68/68] 19b5f2b3_abs candidates=53 retrieved=14 search=1.39ms mrr=1.000
+[69/69] 29f2956b_abs candidates=55 retrieved=10 search=4.22ms mrr=0.000
+[70/70] f4f1d8a4_abs candidates=50 retrieved=10 search=1.77ms mrr=1.000
+[71/71] 0a995998 candidates=45 retrieved=10 search=3.97ms mrr=1.000
+[72/72] 6d550036 candidates=53 retrieved=10 search=3.43ms mrr=0.167
+[73/73] gpt4_59c863d7 candidates=48 retrieved=10 search=3.54ms mrr=1.000
+[74/74] b5ef892d candidates=56 retrieved=13 search=5.32ms mrr=0.250
+[75/75] e831120c candidates=52 retrieved=10 search=5.16ms mrr=1.000
+[76/76] 3a704032 candidates=51 retrieved=13 search=6.05ms mrr=1.000
+[77/77] gpt4_d84a3211 candidates=51 retrieved=10 search=4.83ms mrr=0.500
+[78/78] aae3761f candidates=51 retrieved=10 search=4.00ms mrr=1.000
+[79/79] gpt4_f2262a51 candidates=49 retrieved=10 search=2.70ms mrr=1.000
+[80/80] dd2973ad candidates=53 retrieved=12 search=4.99ms mrr=1.000
+[81/81] c4a1ceb8 candidates=53 retrieved=10 search=4.07ms mrr=1.000
+[82/82] gpt4_a56e767c candidates=52 retrieved=10 search=3.08ms mrr=1.000
+[83/83] 6cb6f249 candidates=43 retrieved=10 search=4.06ms mrr=0.500
+[84/84] 46a3abf7 candidates=55 retrieved=10 search=4.79ms mrr=1.000
+[85/85] 36b9f61e candidates=49 retrieved=10 search=4.36ms mrr=1.000
+[86/86] 28dc39ac candidates=39 retrieved=10 search=3.67ms mrr=1.000
+[87/87] gpt4_2f8be40d candidates=49 retrieved=12 search=4.30ms mrr=0.333
+[88/88] 2e6d26dc candidates=57 retrieved=10 search=3.81ms mrr=1.000
+[89/89] gpt4_15e38248 candidates=48 retrieved=10 search=5.01ms mrr=0.250
+[90/90] 88432d0a candidates=46 retrieved=16 search=6.48ms mrr=0.333
+[91/91] 80ec1f4f candidates=48 retrieved=10 search=4.59ms mrr=1.000
+[92/92] d23cf73b candidates=55 retrieved=10 search=4.53ms mrr=1.000
+[93/93] gpt4_7fce9456 candidates=46 retrieved=10 search=4.72ms mrr=1.000
+[94/94] d682f1a2 candidates=52 retrieved=10 search=4.51ms mrr=1.000
+[95/95] 7024f17c candidates=50 retrieved=13 search=3.15ms mrr=1.000
+[96/96] gpt4_5501fe77 candidates=48 retrieved=11 search=4.63ms mrr=0.333
+[97/97] gpt4_2ba83207 candidates=53 retrieved=14 search=4.26ms mrr=1.000
+[98/98] 2318644b candidates=44 retrieved=10 search=3.59ms mrr=1.000
+[99/99] 2ce6a0f2 candidates=52 retrieved=13 search=7.29ms mrr=1.000
+[100/100] gpt4_d12ceb0e candidates=47 retrieved=10 search=1.80ms mrr=1.000
+[101/101] 00ca467f candidates=49 retrieved=10 search=3.62ms mrr=1.000
+[102/102] b3c15d39 candidates=53 retrieved=10 search=4.75ms mrr=1.000
+[103/103] gpt4_31ff4165 candidates=42 retrieved=13 search=4.80ms mrr=0.500
+[104/104] eeda8a6d candidates=51 retrieved=10 search=2.63ms mrr=1.000
+[105/105] 2788b940 candidates=49 retrieved=10 search=3.71ms mrr=0.500
+[106/106] 60bf93ed candidates=51 retrieved=10 search=3.66ms mrr=1.000
+[107/107] 9d25d4e0 candidates=47 retrieved=12 search=5.88ms mrr=1.000
+[108/108] 129d1232 candidates=50 retrieved=10 search=3.68ms mrr=1.000
+[109/109] 60472f9c candidates=49 retrieved=10 search=3.09ms mrr=1.000
+[110/110] gpt4_194be4b3 candidates=49 retrieved=10 search=2.40ms mrr=1.000
+[111/111] a9f6b44c candidates=46 retrieved=10 search=4.14ms mrr=1.000
+[112/112] d851d5ba candidates=49 retrieved=11 search=2.50ms mrr=1.000
+[113/113] 5a7937c8 candidates=43 retrieved=10 search=3.92ms mrr=1.000
+[114/114] gpt4_ab202e7f candidates=46 retrieved=10 search=3.19ms mrr=1.000
+[115/115] gpt4_e05b82a6 candidates=47 retrieved=10 search=4.86ms mrr=0.500
+[116/116] gpt4_731e37d7 candidates=53 retrieved=15 search=6.38ms mrr=1.000
+[117/117] edced276 candidates=49 retrieved=10 search=5.03ms mrr=1.000
+[118/118] 10d9b85a candidates=46 retrieved=10 search=3.96ms mrr=1.000
+[119/119] e3038f8c candidates=48 retrieved=10 search=3.80ms mrr=0.500
+[120/120] 2b8f3739 candidates=48 retrieved=10 search=3.93ms mrr=1.000
+[121/121] 1a8a66a6 candidates=51 retrieved=10 search=2.34ms mrr=1.000
+[122/122] c2ac3c61 candidates=54 retrieved=10 search=3.19ms mrr=1.000
+[123/123] bf659f65 candidates=56 retrieved=10 search=3.19ms mrr=1.000
+[124/124] gpt4_372c3eed candidates=46 retrieved=11 search=5.18ms mrr=1.000
+[125/125] gpt4_2f91af09 candidates=58 retrieved=13 search=6.07ms mrr=1.000
+[126/126] 81507db6 candidates=50 retrieved=14 search=6.57ms mrr=1.000
+[127/127] 88432d0a_abs candidates=47 retrieved=16 search=6.94ms mrr=0.500
+[128/128] 80ec1f4f_abs candidates=46 retrieved=10 search=2.98ms mrr=1.000
+[129/129] eeda8a6d_abs candidates=51 retrieved=10 search=3.36ms mrr=1.000
+[130/130] 60bf93ed_abs candidates=56 retrieved=10 search=3.89ms mrr=0.125
+[131/131] edced276_abs candidates=52 retrieved=10 search=3.35ms mrr=1.000
+[132/132] gpt4_372c3eed_abs candidates=46 retrieved=10 search=5.21ms mrr=1.000
+[133/133] 8a2466db candidates=54 retrieved=10 search=1.86ms mrr=1.000
+[134/134] 06878be2 candidates=50 retrieved=11 search=1.96ms mrr=0.000
+[135/135] 75832dbd candidates=51 retrieved=10 search=1.91ms mrr=1.000
+[136/136] 0edc2aef candidates=49 retrieved=11 search=1.70ms mrr=1.000
+[137/137] 35a27287 candidates=54 retrieved=13 search=1.84ms mrr=1.000
+[138/138] 32260d93 candidates=47 retrieved=10 search=1.60ms mrr=0.333
+[139/139] 195a1a1b candidates=48 retrieved=10 search=1.62ms mrr=0.500
+[140/140] afdc33df candidates=46 retrieved=10 search=1.96ms mrr=1.000
+[141/141] caf03d32 candidates=55 retrieved=10 search=2.19ms mrr=1.000
+[142/142] 54026fce candidates=52 retrieved=11 search=1.93ms mrr=1.000
+[143/143] 06f04340 candidates=56 retrieved=13 search=1.84ms mrr=0.083
+[144/144] 6b7dfb22 candidates=47 retrieved=10 search=2.36ms mrr=0.143
+[145/145] 1a1907b4 candidates=52 retrieved=11 search=2.19ms mrr=0.091
+[146/146] 09d032c9 candidates=44 retrieved=10 search=2.01ms mrr=0.143
+[147/147] 38146c39 candidates=49 retrieved=10 search=2.17ms mrr=0.333
+[148/148] d24813b1 candidates=47 retrieved=10 search=2.04ms mrr=0.250
+[149/149] 57f827a0 candidates=53 retrieved=14 search=1.82ms mrr=0.500
+[150/150] 95228167 candidates=51 retrieved=14 search=2.36ms mrr=1.000
+[151/151] 505af2f5 candidates=55 retrieved=10 search=2.05ms mrr=0.500
+[152/152] 75f70248 candidates=45 retrieved=11 search=1.86ms mrr=1.000
+[153/153] d6233ab6 candidates=47 retrieved=10 search=2.44ms mrr=0.500
+[154/154] 1da05512 candidates=47 retrieved=14 search=2.12ms mrr=1.000
+[155/155] fca70973 candidates=47 retrieved=10 search=1.97ms mrr=1.000
+[156/156] b6025781 candidates=50 retrieved=12 search=2.06ms mrr=1.000
+[157/157] a89d7624 candidates=51 retrieved=10 search=1.89ms mrr=1.000
+[158/158] b0479f84 candidates=50 retrieved=10 search=2.13ms mrr=0.500
+[159/159] 1d4e3b97 candidates=46 retrieved=16 search=2.31ms mrr=1.000
+[160/160] 07b6f563 candidates=53 retrieved=10 search=1.67ms mrr=1.000
+[161/161] 1c0ddc50 candidates=52 retrieved=10 search=1.76ms mrr=0.167
+[162/162] 0a34ad58 candidates=48 retrieved=10 search=2.26ms mrr=1.000
+[163/163] d3ab962e candidates=53 retrieved=10 search=3.15ms mrr=0.500
+[164/164] 2311e44b candidates=53 retrieved=10 search=3.77ms mrr=1.000
+[165/165] cc06de0d candidates=44 retrieved=10 search=4.70ms mrr=1.000
+[166/166] a11281a2 candidates=52 retrieved=15 search=1.97ms mrr=1.000
+[167/167] 4f54b7c9 candidates=49 retrieved=10 search=2.83ms mrr=1.000
+[168/168] 85fa3a3f candidates=50 retrieved=10 search=6.13ms mrr=1.000
+[169/169] 9aaed6a3 candidates=54 retrieved=11 search=2.89ms mrr=1.000
+[170/170] 1f2b8d4f candidates=53 retrieved=10 search=2.31ms mrr=1.000
+[171/171] e6041065 candidates=46 retrieved=10 search=1.73ms mrr=1.000
+[172/172] 51c32626 candidates=53 retrieved=13 search=1.91ms mrr=1.000
+[173/173] d905b33f candidates=51 retrieved=10 search=1.86ms mrr=1.000
+[174/174] 7405e8b1 candidates=49 retrieved=10 search=2.14ms mrr=1.000
+[175/175] f35224e0 candidates=56 retrieved=10 search=4.24ms mrr=1.000
+[176/176] 6456829e candidates=50 retrieved=10 search=3.14ms mrr=0.500
+[177/177] a4996e51 candidates=48 retrieved=10 search=4.50ms mrr=1.000
+[178/178] 3c1045c8 candidates=52 retrieved=10 search=4.03ms mrr=0.333
+[179/179] 60036106 candidates=46 retrieved=10 search=4.42ms mrr=1.000
+[180/180] 681a1674 candidates=52 retrieved=11 search=2.38ms mrr=1.000
+[181/181] e25c3b8d candidates=51 retrieved=10 search=3.69ms mrr=1.000
+[182/182] 4adc0475 candidates=47 retrieved=11 search=4.55ms mrr=1.000
+[183/183] 4bc144e2 candidates=49 retrieved=10 search=3.78ms mrr=1.000
+[184/184] ef66a6e5 candidates=49 retrieved=10 search=3.45ms mrr=1.000
+[185/185] 5025383b candidates=50 retrieved=10 search=1.79ms mrr=1.000
+[186/186] a1cc6108 candidates=44 retrieved=15 search=1.43ms mrr=1.000
+[187/187] 9ee3ecd6 candidates=54 retrieved=10 search=4.44ms mrr=1.000
+[188/188] 3fdac837 candidates=48 retrieved=10 search=3.83ms mrr=1.000
+[189/189] 91b15a6e candidates=52 retrieved=10 search=2.09ms mrr=1.000
+[190/190] 27016adc candidates=49 retrieved=10 search=2.36ms mrr=1.000
+[191/191] 720133ac candidates=50 retrieved=11 search=4.54ms mrr=1.000
+[192/192] 77eafa52 candidates=54 retrieved=10 search=3.78ms mrr=1.000
+[193/193] 8979f9ec candidates=45 retrieved=10 search=4.63ms mrr=1.000
+[194/194] 0100672e candidates=50 retrieved=11 search=2.34ms mrr=1.000
+[195/195] a96c20ee candidates=54 retrieved=11 search=1.67ms mrr=1.000
+[196/196] 92a0aa75 candidates=46 retrieved=14 search=1.76ms mrr=1.000
+[197/197] 3fe836c9 candidates=46 retrieved=10 search=4.46ms mrr=1.000
+[198/198] 1c549ce4 candidates=48 retrieved=10 search=4.55ms mrr=1.000
+[199/199] 6c49646a candidates=47 retrieved=10 search=4.17ms mrr=1.000
+[200/200] 1192316e candidates=43 retrieved=10 search=4.52ms mrr=0.500
+[201/201] 0ea62687 candidates=47 retrieved=13 search=4.74ms mrr=1.000
+[202/202] 67e0d0f2 candidates=53 retrieved=10 search=3.64ms mrr=1.000
+[203/203] bb7c3b45 candidates=47 retrieved=10 search=3.68ms mrr=1.000
+[204/204] ba358f49 candidates=42 retrieved=14 search=3.81ms mrr=1.000
+[205/205] 61f8c8f8 candidates=50 retrieved=10 search=4.96ms mrr=1.000
+[206/206] 60159905 candidates=48 retrieved=15 search=7.03ms mrr=0.500
+[207/207] ef9cf60a candidates=58 retrieved=11 search=2.16ms mrr=1.000
+[208/208] 73d42213 candidates=51 retrieved=15 search=1.67ms mrr=1.000
+[209/209] bc149d6b candidates=50 retrieved=16 search=6.86ms mrr=1.000
+[210/210] 099778bb candidates=47 retrieved=10 search=1.99ms mrr=1.000
+[211/211] 09ba9854 candidates=46 retrieved=10 search=4.22ms mrr=1.000
+[212/212] d6062bb9 candidates=52 retrieved=10 search=4.19ms mrr=1.000
+[213/213] 157a136e candidates=50 retrieved=10 search=2.74ms mrr=1.000
+[214/214] c18a7dc8 candidates=50 retrieved=16 search=3.15ms mrr=0.200
+[215/215] a3332713 candidates=45 retrieved=10 search=3.22ms mrr=1.000
+[216/216] 55241a1f candidates=49 retrieved=10 search=5.15ms mrr=1.000
+[217/217] a08a253f candidates=54 retrieved=10 search=4.16ms mrr=1.000
+[218/218] f0e564bc candidates=53 retrieved=10 search=4.82ms mrr=1.000
+[219/219] 078150f1 candidates=47 retrieved=10 search=3.84ms mrr=1.000
+[220/220] 8cf4d046 candidates=47 retrieved=10 search=1.71ms mrr=1.000
+[221/221] a346bb18 candidates=51 retrieved=10 search=3.93ms mrr=0.500
+[222/222] 37f165cf candidates=46 retrieved=10 search=2.02ms mrr=1.000
+[223/223] 8e91e7d9 candidates=50 retrieved=10 search=3.27ms mrr=0.125
+[224/224] 87f22b4a candidates=49 retrieved=12 search=3.83ms mrr=1.000
+[225/225] e56a43b9 candidates=46 retrieved=12 search=2.00ms mrr=1.000
+[226/226] efc3f7c2 candidates=49 retrieved=10 search=4.12ms mrr=1.000
+[227/227] 21d02d0d candidates=49 retrieved=10 search=3.80ms mrr=1.000
+[228/228] 2311e44b_abs candidates=53 retrieved=10 search=3.39ms mrr=1.000
+[229/229] 6456829e_abs candidates=55 retrieved=10 search=3.12ms mrr=1.000
+[230/230] e5ba910e_abs candidates=52 retrieved=10 search=3.55ms mrr=1.000
+[231/231] a96c20ee_abs candidates=57 retrieved=10 search=2.04ms mrr=0.500
+[232/232] ba358f49_abs candidates=49 retrieved=14 search=1.48ms mrr=1.000
+[233/233] 09ba9854_abs candidates=52 retrieved=10 search=4.29ms mrr=1.000
+[234/234] gpt4_59149c77 candidates=51 retrieved=10 search=5.82ms mrr=1.000
+[235/235] gpt4_f49edff3 candidates=47 retrieved=10 search=3.67ms mrr=1.000
+[236/236] 71017276 candidates=49 retrieved=10 search=3.96ms mrr=1.000
+[237/237] b46e15ed candidates=48 retrieved=15 search=4.90ms mrr=0.500
+[238/238] gpt4_fa19884c candidates=47 retrieved=10 search=6.11ms mrr=1.000
+[239/239] 0bc8ad92 candidates=52 retrieved=10 search=3.07ms mrr=1.000
+[240/240] af082822 candidates=44 retrieved=10 search=4.31ms mrr=0.500
+[241/241] gpt4_4929293a candidates=47 retrieved=10 search=4.31ms mrr=1.000
+[242/242] gpt4_b5700ca9 candidates=55 retrieved=14 search=4.76ms mrr=1.000
+[243/243] 9a707b81 candidates=58 retrieved=13 search=5.70ms mrr=1.000
+[244/244] gpt4_1d4ab0c9 candidates=54 retrieved=10 search=5.58ms mrr=1.000
+[245/245] gpt4_e072b769 candidates=47 retrieved=10 search=4.64ms mrr=1.000
+[246/246] 0db4c65d candidates=45 retrieved=16 search=7.76ms mrr=0.500
+[247/247] gpt4_1d80365e candidates=53 retrieved=10 search=4.23ms mrr=1.000
+[248/248] gpt4_7f6b06db candidates=54 retrieved=13 search=5.10ms mrr=0.250
+[249/249] gpt4_6dc9b45b candidates=51 retrieved=10 search=4.04ms mrr=1.000
+[250/250] gpt4_8279ba02 candidates=51 retrieved=10 search=3.94ms mrr=0.500
+[251/251] gpt4_18c2b244 candidates=44 retrieved=10 search=3.56ms mrr=1.000
+[252/252] gpt4_a1b77f9c candidates=49 retrieved=10 search=5.04ms mrr=1.000
+[253/253] gpt4_1916e0ea candidates=58 retrieved=10 search=5.28ms mrr=1.000
+[254/254] gpt4_7a0daae1 candidates=65 retrieved=10 search=5.26ms mrr=1.000
+[255/255] gpt4_468eb063 candidates=45 retrieved=10 search=3.38ms mrr=1.000
+[256/256] gpt4_7abb270c candidates=51 retrieved=10 search=1.83ms mrr=1.000
+[257/257] gpt4_1e4a8aeb candidates=48 retrieved=10 search=5.25ms mrr=0.500
+[258/258] gpt4_4fc4f797 candidates=46 retrieved=10 search=6.12ms mrr=1.000
+[259/259] 4dfccbf7 candidates=51 retrieved=14 search=5.65ms mrr=1.000
+[260/260] gpt4_61e13b3c candidates=50 retrieved=10 search=6.79ms mrr=0.500
+[261/261] gpt4_45189cb4 candidates=49 retrieved=10 search=1.89ms mrr=1.000
+[262/262] 2ebe6c90 candidates=47 retrieved=10 search=4.01ms mrr=1.000
+[263/263] gpt4_e061b84f candidates=50 retrieved=14 search=6.13ms mrr=1.000
+[264/264] 370a8ff4 candidates=51 retrieved=13 search=4.70ms mrr=1.000
+[265/265] gpt4_d6585ce8 candidates=55 retrieved=13 search=7.16ms mrr=0.500
+[266/266] gpt4_4ef30696 candidates=52 retrieved=10 search=5.71ms mrr=1.000
+[267/267] gpt4_ec93e27f candidates=48 retrieved=10 search=4.30ms mrr=0.500
+[268/268] 6e984301 candidates=56 retrieved=16 search=4.75ms mrr=1.000
+[269/269] 8077ef71 candidates=49 retrieved=10 search=4.17ms mrr=0.333
+[270/270] gpt4_f420262c candidates=50 retrieved=12 search=3.76ms mrr=1.000
+[271/271] gpt4_8e165409 candidates=53 retrieved=10 search=6.15ms mrr=1.000
+[272/272] gpt4_74aed68e candidates=48 retrieved=10 search=6.21ms mrr=1.000
+[273/273] bcbe585f candidates=48 retrieved=10 search=4.80ms mrr=1.000
+[274/274] gpt4_21adecb5 candidates=54 retrieved=10 search=4.53ms mrr=0.500
+[275/275] 5e1b23de candidates=46 retrieved=10 search=3.87ms mrr=1.000
+[276/276] gpt4_98f46fc6 candidates=49 retrieved=10 search=4.31ms mrr=1.000
+[277/277] gpt4_af6db32f candidates=45 retrieved=10 search=4.19ms mrr=1.000
+[278/278] eac54adc candidates=46 retrieved=15 search=4.32ms mrr=1.000
+[279/279] gpt4_7ddcf75f candidates=50 retrieved=10 search=4.79ms mrr=1.000
+[280/280] gpt4_a2d1d1f6 candidates=50 retrieved=10 search=5.69ms mrr=1.000
+[281/281] gpt4_85da3956 candidates=56 retrieved=10 search=4.61ms mrr=1.000
+[282/282] gpt4_b0863698 candidates=44 retrieved=10 search=4.38ms mrr=0.333
+[283/283] gpt4_68e94287 candidates=52 retrieved=10 search=4.41ms mrr=1.000
+[284/284] gpt4_e414231e candidates=47 retrieved=10 search=5.99ms mrr=1.000
+[285/285] gpt4_7ca326fa candidates=56 retrieved=11 search=1.89ms mrr=1.000
+[286/286] gpt4_7bc6cf22 candidates=52 retrieved=10 search=5.66ms mrr=1.000
+[287/287] 2ebe6c92 candidates=51 retrieved=13 search=1.67ms mrr=0.111
+[288/288] gpt4_e061b84g candidates=59 retrieved=14 search=3.94ms mrr=1.000
+[289/289] 71017277 candidates=53 retrieved=12 search=1.77ms mrr=0.200
+[290/290] b46e15ee candidates=44 retrieved=13 search=2.02ms mrr=1.000
+[291/291] gpt4_d6585ce9 candidates=43 retrieved=11 search=1.77ms mrr=1.000
+[292/292] gpt4_1e4a8aec candidates=54 retrieved=13 search=1.76ms mrr=1.000
+[293/293] gpt4_f420262d candidates=44 retrieved=10 search=2.35ms mrr=0.333
+[294/294] gpt4_59149c78 candidates=54 retrieved=13 search=4.28ms mrr=0.200
+[295/295] gpt4_e414231f candidates=51 retrieved=10 search=1.88ms mrr=1.000
+[296/296] gpt4_4929293b candidates=52 retrieved=15 search=3.98ms mrr=1.000
+[297/297] gpt4_468eb064 candidates=53 retrieved=16 search=1.71ms mrr=0.500
+[298/298] gpt4_fa19884d candidates=56 retrieved=13 search=1.87ms mrr=0.333
+[299/299] 9a707b82 candidates=56 retrieved=13 search=1.92ms mrr=0.111
+[300/300] eac54add candidates=45 retrieved=15 search=1.84ms mrr=0.067
+[301/301] 4dfccbf8 candidates=49 retrieved=12 search=1.74ms mrr=1.000
+[302/302] 0bc8ad93 candidates=48 retrieved=12 search=1.88ms mrr=1.000
+[303/303] 6e984302 candidates=46 retrieved=15 search=2.11ms mrr=0.143
+[304/304] gpt4_8279ba03 candidates=46 retrieved=15 search=2.02ms mrr=1.000
+[305/305] gpt4_b5700ca0 candidates=52 retrieved=14 search=1.73ms mrr=0.167
+[306/306] gpt4_68e94288 candidates=44 retrieved=15 search=2.07ms mrr=0.200
+[307/307] gpt4_2655b836 candidates=46 retrieved=10 search=1.95ms mrr=1.000
+[308/308] gpt4_2487a7cb candidates=50 retrieved=10 search=5.43ms mrr=1.000
+[309/309] gpt4_76048e76 candidates=51 retrieved=10 search=4.17ms mrr=1.000
+[310/310] gpt4_2312f94c candidates=48 retrieved=10 search=4.30ms mrr=1.000
+[311/311] 0bb5a684 candidates=43 retrieved=10 search=4.85ms mrr=1.000
+[312/312] 08f4fc43 candidates=50 retrieved=13 search=5.95ms mrr=1.000
+[313/313] 2c63a862 candidates=55 retrieved=10 search=4.58ms mrr=1.000
+[314/314] gpt4_385a5000 candidates=57 retrieved=10 search=3.10ms mrr=1.000
+[315/315] 2a1811e2 candidates=47 retrieved=12 search=5.56ms mrr=1.000
+[316/316] bbf86515 candidates=47 retrieved=10 search=4.75ms mrr=1.000
+[317/317] gpt4_5dcc0aab candidates=55 retrieved=12 search=1.82ms mrr=1.000
+[318/318] gpt4_0b2f1d21 candidates=56 retrieved=10 search=4.02ms mrr=1.000
+[319/319] f0853d11 candidates=48 retrieved=10 search=4.75ms mrr=1.000
+[320/320] gpt4_6ed717ea candidates=49 retrieved=10 search=4.83ms mrr=1.000
+[321/321] gpt4_70e84552 candidates=51 retrieved=10 search=3.53ms mrr=1.000
+[322/322] a3838d2b candidates=48 retrieved=10 search=4.15ms mrr=1.000
+[323/323] gpt4_93159ced candidates=43 retrieved=13 search=3.83ms mrr=1.000
+[324/324] gpt4_2d58bcd6 candidates=48 retrieved=10 search=3.94ms mrr=1.000
+[325/325] gpt4_65aabe59 candidates=45 retrieved=10 search=4.41ms mrr=1.000
+[326/326] 982b5123 candidates=48 retrieved=10 search=4.72ms mrr=1.000
+[327/327] b9cfe692 candidates=51 retrieved=13 search=4.20ms mrr=1.000
+[328/328] gpt4_4edbafa2 candidates=42 retrieved=10 search=3.96ms mrr=1.000
+[329/329] c8090214 candidates=49 retrieved=10 search=4.47ms mrr=1.000
+[330/330] gpt4_483dd43c candidates=54 retrieved=10 search=3.79ms mrr=1.000
+[331/331] e4e14d04 candidates=46 retrieved=13 search=4.22ms mrr=0.500
+[332/332] c9f37c46 candidates=53 retrieved=13 search=4.59ms mrr=1.000
+[333/333] gpt4_2c50253f candidates=60 retrieved=10 search=1.56ms mrr=1.000
+[334/334] dcfa8644 candidates=47 retrieved=12 search=5.46ms mrr=1.000
+[335/335] gpt4_b4a80587 candidates=47 retrieved=10 search=4.64ms mrr=1.000
+[336/336] gpt4_9a159967 candidates=47 retrieved=10 search=1.86ms mrr=1.000
+[337/337] cc6d1ec1 candidates=46 retrieved=13 search=3.49ms mrr=1.000
+[338/338] gpt4_8c8961ae candidates=55 retrieved=10 search=3.46ms mrr=1.000
+[339/339] gpt4_d9af6064 candidates=53 retrieved=10 search=4.15ms mrr=1.000
+[340/340] gpt4_7de946e7 candidates=55 retrieved=10 search=4.52ms mrr=1.000
+[341/341] d01c6aa8 candidates=45 retrieved=12 search=1.70ms mrr=1.000
+[342/342] 993da5e2 candidates=54 retrieved=14 search=2.31ms mrr=1.000
+[343/343] a3045048 candidates=58 retrieved=10 search=4.72ms mrr=0.500
+[344/344] gpt4_d31cdae3 candidates=53 retrieved=10 search=4.07ms mrr=1.000
+[345/345] gpt4_cd90e484 candidates=54 retrieved=15 search=5.23ms mrr=1.000
+[346/346] gpt4_88806d6e candidates=52 retrieved=11 search=1.83ms mrr=1.000
+[347/347] gpt4_4cd9eba1 candidates=47 retrieved=14 search=5.44ms mrr=0.500
+[348/348] gpt4_93f6379c candidates=43 retrieved=10 search=3.16ms mrr=1.000
+[349/349] b29f3365 candidates=55 retrieved=11 search=2.41ms mrr=0.500
+[350/350] gpt4_2f56ae70 candidates=47 retrieved=10 search=1.73ms mrr=0.250
+[351/351] 6613b389 candidates=43 retrieved=10 search=2.89ms mrr=1.000
+[352/352] gpt4_78cf46a3 candidates=53 retrieved=10 search=4.96ms mrr=1.000
+[353/353] gpt4_0a05b494 candidates=46 retrieved=10 search=2.34ms mrr=1.000
+[354/354] gpt4_1a1dc16d candidates=49 retrieved=10 search=3.78ms mrr=1.000
+[355/355] gpt4_2f584639 candidates=49 retrieved=10 search=4.19ms mrr=1.000
+[356/356] gpt4_213fd887 candidates=47 retrieved=10 search=5.18ms mrr=1.000
+[357/357] gpt4_5438fa52 candidates=53 retrieved=10 search=4.15ms mrr=1.000
+[358/358] gpt4_c27434e8 candidates=52 retrieved=10 search=4.32ms mrr=1.000
+[359/359] gpt4_fe651585 candidates=50 retrieved=11 search=1.43ms mrr=1.000
+[360/360] 8c18457d candidates=43 retrieved=10 search=6.14ms mrr=1.000
+[361/361] gpt4_70e84552_abs candidates=52 retrieved=10 search=3.66ms mrr=0.250
+[362/362] gpt4_93159ced_abs candidates=46 retrieved=14 search=3.71ms mrr=0.125
+[363/363] 982b5123_abs candidates=46 retrieved=12 search=1.53ms mrr=1.000
+[364/364] c8090214_abs candidates=57 retrieved=10 search=4.28ms mrr=1.000
+[365/365] gpt4_c27434e8_abs candidates=50 retrieved=10 search=4.35ms mrr=1.000
+[366/366] gpt4_fe651585_abs candidates=51 retrieved=10 search=1.71ms mrr=1.000
+[367/367] 6a1eabeb candidates=41 retrieved=10 search=1.85ms mrr=1.000
+[368/368] 6aeb4375 candidates=47 retrieved=11 search=2.95ms mrr=1.000
+[369/369] 830ce83f candidates=49 retrieved=11 search=1.82ms mrr=1.000
+[370/370] 852ce960 candidates=41 retrieved=13 search=1.95ms mrr=1.000
+[371/371] 945e3d21 candidates=51 retrieved=10 search=1.86ms mrr=0.333
+[372/372] d7c942c3 candidates=49 retrieved=11 search=1.81ms mrr=1.000
+[373/373] 71315a70 candidates=57 retrieved=10 search=3.57ms mrr=1.000
+[374/374] 89941a93 candidates=53 retrieved=11 search=2.05ms mrr=1.000
+[375/375] ce6d2d27 candidates=51 retrieved=14 search=1.71ms mrr=1.000
+[376/376] 9ea5eabc candidates=54 retrieved=10 search=1.39ms mrr=1.000
+[377/377] 07741c44 candidates=52 retrieved=11 search=1.40ms mrr=1.000
+[378/378] a1eacc2a candidates=47 retrieved=10 search=4.59ms mrr=1.000
+[379/379] 184da446 candidates=42 retrieved=10 search=4.48ms mrr=1.000
+[380/380] 031748ae candidates=50 retrieved=16 search=5.05ms mrr=1.000
+[381/381] 4d6b87c8 candidates=56 retrieved=10 search=3.05ms mrr=1.000
+[382/382] 0f05491a candidates=47 retrieved=10 search=4.81ms mrr=1.000
+[383/383] 08e075c7 candidates=49 retrieved=14 search=1.66ms mrr=1.000
+[384/384] f9e8c073 candidates=54 retrieved=10 search=3.82ms mrr=1.000
+[385/385] 41698283 candidates=46 retrieved=11 search=1.73ms mrr=1.000
+[386/386] 2698e78f candidates=53 retrieved=11 search=1.46ms mrr=1.000
+[387/387] b6019101 candidates=57 retrieved=14 search=6.71ms mrr=1.000
+[388/388] 45dc21b6 candidates=50 retrieved=10 search=3.62ms mrr=1.000
+[389/389] 5a4f22c0 candidates=50 retrieved=10 search=2.02ms mrr=1.000
+[390/390] 6071bd76 candidates=48 retrieved=10 search=2.19ms mrr=1.000
+[391/391] e493bb7c candidates=56 retrieved=11 search=2.16ms mrr=1.000
+[392/392] 618f13b2 candidates=52 retrieved=10 search=5.47ms mrr=1.000
+[393/393] 72e3ee87 candidates=55 retrieved=11 search=4.02ms mrr=1.000
+[394/394] c4ea545c candidates=48 retrieved=10 search=1.51ms mrr=1.000
+[395/395] 01493427 candidates=51 retrieved=10 search=4.09ms mrr=1.000
+[396/396] 6a27ffc2 candidates=53 retrieved=10 search=4.89ms mrr=1.000
+[397/397] 2133c1b5 candidates=57 retrieved=14 search=1.81ms mrr=1.000
+[398/398] 18bc8abd candidates=47 retrieved=11 search=1.87ms mrr=1.000
+[399/399] db467c8c candidates=49 retrieved=13 search=1.59ms mrr=0.500
+[400/400] 7a87bd0c candidates=49 retrieved=14 search=1.64ms mrr=1.000
+[401/401] e61a7584 candidates=50 retrieved=14 search=1.68ms mrr=1.000
+[402/402] 1cea1afa candidates=54 retrieved=11 search=2.66ms mrr=1.000
+[403/403] ed4ddc30 candidates=47 retrieved=10 search=2.87ms mrr=1.000
+[404/404] 8fb83627 candidates=45 retrieved=10 search=3.32ms mrr=1.000
+[405/405] b01defab candidates=51 retrieved=11 search=1.88ms mrr=1.000
+[406/406] 22d2cb42 candidates=49 retrieved=11 search=1.41ms mrr=1.000
+[407/407] 0e4e4c46 candidates=53 retrieved=10 search=1.98ms mrr=1.000
+[408/408] 4b24c848 candidates=52 retrieved=10 search=3.15ms mrr=1.000
+[409/409] 7e974930 candidates=47 retrieved=10 search=3.43ms mrr=1.000
+[410/410] 603deb26 candidates=54 retrieved=10 search=5.06ms mrr=1.000
+[411/411] 59524333 candidates=45 retrieved=10 search=1.46ms mrr=1.000
+[412/412] 5831f84d candidates=44 retrieved=10 search=4.59ms mrr=1.000
+[413/413] eace081b candidates=48 retrieved=10 search=2.13ms mrr=1.000
+[414/414] affe2881 candidates=49 retrieved=10 search=4.23ms mrr=1.000
+[415/415] 50635ada candidates=48 retrieved=11 search=2.34ms mrr=1.000
+[416/416] e66b632c candidates=47 retrieved=10 search=2.09ms mrr=1.000
+[417/417] 0ddfec37 candidates=57 retrieved=12 search=3.92ms mrr=1.000
+[418/418] f685340e candidates=44 retrieved=13 search=2.20ms mrr=1.000
+[419/419] cc5ded98 candidates=54 retrieved=10 search=4.09ms mrr=0.500
+[420/420] dfde3500 candidates=47 retrieved=17 search=2.09ms mrr=1.000
+[421/421] 69fee5aa candidates=53 retrieved=10 search=3.87ms mrr=1.000
+[422/422] 7401057b candidates=50 retrieved=10 search=4.89ms mrr=1.000
+[423/423] cf22b7bf candidates=59 retrieved=10 search=3.93ms mrr=0.500
+[424/424] a2f3aa27 candidates=48 retrieved=13 search=3.71ms mrr=1.000
+[425/425] c7dc5443 candidates=48 retrieved=10 search=1.82ms mrr=1.000
+[426/426] 06db6396 candidates=53 retrieved=10 search=3.59ms mrr=1.000
+[427/427] 3ba21379 candidates=46 retrieved=10 search=1.65ms mrr=1.000
+[428/428] 9bbe84a2 candidates=54 retrieved=10 search=2.07ms mrr=1.000
+[429/429] 10e09553 candidates=49 retrieved=10 search=5.16ms mrr=1.000
+[430/430] dad224aa candidates=51 retrieved=12 search=1.80ms mrr=0.500
+[431/431] ba61f0b9 candidates=48 retrieved=11 search=3.72ms mrr=1.000
+[432/432] 42ec0761 candidates=51 retrieved=11 search=1.68ms mrr=1.000
+[433/433] 5c40ec5b candidates=52 retrieved=10 search=3.89ms mrr=1.000
+[434/434] c6853660 candidates=48 retrieved=10 search=3.98ms mrr=1.000
+[435/435] 26bdc477 candidates=50 retrieved=10 search=3.70ms mrr=1.000
+[436/436] 0977f2af candidates=47 retrieved=10 search=2.15ms mrr=1.000
+[437/437] 6aeb4375_abs candidates=47 retrieved=10 search=3.18ms mrr=1.000
+[438/438] 031748ae_abs candidates=54 retrieved=15 search=4.88ms mrr=1.000
+[439/439] 2698e78f_abs candidates=51 retrieved=12 search=1.24ms mrr=0.500
+[440/440] 2133c1b5_abs candidates=52 retrieved=13 search=1.85ms mrr=1.000
+[441/441] 0ddfec37_abs candidates=49 retrieved=13 search=5.76ms mrr=1.000
+[442/442] f685340e_abs candidates=45 retrieved=10 search=1.98ms mrr=1.000
+[443/443] 89941a94 candidates=47 retrieved=10 search=2.49ms mrr=1.000
+[444/444] 07741c45 candidates=52 retrieved=11 search=1.45ms mrr=1.000
+[445/445] 7161e7e2 candidates=48 retrieved=15 search=3.20ms mrr=1.000
+[446/446] c4f10528 candidates=44 retrieved=10 search=2.77ms mrr=1.000
+[447/447] 89527b6b candidates=47 retrieved=10 search=2.67ms mrr=1.000
+[448/448] e9327a54 candidates=53 retrieved=10 search=2.79ms mrr=1.000
+[449/449] 4c36ccef candidates=52 retrieved=10 search=2.14ms mrr=1.000
+[450/450] 6ae235be candidates=48 retrieved=10 search=2.79ms mrr=1.000
+[451/451] 7e00a6cb candidates=66 retrieved=11 search=2.84ms mrr=1.000
+[452/452] 1903aded candidates=53 retrieved=10 search=2.78ms mrr=1.000
+[453/453] ceb54acb candidates=52 retrieved=11 search=3.02ms mrr=1.000
+[454/454] f523d9fe candidates=51 retrieved=10 search=3.19ms mrr=1.000
+[455/455] 0e5e2d1a candidates=49 retrieved=10 search=6.42ms mrr=1.000
+[456/456] fea54f57 candidates=53 retrieved=10 search=3.33ms mrr=1.000
+[457/457] cc539528 candidates=48 retrieved=11 search=3.12ms mrr=1.000
+[458/458] dc439ea3 candidates=49 retrieved=10 search=2.86ms mrr=1.000
+[459/459] 18dcd5a5 candidates=50 retrieved=10 search=5.23ms mrr=1.000
+[460/460] 488d3006 candidates=53 retrieved=10 search=3.33ms mrr=1.000
+[461/461] 58470ed2 candidates=53 retrieved=10 search=2.43ms mrr=1.000
+[462/462] 8cf51dda candidates=47 retrieved=11 search=3.05ms mrr=1.000
+[463/463] 1d4da289 candidates=57 retrieved=10 search=3.90ms mrr=1.000
+[464/464] 8464fc84 candidates=49 retrieved=10 search=2.80ms mrr=1.000
+[465/465] 8aef76bc candidates=54 retrieved=10 search=3.11ms mrr=1.000
+[466/466] 71a3fd6b candidates=47 retrieved=10 search=5.48ms mrr=1.000
+[467/467] 2bf43736 candidates=49 retrieved=10 search=3.55ms mrr=1.000
+[468/468] 70b3e69b candidates=50 retrieved=11 search=3.37ms mrr=1.000
+[469/469] 8752c811 candidates=58 retrieved=10 search=2.58ms mrr=1.000
+[470/470] 3249768e candidates=49 retrieved=10 search=3.31ms mrr=1.000
+[471/471] 1b9b7252 candidates=47 retrieved=10 search=4.16ms mrr=1.000
+[472/472] 1568498a candidates=49 retrieved=10 search=2.22ms mrr=1.000
+[473/473] 6222b6eb candidates=48 retrieved=10 search=3.74ms mrr=1.000
+[474/474] e8a79c70 candidates=48 retrieved=10 search=5.49ms mrr=1.000
+[475/475] d596882b candidates=45 retrieved=10 search=3.03ms mrr=1.000
+[476/476] e3fc4d6e candidates=58 retrieved=10 search=3.64ms mrr=1.000
+[477/477] 51b23612 candidates=48 retrieved=11 search=2.94ms mrr=1.000
+[478/478] 3e321797 candidates=57 retrieved=13 search=3.24ms mrr=1.000
+[479/479] e982271f candidates=58 retrieved=10 search=2.85ms mrr=1.000
+[480/480] 352ab8bd candidates=52 retrieved=15 search=3.63ms mrr=1.000
+[481/481] fca762bc candidates=43 retrieved=11 search=3.37ms mrr=1.000
+[482/482] 7a8d0b71 candidates=46 retrieved=10 search=5.53ms mrr=1.000
+[483/483] a40e080f candidates=49 retrieved=10 search=2.70ms mrr=1.000
+[484/484] 8b9d4367 candidates=56 retrieved=11 search=3.13ms mrr=1.000
+[485/485] 5809eb10 candidates=57 retrieved=10 search=3.21ms mrr=1.000
+[486/486] 41275add candidates=57 retrieved=10 search=2.77ms mrr=1.000
+[487/487] 4388e9dd candidates=44 retrieved=10 search=2.62ms mrr=1.000
+[488/488] 4baee567 candidates=51 retrieved=10 search=5.36ms mrr=1.000
+[489/489] 561fabcd candidates=50 retrieved=10 search=2.45ms mrr=1.000
+[490/490] b759caee candidates=55 retrieved=10 search=3.15ms mrr=1.000
+[491/491] ac031881 candidates=49 retrieved=11 search=2.54ms mrr=1.000
+[492/492] 28bcfaac candidates=52 retrieved=10 search=3.07ms mrr=1.000
+[493/493] 16c90bf4 candidates=59 retrieved=10 search=3.33ms mrr=1.000
+[494/494] c8f1aeed candidates=52 retrieved=10 search=4.47ms mrr=1.000
+[495/495] eaca4986 candidates=50 retrieved=10 search=2.89ms mrr=1.000
+[496/496] c7cf7dfd candidates=52 retrieved=10 search=3.34ms mrr=1.000
+[497/497] e48988bc candidates=54 retrieved=10 search=3.04ms mrr=1.000
+[498/498] 1de5cff2 candidates=48 retrieved=10 search=3.30ms mrr=1.000
+[499/499] 65240037 candidates=52 retrieved=10 search=2.75ms mrr=1.000
+[500/500] 778164c6 candidates=53 retrieved=10 search=3.09ms mrr=1.000
+wrote benchmark report to scripts/longmemeval-500-misses-pass3-2026-10-12.json

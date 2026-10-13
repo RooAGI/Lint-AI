@@ -1,0 +1,1091 @@
+{
+  "dataset": "benchmark/data/longmemeval_s_raw.json",
+  "harness": "query_repl",
+  "top_k": 20,
+  "method_note": "Each case indexes only its question-scoped haystack and queries with the original question and question date. query_repl alternates user/assistant roles because the raw turns do not retain role labels.",
+  "results": [
+    {
+      "question_id": "gpt4_7f6b06db",
+      "question": "What is the order of the three trips I took in the past three months, from earliest to latest?",
+      "question_date": "2023/06/01 (Thu) 03:56",
+      "gold_session_ids": [
+        "answer_5d8c99d3_1",
+        "answer_5d8c99d3_2",
+        "answer_5d8c99d3_3"
+      ],
+      "gold_ranks": [
+        5,
+        10
+      ],
+      "hit_at_5": true,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "928890e4_3",
+          "score": 65.6735,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "42165950_8",
+          "score": 64.9379,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "d9ca4aca",
+          "score": 63.5843,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "sharegpt_t5P7b1R_17",
+          "score": 53.2339,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "answer_5d8c99d3_1",
+          "score": 42.1565,
+          "answer": true
+        },
+        {
+          "rank": 6,
+          "session_id": "39c1bf6a",
+          "score": 40.2224,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "ultrachat_338301",
+          "score": 36.8583,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "6f051087_2",
+          "score": 34.5107,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "896890c0",
+          "score": 33.3607,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "answer_5d8c99d3_2",
+          "score": 18.8973,
+          "answer": true
+        },
+        {
+          "rank": 11,
+          "session_id": "sharegpt_gPFzM9v_153",
+          "score": 17.3315,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "ultrachat_31232",
+          "score": 16.7303,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "4bf66c38_2",
+          "score": 15.7683,
+          "answer": false
+        },
+        {
+          "rank": 14,
+          "session_id": "sharegpt_v11Tpg9_255",
+          "score": 15.2691,
+          "answer": false
+        },
+        {
+          "rank": 15,
+          "session_id": "252715f8_2",
+          "score": 14.7783,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 54 haystack sessions for 'gpt4_7f6b06db'...\nIndexed. Answer sessions: [\"answer_5d8c99d3_1\", \"answer_5d8c99d3_2\", \"answer_5d8c99d3_3\"]\nOriginal question: What is the order of the three trips I took in the past three months, from earliest to latest?\nCommands: !ref <date>  !quit\n\nquery> (101.7ms) top sessions:\n  1. 928890e4_3 (score 65.6735)\n  2. 42165950_8 (score 64.9379)\n  3. d9ca4aca (score 63.5843)\n  4. sharegpt_t5P7b1R_17 (score 53.2339)\n  5. answer_5d8c99d3_1 (score 42.1565)  <-- ANSWER\n  6. 39c1bf6a (score 40.2224)\n  7. ultrachat_338301 (score 36.8583)\n  8. 6f051087_2 (score 34.5107)\n  9. 896890c0 (score 33.3607)\n  10. answer_5d8c99d3_2 (score 18.8973)  <-- ANSWER\n  11. sharegpt_gPFzM9v_153 (score 17.3315)\n  12. ultrachat_31232 (score 16.7303)\n  13. 4bf66c38_2 (score 15.7683)\n  14. sharegpt_v11Tpg9_255 (score 15.2691)\n  15. 252715f8_2 (score 14.7783)\n\nquery> "
+    },
+    {
+      "question_id": "gpt4_e061b84f",
+      "question": "What is the order of the three sports events I participated in during the past month, from earliest to latest?",
+      "question_date": "2023/07/01 (Sat) 20:43",
+      "gold_session_ids": [
+        "answer_8c64ce25_2",
+        "answer_8c64ce25_1",
+        "answer_8c64ce25_3"
+      ],
+      "gold_ranks": [],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "77dd7700",
+          "score": 59.1793,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "0a6bf5e4_1",
+          "score": 55.6909,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "ultrachat_129606",
+          "score": 52.7744,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "73bc3176_2",
+          "score": 52.6964,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "bab3f409",
+          "score": 50.8127,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "5a78688d_1",
+          "score": 49.3884,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "539c2346_3",
+          "score": 40.2784,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "ultrachat_356174",
+          "score": 36.9,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "ultrachat_436674",
+          "score": 35.6617,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "1446b088_2",
+          "score": 31.78,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "ultrachat_18218",
+          "score": 30.993,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "11a8f823_1",
+          "score": 27.1031,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "78d28576_2",
+          "score": 18.4922,
+          "answer": false
+        },
+        {
+          "rank": 14,
+          "session_id": "ultrachat_308277",
+          "score": 18.2051,
+          "answer": false
+        },
+        {
+          "rank": 15,
+          "session_id": "9345f7dc_4",
+          "score": 18.0749,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 50 haystack sessions for 'gpt4_e061b84f'...\nIndexed. Answer sessions: [\"answer_8c64ce25_2\", \"answer_8c64ce25_1\", \"answer_8c64ce25_3\"]\nOriginal question: What is the order of the three sports events I participated in during the past month, from earliest to latest?\nCommands: !ref <date>  !quit\n\nquery> (90.7ms) top sessions:\n  1. 77dd7700 (score 59.1793)\n  2. 0a6bf5e4_1 (score 55.6909)\n  3. ultrachat_129606 (score 52.7744)\n  4. 73bc3176_2 (score 52.6964)\n  5. bab3f409 (score 50.8127)\n  6. 5a78688d_1 (score 49.3884)\n  7. 539c2346_3 (score 40.2784)\n  8. ultrachat_356174 (score 36.9000)\n  9. ultrachat_436674 (score 35.6617)\n  10. 1446b088_2 (score 31.7800)\n  11. ultrachat_18218 (score 30.9930)\n  12. 11a8f823_1 (score 27.1031)\n  13. 78d28576_2 (score 18.4922)\n  14. ultrachat_308277 (score 18.2051)\n  15. 9345f7dc_4 (score 18.0749)\n\nquery> "
+    },
+    {
+      "question_id": "2ebe6c92",
+      "question": "Which book did I finish a week ago?",
+      "question_date": "2023/02/07 (Tue) 09:09",
+      "gold_session_ids": [
+        "answer_c9d35c00_1",
+        "answer_c9d35c00_2"
+      ],
+      "gold_ranks": [
+        9,
+        13
+      ],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "fb303dd2_2",
+          "score": 57.0938,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "564761aa",
+          "score": 53.9348,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "16756728_1",
+          "score": 53.158,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "9f8bdd23_2",
+          "score": 50.2197,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "1ba79ea8_1",
+          "score": 50.1523,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "8c2de44c",
+          "score": 40.2658,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "b30a47be_2",
+          "score": 38.4978,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "54c5a89c_1",
+          "score": 36.8428,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "answer_c9d35c00_2",
+          "score": 35.7346,
+          "answer": true
+        },
+        {
+          "rank": 10,
+          "session_id": "sharegpt_iQp7qQ2_0",
+          "score": 24.5468,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "9d4312f6_3",
+          "score": 23.986,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "acbb04c7",
+          "score": 23.5491,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "answer_c9d35c00_1",
+          "score": 22.5653,
+          "answer": true
+        }
+      ],
+      "harness_stdout": "Indexing 51 haystack sessions for '2ebe6c92'...\nIndexed. Answer sessions: [\"answer_c9d35c00_1\", \"answer_c9d35c00_2\"]\nOriginal question: Which book did I finish a week ago?\nCommands: !ref <date>  !quit\n\nquery> (85.5ms) top sessions:\n  1. fb303dd2_2 (score 57.0938)\n  2. 564761aa (score 53.9348)\n  3. 16756728_1 (score 53.1580)\n  4. 9f8bdd23_2 (score 50.2197)\n  5. 1ba79ea8_1 (score 50.1523)\n  6. 8c2de44c (score 40.2658)\n  7. b30a47be_2 (score 38.4978)\n  8. 54c5a89c_1 (score 36.8428)\n  9. answer_c9d35c00_2 (score 35.7346)  <-- ANSWER\n  10. sharegpt_iQp7qQ2_0 (score 24.5468)\n  11. 9d4312f6_3 (score 23.9860)\n  12. acbb04c7 (score 23.5491)\n  13. answer_c9d35c00_1 (score 22.5653)  <-- ANSWER\n\nquery> "
+    },
+    {
+      "question_id": "gpt4_e061b84g",
+      "question": "I mentioned participating in a sports event two weeks ago. What was the event?",
+      "question_date": "2023/07/01 (Sat) 13:38",
+      "gold_session_ids": [
+        "answer_8c64ce26_2",
+        "answer_8c64ce26_1",
+        "answer_8c64ce26_3"
+      ],
+      "gold_ranks": [],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "3929e6cc_1",
+          "score": 107.6774,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "9dac9e37_1",
+          "score": 65.5872,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "7083fcb9_1",
+          "score": 33.9963,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "ae15e8b6_1",
+          "score": 33.9636,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "68705467_1",
+          "score": 21.4005,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "ultrachat_246504",
+          "score": 15.7987,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "sharegpt_783Lb5V_0",
+          "score": 14.6301,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "ce584ba0",
+          "score": 14.3312,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "0e3d8491_1",
+          "score": 12.8429,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "ultrachat_231231",
+          "score": 12.1085,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "ultrachat_547960",
+          "score": 10.7136,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "09d021e7_2",
+          "score": 10.5591,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "2640c1b0",
+          "score": 9.4463,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 59 haystack sessions for 'gpt4_e061b84g'...\nIndexed. Answer sessions: [\"answer_8c64ce26_2\", \"answer_8c64ce26_1\", \"answer_8c64ce26_3\"]\nOriginal question: I mentioned participating in a sports event two weeks ago. What was the event?\nCommands: !ref <date>  !quit\n\nquery> (90.8ms) top sessions:\n  1. 3929e6cc_1 (score 107.6774)\n  2. 9dac9e37_1 (score 65.5872)\n  3. 7083fcb9_1 (score 33.9963)\n  4. ae15e8b6_1 (score 33.9636)\n  5. 68705467_1 (score 21.4005)\n  6. ultrachat_246504 (score 15.7987)\n  7. sharegpt_783Lb5V_0 (score 14.6301)\n  8. ce584ba0 (score 14.3312)\n  9. 0e3d8491_1 (score 12.8429)\n  10. ultrachat_231231 (score 12.1085)\n  11. ultrachat_547960 (score 10.7136)\n  12. 09d021e7_2 (score 10.5591)\n  13. 2640c1b0 (score 9.4463)\n\nquery> "
+    },
+    {
+      "question_id": "71017277",
+      "question": "I received a piece of jewelry last Saturday from whom?",
+      "question_date": "2023/03/09 (Thu) 15:47",
+      "gold_session_ids": [
+        "answer_0b4a8adc_1"
+      ],
+      "gold_ranks": [
+        5
+      ],
+      "hit_at_5": true,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "85a1be56_2",
+          "score": 94.8078,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "ultrachat_557308",
+          "score": 42.8237,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "e5b86922_1",
+          "score": 40.9574,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "ultrachat_542251",
+          "score": 17.5237,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "answer_0b4a8adc_1",
+          "score": 16.5249,
+          "answer": true
+        },
+        {
+          "rank": 6,
+          "session_id": "976ca0d9",
+          "score": 16.2327,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "5854eebc_2",
+          "score": 16.0098,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "e64f9553_1",
+          "score": 14.3731,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "f8de4e92_4",
+          "score": 13.8162,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "0320f558_1",
+          "score": 11.4729,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "ultrachat_181350",
+          "score": 7.6846,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "fd749c9a_1",
+          "score": 6.3726,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 53 haystack sessions for '71017277'...\nIndexed. Answer sessions: [\"answer_0b4a8adc_1\"]\nOriginal question: I received a piece of jewelry last Saturday from whom?\nCommands: !ref <date>  !quit\n\nquery> (88.0ms) top sessions:\n  1. 85a1be56_2 (score 94.8078)\n  2. ultrachat_557308 (score 42.8237)\n  3. e5b86922_1 (score 40.9574)\n  4. ultrachat_542251 (score 17.5237)\n  5. answer_0b4a8adc_1 (score 16.5249)  <-- ANSWER\n  6. 976ca0d9 (score 16.2327)\n  7. 5854eebc_2 (score 16.0098)\n  8. e64f9553_1 (score 14.3731)\n  9. f8de4e92_4 (score 13.8162)\n  10. 0320f558_1 (score 11.4729)\n  11. ultrachat_181350 (score 7.6846)\n  12. fd749c9a_1 (score 6.3726)\n\nquery> "
+    },
+    {
+      "question_id": "gpt4_4929293b",
+      "question": "What was the the life event of one of my relatives that I participated in a week ago?",
+      "question_date": "2023/06/22 (Thu) 18:33",
+      "gold_session_ids": [
+        "answer_add9b013_2",
+        "answer_add9b013_1"
+      ],
+      "gold_ranks": [],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "bda611f6_3",
+          "score": 79.6848,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "sharegpt_rqvR1Ep_0",
+          "score": 62.0393,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "c0dbabb8",
+          "score": 49.6652,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "sharegpt_KFhIUCO_0",
+          "score": 45.9774,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "e76430ea_3",
+          "score": 45.0615,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "11d959b3_1",
+          "score": 43.9497,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "cceffff7",
+          "score": 22.3077,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "sharegpt_9l7gjYP_17",
+          "score": 21.5552,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "cc8252e8",
+          "score": 21.1762,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "cae65795_1",
+          "score": 20.8134,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "b4ed7223_3",
+          "score": 19.9351,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "2d5bfa98_2",
+          "score": 19.0617,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "88e01130_2",
+          "score": 18.417,
+          "answer": false
+        },
+        {
+          "rank": 14,
+          "session_id": "4090cbea",
+          "score": 15.9313,
+          "answer": false
+        },
+        {
+          "rank": 15,
+          "session_id": "ultrachat_326769",
+          "score": 15.6058,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 52 haystack sessions for 'gpt4_4929293b'...\nIndexed. Answer sessions: [\"answer_add9b013_2\", \"answer_add9b013_1\"]\nOriginal question: What was the the life event of one of my relatives that I participated in a week ago?\nCommands: !ref <date>  !quit\n\nquery> (101.7ms) top sessions:\n  1. bda611f6_3 (score 79.6848)\n  2. sharegpt_rqvR1Ep_0 (score 62.0393)\n  3. c0dbabb8 (score 49.6652)\n  4. sharegpt_KFhIUCO_0 (score 45.9774)\n  5. e76430ea_3 (score 45.0615)\n  6. 11d959b3_1 (score 43.9497)\n  7. cceffff7 (score 22.3077)\n  8. sharegpt_9l7gjYP_17 (score 21.5552)\n  9. cc8252e8 (score 21.1762)\n  10. cae65795_1 (score 20.8134)\n  11. b4ed7223_3 (score 19.9351)\n  12. 2d5bfa98_2 (score 19.0617)\n  13. 88e01130_2 (score 18.4170)\n  14. 4090cbea (score 15.9313)\n  15. ultrachat_326769 (score 15.6058)\n\nquery> "
+    },
+    {
+      "question_id": "9a707b82",
+      "question": "I mentioned cooking something for my friend a couple of days ago. What was it?",
+      "question_date": "2022/04/12 (Tue) 22:57",
+      "gold_session_ids": [
+        "answer_dba89488_2",
+        "answer_dba89488_1"
+      ],
+      "gold_ranks": [
+        9
+      ],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "sharegpt_bUaSM2v_0",
+          "score": 77.953,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "7966888b_2",
+          "score": 56.4364,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "7a4d00b3_2",
+          "score": 54.7882,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "f62c04c6",
+          "score": 38.7129,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "e72739cd_1",
+          "score": 37.818,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "990f3ef9_2",
+          "score": 36.7767,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "09e97c6f_2",
+          "score": 36.0888,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "ultrachat_7560",
+          "score": 34.3383,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "answer_dba89488_1",
+          "score": 18.6433,
+          "answer": true
+        },
+        {
+          "rank": 10,
+          "session_id": "12b6f0f1_3",
+          "score": 18.2703,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "79d122f0",
+          "score": 17.9802,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "8e78fa70_1",
+          "score": 13.6024,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "e8df5350",
+          "score": 12.4159,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 56 haystack sessions for '9a707b82'...\nIndexed. Answer sessions: [\"answer_dba89488_2\", \"answer_dba89488_1\"]\nOriginal question: I mentioned cooking something for my friend a couple of days ago. What was it?\nCommands: !ref <date>  !quit\n\nquery> (112.0ms) top sessions:\n  1. sharegpt_bUaSM2v_0 (score 77.9530)\n  2. 7966888b_2 (score 56.4364)\n  3. 7a4d00b3_2 (score 54.7882)\n  4. f62c04c6 (score 38.7129)\n  5. e72739cd_1 (score 37.8180)\n  6. 990f3ef9_2 (score 36.7767)\n  7. 09e97c6f_2 (score 36.0888)\n  8. ultrachat_7560 (score 34.3383)\n  9. answer_dba89488_1 (score 18.6433)  <-- ANSWER\n  10. 12b6f0f1_3 (score 18.2703)\n  11. 79d122f0 (score 17.9802)\n  12. 8e78fa70_1 (score 13.6024)\n  13. e8df5350 (score 12.4159)\n\nquery> "
+    },
+    {
+      "question_id": "eac54add",
+      "question": "What was the significant buisiness milestone I mentioned four weeks ago?",
+      "question_date": "2023/03/28 (Tue) 20:35",
+      "gold_session_ids": [
+        "answer_0d4d0348_1",
+        "answer_0d4d0348_2"
+      ],
+      "gold_ranks": [
+        15
+      ],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "7966888b_2",
+          "score": 81.1216,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "8f2e0a53_2",
+          "score": 80.4499,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "773aebbd_3",
+          "score": 47.5798,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "sharegpt_5YtukCb_0",
+          "score": 42.4598,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "c3023a45_5",
+          "score": 33.8255,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "2ea6fda4_1",
+          "score": 31.9273,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "ultrachat_208612",
+          "score": 14.4071,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "390f1af3",
+          "score": 13.427,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "1fb3bbed_1",
+          "score": 13.2347,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "ultrachat_133409",
+          "score": 12.0603,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "369695b4_2",
+          "score": 11.8405,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "ultrachat_91693",
+          "score": 11.1702,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "577da76d_2",
+          "score": 10.4931,
+          "answer": false
+        },
+        {
+          "rank": 14,
+          "session_id": "a1166ecc_3",
+          "score": 9.5613,
+          "answer": false
+        },
+        {
+          "rank": 15,
+          "session_id": "answer_0d4d0348_2",
+          "score": 9.1692,
+          "answer": true
+        }
+      ],
+      "harness_stdout": "Indexing 45 haystack sessions for 'eac54add'...\nIndexed. Answer sessions: [\"answer_0d4d0348_1\", \"answer_0d4d0348_2\"]\nOriginal question: What was the significant buisiness milestone I mentioned four weeks ago?\nCommands: !ref <date>  !quit\n\nquery> (101.2ms) top sessions:\n  1. 7966888b_2 (score 81.1216)\n  2. 8f2e0a53_2 (score 80.4499)\n  3. 773aebbd_3 (score 47.5798)\n  4. sharegpt_5YtukCb_0 (score 42.4598)\n  5. c3023a45_5 (score 33.8255)\n  6. 2ea6fda4_1 (score 31.9273)\n  7. ultrachat_208612 (score 14.4071)\n  8. 390f1af3 (score 13.4270)\n  9. 1fb3bbed_1 (score 13.2347)\n  10. ultrachat_133409 (score 12.0603)\n  11. 369695b4_2 (score 11.8405)\n  12. ultrachat_91693 (score 11.1702)\n  13. 577da76d_2 (score 10.4931)\n  14. a1166ecc_3 (score 9.5613)\n  15. answer_0d4d0348_2 (score 9.1692)  <-- ANSWER\n\nquery> "
+    },
+    {
+      "question_id": "gpt4_8279ba03",
+      "question": "What kitchen appliance did I buy 10 days ago?",
+      "question_date": "2023/03/25 (Sat) 18:26",
+      "gold_session_ids": [
+        "answer_56521e66_1"
+      ],
+      "gold_ranks": [],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "d1a1b9ea_1",
+          "score": 42.3891,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "518d26d3_4",
+          "score": 36.5612,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "864a563d_5",
+          "score": 36.548,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "652c0717_3",
+          "score": 36.0526,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "2ef55f49_3",
+          "score": 33.0706,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "570fe405",
+          "score": 22.252,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "50d66391_4",
+          "score": 22.0431,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "b357fb8b_2",
+          "score": 19.3138,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "49b78a55_1",
+          "score": 15.4081,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "606d0c4a_2",
+          "score": 13.9776,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "dea400f8_2",
+          "score": 13.374,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "bb107057_2",
+          "score": 12.08,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "ba9f938b_1",
+          "score": 11.7528,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 46 haystack sessions for 'gpt4_8279ba03'...\nIndexed. Answer sessions: [\"answer_56521e66_1\"]\nOriginal question: What kitchen appliance did I buy 10 days ago?\nCommands: !ref <date>  !quit\n\nquery> (105.4ms) top sessions:\n  1. d1a1b9ea_1 (score 42.3891)\n  2. 518d26d3_4 (score 36.5612)\n  3. 864a563d_5 (score 36.5480)\n  4. 652c0717_3 (score 36.0526)\n  5. 2ef55f49_3 (score 33.0706)\n  6. 570fe405 (score 22.2520)\n  7. 50d66391_4 (score 22.0431)\n  8. b357fb8b_2 (score 19.3138)\n  9. 49b78a55_1 (score 15.4081)\n  10. 606d0c4a_2 (score 13.9776)\n  11. dea400f8_2 (score 13.3740)\n  12. bb107057_2 (score 12.0800)\n  13. ba9f938b_1 (score 11.7528)\n\nquery> "
+    },
+    {
+      "question_id": "gpt4_b5700ca0",
+      "question": "Where did I attend the religious activity last week?",
+      "question_date": "2023/04/10 (Mon) 13:35",
+      "gold_session_ids": [
+        "answer_a17423e8_1"
+      ],
+      "gold_ranks": [
+        6
+      ],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "43502c3c_4",
+          "score": 50.9847,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "534be93d_1",
+          "score": 43.638,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "sharegpt_FpTfRvR_0",
+          "score": 40.4046,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "ultrachat_160178",
+          "score": 36.022,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "5829ab38",
+          "score": 35.9733,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "answer_a17423e8_1",
+          "score": 17.6542,
+          "answer": true
+        },
+        {
+          "rank": 7,
+          "session_id": "109e07e8_2",
+          "score": 14.939,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "3ceb6783_3",
+          "score": 14.7,
+          "answer": false
+        },
+        {
+          "rank": 9,
+          "session_id": "e789afdb_2",
+          "score": 13.8993,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "fd6f60f0_1",
+          "score": 13.5147,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "ultrachat_540666",
+          "score": 12.9417,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "ultrachat_23298",
+          "score": 11.9,
+          "answer": false
+        },
+        {
+          "rank": 13,
+          "session_id": "ultrachat_174938",
+          "score": 11.7997,
+          "answer": false
+        },
+        {
+          "rank": 14,
+          "session_id": "ultrachat_101752",
+          "score": 11.4767,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 52 haystack sessions for 'gpt4_b5700ca0'...\nIndexed. Answer sessions: [\"answer_a17423e8_1\"]\nOriginal question: Where did I attend the religious activity last week?\nCommands: !ref <date>  !quit\n\nquery> (93.1ms) top sessions:\n  1. 43502c3c_4 (score 50.9847)\n  2. 534be93d_1 (score 43.6380)\n  3. sharegpt_FpTfRvR_0 (score 40.4046)\n  4. ultrachat_160178 (score 36.0220)\n  5. 5829ab38 (score 35.9733)\n  6. answer_a17423e8_1 (score 17.6542)  <-- ANSWER\n  7. 109e07e8_2 (score 14.9390)\n  8. 3ceb6783_3 (score 14.7000)\n  9. e789afdb_2 (score 13.8993)\n  10. fd6f60f0_1 (score 13.5147)\n  11. ultrachat_540666 (score 12.9417)\n  12. ultrachat_23298 (score 11.9000)\n  13. ultrachat_174938 (score 11.7997)\n  14. ultrachat_101752 (score 11.4767)\n\nquery> "
+    },
+    {
+      "question_id": "gpt4_93159ced_abs",
+      "question": "How long have I been working before I started my current job at Google?",
+      "question_date": "2023/05/30 (Tue) 18:54",
+      "gold_session_ids": [
+        "answer_e5131a1b_abs_1",
+        "answer_e5131a1b_abs_2"
+      ],
+      "gold_ranks": [
+        8,
+        12
+      ],
+      "hit_at_5": false,
+      "top_20": [
+        {
+          "rank": 1,
+          "session_id": "sharegpt_pfa0Sfh_17",
+          "score": 78.0258,
+          "answer": false
+        },
+        {
+          "rank": 2,
+          "session_id": "2f097fba_1",
+          "score": 61.2855,
+          "answer": false
+        },
+        {
+          "rank": 3,
+          "session_id": "ultrachat_195762",
+          "score": 60.8536,
+          "answer": false
+        },
+        {
+          "rank": 4,
+          "session_id": "sharegpt_CyJ3dal_43",
+          "score": 54.1841,
+          "answer": false
+        },
+        {
+          "rank": 5,
+          "session_id": "sharegpt_2JGvW9D_63",
+          "score": 47.898,
+          "answer": false
+        },
+        {
+          "rank": 6,
+          "session_id": "156988fe",
+          "score": 46.7689,
+          "answer": false
+        },
+        {
+          "rank": 7,
+          "session_id": "8a1eb315_3",
+          "score": 44.2641,
+          "answer": false
+        },
+        {
+          "rank": 8,
+          "session_id": "answer_e5131a1b_abs_1",
+          "score": 40.2517,
+          "answer": true
+        },
+        {
+          "rank": 9,
+          "session_id": "cf8e352f_3",
+          "score": 35.2588,
+          "answer": false
+        },
+        {
+          "rank": 10,
+          "session_id": "ultrachat_105960",
+          "score": 32.7811,
+          "answer": false
+        },
+        {
+          "rank": 11,
+          "session_id": "7b9ee249_1",
+          "score": 32.3266,
+          "answer": false
+        },
+        {
+          "rank": 12,
+          "session_id": "answer_e5131a1b_abs_2",
+          "score": 29.9442,
+          "answer": true
+        },
+        {
+          "rank": 13,
+          "session_id": "56bba837",
+          "score": 29.8464,
+          "answer": false
+        },
+        {
+          "rank": 14,
+          "session_id": "d850eba6_1",
+          "score": 29.4665,
+          "answer": false
+        }
+      ],
+      "harness_stdout": "Indexing 46 haystack sessions for 'gpt4_93159ced_abs'...\nIndexed. Answer sessions: [\"answer_e5131a1b_abs_1\", \"answer_e5131a1b_abs_2\"]\nOriginal question: How long have I been working before I started my current job at Google?\nCommands: !ref <date>  !quit\n\nquery> (101.1ms) top sessions:\n  1. sharegpt_pfa0Sfh_17 (score 78.0258)\n  2. 2f097fba_1 (score 61.2855)\n  3. ultrachat_195762 (score 60.8536)\n  4. sharegpt_CyJ3dal_43 (score 54.1841)\n  5. sharegpt_2JGvW9D_63 (score 47.8980)\n  6. 156988fe (score 46.7689)\n  7. 8a1eb315_3 (score 44.2641)\n  8. answer_e5131a1b_abs_1 (score 40.2517)  <-- ANSWER\n  9. cf8e352f_3 (score 35.2588)\n  10. ultrachat_105960 (score 32.7811)\n  11. 7b9ee249_1 (score 32.3266)\n  12. answer_e5131a1b_abs_2 (score 29.9442)  <-- ANSWER\n  13. 56bba837 (score 29.8464)\n  14. d850eba6_1 (score 29.4665)\n\nquery> "
+    }
+  ]
+}

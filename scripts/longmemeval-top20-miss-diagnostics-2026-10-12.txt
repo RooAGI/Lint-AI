@@ -1,0 +1,525 @@
+
+====================================================================================================
+QUESTION_ID 06878be2
+QUESTION Can you suggest some accessories that would complement my current photography setup?
+GOLD ['answer_555dfb94']
+GOLD_ANSWER The user would prefer suggestions of Sony-compatible accessories or high-quality photography gear that can enhance their photography experience. They may not prefer suggestions of other brands' equipment or low-quality gear.
+Indexing 50 haystack sessions for '06878be2'...
+Indexed. Answer sessions: ["answer_555dfb94"]
+Original question: Can you suggest some accessories that would complement my current photography setup?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_555dfb94 timestamp=Some("2023-05-27T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: Can you suggest some accessories that would complement my current photography setup?
+  reference date: Some("2023/05/30 (Tue) 16:40")
+  normalized query: can you suggest some accessori that would complement my current photographi setup
+  augmented/search query: Can you suggest some accessories that would complement my current photography setup? Can suggest accessories complement current photography setup would setup current
+  kind: Statement
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: None
+  temporal phrase: None
+  temporal source: None
+  resolved temporal anchor: None
+  temporal window: None..None
+  anchor date: None
+  anchor window: None
+  window days: 365
+  explicit temporal: false
+  hard temporal filter: false
+  spans:
+    Entity: "Can" => "can" (source=heuristic, score=0.550)
+    NounPhrase: "suggest" => "suggest" (source=pos, score=0.400)
+    NounPhrase: "accessories" => "accessori" (source=pos, score=0.400)
+    NounPhrase: "complement" => "complement" (source=pos, score=0.400)
+    NounPhrase: "current photography setup" => "current photographi setup" (source=pos, score=0.400)
+    VerbPhrase: "Can" => "can" (source=pos, score=0.350)
+    VerbPhrase: "would" => "would" (source=pos, score=0.350)
+    Subject: "Can" => "can" (source=heuristic, score=0.750)
+    Object: "setup" => "setup" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=75 lexical_hits=48 candidates=210 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_555dfb94: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_555dfb94: candidate rank=25 score=9.801 doc_id=doc:memory:v2:62ca3a3dafb46c566986308e307fcdf70dce1cd4307a7c26fb48b63b88dfe71c
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:9dda145a6f9db6bbd7697f0a83e0d878c72d3b3659004f8b499b2efeea9ef6cd session=Some("ultrachat_319509") score=56.679 structured_evidence=[]
+    2. id=doc:memory:v2:5983424c4924d5a93e718e5301cd8c07a3a11bba74c78e89c2a51b4174f35523 session=Some("ultrachat_319509") score=14.387 structured_evidence=[]
+    3. id=doc:memory:v2:65a2f80d6bc54a1266da9714d0f26cee31024ceae0c55393d053a8ccfb029762 session=Some("ultrachat_448784") score=40.649 structured_evidence=[]
+    4. id=doc:memory:v2:257634a4174cefca138a6a1d7f63f67cb070f932adafa8eed88feb153afdc3dc session=Some("ultrachat_448784") score=12.582 structured_evidence=[]
+    5. id=doc:memory:v2:d78196645da8f9d07f4a77694e246f7ba22addd5a88d4179d675169b58d92142 session=Some("sharegpt_GSC090N_6") score=33.129 structured_evidence=[]
+    6. id=doc:memory:v2:7a2d7bce3bbb689e5ef427bf45f71fced51e366d40be3c81b368a059c080f518 session=Some("368276ab_3") score=19.675 structured_evidence=[]
+    7. id=doc:memory:v2:c7226f16a17be9b515bcbb8f1e61107610df437f50fabad4ab8bc28edd38b114 session=Some("368276ab_3") score=8.844 structured_evidence=[]
+    8. id=doc:memory:v2:1b2413c234b30e75a208c4fe5ca011870905b4a540031db12fd674cb92590c43 session=Some("8fcfbe43_2") score=17.976 structured_evidence=[]
+    9. id=doc:memory:v2:cc207f38118c3a3f0125f8cc257de2892fbe38f904aeb806802b96e9d0f2485b session=Some("8fcfbe43_2") score=6.723 structured_evidence=[]
+    10. id=doc:memory:v2:f346573f5ac9b40c0fa852093d8c4f8e2e8b144951254531425570637cad1a3e session=Some("ultrachat_506627") score=16.881 structured_evidence=[]
+    11. id=doc:memory:v2:53614cca1ef730296ee9d16803c20bafe4f64371fcda5f7dc924d930dc0a1afe session=Some("ultrachat_506627") score=16.027 structured_evidence=[]
+    12. id=doc:memory:v2:d4590ed7687eaeeebe1ef456bd1ec1bf4f3ef324c49be846d3b0145aac8623fa session=Some("a6074da9_1") score=14.188 structured_evidence=[]
+    13. id=doc:memory:v2:7662ab4ebe8142f5fd5ce3c1159add1b9aef617be228f31f79bf98b06247b363 session=Some("a6074da9_1") score=13.528 structured_evidence=[]
+    14. id=doc:memory:v2:6149e22bdf1aeee34a9e121f9c1604cdab1ef0e1c14de1f37a81ca63b390eac1 session=Some("ca929779_1") score=14.801 structured_evidence=[]
+    15. id=doc:memory:v2:d19b5409655e6c6bee9a0dbb97225b11e0345483e680528c1cb732a84f780369 session=Some("ca929779_1") score=10.052 structured_evidence=[]
+    16. id=doc:memory:v2:65245add957814cef7d27dd211c7e020f679be6bcf10fa8f29b8858cfd135d8c session=Some("42165950_2") score=14.528 structured_evidence=[]
+    17. id=doc:memory:v2:c3d0a12f78fd1de8e1c7df6e668b3f8f90bce02bb809d0bb84d5c9eeac385538 session=Some("42165950_2") score=8.461 structured_evidence=[]
+    18. id=doc:memory:v2:079473c13abaa00f7f9406354667b16ff8adfb733c5e229ccf79dc7a88460271 session=Some("63b51f8a_1") score=15.705 structured_evidence=[]
+    19. id=doc:memory:v2:9e3cea5d623cf0561231f6d7d47e2b5906b211b6902d2263d5568d11318f661f session=Some("63b51f8a_1") score=3.464 structured_evidence=[]
+    20. id=doc:memory:v2:f28149fead9665392cc3e56ec90568c8500bf0c18dc911836f7d906bd213efac session=Some("be1c6872") score=12.868 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=48 candidates=210 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_555dfb94: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_555dfb94: absent from service-depth index results
+
+(91.2ms) top sessions:
+  1. ultrachat_319509 (score 56.6785)
+  2. ultrachat_448784 (score 40.6493)
+  3. sharegpt_GSC090N_6 (score 33.1293)
+  4. 368276ab_3 (score 19.6751)
+  5. 8fcfbe43_2 (score 17.9763)
+  6. ultrachat_506627 (score 16.8808)
+  7. a6074da9_1 (score 14.1878)
+  8. ca929779_1 (score 14.8013)
+  9. 42165950_2 (score 14.5280)
+  10. 63b51f8a_1 (score 15.7054)
+  11. be1c6872 (score 12.8681)
+
+query>
+
+====================================================================================================
+QUESTION_ID 0862e8bf_abs
+QUESTION What is the name of my hamster?
+GOLD ['answer_c6fd8ebd_abs']
+GOLD_ANSWER You did not mention this information. You mentioned your cat Luna but not your hamster.
+Indexing 55 haystack sessions for '0862e8bf_abs'...
+Indexed. Answer sessions: ["answer_c6fd8ebd_abs"]
+Original question: What is the name of my hamster?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_c6fd8ebd_abs timestamp=Some("2023-05-24T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: What is the name of my hamster?
+  reference date: Some("2023/05/30 (Tue) 21:39")
+  normalized query: what is the name of my hamster
+  augmented/search query: What is the name of my hamster? name hamster is
+  kind: What
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: None
+  temporal phrase: None
+  temporal source: None
+  resolved temporal anchor: None
+  temporal window: None..None
+  anchor date: None
+  anchor window: None
+  window days: 30
+  explicit temporal: false
+  hard temporal filter: false
+  spans:
+    QuestionWord: "what" => "what" (source=heuristic, score=0.700)
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "name" => "name" (source=pos, score=0.400)
+    NounPhrase: "hamster" => "hamster" (source=pos, score=0.400)
+    VerbPhrase: "is" => "is" (source=pos, score=0.350)
+    Subject: "What" => "what" (source=heuristic, score=0.750)
+    Object: "hamster" => "hamster" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=80 lexical_hits=0 candidates=139 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_c6fd8ebd_abs: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_c6fd8ebd_abs: candidate rank=35 score=1.672 doc_id=doc:memory:v2:320d871ce26cf3c6d78ddd49cd5c7dc34c894657fdb7fba70a59e2ff9ac81ec3
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:6d7a6a4a51f3ca01c2c190df6bd50c176467c0940a1d85533afa13208f8276dd session=Some("sharegpt_9l7gjYP_17") score=4.251 structured_evidence=[]
+    2. id=doc:memory:v2:c8fa9034dc15abdc41c49e0be1e774a30f9cdb063aafaf507daed9904ce71824 session=Some("sharegpt_9l7gjYP_17") score=4.251 structured_evidence=[]
+    3. id=doc:memory:v2:c7a65049ed3a4978e11f0722b6acc9b2abff2bf243590e25e6246405046ab44b session=Some("baf0243b_1") score=3.291 structured_evidence=[]
+    4. id=doc:memory:v2:e41af29d012c5f552f51db908d7c7f112ec86c33b75ebd4697f674662c3faff1 session=Some("baf0243b_1") score=2.472 structured_evidence=[]
+    5. id=doc:memory:v2:5d8663509897c679af99a38fda1554c58c1fcb6285e0a6fdaa46b12974d7c806 session=Some("0e69d205_1") score=3.651 structured_evidence=[]
+    6. id=doc:memory:v2:a0f78cdfa4f65188acec46ed536bf5d7b4a9eb0578d9ebdb416a121df1706eed session=Some("0e69d205_1") score=1.832 structured_evidence=[]
+    7. id=doc:memory:v2:f330abb9e99348ba04c85dc628b7478f67dd64dedd0bdf0455eae412b9bb5aa4 session=Some("89a9f6f5") score=3.291 structured_evidence=[]
+    8. id=doc:memory:v2:4a4cb3265e06ccb1cba72c90bae83abb9c4c2dc2b83a587e6b9ddd89a091f69a session=Some("89a9f6f5") score=2.499 structured_evidence=[]
+    9. id=doc:memory:v2:d15bcb0d7ad216372351b49ceedeb57b2394fd38da4e646c63eb9e8a0a03e7de session=Some("sharegpt_8T6d65A_83") score=2.992 structured_evidence=[]
+    10. id=doc:memory:v2:5f8cb04f57afc0a561dc4f7b4d2fd79c5f91d412807d3bf0c1476d56f30244b6 session=Some("sharegpt_8T6d65A_83") score=2.339 structured_evidence=[]
+    11. id=doc:memory:v2:c12b36fee99a929e97f4e1d486bba651365d688e78a1ef60c23ff8d9f9d1b566 session=Some("1d85d4ba_2") score=3.291 structured_evidence=[]
+    12. id=doc:memory:v2:6c17a8a8cde035f6126ca5451b16ca794887a5485e88f0a3ef8e54438c3a7d81 session=Some("1d85d4ba_2") score=1.672 structured_evidence=[]
+    13. id=doc:memory:v2:87673403490ba256844bb5536c65c80614ed1dff080f8af69210ef0635daf80b session=Some("1881e7db_2") score=3.611 structured_evidence=[]
+    14. id=doc:memory:v2:507827566e4d0a8f8b62c0b2b5ab9d7b0e1c1e40f11c367d3482b657751965c5 session=Some("1881e7db_2") score=2.499 structured_evidence=[]
+    15. id=doc:memory:v2:a638883868146acd699563add6221def7bc850feb315d10ad3dd262b4e61a2e0 session=Some("8f007ec7_3") score=3.291 structured_evidence=[]
+    16. id=doc:memory:v2:95f311d88e92806ce49cb710e3998ab99423cf202ab1dd19d0a77d693866c6ce session=Some("8f007ec7_3") score=2.419 structured_evidence=[]
+    17. id=doc:memory:v2:17d746a1bb9251bd47084521ca6faa59d7eb29d689d2be21d6b370bb8e5c3f7f session=Some("c1b801e6") score=2.419 structured_evidence=[]
+    18. id=doc:memory:v2:346fc91477fffca54db7cd282395e00b556dcdd8c8a45eed3ef0c9508a028ff7 session=Some("c1b801e6") score=1.672 structured_evidence=[]
+    19. id=doc:memory:v2:0bf129a4ff055b69a619975807f190a07316bade25fb15acb6652641760085b6 session=Some("3301f749_1") score=2.419 structured_evidence=[]
+    20. id=doc:memory:v2:065f2f430a5d16b59d14f7b6033056c238e389ca1d556f0cc1e0c1eeda3c6193 session=Some("3301f749_1") score=1.672 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=0 candidates=139 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_c6fd8ebd_abs: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_c6fd8ebd_abs: absent from service-depth index results
+
+(98.0ms) top sessions:
+  1. sharegpt_9l7gjYP_17 (score 4.2507)
+  2. baf0243b_1 (score 3.2907)
+  3. 0e69d205_1 (score 3.6507)
+  4. 89a9f6f5 (score 3.2907)
+  5. sharegpt_8T6d65A_83 (score 2.9920)
+  6. 1d85d4ba_2 (score 3.2907)
+  7. 1881e7db_2 (score 3.6107)
+  8. 8f007ec7_3 (score 3.2907)
+  9. c1b801e6 (score 2.4187)
+  10. 3301f749_1 (score 2.4187)
+
+query>
+
+====================================================================================================
+QUESTION_ID 29f2956b_abs
+QUESTION How much time do I dedicate to practicing violin every day?
+GOLD ['answer_7cc5362f_abs']
+GOLD_ANSWER You did not mention this information. You mentioned practing guitar everyday, but not violin.
+Indexing 55 haystack sessions for '29f2956b_abs'...
+Indexed. Answer sessions: ["answer_7cc5362f_abs"]
+Original question: How much time do I dedicate to practicing violin every day?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_7cc5362f_abs timestamp=Some("2023-05-22T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: How much time do I dedicate to practicing violin every day?
+  reference date: Some("2023/05/30 (Tue) 20:28")
+  normalized query: how much time do dedic to practic violin everi day
+  augmented/search query: How much time do I dedicate to practicing violin every day? time dedicate violin day practicing
+  kind: HowMuch
+  analyzed intent: Lookup
+  routing intent: Some(Sum)
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: None
+  temporal phrase: None
+  temporal source: None
+  resolved temporal anchor: None
+  temporal window: None..None
+  anchor date: None
+  anchor window: None
+  window days: 14
+  explicit temporal: false
+  hard temporal filter: false
+  spans:
+    QuestionWord: "how" => "how" (source=heuristic, score=0.700)
+    Entity: "How" => "how" (source=heuristic, score=0.550)
+    NounPhrase: "time" => "time" (source=pos, score=0.400)
+    NounPhrase: "dedicate" => "dedic" (source=pos, score=0.400)
+    NounPhrase: "violin" => "violin" (source=pos, score=0.400)
+    NounPhrase: "day" => "day" (source=pos, score=0.400)
+    VerbPhrase: "do" => "do" (source=pos, score=0.350)
+    VerbPhrase: "practicing" => "practic" (source=pos, score=0.350)
+    Subject: "time" => "time" (source=heuristic, score=0.750)
+    Object: "day" => "day" (source=heuristic, score=0.750)
+    Quantity: "How much" => "how much" (source=heuristic, score=0.850)
+
+Retrieval stages: MemoryService results=20 raw index results=84 lexical_hits=206 candidates=262 evidence_groups=45 evidence_ms=1.95
+  post-evidence group ranking (top 15 plus answer sessions):
+    1. ultrachat_13007 base=66.623 evidence=4.805 boost=5.480 final=58.778 pre=2 support=6 terms=12 num=4 unit=4 date=6 pred=1 required_relation_docs=0 penalty=1.400
+    2. b67748d1_1 base=66.975 evidence=3.158 boost=5.198 final=58.778 pre=1 support=9 terms=11 num=1 unit=7 date=9 pred=0 required_relation_docs=0 penalty=0.000
+    3. ultrachat_70054 base=55.892 evidence=4.043 boost=6.040 final=50.753 pre=3 support=9 terms=15 num=1 unit=5 date=9 pred=0 required_relation_docs=0 penalty=0.000
+    4. sharegpt_5n9NBC8_0 base=48.589 evidence=0.780 boost=1.260 final=40.131 pre=4 support=1 terms=2 num=0 unit=1 date=1 pred=0 required_relation_docs=0 penalty=0.000
+    5. 503b2761 base=37.343 evidence=2.833 boost=4.763 final=34.637 pre=6 support=6 terms=10 num=1 unit=6 date=6 pred=1 required_relation_docs=0 penalty=0.350
+    6. ultrachat_441324 base=35.621 evidence=3.130 boost=5.590 final=34.087 pre=7 support=4 terms=5 num=2 unit=4 date=4 pred=1 required_relation_docs=0 penalty=0.000
+    7. 1516d4c8 base=37.873 evidence=1.592 boost=3.162 final=33.461 pre=5 support=4 terms=5 num=1 unit=4 date=4 pred=0 required_relation_docs=0 penalty=0.350
+    8. 60f10fd3 base=33.142 evidence=1.493 boost=3.452 final=29.966 pre=8 support=5 terms=6 num=1 unit=5 date=5 pred=0 required_relation_docs=0 penalty=0.000
+    9. 64b7d9cc_2 base=30.008 evidence=3.050 boost=4.390 final=28.396 pre=10 support=4 terms=9 num=1 unit=4 date=4 pred=0 required_relation_docs=0 penalty=0.700
+   10. sharegpt_cu7TYt7_73 base=28.102 evidence=3.205 boost=5.705 final=28.186 pre=11 support=5 terms=6 num=2 unit=4 date=5 pred=1 required_relation_docs=0 penalty=0.000
+   11. ultrachat_548270 base=31.566 evidence=0.300 boost=1.180 final=26.433 pre=9 support=2 terms=2 num=0 unit=2 date=2 pred=0 required_relation_docs=0 penalty=0.000
+   12. 2f63ef92_1 base=27.023 evidence=0.405 boost=1.665 final=23.283 pre=12 support=2 terms=1 num=2 unit=1 date=2 pred=0 required_relation_docs=0 penalty=0.000
+   13. cc50c6a9 base=20.178 evidence=2.460 boost=4.640 final=20.783 pre=15 support=6 terms=8 num=3 unit=3 date=6 pred=1 required_relation_docs=0 penalty=0.700
+   14. answer_7cc5362f_abs base=18.023 evidence=4.392 boost=6.230 final=20.648 pre=16 support=6 terms=12 num=2 unit=4 date=6 pred=1 required_relation_docs=0 penalty=0.350 ANSWER
+   15. 77908e43_2 base=22.454 evidence=0.300 boost=1.180 final=19.143 pre=14 support=2 terms=2 num=0 unit=2 date=2 pred=0 required_relation_docs=0 penalty=0.000
+
+  deep index gold-session presence:
+    answer_7cc5362f_abs: candidate rank=27 score=13.135 doc_id=doc:memory:v2:1d968b1bd3a02d34e9d739c151795bae0e07823c844d1637998ffb4e7e7e7218
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:709187150fa37bc0418e23cb9fe236acae223a1097e8b3274c4891a7b0bd9ca9 session=Some("ultrachat_13007") score=48.418 structured_evidence=[]
+    2. id=doc:memory:v2:4a7b32fa280b126a30c09425f8c89ad7db6cb38611cb5222dd43ea16ec927ded session=Some("ultrachat_13007") score=35.693 structured_evidence=[]
+    3. id=doc:memory:v2:a66d0b2526eb8114d259b31d328d1ae70560bda826202ba3fc341699cb3fe8a3 session=Some("b67748d1_1") score=46.893 structured_evidence=[]
+    4. id=doc:memory:v2:4ef9b5944ad76828ffc88ed859e77bb2bcebfc077cec899bf11b71c79969a488 session=Some("b67748d1_1") score=46.647 structured_evidence=[]
+    5. id=doc:memory:v2:b60488065e1178e85b6a32479fd76c5542703bf5700f7b78c6e932dae51e6739 session=Some("ultrachat_70054") score=35.497 structured_evidence=[]
+    6. id=doc:memory:v2:5e71a921b82c4abe028e79be0c7ea9649ca22220d78dedd339f4c53fd63803e4 session=Some("ultrachat_70054") score=35.402 structured_evidence=[]
+    7. id=doc:memory:v2:711d9ec31dc51bfe4c42c5973bf15f8cc9774c884a364e41a92e05f541c46d4f session=Some("sharegpt_5n9NBC8_0") score=47.830 structured_evidence=[]
+    8. id=doc:memory:v2:624e3c5ef33f5ba3d38db04f79a07a63b6dff465314ea4015621b0708a9951a5 session=Some("sharegpt_5n9NBC8_0") score=1.280 structured_evidence=[]
+    9. id=doc:memory:v2:bd35dc2ab59c2de6f940441131e5a97b0712da346268188a774f3cba7b987184 session=Some("503b2761") score=28.706 structured_evidence=[]
+    10. id=doc:memory:v2:f02e214a35cb69bbdd8c3b614ad67d8f3fba4e2075f8ebbe3c4de0bcf67b74ac session=Some("503b2761") score=21.349 structured_evidence=[]
+    11. id=doc:memory:v2:fa52e486a8fb08ccecf1104eff08ed5114dbba28a50d6eabec69dc558d1504ba session=Some("ultrachat_441324") score=23.981 structured_evidence=[]
+    12. id=doc:memory:v2:529cf202b1e9e2243de86d61140818f64e2ff0d8af2d5fbd7eec10c13e7b20f9 session=Some("ultrachat_441324") score=23.037 structured_evidence=[]
+    13. id=doc:memory:v2:6d91addc99dcfef0a5633c442a4896e12d64dd9b76f1f59ed9e9af07c25eeab6 session=Some("1516d4c8") score=28.266 structured_evidence=[]
+    14. id=doc:memory:v2:5714b4fca8583ae90dceb63b9584e194e05093057650dd0f992872b39c236763 session=Some("1516d4c8") score=26.830 structured_evidence=[]
+    15. id=doc:memory:v2:0aa60a7b46acc27df5d67c29299be9cfd25364faa60db16b29869ee1ef4712b1 session=Some("60f10fd3") score=26.523 structured_evidence=[]
+    16. id=doc:memory:v2:ca66e69e1c00db5de0d85c76cfe32b9c89ecf5e2c465ed331ceab5878c5206b2 session=Some("60f10fd3") score=12.520 structured_evidence=[]
+    17. id=doc:memory:v2:da451ce390bce10ae3e8da7daad2736c334cb5fa6d92eb86e3068bc9d2cadf90 session=Some("64b7d9cc_2") score=26.120 structured_evidence=[]
+    18. id=doc:memory:v2:69f6c0c2034276f51f0962a1878d7ab55cf655a23f71f8c1faf28319bf821211 session=Some("64b7d9cc_2") score=6.966 structured_evidence=[]
+    19. id=doc:memory:v2:205feb86786942bb1bd25da47e1c51c6fc062e1cd562630430e94fc5ad576d5e session=Some("sharegpt_cu7TYt7_73") score=24.104 structured_evidence=[]
+    20. id=doc:memory:v2:47cf7c33eb34c8779f7b169cf3962172f3f51f8850c97621d86922cbe5309393 session=Some("sharegpt_cu7TYt7_73") score=6.294 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=206 candidates=262 evidence_groups=45 evidence_ms=1.83
+  post-evidence group ranking (top 15 plus answer sessions):
+    1. ultrachat_13007 base=66.623 evidence=4.805 boost=5.480 final=58.778 pre=2 support=6 terms=12 num=4 unit=4 date=6 pred=1 required_relation_docs=0 penalty=1.400
+    2. b67748d1_1 base=66.975 evidence=3.158 boost=5.198 final=58.778 pre=1 support=9 terms=11 num=1 unit=7 date=9 pred=0 required_relation_docs=0 penalty=0.000
+    3. ultrachat_70054 base=55.892 evidence=4.043 boost=6.040 final=50.753 pre=3 support=9 terms=15 num=1 unit=5 date=9 pred=0 required_relation_docs=0 penalty=0.000
+    4. sharegpt_5n9NBC8_0 base=48.589 evidence=0.780 boost=1.260 final=40.131 pre=4 support=1 terms=2 num=0 unit=1 date=1 pred=0 required_relation_docs=0 penalty=0.000
+    5. 503b2761 base=37.343 evidence=2.833 boost=4.763 final=34.637 pre=6 support=6 terms=10 num=1 unit=6 date=6 pred=1 required_relation_docs=0 penalty=0.350
+    6. ultrachat_441324 base=35.621 evidence=3.130 boost=5.590 final=34.087 pre=7 support=4 terms=5 num=2 unit=4 date=4 pred=1 required_relation_docs=0 penalty=0.000
+    7. 1516d4c8 base=37.873 evidence=1.592 boost=3.162 final=33.461 pre=5 support=4 terms=5 num=1 unit=4 date=4 pred=0 required_relation_docs=0 penalty=0.350
+    8. 60f10fd3 base=33.142 evidence=1.493 boost=3.452 final=29.966 pre=8 support=5 terms=6 num=1 unit=5 date=5 pred=0 required_relation_docs=0 penalty=0.000
+    9. 64b7d9cc_2 base=30.008 evidence=3.050 boost=4.390 final=28.396 pre=10 support=4 terms=9 num=1 unit=4 date=4 pred=0 required_relation_docs=0 penalty=0.700
+   10. sharegpt_cu7TYt7_73 base=28.102 evidence=3.205 boost=5.705 final=28.186 pre=11 support=5 terms=6 num=2 unit=4 date=5 pred=1 required_relation_docs=0 penalty=0.000
+   11. ultrachat_548270 base=31.566 evidence=0.300 boost=1.180 final=26.433 pre=9 support=2 terms=2 num=0 unit=2 date=2 pred=0 required_relation_docs=0 penalty=0.000
+   12. 2f63ef92_1 base=27.023 evidence=0.405 boost=1.665 final=23.283 pre=12 support=2 terms=1 num=2 unit=1 date=2 pred=0 required_relation_docs=0 penalty=0.000
+   13. cc50c6a9 base=20.178 evidence=2.460 boost=4.640 final=20.783 pre=15 support=6 terms=8 num=3 unit=3 date=6 pred=1 required_relation_docs=0 penalty=0.700
+   14. answer_7cc5362f_abs base=18.023 evidence=4.392 boost=6.230 final=20.648 pre=16 support=6 terms=12 num=2 unit=4 date=6 pred=1 required_relation_docs=0 penalty=0.350 ANSWER
+   15. 77908e43_2 base=22.454 evidence=0.300 boost=1.180 final=19.143 pre=14 support=2 terms=2 num=0 unit=2 date=2 pred=0 required_relation_docs=0 penalty=0.000
+
+  service-depth index gold-session presence:
+    answer_7cc5362f_abs: absent from service-depth index results
+
+(97.7ms) top sessions:
+  1. ultrachat_13007 (score 48.4176)
+  2. b67748d1_1 (score 46.8928)
+  3. ultrachat_70054 (score 35.4965)
+  4. sharegpt_5n9NBC8_0 (score 47.8299)
+  5. 503b2761 (score 28.7060)
+  6. ultrachat_441324 (score 23.9813)
+  7. 1516d4c8 (score 28.2662)
+  8. 60f10fd3 (score 26.5228)
+  9. 64b7d9cc_2 (score 26.1197)
+  10. sharegpt_cu7TYt7_73 (score 24.1043)
+
+query>
+
+====================================================================================================
+QUESTION_ID gpt4_8279ba03
+QUESTION What kitchen appliance did I buy 10 days ago?
+GOLD ['answer_56521e66_1']
+GOLD_ANSWER a smoker
+Indexing 46 haystack sessions for 'gpt4_8279ba03'...
+Indexed. Answer sessions: ["answer_56521e66_1"]
+Original question: What kitchen appliance did I buy 10 days ago?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_56521e66_1 timestamp=Some("2023-03-15T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: What kitchen appliance did I buy 10 days ago?
+  reference date: Some("2023/03/25 (Sat) 18:26")
+  normalized query: what kitchen applianc did buy day ago
+  augmented/search query: What kitchen appliance did I buy 10 days ago? kitchen appliance 10 days ago buy appliance ago kitchen
+  kind: What
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: Some(Past)
+  temporal phrase: Some("10 days ago")
+  temporal source: Some("fuzzydate")
+  resolved temporal anchor: Some("2023-03-15")
+  temporal window: None..None
+  anchor date: Some("2023-03-15")
+  anchor window: Some("2023-03-08..2023-03-22")
+  window days: 365
+  explicit temporal: true
+  hard temporal filter: false
+  spans:
+    QuestionWord: "what" => "what" (source=heuristic, score=0.700)
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "kitchen appliance" => "kitchen applianc" (source=pos, score=0.400)
+    NounPhrase: "10 days ago" => "day ago" (source=pos, score=0.400)
+    VerbPhrase: "did" => "did" (source=pos, score=0.350)
+    VerbPhrase: "buy" => "buy" (source=pos, score=0.350)
+    Temporal: "10 days ago" => "day ago" (source=fuzzydate, score=0.800)
+    Subject: "appliance" => "applianc" (source=heuristic, score=0.750)
+    Object: "ago" => "ago" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=78 lexical_hits=288 candidates=333 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_56521e66_1: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_56521e66_1: candidate rank=43 score=4.952 doc_id=doc:memory:v2:1964fceecf7c56d1a563aca4d55cc9b408d6cbe44a61fd902c2d0ea0ddbda562
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:92511d9f58553ef5edfac293ff17a3515df77700fd7467e36ffe84ac84c6d4e3 session=Some("d1a1b9ea_1") score=42.389 structured_evidence=[]
+    2. id=doc:memory:v2:c4ec70daea2c6eeb2207b41545ff90340c36a1a12c7d57cb241f5535d89ccec3 session=Some("518d26d3_4") score=36.561 structured_evidence=[]
+    3. id=doc:memory:v2:3944fc227d090b95fb11b5e212e87b04a0a3b1386a5ce9816aaebbc1465b020a session=Some("864a563d_5") score=36.548 structured_evidence=[]
+    4. id=doc:memory:v2:0dbf9b6755457741357dcb5f4bdfdba90ae8799b18e8ff65af7501b71d739a78 session=Some("652c0717_3") score=36.053 structured_evidence=[]
+    5. id=doc:memory:v2:1ff7f4101f48c6ad9e198b0edc2f995998bc585bb65eac75d1eb4e59bae1e86a session=Some("d1a1b9ea_1") score=35.428 structured_evidence=[]
+    6. id=doc:memory:v2:f2b6665d8896b8c6dd3461da4d73c06d3fb62b7c404783f9da81c5969edee34c session=Some("2ef55f49_3") score=33.071 structured_evidence=[]
+    7. id=doc:memory:v2:cb7dc55ccb2676a474d036794609b3fbb5d12b47eb625e088e1de978e5cc504f session=Some("652c0717_3") score=32.745 structured_evidence=[]
+    8. id=doc:memory:v2:21a6819568c9cd7c33336fd717062e15707ae38a2dd430b3ac93f04651c83139 session=Some("570fe405") score=22.252 structured_evidence=[]
+    9. id=doc:memory:v2:5752d5294fdfefe8f9f0a917b4631335c57ee324e6234794194cd6df80492de3 session=Some("50d66391_4") score=22.043 structured_evidence=[]
+    10. id=doc:memory:v2:15255ab2053fbc1499e89965627b3564d01cf8b47b7208ebc60d4cfa9e93f4f6 session=Some("50d66391_4") score=21.545 structured_evidence=[]
+    11. id=doc:memory:v2:da3e1578b37f596b489a94d709fc03060ad7d7d7acb28ff974610dc0c21b0a2e session=Some("b357fb8b_2") score=19.314 structured_evidence=[]
+    12. id=doc:memory:v2:bbe8edf2bf36cca2f8ccae0f33956257db5683f4e8a2e14b1b30ebaf84ebb24e session=Some("49b78a55_1") score=15.408 structured_evidence=[]
+    13. id=doc:memory:v2:44b45c4452b760719b470899b53675d51cc6bdadbe21c105d4295c12771b34bf session=Some("606d0c4a_2") score=13.978 structured_evidence=[]
+    14. id=doc:memory:v2:d292200ac178333218800de7f1124ff6134303f20608966a98cc823acc42976b session=Some("dea400f8_2") score=13.374 structured_evidence=[]
+    15. id=doc:memory:v2:a826cdc4bbc3bc5464588a369eed26deaf35602922b6ade61578820e2a634be6 session=Some("b357fb8b_2") score=12.503 structured_evidence=[]
+    16. id=doc:memory:v2:12107134ed555a90f5aa5335c06b472a96fd46f9cf81293111c39f8b04491fa2 session=Some("dea400f8_2") score=12.358 structured_evidence=[]
+    17. id=doc:memory:v2:0b7b5b7b25d0680387a5e2efabf4beab668ca01c9fa74603f8eb9211f2695070 session=Some("bb107057_2") score=12.080 structured_evidence=[]
+    18. id=doc:memory:v2:6dae753e5c1e80f0d4edff66af01e7beb1c3dceb26fdf311d2389ac3d39cbbfa session=Some("ba9f938b_1") score=11.753 structured_evidence=[]
+    19. id=doc:memory:v2:2cb1ecfc68c4a95c6cf64cf041399a451bcfd64ae64f234914f81f11471e67fe session=Some("bb107057_2") score=11.656 structured_evidence=[]
+    20. id=doc:memory:v2:fd5c300ee449fd631d9d3edadfb61db84618b560f29feaf0c47709ffe65f6395 session=Some("606d0c4a_2") score=11.553 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=288 candidates=333 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_56521e66_1: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_56521e66_1: absent from service-depth index results
+
+(93.8ms) top sessions:
+  1. d1a1b9ea_1 (score 42.3891)
+  2. 518d26d3_4 (score 36.5612)
+  3. 864a563d_5 (score 36.5480)
+  4. 652c0717_3 (score 36.0526)
+  5. 2ef55f49_3 (score 33.0706)
+  6. 570fe405 (score 22.2520)
+  7. 50d66391_4 (score 22.0431)
+  8. b357fb8b_2 (score 19.3138)
+  9. 49b78a55_1 (score 15.4081)
+  10. 606d0c4a_2 (score 13.9776)
+  11. dea400f8_2 (score 13.3740)
+  12. bb107057_2 (score 12.0800)
+  13. ba9f938b_1 (score 11.7528)
+
+query>
+
+====================================================================================================
+QUESTION_ID gpt4_e061b84g
+QUESTION I mentioned participating in a sports event two weeks ago. What was the event?
+GOLD ['answer_8c64ce26_2', 'answer_8c64ce26_1', 'answer_8c64ce26_3']
+GOLD_ANSWER The company's annual charity soccer tournament.
+Indexing 59 haystack sessions for 'gpt4_e061b84g'...
+Indexed. Answer sessions: ["answer_8c64ce26_2", "answer_8c64ce26_1", "answer_8c64ce26_3"]
+Original question: I mentioned participating in a sports event two weeks ago. What was the event?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_8c64ce26_2 timestamp=Some("2023-06-02T00:00:00+00:00")
+    Spring Sprint Triathlon -[event_time]-> 2023-06-02T00:00:00+00:00 (confidence=0.70)
+    Spring Sprint Triathlon -[event_type]-> Triathlon (confidence=0.78)
+    user -[participated_in]-> Spring Sprint Triathlon (confidence=0.82)
+  answer_8c64ce26_1 timestamp=Some("2023-06-10T00:00:00+00:00")
+    Midsummer 5K Run -[event_time]-> 2023-06-10T00:00:00+00:00 (confidence=0.70)
+    Midsummer 5K Run -[event_type]-> Run (confidence=0.78)
+    user -[participated_in]-> Midsummer 5K Run (confidence=0.82)
+  answer_8c64ce26_3 timestamp=Some("2023-06-17T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: I mentioned participating in a sports event two weeks ago. What was the event?
+  reference date: Some("2023/07/01 (Sat) 13:38")
+  normalized query: mention particip in sport event two week ago what was the event
+  augmented/search query: I mentioned participating in a sports event two weeks ago. What was the event? sports event two weeks ago event mentioned participating was ago
+  kind: Statement
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: Some(Mixed)
+  temporal phrase: Some("two weeks ago")
+  temporal source: Some("fuzzydate")
+  resolved temporal anchor: Some("2023-06-17")
+  temporal window: None..None
+  anchor date: Some("2023-06-17")
+  anchor window: Some("2023-06-10..2023-06-24")
+  window days: 30
+  explicit temporal: true
+  hard temporal filter: false
+  spans:
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "sports event two weeks ago" => "sport event two week ago" (source=pos, score=0.400)
+    NounPhrase: "event" => "event" (source=pos, score=0.400)
+    VerbPhrase: "mentioned participating" => "mention particip" (source=pos, score=0.350)
+    VerbPhrase: "was" => "was" (source=pos, score=0.350)
+    Temporal: "two weeks ago" => "two week ago" (source=fuzzydate, score=0.800)
+    Subject: "What" => "what" (source=heuristic, score=0.750)
+    Object: "event" => "event" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=97 lexical_hits=140 candidates=283 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_8c64ce26_2: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_1: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_3: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_8c64ce26_2: candidate rank=46 score=3.542 doc_id=doc:memory:v2:337cfe4065ee301eed98611ac71831b8b4d115805ab4e55c816787e911ec6fb7
+    answer_8c64ce26_1: candidate rank=49 score=3.402 doc_id=doc:memory:v2:e837f7286ca95f23a4174c2f5681113738088273e8db8f4c58ccd2869de0deb2
+    answer_8c64ce26_3: candidate rank=22 score=9.069 doc_id=doc:memory:v2:0a5ad7457387444db969e32427e54f4ed0b81224b539e8c3f17c9fbc8520c1e8
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:d4ed959b77b91d23702272b484eea80af5961e91990698579ae0cf290be43d04 session=Some("3929e6cc_1") score=107.677 structured_evidence=[]
+    2. id=doc:memory:v2:4dcd08e32aada53048590f90edd40c0ae3bd353772857a903cde2d0293145775 session=Some("9dac9e37_1") score=65.587 structured_evidence=[]
+    3. id=doc:memory:v2:e24483d8a37e4ba9d4085eecfc1451d3f54131823526550ae6f0f8de0f9e9df4 session=Some("9dac9e37_1") score=59.799 structured_evidence=[]
+    4. id=doc:memory:v2:c2a7a6b6dd9959825baa27a7cb4ccf65f0396592c13128182ac758ae81e42142 session=Some("3929e6cc_1") score=56.943 structured_evidence=[]
+    5. id=doc:memory:v2:7140acffa07619c66f100607a51fbb4e4407f1f46fbd0bd09dd9e97ed6982a54 session=Some("7083fcb9_1") score=33.996 structured_evidence=[]
+    6. id=doc:memory:v2:c2f47ea8eeb647c7033bef3e9899a3707798ef62d653a658cd4f0d864a8c49e2 session=Some("ae15e8b6_1") score=33.964 structured_evidence=[]
+    7. id=doc:memory:v2:9517e047938760ec727e190fac935235e1372650cbdcb7e5619d35800e3507f5 session=Some("ae15e8b6_1") score=33.321 structured_evidence=[]
+    8. id=doc:memory:v2:8259bea7869a941a97464ededb50d37e5f23689de2f68f10f3bed86151f2b8c5 session=Some("68705467_1") score=21.401 structured_evidence=[]
+    9. id=doc:memory:v2:381fe4b44b0574a69355b65c2d0e4669a33d9685b7699bc0e8cfb73ad785f633 session=Some("68705467_1") score=18.889 structured_evidence=[]
+    10. id=doc:memory:v2:6a70a1e826901b94f85334d6d42204ac6a73bd2e8432516ee6dd909fcc2f4a8b session=Some("ultrachat_246504") score=15.799 structured_evidence=[]
+    11. id=doc:memory:v2:410aca529805004abe6e17c7909ddb198afcf876c38aaee64107ed8ce27b6ff4 session=Some("sharegpt_783Lb5V_0") score=14.630 structured_evidence=[]
+    12. id=doc:memory:v2:4acca8e1965fe1572b9b039f4a8830d0090fc7426a4a4a7ca49a72fc84fe42f5 session=Some("ce584ba0") score=14.331 structured_evidence=[]
+    13. id=doc:memory:v2:e5d55e26d2909026a86b389dfa4d7644a4e76cc4e34587517059c964d4b44a73 session=Some("7083fcb9_1") score=13.056 structured_evidence=[]
+    14. id=doc:memory:v2:ca5f7aa4c918f1793089f1fb42feff3b051957dd0a15bd0b06d300d78311e945 session=Some("0e3d8491_1") score=12.843 structured_evidence=[]
+    15. id=doc:memory:v2:2548acb6fd2f42f046285d8c4d4f39026774bc8640ff03b24a73ff32bddade6b session=Some("ce584ba0") score=12.119 structured_evidence=[]
+    16. id=doc:memory:v2:d610dd3a8637d3cc6d46e44dbffad9acb3f45136fc2950223549956e308a97dd session=Some("ultrachat_231231") score=12.109 structured_evidence=[]
+    17. id=doc:memory:v2:7e72b191258d0a7333f82a951b23e90ccc61505391648d76aedbd0e176b5b482 session=Some("ultrachat_547960") score=10.714 structured_evidence=[]
+    18. id=doc:memory:v2:781f15ef6305864e94df995fa698a525f3f56171ee6ad75164c7b48e9ca99364 session=Some("09d021e7_2") score=10.559 structured_evidence=[]
+    19. id=doc:memory:v2:8a6a1a04a1ea7f2433217455f2b97b8ea6795f3c2de4d8a9cdb3b01186d5f42c session=Some("0e3d8491_1") score=10.270 structured_evidence=[]
+    20. id=doc:memory:v2:d7c5a97a93d5ba4ab2c346e9379bd8fa487e3dc6871fce1a582b78517c0ebc21 session=Some("2640c1b0") score=9.446 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=140 candidates=283 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_8c64ce26_2: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_1: absent from index evidence groups; the evidence stage had no candidates
+  ANSWER answer_8c64ce26_3: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_8c64ce26_2: absent from service-depth index results
+    answer_8c64ce26_1: absent from service-depth index results
+    answer_8c64ce26_3: absent from service-depth index results
+
+(100.6ms) top sessions:
+  1. 3929e6cc_1 (score 107.6774)
+  2. 9dac9e37_1 (score 65.5872)
+  3. 7083fcb9_1 (score 33.9963)
+  4. ae15e8b6_1 (score 33.9636)
+  5. 68705467_1 (score 21.4005)
+  6. ultrachat_246504 (score 15.7987)
+  7. sharegpt_783Lb5V_0 (score 14.6301)
+  8. ce584ba0 (score 14.3312)
+  9. 0e3d8491_1 (score 12.8429)
+  10. ultrachat_231231 (score 12.1085)
+  11. ultrachat_547960 (score 10.7136)
+  12. 09d021e7_2 (score 10.5591)
+  13. 2640c1b0 (score 9.4463)
+
+query>

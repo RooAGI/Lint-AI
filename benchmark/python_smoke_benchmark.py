@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-import lint_ai
+import membrick
 
 
 ABSTENTION_TYPES = {
@@ -52,7 +52,7 @@ def query_text_for_index_store(query):
 
 
 def run_entry(entry, ks):
-    store = lint_ai.IndexStore()
+    store = membrick.IndexStore()
     for session_id, turns in zip(entry["haystack_session_ids"], entry["haystack_sessions"]):
         for turn_idx, turn in enumerate(turns):
             doc_id = f"{session_id}::turn{turn_idx}"

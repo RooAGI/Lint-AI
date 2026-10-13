@@ -2,7 +2,7 @@
 //!
 //! OpenClaw exposes two hook systems (verified against a live 2026.9.6 host):
 //!   - internal hooks, which run in-process and can mutate the live event
-//!     (used for `agent:bootstrap` → recall and inject `LINTAI.md`), and
+//!     (used for `agent:bootstrap` → recall and inject `MEMBRICK.md`), and
 //!   - typed plugin hooks, which observe lifecycle events (used for
 //!     `agent_end` → Outcome capture, `before_reset` → SessionSummary capture;
 //!     `session_start`/`session_end`/`shutdown` are acknowledged no-ops).
@@ -17,7 +17,7 @@ use super::document::{OpenClawDocument, OpenClawDocumentType};
 use crate::ids::stable_doc_id_from_source;
 use crate::integrations::recall::{relevant_excerpt, truncate_utf8};
 use crate::integrations::session_recording::{
-    lint_ai_enabled, record_event_if_enabled, RecordingProvider,
+    membrick_enabled, record_event_if_enabled, RecordingProvider,
 };
 use crate::memory_api::MemoryService;
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
@@ -35,7 +35,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_TOP_K: usize = 5;
 const MAX_EXCERPT_BYTES: usize = 800;
 const MAX_CAPTURE_BYTES: usize = 32 * 1024;
-const INJECTED_FILE_NAME: &str = "LINTAI.md";
+const INJECTED_FILE_NAME: &str = "MEMBRICK.md";
 /// Fallback recall query when the shim has no user text to correlate
 /// (e.g. a fresh session whose first turn has no `message:received` yet).
 const DEFAULT_BOOTSTRAP_QUERY: &str = "decisions unresolved work failures implemented changes";
@@ -107,7 +107,7 @@ pub fn run_hook(kind: OpenClawHookKind, fallback_root: &Path) -> Result<()> {
             // Unparseable stdin: there is no safe mutation to return (for
             // bootstrap we cannot know the existing files), so emit a sentinel
             // the shims treat as "leave the event untouched".
-            eprintln!("warning: Lint-AI OpenClaw hook received invalid input: {error:#}");
+            eprintln!("warning: Membrick OpenClaw hook received invalid input: {error:#}");
             emit(&json!({ "ok": false, "error": "invalid hook input" }))?;
             return Ok(());
         }
@@ -119,16 +119,38 @@ pub fn run_hook(kind: OpenClawHookKind, fallback_root: &Path) -> Result<()> {
 /// Execute an OpenClaw lifecycle event for either the CLI shim or HTTP API.
 /// Errors are deliberately converted to a fail-open response.
 pub fn process_http_hook(kind: OpenClawHookKind, value: Value, fallback_root: &Path) -> Value {
+    process_http_hook_with_writer(kind, value, fallback_root, |document| {
+        let session_id = document
+            .filters
+            .get("session_id")
+            .cloned()
+            .unwrap_or_default();
+        crate::integrations::mcp_tools::upsert_hook_document(
+            fallback_root,
+            "openclaw",
+            &session_id,
+            document,
+        )
+    })
+}
+
+/// Execute an HTTP hook while sending captures to the caller's resident writer.
+pub fn process_http_hook_with_writer(
+    kind: OpenClawHookKind,
+    value: Value,
+    fallback_root: &Path,
+    mut publish: impl FnMut(crate::SourceDocument) -> Result<()>,
+) -> Value {
     let input: OpenClawHookInput = match serde_json::from_value(value) {
         Ok(input) => input,
         Err(error) => {
-            eprintln!("warning: Lint-AI OpenClaw hook received invalid input: {error:#}");
+            eprintln!("warning: Membrick OpenClaw hook received invalid input: {error:#}");
             return json!({ "ok": false, "error": "invalid hook input" });
         }
     };
     // HTTP callers cannot choose the server's workspace via hook fields.
     match fallback_root.canonicalize() {
-        Ok(root) => process_hook_at_root(kind, input, &root),
+        Ok(root) => process_hook_at_root(kind, input, &root, &mut publish),
         Err(_) => default_output(kind, &input),
     }
 }
@@ -137,14 +159,32 @@ fn process_hook(kind: OpenClawHookKind, input: OpenClawHookInput, fallback_root:
     let root = match resolve_root(&input, kind, fallback_root) {
         Ok(root) => root,
         Err(error) => {
-            eprintln!("warning: Lint-AI OpenClaw hook failed open: {error:#}");
+            eprintln!("warning: Membrick OpenClaw hook failed open: {error:#}");
             return default_output(kind, &input);
         }
     };
-    process_hook_at_root(kind, input, &root)
+    let mut publish = |document: crate::SourceDocument| {
+        let session_id = document
+            .filters
+            .get("session_id")
+            .cloned()
+            .unwrap_or_default();
+        crate::integrations::mcp_tools::upsert_hook_document(
+            &root,
+            "openclaw",
+            &session_id,
+            document,
+        )
+    };
+    process_hook_at_root(kind, input, &root, &mut publish)
 }
 
-fn process_hook_at_root(kind: OpenClawHookKind, input: OpenClawHookInput, root: &Path) -> Value {
+fn process_hook_at_root(
+    kind: OpenClawHookKind,
+    input: OpenClawHookInput,
+    root: &Path,
+    publish: &mut dyn FnMut(crate::SourceDocument) -> Result<()>,
+) -> Value {
     let session_id = session_id(&input, kind);
     if let Err(error) = record_event_if_enabled(
         RecordingProvider::OpenClaw,
@@ -153,12 +193,12 @@ fn process_hook_at_root(kind: OpenClawHookKind, input: OpenClawHookInput, root: 
         kind.event_name(),
         telemetry_payload(kind, &input),
     ) {
-        eprintln!("warning: Lint-AI OpenClaw session recording failed open: {error:#}");
+        eprintln!("warning: Membrick OpenClaw session recording failed open: {error:#}");
     }
-    let output = match handle_hook(kind, &input, &root) {
+    let output = match handle_hook(kind, &input, &root, publish) {
         Ok(output) => output,
         Err(error) => {
-            eprintln!("warning: Lint-AI OpenClaw hook failed open: {error:#}");
+            eprintln!("warning: Membrick OpenClaw hook failed open: {error:#}");
             default_output(kind, &input)
         }
     };
@@ -173,11 +213,16 @@ fn emit(output: &Value) -> Result<()> {
     Ok(())
 }
 
-fn handle_hook(kind: OpenClawHookKind, input: &OpenClawHookInput, root: &Path) -> Result<Value> {
+fn handle_hook(
+    kind: OpenClawHookKind,
+    input: &OpenClawHookInput,
+    root: &Path,
+    publish: &mut dyn FnMut(crate::SourceDocument) -> Result<()>,
+) -> Result<Value> {
     match kind {
         OpenClawHookKind::Bootstrap => handle_bootstrap(input, root),
-        OpenClawHookKind::AgentEnd => handle_agent_end(input, root),
-        OpenClawHookKind::BeforeReset => handle_before_reset(input, root),
+        OpenClawHookKind::AgentEnd => handle_agent_end(input, root, publish),
+        OpenClawHookKind::BeforeReset => handle_before_reset(input, root, publish),
         OpenClawHookKind::SessionStart => handle_session_start(input),
         OpenClawHookKind::SessionEnd => handle_session_end(input),
         OpenClawHookKind::Shutdown => handle_shutdown(),
@@ -293,7 +338,7 @@ fn current_timestamp() -> String {
 // ---------------------------------------------------------------------------
 
 /// Recall from the OpenClaw memory store and return the bootstrap-file list
-/// with `LINTAI.md` appended (replacing any stale entry with the same name so
+/// with `MEMBRICK.md` appended (replacing any stale entry with the same name so
 /// repeated per-turn firings stay idempotent).
 fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
     let existing = input
@@ -307,7 +352,7 @@ fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
         .filter(|file| file.get("name").and_then(Value::as_str) != Some(INJECTED_FILE_NAME))
         .collect();
 
-    if lint_ai_enabled(RecordingProvider::OpenClaw, root)? {
+    if membrick_enabled(RecordingProvider::OpenClaw, root)? {
         let query = input.query.trim();
         let query = if query.is_empty() {
             DEFAULT_BOOTSTRAP_QUERY
@@ -319,12 +364,12 @@ fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
             // The injected file lives at the resolved root (which already
             // fell back to the install root when the event omitted
             // `workspaceDir`); building the path from the raw event field
-            // would yield `/LINTAI.md` and the recall would not be injected.
+            // would yield `/MEMBRICK.md` and the recall would not be injected.
             let injected_path = root.join(INJECTED_FILE_NAME);
             files.push(json!({
                 "name": INJECTED_FILE_NAME,
                 "path": injected_path.to_string_lossy(),
-                "content": format!("# {INJECTED_FILE_NAME}\n\nLint-AI recalled memories (automatic):\n{memories}"),
+                "content": format!("# {INJECTED_FILE_NAME}\n\nMembrick recalled memories (automatic):\n{memories}"),
                 "missing": false,
             }));
         }
@@ -333,53 +378,45 @@ fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
 }
 
 fn retrieve_memories(root: &Path, query: &str) -> Result<String> {
-    let ignore_paths = vec![
-        "node_modules".to_string(),
-        "target".to_string(),
-        "dist".to_string(),
-        "build".to_string(),
-        "vendor".to_string(),
-        "coverage".to_string(),
-        ".git".to_string(),
-    ];
-    let input = crate::adapters::AdapterInput {
+    let results = crate::integrations::mcp_tools::search_hook_documents(
         root,
-        max_bytes: 5_000_000,
-        max_files: 50_000,
-        max_depth: 20,
-        max_total_bytes: 100_000_000,
-    };
-    let mut store = MemoryService::open_workspace(
-        root,
-        crate::integrations::mcp_index::SHARED_MEMORY_DIR,
-        &ignore_paths,
-        || {
-            let graph = crate::adapters::build_project_graph(&input)?;
-            let graph = crate::adapters::apply_ignore_paths(graph, &ignore_paths);
-            Ok(crate::adapters::graph_to_source_documents(&graph))
-        },
+        "openclaw",
+        None,
+        query,
+        DEFAULT_TOP_K,
     )?;
-    if store.is_empty() {
-        return Ok(String::new());
-    }
-    let results = store.observe_plain_query(query, "openclaw", None, DEFAULT_TOP_K * 3)?;
-    let mut seen = HashSet::new();
     let mut output = String::new();
-    for result in results.into_iter().take(DEFAULT_TOP_K) {
-        let Some(record) = store.record_by_id(&result.doc_id) else {
-            continue;
-        };
-        let excerpt = relevant_excerpt(
-            &record.content,
-            query,
-            &result.matched_terms,
-            MAX_EXCERPT_BYTES,
-        );
+    for result in results
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let content = result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let source = result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let matched_terms = result
+            .get("matched_terms")
+            .and_then(Value::as_array)
+            .map(|terms| {
+                terms
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let excerpt = relevant_excerpt(content, query, &matched_terms, MAX_EXCERPT_BYTES);
         let excerpt = excerpt.trim();
-        if excerpt.is_empty() || !seen.insert(excerpt.to_string()) {
+        if excerpt.is_empty() {
             continue;
         }
-        output.push_str(&format!("\n- Source: {}\n  {}\n", record.source, excerpt));
+        output.push_str(&format!("\n- Source: {}\n  {}\n", source, excerpt));
     }
     Ok(output)
 }
@@ -475,6 +512,7 @@ fn capture_outcome(
     run_id: &str,
     channel: Option<&str>,
     turns: &[(String, String)],
+    publish: &mut dyn FnMut(crate::SourceDocument) -> Result<()>,
 ) -> Result<Value> {
     if turns.is_empty() {
         return Ok(ack(Some("no conversation text")));
@@ -493,13 +531,7 @@ fn capture_outcome(
         timestamp: Some(current_timestamp()),
         channel: channel.map(str::to_string),
     };
-    // Writes go through the persistent shared store under the cross-process
-    // write lock (never the in-memory view): hook captures must survive the
-    // hook process and be visible to MCP servers and other hooks.
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document.into_source_document()?);
-        store.refresh_index()
-    })?;
+    publish(document.into_source_document()?)?;
     Ok(ack(None))
 }
 
@@ -507,7 +539,11 @@ fn capture_outcome(
 // agent_end — per-turn Outcome capture (idempotent on runId via the store).
 // ---------------------------------------------------------------------------
 
-fn handle_agent_end(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
+fn handle_agent_end(
+    input: &OpenClawHookInput,
+    root: &Path,
+    publish: &mut dyn FnMut(crate::SourceDocument) -> Result<()>,
+) -> Result<Value> {
     let run_id = input
         .event
         .get("runId")
@@ -517,7 +553,7 @@ fn handle_agent_end(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
     if run_id.is_empty() {
         return Ok(ack(Some("missing runId")));
     }
-    if !lint_ai_enabled(RecordingProvider::OpenClaw, root)? {
+    if !membrick_enabled(RecordingProvider::OpenClaw, root)? {
         return Ok(ack(Some("recording disabled")));
     }
     let session_id = session_id(input, OpenClawHookKind::AgentEnd);
@@ -529,7 +565,7 @@ fn handle_agent_end(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
         .unwrap_or_default();
     let turns = message_texts(&messages);
     let channel = input.ctx.get("channel").and_then(Value::as_str);
-    capture_outcome(root, &session_id, run_id, channel, &turns)
+    capture_outcome(root, &session_id, run_id, channel, &turns, publish)
 }
 
 // ---------------------------------------------------------------------------
@@ -537,9 +573,13 @@ fn handle_agent_end(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
 // departing transcript (delivered before OpenClaw wipes the session).
 // ---------------------------------------------------------------------------
 
-fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
+fn handle_before_reset(
+    input: &OpenClawHookInput,
+    root: &Path,
+    publish: &mut dyn FnMut(crate::SourceDocument) -> Result<()>,
+) -> Result<Value> {
     let session_id = session_id(input, OpenClawHookKind::BeforeReset);
-    if !lint_ai_enabled(RecordingProvider::OpenClaw, root)? {
+    if !membrick_enabled(RecordingProvider::OpenClaw, root)? {
         return Ok(ack(Some("recording disabled")));
     }
     let reason = input
@@ -580,13 +620,7 @@ fn handle_before_reset(input: &OpenClawHookInput, root: &Path) -> Result<Value> 
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    // Writes go through the persistent shared store under the cross-process
-    // write lock (never the in-memory view): hook captures must survive the
-    // hook process and be visible to MCP servers and other hooks.
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document.into_source_document()?);
-        store.refresh_index()
-    })?;
+    publish(document.into_source_document()?)?;
     Ok(ack(None))
 }
 
@@ -632,12 +666,19 @@ mod tests {
     fn test_root() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!(
-            "lint-ai-openclaw-hook-test-{}-{}",
+            "membrick-openclaw-hook-test-{}-{}",
             std::process::id(),
             id
         ));
         fs::create_dir_all(&root).unwrap();
         fs::canonicalize(root).unwrap()
+    }
+
+    fn test_publish(root: &Path, document: crate::SourceDocument) -> Result<()> {
+        MemoryService::with_shared_memory(root, |service| {
+            service.upsert(document);
+            service.refresh_index()
+        })
     }
 
     fn write_memory_doc(root: &Path, source: &str, content: &str) {
@@ -681,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_injects_lintai_md_when_memories_exist() {
+    fn bootstrap_injects_membrick_md_when_memories_exist() {
         let root = test_root();
         write_memory_doc(
             &root,
@@ -695,11 +736,11 @@ mod tests {
         let output = handle_bootstrap(&input, &root).unwrap();
         let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
         assert_eq!(files.len(), 2);
-        let injected = files.iter().find(|f| f["name"] == "LINTAI.md").unwrap();
+        let injected = files.iter().find(|f| f["name"] == "MEMBRICK.md").unwrap();
         assert!(injected["content"].as_str().unwrap().contains("SQLite"));
         assert_eq!(
             injected["path"],
-            format!("{}/LINTAI.md", root.to_str().unwrap())
+            format!("{}/MEMBRICK.md", root.to_str().unwrap())
         );
         assert_eq!(injected["missing"], false);
         // Pre-existing files survive.
@@ -726,7 +767,7 @@ mod tests {
         let second = handle_bootstrap(&rerun_input, &root).unwrap();
         let files = second.get("bootstrapFiles").unwrap().as_array().unwrap();
         assert_eq!(
-            files.iter().filter(|f| f["name"] == "LINTAI.md").count(),
+            files.iter().filter(|f| f["name"] == "MEMBRICK.md").count(),
             1,
             "must not duplicate the injected file"
         );
@@ -755,7 +796,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .all(|f| f["name"] != "LINTAI.md"));
+            .all(|f| f["name"] != "MEMBRICK.md"));
     }
 
     #[test]
@@ -794,7 +835,7 @@ mod tests {
         let input = bootstrap_input(root.to_str().unwrap(), "", vec![]);
         let output = handle_bootstrap(&input, &root).unwrap();
         let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
-        assert!(files.iter().any(|f| f["name"] == "LINTAI.md"));
+        assert!(files.iter().any(|f| f["name"] == "MEMBRICK.md"));
     }
 
     #[test]
@@ -824,10 +865,10 @@ mod tests {
         };
         let output = handle_bootstrap(&input, &root).unwrap();
         let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
-        let injected = files.iter().find(|f| f["name"] == "LINTAI.md").unwrap();
+        let injected = files.iter().find(|f| f["name"] == "MEMBRICK.md").unwrap();
         let path = injected["path"].as_str().unwrap();
-        assert_eq!(path, root.join("LINTAI.md").to_string_lossy());
-        assert_ne!(path, "/LINTAI.md");
+        assert_eq!(path, root.join("MEMBRICK.md").to_string_lossy());
+        assert_ne!(path, "/MEMBRICK.md");
     }
 
     fn agent_end_input(run_id: &str, session_id: &str) -> OpenClawHookInput {
@@ -859,13 +900,17 @@ mod tests {
         // function of (project, session, "outcome", run_id), so the second
         // upsert replaces the identical record in place.
         let root = test_root();
-        let first = handle_agent_end(&agent_end_input("run-1", "sess-1"), &root).unwrap();
+        let mut publish = |document| test_publish(&root, document);
+        let first =
+            handle_agent_end(&agent_end_input("run-1", "sess-1"), &root, &mut publish).unwrap();
         assert_eq!(first["ok"], true);
         // Retry with the same runId: re-runs capture, store dedupes.
-        let second = handle_agent_end(&agent_end_input("run-1", "sess-1"), &root).unwrap();
+        let second =
+            handle_agent_end(&agent_end_input("run-1", "sess-1"), &root, &mut publish).unwrap();
         assert_eq!(second["ok"], true);
         // A new runId captures a second record.
-        let third = handle_agent_end(&agent_end_input("run-2", "sess-1"), &root).unwrap();
+        let third =
+            handle_agent_end(&agent_end_input("run-2", "sess-1"), &root, &mut publish).unwrap();
         assert_eq!(third["ok"], true);
 
         let mut store = open_store(&root).unwrap();
@@ -896,7 +941,8 @@ mod tests {
             ctx: json!({"sessionId": "s"}),
             query: String::new(),
         };
-        let output = handle_agent_end(&input, &root).unwrap();
+        let mut publish = |document| test_publish(&root, document);
+        let output = handle_agent_end(&input, &root, &mut publish).unwrap();
         assert_eq!(output["skipped"], "missing runId");
     }
 
@@ -914,7 +960,8 @@ mod tests {
             ctx: json!({"sessionId": "sess-9", "channel": "webchat"}),
             query: String::new(),
         };
-        let output = handle_before_reset(&input, &root).unwrap();
+        let mut publish = |document| test_publish(&root, document);
+        let output = handle_before_reset(&input, &root, &mut publish).unwrap();
         assert_eq!(output["ok"], true);
 
         let mut store = open_store(&root).unwrap();

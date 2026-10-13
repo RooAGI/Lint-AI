@@ -1,0 +1,2347 @@
+   Compiling membrick v0.3.0 (/Users/louis/sources/Membrick)
+warning: unused imports: `TextFieldIndexing` and `TextOptions`
+  --> src/index/build.rs:16:39
+   |
+16 |     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT,
+   |                                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/agy/hooks.rs:7:5
+  |
+7 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/agy/hooks.rs:8:23
+  |
+8 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/agy/hooks.rs:9:5
+  |
+9 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/claude_code/hooks/mod.rs:15:24
+   |
+15 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/codex/hooks/mod.rs:14:24
+   |
+14 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/gemini_cli/hooks.rs:4:5
+  |
+4 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/gemini_cli/hooks.rs:5:23
+  |
+5 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/gemini_cli/hooks.rs:6:5
+  |
+6 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Serialize`
+  --> src/integrations/openclaw/hooks.rs:27:26
+   |
+27 | use serde::{Deserialize, Serialize};
+   |                          ^^^^^^^^^
+
+warning: unused import: `std::collections::HashSet`
+  --> src/integrations/openclaw/hooks.rs:29:5
+   |
+29 | use std::collections::HashSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::fs`
+  --> src/integrations/openclaw/hooks.rs:30:5
+   |
+30 | use std::fs;
+   |     ^^^^^^^
+
+warning: unused import: `SearchRequest`
+ --> src/integrations/roo_runtime.rs:5:40
+  |
+5 | use crate::memory_api::{MemoryService, SearchRequest};
+  |                                        ^^^^^^^^^^^^^
+
+warning: unused import: `Tier1NerProvider`
+ --> src/memory_api.rs:5:40
+  |
+5 | use crate::pipeline::{PipelineOptions, Tier1NerProvider};
+  |                                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `is_stopword`
+  --> src/segments/intent.rs:29:24
+   |
+29 | use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
+   |                        ^^^^^^^^^^^
+
+warning: unused import: `intent::*`
+  --> src/segments/mod.rs:19:9
+   |
+19 | pub use intent::*;
+   |         ^^^^^^^^^
+
+warning: unused import: `relations::*`
+  --> src/segments/mod.rs:23:9
+   |
+23 | pub use relations::*;
+   |         ^^^^^^^^^^^^
+
+warning: unused imports: `Decoder` and `PostProcessor`
+  --> src/bart_tokenizer.rs:15:18
+   |
+15 | use tokenizers::{Decoder, PostProcessor};
+   |                  ^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `stable_chunk_id` and `stable_doc_id_from_source`
+   --> src/lib.rs:121:29
+    |
+121 | pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
+    |                             ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GlobalBm25Statistics` and `MemoryIndex`
+   --> src/lib.rs:142:31
+    |
+142 | pub(crate) use crate::index::{GlobalBm25Statistics, MemoryIndex, TemporalQueryContext};
+    |                               ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `IndexDump`, `MemoryIndexSnapshot`, `StorePaths`, and `resolve_store_paths`
+   --> src/lib.rs:146:5
+    |
+146 |     resolve_store_paths, IndexDump, IndexStore, MemoryIndexSnapshot, StorePaths,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `QueryAnalysis` and `temporal_anchor_is_span`
+   --> src/lib.rs:152:5
+    |
+152 |     temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `SegmentManifestEntry` and `SegmentManifest`
+   --> src/lib.rs:154:34
+    |
+154 | pub(crate) use crate::segments::{SegmentManifest, SegmentManifestEntry};
+    |                                  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DocumentSemanticState`, `SemanticClaim`, `SemanticRelationKind`, `SemanticRelationStore`, and `SemanticRelation`
+   --> src/lib.rs:156:5
+    |
+156 |     DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
+    |     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+157 |     SemanticRelationStore,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TemporalFactStore`, `TemporalFact`, `TimelineEvent`, and `TimelinePair`
+   --> src/lib.rs:161:5
+    |
+161 |     TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
+    |     ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `RankedTerm` and `Tier1Entity`
+   --> src/lib.rs:163:31
+    |
+163 | pub(crate) use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+    |                               ^^^^^^^^^^  ^^^^^^^^^^^
+
+error[E0063]: missing field `evidence_requirements` in initializer of `index::model::TemporalQueryContext<'_>`
+   --> src/bin/segment_scoped_benchmark.rs:483:24
+    |
+483 |         let temporal = TemporalQueryContext {
+    |                        ^^^^^^^^^^^^^^^^^^^^ missing `evidence_requirements`
+
+warning: unused variable: `is_synthetic_f`
+    --> src/index/build.rs:1073:9
+     |
+1073 |         is_synthetic_f: Field,
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_synthetic_f`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tag_links_f`
+    --> src/index/build.rs:1074:9
+     |
+1074 |         tag_links_f: Field,
+     |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tag_links_f`
+
+warning: unreachable pattern
+   --> src/integrations/session_recording.rs:920:13
+    |
+919 |             Self::Agy => "agy",
+    |             --------- matches all the relevant values
+920 |             Self::Agy => "agy",
+    |             ^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/memory_api.rs:2097:13
+     |
+2097 |         let mut prepared = if session_id.is_none() {
+     |             ----^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:284:5
+    |
+284 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:344:5
+    |
+344 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:404:5
+    |
+404 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:481:5
+    |
+481 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:558:5
+    |
+558 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:929:13
+    |
+929 |         let mut search_scored = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:958:13
+    |
+958 |         let mut search = |service: &mut MemoryService,
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:966:13
+    |
+966 |         let mut search_scored_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:995:13
+    |
+995 |         let mut search_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+For more information about this error, try `rustc --explain E0063`.
+warning: `membrick` (lib) generated 39 warnings
+error: could not compile `membrick` (lib) due to 1 previous error; 39 warnings emitted
+   Compiling membrick v0.3.0 (/Users/louis/sources/Membrick)
+warning: unused imports: `TextFieldIndexing` and `TextOptions`
+  --> src/index/build.rs:16:39
+   |
+16 |     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT,
+   |                                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/agy/hooks.rs:7:5
+  |
+7 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/agy/hooks.rs:8:23
+  |
+8 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/agy/hooks.rs:9:5
+  |
+9 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/claude_code/hooks/mod.rs:15:24
+   |
+15 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/codex/hooks/mod.rs:14:24
+   |
+14 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/gemini_cli/hooks.rs:4:5
+  |
+4 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/gemini_cli/hooks.rs:5:23
+  |
+5 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/gemini_cli/hooks.rs:6:5
+  |
+6 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Serialize`
+  --> src/integrations/openclaw/hooks.rs:27:26
+   |
+27 | use serde::{Deserialize, Serialize};
+   |                          ^^^^^^^^^
+
+warning: unused import: `std::collections::HashSet`
+  --> src/integrations/openclaw/hooks.rs:29:5
+   |
+29 | use std::collections::HashSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::fs`
+  --> src/integrations/openclaw/hooks.rs:30:5
+   |
+30 | use std::fs;
+   |     ^^^^^^^
+
+warning: unused import: `SearchRequest`
+ --> src/integrations/roo_runtime.rs:5:40
+  |
+5 | use crate::memory_api::{MemoryService, SearchRequest};
+  |                                        ^^^^^^^^^^^^^
+
+warning: unused import: `Tier1NerProvider`
+ --> src/memory_api.rs:5:40
+  |
+5 | use crate::pipeline::{PipelineOptions, Tier1NerProvider};
+  |                                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `is_stopword`
+  --> src/segments/intent.rs:29:24
+   |
+29 | use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
+   |                        ^^^^^^^^^^^
+
+warning: unused import: `intent::*`
+  --> src/segments/mod.rs:19:9
+   |
+19 | pub use intent::*;
+   |         ^^^^^^^^^
+
+warning: unused import: `relations::*`
+  --> src/segments/mod.rs:23:9
+   |
+23 | pub use relations::*;
+   |         ^^^^^^^^^^^^
+
+warning: unused imports: `Decoder` and `PostProcessor`
+  --> src/bart_tokenizer.rs:15:18
+   |
+15 | use tokenizers::{Decoder, PostProcessor};
+   |                  ^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `stable_chunk_id` and `stable_doc_id_from_source`
+   --> src/lib.rs:121:29
+    |
+121 | pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
+    |                             ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GlobalBm25Statistics` and `MemoryIndex`
+   --> src/lib.rs:142:31
+    |
+142 | pub(crate) use crate::index::{GlobalBm25Statistics, MemoryIndex, TemporalQueryContext};
+    |                               ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `IndexDump`, `MemoryIndexSnapshot`, `StorePaths`, and `resolve_store_paths`
+   --> src/lib.rs:146:5
+    |
+146 |     resolve_store_paths, IndexDump, IndexStore, MemoryIndexSnapshot, StorePaths,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused imports: `QueryAnalysis` and `temporal_anchor_is_span`
+   --> src/lib.rs:152:5
+    |
+152 |     temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `SegmentManifestEntry` and `SegmentManifest`
+   --> src/lib.rs:154:34
+    |
+154 | pub(crate) use crate::segments::{SegmentManifest, SegmentManifestEntry};
+    |                                  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DocumentSemanticState`, `SemanticClaim`, `SemanticRelationKind`, `SemanticRelationStore`, and `SemanticRelation`
+   --> src/lib.rs:156:5
+    |
+156 |     DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
+    |     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+157 |     SemanticRelationStore,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TemporalFactStore`, `TemporalFact`, `TimelineEvent`, and `TimelinePair`
+   --> src/lib.rs:161:5
+    |
+161 |     TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
+    |     ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `RankedTerm` and `Tier1Entity`
+   --> src/lib.rs:163:31
+    |
+163 | pub(crate) use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+    |                               ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused variable: `is_synthetic_f`
+    --> src/index/build.rs:1073:9
+     |
+1073 |         is_synthetic_f: Field,
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_synthetic_f`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tag_links_f`
+    --> src/index/build.rs:1074:9
+     |
+1074 |         tag_links_f: Field,
+     |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tag_links_f`
+
+warning: unreachable pattern
+   --> src/integrations/session_recording.rs:920:13
+    |
+919 |             Self::Agy => "agy",
+    |             --------- matches all the relevant values
+920 |             Self::Agy => "agy",
+    |             ^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/memory_api.rs:2097:13
+     |
+2097 |         let mut prepared = if session_id.is_none() {
+     |             ----^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:284:5
+    |
+284 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:344:5
+    |
+344 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:404:5
+    |
+404 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:481:5
+    |
+481 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:558:5
+    |
+558 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:929:13
+    |
+929 |         let mut search_scored = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:958:13
+    |
+958 |         let mut search = |service: &mut MemoryService,
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:966:13
+    |
+966 |         let mut search_scored_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:995:13
+    |
+995 |         let mut search_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: methods `remove_expired_file` and `evict_expired` are never used
+   --> src/conversation_state.rs:335:8
+    |
+145 | impl ConversationStateStore {
+    | --------------------------- methods in this implementation
+...
+335 |     fn remove_expired_file(&self, user_id: &str, session_id: &str, now_ms: u64) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^
+...
+437 |     pub fn evict_expired(&mut self, now_ms: u64) -> usize {
+    |            ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `lexical_bm25` is never used
+    --> src/index/build.rs:1136:19
+     |
+ 161 | impl MemoryIndex {
+     | ---------------- method in this implementation
+...
+1136 |     pub(crate) fn lexical_bm25(
+     |                   ^^^^^^^^^^^^
+
+warning: field `chunk_u32` is never read
+   --> src/index/model.rs:344:16
+    |
+341 | pub(crate) struct IntervalEntry {
+    |                   ------------- field in this struct
+...
+344 |     pub(crate) chunk_u32: u32,
+    |                ^^^^^^^^^
+    |
+    = note: `IntervalEntry` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `center`, `overlaps`, `left`, and `right` are never read
+   --> src/index/model.rs:349:5
+    |
+348 | struct IntervalNode {
+    |        ------------ fields in this struct
+349 |     center: usize,
+    |     ^^^^^^
+350 |     overlaps: Vec<IntervalEntry>,
+    |     ^^^^^^^^
+351 |     left: Option<Box<IntervalNode>>,
+    |     ^^^^
+352 |     right: Option<Box<IntervalNode>>,
+    |     ^^^^^
+    |
+    = note: `IntervalNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `root` is never read
+   --> src/index/model.rs:357:5
+    |
+356 | pub(crate) struct IntervalTree {
+    |                   ------------ field in this struct
+357 |     root: Option<Box<IntervalNode>>,
+    |     ^^^^
+    |
+    = note: `IntervalTree` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `query` is never used
+   --> src/index/model.rs:396:19
+    |
+360 | impl IntervalTree {
+    | ----------------- method in this implementation
+...
+396 |     pub(crate) fn query(&self, start: usize, end: usize) -> Vec<u32> {
+    |                   ^^^^^
+
+warning: field `doc_interval_trees` is never read
+   --> src/index/model.rs:469:16
+    |
+420 | pub struct MemoryIndex {
+    |            ----------- field in this struct
+...
+469 |     pub(crate) doc_interval_trees: Vec<IntervalTree>,
+    |                ^^^^^^^^^^^^^^^^^^
+
+warning: fields `subword_f`, `is_synthetic_f`, and `tag_links_f` are never read
+   --> src/index/model.rs:508:16
+    |
+492 | pub(crate) struct LexicalIndex {
+    |                   ------------ fields in this struct
+...
+508 |     pub(crate) subword_f: Field,
+    |                ^^^^^^^^^
+...
+511 |     pub(crate) is_synthetic_f: Field,
+    |                ^^^^^^^^^^^^^^
+...
+514 |     pub(crate) tag_links_f: Field,
+    |                ^^^^^^^^^^^
+
+warning: method `shard_count` is never used
+   --> src/index/model.rs:558:12
+    |
+533 | impl GlobalBm25Statistics {
+    | ------------------------- method in this implementation
+...
+558 |     pub fn shard_count(&self) -> usize {
+    |            ^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src/index/query.rs:50:12
+     |
+  35 | impl MemoryIndex {
+     | ---------------- methods in this implementation
+...
+  50 |     pub fn query_with_temporal_context_and_statistics(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 317 |     pub fn query_timed(
+     |            ^^^^^^^^^^^
+...
+ 384 |     pub fn query_with_lexical_hits(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 413 |     pub fn query_with_filters(
+     |            ^^^^^^^^^^^^^^^^^^
+...
+ 503 |     pub fn query_with_filters_and_lexical(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 537 |     pub fn query_with_filters_multi(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1611 |     pub fn impacted_chunks_for_line_range(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `LEXICAL_SUBWORD_BOOST` is never used
+  --> src/index/query_terms.rs:26:18
+   |
+26 | pub(crate) const LEXICAL_SUBWORD_BOOST: f32 = 0.1;
+   |                  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/claude_code/hooks/mod.rs:435:4
+    |
+435 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/codex/hooks/mod.rs:593:4
+    |
+593 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: field `tool_input` is never read
+  --> src/integrations/gemini_cli/hooks.rs:59:9
+   |
+47 | pub struct GeminiHookInput {
+   |            --------------- field in this struct
+...
+59 |     pub tool_input: Option<Value>,
+   |         ^^^^^^^^^^
+   |
+   = note: `GeminiHookInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `transcript_path` is never read
+  --> src/integrations/muse_code/hooks/protocol.rs:18:9
+   |
+15 | pub struct MuseHookInput {
+   |            ------------- field in this struct
+...
+18 |     pub transcript_path: Option<PathBuf>,
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `MuseHookInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Checkpoint` is never constructed
+  --> src/integrations/openclaw/document.rs:20:5
+   |
+16 | pub enum OpenClawDocumentType {
+   |          -------------------- variant in this enum
+...
+20 |     Checkpoint,
+   |     ^^^^^^^^^^
+   |
+   = note: `OpenClawDocumentType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `process_http_hook` is never used
+   --> src/integrations/openclaw/hooks.rs:121:8
+    |
+121 | pub fn process_http_hook(kind: OpenClawHookKind, value: Value, fallback_root: &Path) -> Value {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `memory_root` is never used
+   --> src/integrations/openclaw/hooks.rs:309:4
+    |
+309 | fn memory_root(root: &Path) -> PathBuf {
+    |    ^^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/openclaw/hooks.rs:315:4
+    |
+315 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: methods `published_search_view`, `observe_plain_query`, and `select_session_documents` are never used
+    --> src/memory_api.rs:2312:19
+     |
+ 869 | impl MemoryService {
+     | ------------------ methods in this implementation
+...
+2312 |     pub(crate) fn published_search_view(&self) -> anyhow::Result<Option<Arc<MemoryService>>> {
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+...
+3122 |     pub(crate) fn observe_plain_query(
+     |                   ^^^^^^^^^^^^^^^^^^^
+...
+3165 |     pub(crate) fn select_session_documents(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `open_workspace_owner` is never used
+    --> src/memory_api.rs:6661:19
+     |
+6642 | impl MemoryService {
+     | ------------------ associated function in this implementation
+...
+6661 |     pub(crate) fn open_workspace_owner(
+     |                   ^^^^^^^^^^^^^^^^^^^^
+
+warning: method `publish_staged` is never used
+   --> src/memory_api/staged.rs:369:19
+    |
+ 27 | impl MemoryService {
+    | ------------------ method in this implementation
+...
+369 |     pub(crate) fn publish_staged(&mut self) -> anyhow::Result<()> {
+    |                   ^^^^^^^^^^^^^^
+
+warning: function `record_content_text` is never used
+  --> src/pipeline/build.rs:25:4
+   |
+25 | fn record_content_text(record: &DocRecord) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: methods `single_index`, `is_segmented`, and `segment_count` are never used
+   --> src/pipeline/config.rs:220:12
+    |
+219 | impl MemoryIndexSnapshot {
+    | ------------------------ methods in this implementation
+220 |     pub fn single_index(&self) -> Option<&MemoryIndex> {
+    |            ^^^^^^^^^^^^
+...
+227 |     pub fn is_segmented(&self) -> bool {
+    |            ^^^^^^^^^^^^
+...
+231 |     pub fn segment_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+
+warning: function `is_directory_empty` is never used
+   --> src/pipeline/persistence.rs:462:15
+    |
+462 | pub(crate) fn is_directory_empty(dir: &Path) -> Result<bool> {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: struct `DocumentLifecycleMeta` is never constructed
+  --> src/pipeline/store.rs:54:19
+   |
+54 | pub(crate) struct DocumentLifecycleMeta {
+   |                   ^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+    --> src/pipeline/store.rs:711:12
+     |
+ 352 | impl IndexStore {
+     | --------------- associated items in this implementation
+...
+ 711 |     pub fn for_corpus(corpus_root: &Path, mut options: PipelineOptions) -> Result<Self> {
+     |            ^^^^^^^^^^
+...
+ 854 |     pub(crate) fn dump(&mut self) -> Result<IndexDump> {
+     |                   ^^^^
+...
+1039 |     pub fn len(&self) -> usize {
+     |            ^^^
+...
+1047 |     pub fn is_dirty(&self) -> bool {
+     |            ^^^^^^^^
+...
+1121 |     pub fn chunk_lifecycle(&self) -> Vec<&ChunkLifecycleMeta> {
+     |            ^^^^^^^^^^^^^^^
+...
+1127 |     pub(crate) fn document_lifecycle(&self) -> Vec<DocumentLifecycleMeta> {
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+1162 |     pub fn temporal_facts(&self) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^
+...
+1181 |     pub fn temporal_facts_as_of(&self, date: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+1185 |     pub fn temporal_timeline(&self, subject: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^^^^
+...
+1189 |     pub fn temporal_timeline_window_around(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1199 |     pub fn temporal_events_between(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1207 |     pub fn temporal_adjacent_pairs_between(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1331 |     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
+     |            ^^^^^
+...
+1336 |     pub fn query_timed(
+     |            ^^^^^^^^^^^
+...
+1360 |     pub fn query_prepared_timed(
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+1410 |     pub fn query_filtered(
+     |            ^^^^^^^^^^^^^^
+...
+1440 |     pub fn query_filtered_multi(
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MAX_PENDING_CHANGES` is never used
+  --> src/pipeline/watcher.rs:14:7
+   |
+14 | const MAX_PENDING_CHANGES: usize = 64;
+   |       ^^^^^^^^^^^^^^^^^^^
+
+warning: method `take_change` is never used
+   --> src/pipeline/watcher.rs:212:12
+    |
+ 63 | impl WorkspaceWatcher {
+    | --------------------- method in this implementation
+...
+212 |     pub fn take_change(&self) -> bool {
+    |            ^^^^^^^^^^^
+
+warning: associated items `from_analysis`, `into_analysis`, and `execute_on_index_with_semantics` are never used
+   --> src/query_plan.rs:94:19
+    |
+ 37 | impl PreparedQuery {
+    | ------------------ associated items in this implementation
+...
+ 94 |     pub(crate) fn from_analysis(analysis: QueryAnalysis) -> Self {
+    |                   ^^^^^^^^^^^^^
+...
+102 |     fn into_analysis(self) -> QueryAnalysis {
+    |        ^^^^^^^^^^^^^
+...
+288 |     pub fn execute_on_index_with_semantics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `REMOTE_QUERY_PROTOCOL_VERSION` is never used
+  --> src/remote_query.rs:11:11
+   |
+11 | pub const REMOTE_QUERY_PROTOCOL_VERSION: u32 = 1;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryRequest` is never constructed
+  --> src/remote_query.rs:14:12
+   |
+14 | pub struct RemoteQueryRequest {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteTemporalContext` is never constructed
+  --> src/remote_query.rs:31:12
+   |
+31 | pub struct RemoteTemporalContext {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsRequest` is never constructed
+  --> src/remote_query.rs:41:12
+   |
+41 | pub struct RemoteStatisticsRequest {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsResponse` is never constructed
+  --> src/remote_query.rs:48:12
+   |
+48 | pub struct RemoteStatisticsResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteFieldStatistics` is never constructed
+  --> src/remote_query.rs:60:12
+   |
+60 | pub struct RemoteFieldStatistics {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteCandidateRequest` is never constructed
+  --> src/remote_query.rs:66:12
+   |
+66 | pub struct RemoteCandidateRequest {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsSnapshot` is never constructed
+  --> src/remote_query.rs:73:12
+   |
+73 | pub struct RemoteStatisticsSnapshot {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteCandidateResponse` is never constructed
+  --> src/remote_query.rs:79:12
+   |
+79 | pub struct RemoteCandidateResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteSearchResult` is never constructed
+  --> src/remote_query.rs:90:12
+   |
+90 | pub struct RemoteSearchResult {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryCompleteness` is never constructed
+  --> src/remote_query.rs:99:12
+   |
+99 | pub struct RemoteQueryCompleteness {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryFailure` is never constructed
+   --> src/remote_query.rs:106:12
+    |
+106 | pub struct RemoteQueryFailure {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:160:12
+    |
+159 | impl RemoteQueryRequest {
+    | ----------------------- method in this implementation
+160 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:184:12
+    |
+183 | impl RemoteStatisticsRequest {
+    | ---------------------------- method in this implementation
+184 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:193:12
+    |
+192 | impl RemoteCandidateRequest {
+    | --------------------------- method in this implementation
+193 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate_against` is never used
+   --> src/remote_query.rs:203:12
+    |
+202 | impl RemoteStatisticsResponse {
+    | ----------------------------- method in this implementation
+203 |     pub fn validate_against(&self, request: &RemoteStatisticsRequest) -> Result<(), String> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: method `validate_against` is never used
+   --> src/remote_query.rs:219:12
+    |
+218 | impl RemoteCandidateResponse {
+    | ---------------------------- method in this implementation
+219 |     pub fn validate_against(&self, request: &RemoteCandidateRequest) -> Result<(), String> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: associated items `validate`, `is_complete`, and `merge` are never used
+   --> src/remote_query.rs:238:12
+    |
+237 | impl RemoteQueryCompleteness {
+    | ---------------------------- associated items in this implementation
+238 |     pub fn validate(&self) -> Result<(), String> {
+    |            ^^^^^^^^
+...
+272 |     pub fn is_complete(&self) -> bool {
+    |            ^^^^^^^^^^^
+...
+280 |     fn merge<I>(responses: I) -> Self
+    |        ^^^^^
+
+warning: function `aggregate_statistics` is never used
+   --> src/remote_query.rs:310:8
+    |
+310 | pub fn aggregate_statistics(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reduce_candidates` is never used
+   --> src/remote_query.rs:366:8
+    |
+366 | pub fn reduce_candidates(
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `canonical_result_key` is never used
+   --> src/remote_query.rs:411:4
+    |
+411 | fn canonical_result_key(result: &RemoteSearchResult) -> (String, Option<String>, String) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_response_identity` is never used
+   --> src/remote_query.rs:419:4
+    |
+419 | fn validate_response_identity(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_unique_names` is never used
+   --> src/remote_query.rs:439:4
+    |
+439 | fn validate_unique_names(kind: &str, names: &[String]) -> Result<(), String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `answer_shape` and `shared_relation` are never read
+  --> src/segments/intent.rs:80:9
+   |
+74 | pub struct RevealedQuestion {
+   |            ---------------- fields in this struct
+...
+80 |     pub answer_shape: String,
+   |         ^^^^^^^^^^^^
+...
+84 |     pub shared_relation: Option<SharedRelationQuery>,
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `RevealedQuestion` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `reveal_question` is never used
+   --> src/segments/intent.rs:646:8
+    |
+646 | pub fn reveal_question(question: &str) -> RevealedQuestion {
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `build_segments_by_group_id` is never used
+   --> src/segments/model.rs:164:15
+    |
+164 | pub(crate) fn build_segments_by_group_id(records: &[DocRecord]) -> Vec<MemoryIndexSegment> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_memory_index_segment` is never used
+   --> src/segments/model.rs:184:15
+    |
+184 | pub(crate) fn build_memory_index_segment(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segment` is never used
+   --> src/segments/query.rs:114:15
+    |
+114 | pub(crate) fn query_top_segment(
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments` is never used
+   --> src/segments/query.rs:122:15
+    |
+122 | pub(crate) fn query_top_segments(
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_all_segments` is never used
+   --> src/segments/query.rs:131:4
+    |
+131 | fn query_all_segments(
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments_with_diagnostics` is never used
+   --> src/segments/query.rs:139:4
+    |
+139 | fn query_top_segments_with_diagnostics(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments_with_diagnostics_and_strategy` is never used
+   --> src/segments/query.rs:161:4
+    |
+161 | fn query_top_segments_with_diagnostics_and_strategy(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_all_segments_with_diagnostics` is never used
+    --> src/segments/query.rs:1621:4
+     |
+1621 | fn query_all_segments_with_diagnostics(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `turn_idx` is never read
+   --> src/segments/relations.rs:169:9
+    |
+162 | pub struct RawKeyPhrase {
+    |            ------------ field in this struct
+...
+169 |     pub turn_idx: usize,
+    |         ^^^^^^^^
+    |
+    = note: `RawKeyPhrase` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `coref` is never read
+   --> src/segments/relations.rs:205:9
+    |
+181 | pub struct RawRelation {
+    |            ----------- field in this struct
+...
+205 |     pub coref: Option<String>,
+    |         ^^^^^
+    |
+    = note: `RawRelation` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `EntityRelation` is never constructed
+   --> src/segments/relations.rs:220:12
+    |
+220 | pub struct EntityRelation {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `extract_key_phrases_via_spacy` is never used
+   --> src/segments/relations.rs:375:8
+    |
+375 | pub fn extract_key_phrases_via_spacy(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extractor_model_for_turns` is never used
+   --> src/segments/relations.rs:425:15
+    |
+425 | pub(crate) fn extractor_model_for_turns(turns: &[RelationTurn]) -> &'static str {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `len`, `is_empty`, `triple_count`, and `place_keywords_for_activity` are never used
+   --> src/segments/relations.rs:710:12
+    |
+654 | impl RelationIndex {
+    | ------------------ methods in this implementation
+...
+710 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+714 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+719 |     pub fn triple_count(&self) -> usize {
+    |            ^^^^^^^^^^^^
+...
+751 |     pub fn place_keywords_for_activity(&self, person: &str, activity_verb: &str) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `route_segments` is never used
+  --> src/segments/routing.rs:22:15
+   |
+22 | pub(crate) fn route_segments(query: &str, segments: &[MemoryIndexSegment]) -> Vec<SegmentRoute> {
+   |               ^^^^^^^^^^^^^^
+
+warning: function `route_segments_with_strategy` is never used
+  --> src/segments/routing.rs:26:15
+   |
+26 | pub(crate) fn route_segments_with_strategy(
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `segment_id` is never read
+   --> src/segments/routing.rs:723:16
+    |
+721 | pub(crate) struct RouteAwareCandidate {
+    |                   ------------------- field in this struct
+722 |     pub(crate) result: SearchResult,
+723 |     pub(crate) segment_id: String,
+    |                ^^^^^^^^^^
+    |
+    = note: `RouteAwareCandidate` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple associated items are never used
+   --> src/segments/segmented.rs:114:12
+    |
+ 56 | impl SegmentedMemoryIndex {
+    | ------------------------- associated items in this implementation
+...
+114 |     pub fn from_segments(segments: Vec<MemoryIndexSegment>) -> Result<Self, String> {
+    |            ^^^^^^^^^^^^^
+...
+237 |     pub fn from_records_by_manifest(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+306 |     pub fn refresh_incremental(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+321 |     pub(crate) fn refresh_incremental_with_lexical_root(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+403 |     pub(crate) fn refresh_changed(
+    |                   ^^^^^^^^^^^^^^^
+...
+519 |     pub fn generation(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+538 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+542 |     pub fn route(&self, query: &str) -> Vec<SegmentRoute> {
+    |            ^^^^^
+...
+551 |     pub fn route_with_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+574 |     pub fn query(&self, query: &str, top_k: usize, segment_limit: usize) -> Vec<SearchResult> {
+    |            ^^^^^
+...
+579 |     pub fn query_with_diagnostics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+593 |     pub fn query_with_diagnostics_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+657 |     pub fn query_with_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+861 |     pub fn query_all_segments(&self, query: &str, top_k: usize) -> Vec<SearchResult> {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+866 |     pub fn query_all_segments_with_diagnostics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `from_documents` is never used
+   --> src/semantic_relations.rs:139:12
+    |
+123 | impl SemanticRelationStore {
+    | -------------------------- associated function in this implementation
+...
+139 |     pub fn from_documents<'a, I>(documents: I, options: SupersessionOptions) -> Self
+    |            ^^^^^^^^^^^^^^
+
+warning: struct `TimelineEvent` is never constructed
+ --> src/temporal_fact.rs:9:12
+  |
+9 | pub struct TimelineEvent<'a> {
+  |            ^^^^^^^^^^^^^
+
+warning: struct `TimelinePair` is never constructed
+  --> src/temporal_fact.rs:15:12
+   |
+15 | pub struct TimelinePair<'a> {
+   |            ^^^^^^^^^^^^
+
+warning: methods `valid_to_date` and `active_at` are never used
+  --> src/temporal_fact.rs:93:8
+   |
+47 | impl TemporalFact {
+   | ----------------- methods in this implementation
+...
+93 |     fn valid_to_date(&self) -> Option<NaiveDate> {
+   |        ^^^^^^^^^^^^^
+...
+99 |     fn active_at(&self, date: NaiveDate) -> bool {
+   |        ^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/temporal_fact.rs:124:12
+    |
+123 | impl TemporalFactStore {
+    | ---------------------- associated items in this implementation
+124 |     pub fn empty() -> Self {
+    |            ^^^^^
+...
+208 |     pub fn facts(&self) -> &[TemporalFact] {
+    |            ^^^^^
+...
+305 |     pub fn as_of(&self, date: &str) -> Vec<&TemporalFact> {
+    |            ^^^^^
+...
+323 |     pub fn timeline_events_between(&self, start: &str, end: &str) -> Vec<TimelineEvent<'_>> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+357 |     pub fn timeline_window_around(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+409 |     pub fn adjacent_pairs_between(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+441 |     pub fn timeline(&self, subject: &str) -> Vec<&TemporalFact> {
+    |            ^^^^^^^^
+
+warning: function `normalize_range` is never used
+   --> src/temporal_fact.rs:468:4
+    |
+468 | fn normalize_range(start: &str, end: &str) -> Option<(NaiveDate, NaiveDate)> {
+    |    ^^^^^^^^^^^^^^^
+
+warning: trait `SourceAdapter` is never used
+  --> src/adapters.rs:17:11
+   |
+17 | pub trait SourceAdapter {
+   |           ^^^^^^^^^^^^^
+
+warning: function `default_source_adapters` is never used
+  --> src/adapters.rs:25:8
+   |
+25 | pub fn default_source_adapters() -> Vec<Box<dyn SourceAdapter>> {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `MarkdownAdapter` is never constructed
+  --> src/adapters/markdown.rs:32:12
+   |
+32 | pub struct MarkdownAdapter;
+   |            ^^^^^^^^^^^^^^^
+
+warning: field `category` is never read
+   --> src/behood_query.rs:291:5
+    |
+288 | struct FusedActivity {
+    |        ------------- field in this struct
+...
+291 |     category: String,
+    |     ^^^^^^^^
+    |
+    = note: `FusedActivity` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `activity_phrase` and `where_phrase` are never read
+   --> src/behood_query.rs:567:9
+    |
+561 | pub struct ScopeVerdict {
+    |            ------------ fields in this struct
+...
+567 |     pub activity_phrase: String,
+    |         ^^^^^^^^^^^^^^^
+...
+574 |     pub where_phrase: String,
+    |         ^^^^^^^^^^^^
+    |
+    = note: `ScopeVerdict` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `text` is never read
+   --> src/behood_query.rs:615:9
+    |
+613 | pub struct KindHit {
+    |            ------- field in this struct
+614 |     /// Entity text as it appears in the judged span.
+615 |     pub text: String,
+    |         ^^^^
+    |
+    = note: `KindHit` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `name` is never used
+  --> src/claim_extractor.rs:11:8
+   |
+ 9 | pub trait ClaimExtractor {
+   |           -------------- method in this trait
+10 |     fn extract(&self, record: &DocRecord) -> ExtractedClaims;
+11 |     fn name(&self) -> &'static str;
+   |        ^^^^
+
+warning: struct `CorpusGraph` is never constructed
+ --> src/corpus_graph.rs:8:12
+  |
+8 | pub struct CorpusGraph {
+  |            ^^^^^^^^^^^
+
+warning: associated items `new`, `from_bundle`, `with_ownership`, `symbol_usage_summary`, and `symbols_for_doc` are never used
+  --> src/corpus_graph.rs:15:12
+   |
+14 | impl CorpusGraph {
+   | ---------------- associated items in this implementation
+15 |     pub fn new(documents: MemoryIndex, symbols: SymbolStore, usage: UsageGraph) -> Self {
+   |            ^^^
+...
+23 |     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
+   |            ^^^^^^^^^^^
+...
+39 |     pub fn with_ownership(mut self, records: impl IntoIterator<Item = OwnershipRecord>) -> Self {
+   |            ^^^^^^^^^^^^^^
+...
+44 |     pub fn symbol_usage_summary(&self, symbol_id: &str) -> UsageSummary {
+   |            ^^^^^^^^^^^^^^^^^^^^
+...
+48 |     pub fn symbols_for_doc(&self, doc_id: &str) -> Vec<&SymbolRecord> {
+   |            ^^^^^^^^^^^^^^^
+
+warning: field `path` is never read
+  --> src/graph.rs:14:9
+   |
+12 | pub struct Page {
+   |            ---- field in this struct
+13 |     /// Absolute path to the file.
+14 |     pub path: String,
+   |         ^^^^
+   |
+   = note: `Page` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `content` is never read
+  --> src/graph.rs:42:9
+   |
+30 | pub struct ChunkNode {
+   |            --------- field in this struct
+...
+42 |     pub content: String,
+   |         ^^^^^^^
+   |
+   = note: `ChunkNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `chunk_index` and `doc_entities` are never read
+  --> src/graph.rs:73:9
+   |
+61 | pub struct Graph {
+   |            ----- fields in this struct
+...
+73 |     pub chunk_index: HashMap<String, NodeIndex>,
+   |         ^^^^^^^^^^^
+...
+83 |     pub doc_entities: HashMap<String, Vec<String>>,
+   |         ^^^^^^^^^^^^
+
+warning: enum `OwnershipKind` is never used
+ --> src/ownership.rs:7:10
+  |
+7 | pub enum OwnershipKind {
+  |          ^^^^^^^^^^^^^
+
+warning: enum `FlowState` is never used
+  --> src/ownership.rs:19:10
+   |
+19 | pub enum FlowState {
+   |          ^^^^^^^^^
+
+warning: enum `FlowEdgeKind` is never used
+  --> src/ownership.rs:30:10
+   |
+30 | pub enum FlowEdgeKind {
+   |          ^^^^^^^^^^^^
+
+warning: struct `FlowEdge` is never constructed
+  --> src/ownership.rs:41:12
+   |
+41 | pub struct FlowEdge {
+   |            ^^^^^^^^
+
+warning: struct `OwnershipRecord` is never constructed
+  --> src/ownership.rs:48:12
+   |
+48 | pub struct OwnershipRecord {
+   |            ^^^^^^^^^^^^^^^
+
+warning: struct `LeakFinding` is never constructed
+  --> src/ownership.rs:69:12
+   |
+69 | pub struct LeakFinding {
+   |            ^^^^^^^^^^^
+
+warning: fields `original_terms` and `unexpanded_non_english_terms` are never read
+  --> src/query_expansion.rs:11:9
+   |
+10 | pub struct ExpandedQuery {
+   |            ------------- fields in this struct
+11 |     pub original_terms: Vec<String>,
+   |         ^^^^^^^^^^^^^^
+...
+17 |     pub unexpanded_non_english_terms: Vec<String>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ExpandedQuery` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: constant `BART_VOCAB` is never used
+  --> src/bart_tokenizer.rs:18:7
+   |
+18 | const BART_VOCAB: &str = include_str!("../tokenizers/bart/vocab.json");
+   |       ^^^^^^^^^^
+
+warning: constant `BART_MERGES` is never used
+  --> src/bart_tokenizer.rs:20:7
+   |
+20 | const BART_MERGES: &str = include_str!("../tokenizers/bart/merges.txt");
+   |       ^^^^^^^^^^^
+
+warning: static `BART` is never used
+  --> src/bart_tokenizer.rs:22:8
+   |
+22 | static BART: OnceLock<Tokenizer> = OnceLock::new();
+   |        ^^^^
+
+warning: function `build_bart` is never used
+  --> src/bart_tokenizer.rs:25:4
+   |
+25 | fn build_bart() -> Tokenizer {
+   |    ^^^^^^^^^^
+
+warning: function `bart` is never used
+  --> src/bart_tokenizer.rs:50:4
+   |
+50 | fn bart() -> &'static Tokenizer {
+   |    ^^^^
+
+warning: function `bart_subwords` is never used
+  --> src/bart_tokenizer.rs:59:8
+   |
+59 | pub fn bart_subwords(text: &str) -> Vec<String> {
+   |        ^^^^^^^^^^^^^
+
+warning: function `bart_subwords_joined` is never used
+  --> src/bart_tokenizer.rs:82:8
+   |
+82 | pub fn bart_subwords_joined(text: &str) -> String {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `ReviewSeverity` is never used
+  --> src/review.rs:10:10
+   |
+10 | pub enum ReviewSeverity {
+   |          ^^^^^^^^^^^^^^
+
+warning: enum `ReviewCategory` is never used
+  --> src/review.rs:19:10
+   |
+19 | pub enum ReviewCategory {
+   |          ^^^^^^^^^^^^^^
+
+warning: struct `ReviewRepoRef` is never constructed
+  --> src/review.rs:32:12
+   |
+32 | pub struct ReviewRepoRef {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewHunk` is never constructed
+  --> src/review.rs:43:12
+   |
+43 | pub struct ReviewHunk {
+   |            ^^^^^^^^^^
+
+warning: struct `ReviewFileChange` is never constructed
+  --> src/review.rs:61:12
+   |
+61 | pub struct ReviewFileChange {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewFileSummary` is never constructed
+  --> src/review.rs:81:12
+   |
+81 | pub struct ReviewFileSummary {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewSummary` is never constructed
+  --> src/review.rs:87:12
+   |
+87 | pub struct ReviewSummary {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewDiffSummary` is never constructed
+  --> src/review.rs:97:12
+   |
+97 | pub struct ReviewDiffSummary {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `DocumentSummary` is never constructed
+   --> src/review.rs:105:12
+    |
+105 | pub struct DocumentSummary {
+    |            ^^^^^^^^^^^^^^^
+
+warning: struct `SymbolSummary` is never constructed
+   --> src/review.rs:130:12
+    |
+130 | pub struct SymbolSummary {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `OwnershipSummary` is never constructed
+   --> src/review.rs:163:12
+    |
+163 | pub struct OwnershipSummary {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewUsageNodeSummary` is never constructed
+   --> src/review.rs:195:12
+    |
+195 | pub struct ReviewUsageNodeSummary {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewUsageSummary` is never constructed
+   --> src/review.rs:210:12
+    |
+210 | pub struct ReviewUsageSummary {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewEvidence` is never constructed
+   --> src/review.rs:238:12
+    |
+238 | pub struct ReviewEvidence {
+    |            ^^^^^^^^^^^^^^
+
+warning: struct `ReviewFinding` is never constructed
+   --> src/review.rs:253:12
+    |
+253 | pub struct ReviewFinding {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewContext` is never constructed
+   --> src/review.rs:267:12
+    |
+267 | pub struct ReviewContext {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewPacket` is never constructed
+   --> src/review.rs:281:12
+    |
+281 | pub struct ReviewPacket {
+    |            ^^^^^^^^^^^^
+
+warning: struct `ReviewDiff` is never constructed
+   --> src/review.rs:297:12
+    |
+297 | pub struct ReviewDiff {
+    |            ^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/review.rs:304:12
+    |
+303 | impl ReviewPacket {
+    | ----------------- associated function in this implementation
+304 |     pub fn new(
+    |            ^^^
+
+warning: enum `SymbolKind` is never used
+  --> src/symbols.rs:11:10
+   |
+11 | pub enum SymbolKind {
+   |          ^^^^^^^^^^
+
+warning: enum `SymbolRelationKind` is never used
+  --> src/symbols.rs:27:10
+   |
+27 | pub enum SymbolRelationKind {
+   |          ^^^^^^^^^^^^^^^^^^
+
+warning: struct `SymbolLocation` is never constructed
+  --> src/symbols.rs:39:12
+   |
+39 | pub struct SymbolLocation {
+   |            ^^^^^^^^^^^^^^
+
+warning: struct `SymbolRecord` is never constructed
+  --> src/symbols.rs:52:12
+   |
+52 | pub struct SymbolRecord {
+   |            ^^^^^^^^^^^^
+
+warning: associated items `new`, `declared`, `referenced`, and `with_attribute` are never used
+   --> src/symbols.rs:77:12
+    |
+ 76 | impl SymbolRecord {
+    | ----------------- associated items in this implementation
+ 77 |     pub fn new(
+    |            ^^^
+...
+101 |     pub fn declared(
+    |            ^^^^^^^^
+...
+116 |     pub fn referenced(
+    |            ^^^^^^^^^^
+...
+137 |     pub fn with_attribute(mut self, key: impl Into<String>, value: Value) -> Self {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `symbol_id_for` is never used
+   --> src/symbols.rs:143:4
+    |
+143 | fn symbol_id_for(
+    |    ^^^^^^^^^^^^^
+
+warning: struct `SymbolStore` is never constructed
+   --> src/symbols.rs:153:12
+    |
+153 | pub struct SymbolStore {
+    |            ^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/symbols.rs:168:12
+    |
+167 | impl SymbolStore {
+    | ---------------- associated items in this implementation
+168 |     pub fn new() -> Self {
+    |            ^^^
+...
+172 |     pub fn from_records(records: impl IntoIterator<Item = SymbolRecord>) -> Self {
+    |            ^^^^^^^^^^^^
+...
+178 |     pub fn extend(&mut self, records: impl IntoIterator<Item = SymbolRecord>) {
+    |            ^^^^^^
+...
+184 |     pub fn insert(&mut self, record: SymbolRecord) {
+    |            ^^^^^^
+...
+205 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+209 |     pub fn lookup_by_name<'a>(&'a self, name: &str) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^
+...
+220 |     pub fn lookup_by_doc<'a>(&'a self, doc_id: &str) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^
+...
+224 |     pub fn lookup_by_kind<'a>(&'a self, kind: &SymbolKind) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^
+...
+228 |     pub fn lookup_by_relation<'a>(
+    |            ^^^^^^^^^^^^^^^^^^
+...
+235 |     pub fn lookup_by_attribute<'a>(&'a self, key: &str, value: &Value) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+246 |     fn append_matches<'a>(
+    |        ^^^^^^^^^^^^^^
+...
+257 |     fn append_normalized_matches<'a>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+268 |     fn lookup_indices<'a>(&'a self, indices: Option<&Vec<usize>>) -> Vec<&'a SymbolRecord> {
+    |        ^^^^^^^^^^^^^^
+...
+277 |     fn append_indices<'a>(
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `IngestBundle` is never constructed
+   --> src/symbols.rs:294:12
+    |
+294 | pub struct IngestBundle {
+    |            ^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/symbols.rs:300:12
+    |
+299 | impl IngestBundle {
+    | ----------------- associated function in this implementation
+300 |     pub fn new(documents: Vec<SourceDocument>, symbols: Vec<SymbolRecord>) -> Self {
+    |            ^^^
+
+warning: struct `CorpusIndex` is never constructed
+   --> src/symbols.rs:305:12
+    |
+305 | pub struct CorpusIndex {
+    |            ^^^^^^^^^^^
+
+warning: associated functions `new` and `from_bundle` are never used
+   --> src/symbols.rs:311:12
+    |
+310 | impl CorpusIndex {
+    | ---------------- associated functions in this implementation
+311 |     pub fn new(documents: MemoryIndex, symbols: SymbolStore) -> Self {
+    |            ^^^
+...
+315 |     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
+    |            ^^^^^^^^^^^
+
+warning: function `augment_query_with_temporal_context` is never used
+  --> src/temporal.rs:35:8
+   |
+35 | pub fn augment_query_with_temporal_context(query: &str, question_date: Option<&str>) -> String {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `UsageNodeKind` is never used
+ --> src/usage.rs:8:10
+  |
+8 | pub enum UsageNodeKind {
+  |          ^^^^^^^^^^^^^
+
+warning: enum `UsageEdgeKind` is never used
+  --> src/usage.rs:14:10
+   |
+14 | pub enum UsageEdgeKind {
+   |          ^^^^^^^^^^^^^
+
+warning: struct `UsageNode` is never constructed
+  --> src/usage.rs:29:12
+   |
+29 | pub struct UsageNode {
+   |            ^^^^^^^^^
+
+warning: struct `UsageEdge` is never constructed
+  --> src/usage.rs:43:12
+   |
+43 | pub struct UsageEdge {
+   |            ^^^^^^^^^
+
+warning: struct `UsageGraph` is never constructed
+  --> src/usage.rs:60:12
+   |
+60 | pub struct UsageGraph {
+   |            ^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/usage.rs:74:12
+    |
+ 73 | impl UsageGraph {
+    | --------------- associated items in this implementation
+ 74 |     pub fn new() -> Self {
+    |            ^^^
+...
+ 82 |     pub fn from_bundle(bundle: &crate::symbols::IngestBundle) -> Self {
+    |            ^^^^^^^^^^^
+...
+ 88 |     pub fn insert_node(&mut self, node: UsageNode) -> usize {
+    |            ^^^^^^^^^^^
+...
+ 94 |     pub fn insert_edge(&mut self, edge: UsageEdge) {
+    |            ^^^^^^^^^^^
+...
+113 |     pub fn lookup_by_node(&self, node_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^
+...
+117 |     pub fn lookup_by_doc(&self, doc_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^
+...
+121 |     pub fn lookup_by_symbol(&self, symbol_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^^^
+...
+125 |     pub fn lookup_by_kind(&self, kind: UsageEdgeKind) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^
+...
+129 |     fn lookup_indices(&self, indices: Option<&Vec<usize>>) -> Vec<&UsageEdge> {
+    |        ^^^^^^^^^^^^^^
+...
+137 |     pub fn ingest_symbols(&mut self, symbols: impl IntoIterator<Item = SymbolRecord>) {
+    |            ^^^^^^^^^^^^^^
+...
+172 |     pub fn ingest_ownership(&mut self, records: impl IntoIterator<Item = OwnershipRecord>) {
+    |            ^^^^^^^^^^^^^^^^
+...
+206 |     pub fn connected_symbols(&self, symbol_id: &str) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+220 |     pub fn summary_for_symbol(&self, symbol_id: &str) -> UsageSummary {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `UsageSummary` is never constructed
+   --> src/usage.rs:251:12
+    |
+251 | pub struct UsageSummary {
+    |            ^^^^^^^^^^^^
+
+warning: `membrick` (lib) generated 183 warnings (run `cargo fix --lib -p membrick` to apply 38 suggestions)
+    Finished `release` profile [optimized] target(s) in 21.65s
+     Running `target/release/segment_scoped_benchmark --longmemeval benchmark/data/longmemeval_s_raw.json --segment-compare --segment-top-n 5 --adaptive-segment-max-n 12 --segment-router coverage-local --ner-provider heuristic --k 1 --k 3 --k 5 --k 10 --k 20 --out comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz`
+loading raw LongMemEval data...
+running 500 scoped questions...
+[47/500] 19b5f2b3 candidates=45 q=8 analysis=4.79ms total=334.29ms snapshot=333.91ms rerank=333.77ms sparse=0.07ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.26ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[110/500] gpt4_194be4b3 candidates=49 q=10 analysis=4.81ms total=341.01ms snapshot=340.43ms rerank=340.42ms sparse=1.55ms lex_merge=0.02ms post=0.28ms routing=1.26ms seq_rerank=0.00ms evidence=0.95ms group_build=0.06ms group_sort=0.05ms
+[188/500] 3fdac837 candidates=48 q=17 analysis=5.37ms total=350.84ms snapshot=349.90ms rerank=349.89ms sparse=1.30ms lex_merge=0.02ms post=0.16ms routing=1.11ms seq_rerank=0.00ms evidence=2.83ms group_build=0.07ms group_sort=0.03ms
+[32/500] d52b4f67 candidates=54 q=8 analysis=4.88ms total=348.19ms snapshot=347.55ms rerank=347.55ms sparse=0.16ms lex_merge=0.06ms post=0.10ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[1/500] e47becba candidates=54 q=7 analysis=4.90ms total=338.53ms snapshot=338.15ms rerank=338.15ms sparse=0.06ms lex_merge=0.00ms post=0.05ms routing=0.00ms seq_rerank=0.94ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[63/500] 3d86fd0a candidates=57 q=6 analysis=4.92ms total=335.90ms snapshot=335.65ms rerank=335.63ms sparse=0.07ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.21ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[94/500] d682f1a2 candidates=52 q=21 analysis=4.91ms total=350.51ms snapshot=348.35ms rerank=348.34ms sparse=1.54ms lex_merge=0.05ms post=0.20ms routing=1.29ms seq_rerank=0.00ms evidence=2.30ms group_build=0.09ms group_sort=0.03ms
+[376/500] 9ea5eabc candidates=54 q=8 analysis=4.85ms total=328.76ms snapshot=328.42ms rerank=328.41ms sparse=0.09ms lex_merge=0.02ms post=0.07ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.07ms group_sort=0.01ms
+[102/500] b3c15d39 candidates=53 q=25 analysis=5.14ms total=349.67ms snapshot=348.44ms rerank=348.42ms sparse=1.79ms lex_merge=0.04ms post=0.16ms routing=1.58ms seq_rerank=0.00ms evidence=2.14ms group_build=0.09ms group_sort=0.03ms
+[78/500] aae3761f candidates=51 q=25 analysis=4.77ms total=343.14ms snapshot=341.90ms rerank=341.89ms sparse=2.24ms lex_merge=0.01ms post=0.30ms routing=1.92ms seq_rerank=0.00ms evidence=2.11ms group_build=0.07ms group_sort=0.03ms
+[126/500] 81507db6 candidates=50 q=20 analysis=4.95ms total=347.06ms snapshot=345.89ms rerank=345.87ms sparse=1.65ms lex_merge=0.02ms post=0.13ms routing=1.50ms seq_rerank=0.12ms evidence=2.32ms group_build=0.13ms group_sort=0.03ms
+[344/500] gpt4_d31cdae3 candidates=53 q=35 analysis=4.91ms total=341.15ms snapshot=339.82ms rerank=339.80ms sparse=1.36ms lex_merge=0.02ms post=0.18ms routing=1.16ms seq_rerank=0.00ms evidence=1.82ms group_build=0.09ms group_sort=0.02ms
+[313/500] 2c63a862 candidates=55 q=22 analysis=4.84ms total=378.88ms snapshot=376.08ms rerank=376.05ms sparse=2.06ms lex_merge=0.06ms post=0.33ms routing=1.66ms seq_rerank=0.00ms evidence=2.44ms group_build=0.21ms group_sort=0.04ms
+[438/500] 031748ae_abs candidates=54 q=27 analysis=4.94ms total=322.63ms snapshot=321.56ms rerank=321.55ms sparse=1.88ms lex_merge=0.06ms post=0.28ms routing=1.54ms seq_rerank=0.12ms evidence=2.20ms group_build=0.06ms group_sort=0.03ms
+[251/500] gpt4_18c2b244 candidates=44 q=67 analysis=5.07ms total=334.35ms snapshot=331.58ms rerank=331.56ms sparse=0.25ms lex_merge=0.05ms post=0.20ms routing=0.00ms seq_rerank=0.23ms evidence=0.00ms group_build=0.12ms group_sort=0.00ms
+[33/500] 25e5aa4f candidates=48 q=14 analysis=0.66ms total=1.65ms snapshot=0.73ms rerank=0.72ms sparse=0.08ms lex_merge=0.04ms post=0.04ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[111/500] a9f6b44c candidates=46 q=12 analysis=1.02ms total=3.69ms snapshot=3.02ms rerank=3.01ms sparse=0.60ms lex_merge=0.02ms post=0.05ms routing=0.53ms seq_rerank=0.00ms evidence=2.08ms group_build=0.07ms group_sort=0.02ms
+[189/500] 91b15a6e candidates=52 q=26 analysis=0.56ms total=1.87ms snapshot=0.85ms rerank=0.83ms sparse=0.09ms lex_merge=0.01ms post=0.07ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[377/500] 07741c44 candidates=52 q=10 analysis=0.61ms total=0.92ms snapshot=0.44ms rerank=0.43ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[48/500] 4fd1909e candidates=57 q=14 analysis=0.60ms total=1.30ms snapshot=0.64ms rerank=0.63ms sparse=0.06ms lex_merge=0.00ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[79/500] gpt4_f2262a51 candidates=49 q=10 analysis=0.67ms total=2.39ms snapshot=1.92ms rerank=1.91ms sparse=0.34ms lex_merge=0.01ms post=0.04ms routing=0.29ms seq_rerank=0.00ms evidence=1.34ms group_build=0.05ms group_sort=0.02ms
+[103/500] gpt4_31ff4165 candidates=42 q=12 analysis=0.71ms total=4.84ms snapshot=4.05ms rerank=4.04ms sparse=1.31ms lex_merge=0.05ms post=0.04ms routing=1.22ms seq_rerank=0.15ms evidence=2.25ms group_build=0.07ms group_sort=0.02ms
+[2/500] 118b2229 candidates=47 q=8 analysis=0.63ms total=0.96ms snapshot=0.48ms rerank=0.47ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[64/500] a82c026e candidates=48 q=13 analysis=0.62ms total=1.04ms snapshot=0.53ms rerank=0.53ms sparse=0.05ms lex_merge=0.02ms post=0.03ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[95/500] 7024f17c candidates=50 q=15 analysis=0.70ms total=2.38ms snapshot=1.92ms rerank=1.91ms sparse=0.47ms lex_merge=0.01ms post=0.03ms routing=0.44ms seq_rerank=0.14ms evidence=1.10ms group_build=0.04ms group_sort=0.01ms
+[314/500] gpt4_385a5000 candidates=57 q=15 analysis=0.63ms total=2.88ms snapshot=2.42ms rerank=2.41ms sparse=0.55ms lex_merge=0.01ms post=0.05ms routing=0.49ms seq_rerank=0.00ms evidence=1.44ms group_build=0.05ms group_sort=0.01ms
+[127/500] 88432d0a_abs candidates=47 q=22 analysis=0.72ms total=5.11ms snapshot=4.09ms rerank=4.08ms sparse=1.32ms lex_merge=0.03ms post=0.06ms routing=1.23ms seq_rerank=0.17ms evidence=1.94ms group_build=0.10ms group_sort=0.02ms
+[439/500] 2698e78f_abs candidates=51 q=8 analysis=0.60ms total=0.53ms snapshot=0.29ms rerank=0.29ms sparse=0.02ms lex_merge=0.00ms post=0.02ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.02ms group_sort=0.00ms
+[345/500] gpt4_cd90e484 candidates=54 q=25 analysis=0.69ms total=5.95ms snapshot=4.53ms rerank=4.51ms sparse=1.47ms lex_merge=0.05ms post=0.06ms routing=1.36ms seq_rerank=0.15ms evidence=2.28ms group_build=0.07ms group_sort=0.02ms
+[252/500] gpt4_a1b77f9c candidates=49 q=33 analysis=0.66ms total=4.60ms snapshot=3.34ms rerank=3.32ms sparse=1.18ms lex_merge=0.02ms post=0.12ms routing=1.04ms seq_rerank=0.00ms evidence=1.75ms group_build=0.05ms group_sort=0.02ms
+[34/500] caf9ead2 candidates=46 q=15 analysis=0.56ms total=1.19ms snapshot=0.64ms rerank=0.63ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[112/500] d851d5ba candidates=49 q=12 analysis=0.55ms total=2.19ms snapshot=1.68ms rerank=1.67ms sparse=0.31ms lex_merge=0.01ms post=0.04ms routing=0.26ms seq_rerank=0.00ms evidence=1.12ms group_build=0.04ms group_sort=0.02ms
+[104/500] eeda8a6d candidates=51 q=15 analysis=0.64ms total=1.90ms snapshot=1.52ms rerank=1.51ms sparse=0.31ms lex_merge=0.00ms post=0.04ms routing=0.27ms seq_rerank=0.00ms evidence=0.98ms group_build=0.05ms group_sort=0.01ms
+[190/500] 27016adc candidates=49 q=25 analysis=0.61ms total=2.91ms snapshot=1.02ms rerank=1.00ms sparse=0.17ms lex_merge=0.05ms post=0.12ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[378/500] a1eacc2a candidates=47 q=22 analysis=0.71ms total=4.08ms snapshot=3.21ms rerank=3.19ms sparse=0.73ms lex_merge=0.02ms post=0.09ms routing=0.62ms seq_rerank=0.00ms evidence=2.06ms group_build=0.07ms group_sort=0.02ms
+[49/500] 545bd2b5 candidates=44 q=19 analysis=0.66ms total=4.39ms snapshot=3.64ms rerank=3.62ms sparse=1.23ms lex_merge=0.02ms post=0.08ms routing=1.13ms seq_rerank=0.00ms evidence=2.01ms group_build=0.07ms group_sort=0.02ms
+[65/500] 0862e8bf_abs candidates=55 q=6 analysis=0.61ms total=0.52ms snapshot=0.38ms rerank=0.37ms sparse=0.02ms lex_merge=0.00ms post=0.02ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[3/500] 51a45a95 candidates=51 q=11 analysis=0.50ms total=1.42ms snapshot=0.59ms rerank=0.58ms sparse=0.05ms lex_merge=0.03ms post=0.03ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[80/500] dd2973ad candidates=53 q=18 analysis=0.56ms total=5.39ms snapshot=4.41ms rerank=4.40ms sparse=1.53ms lex_merge=0.05ms post=0.06ms routing=1.41ms seq_rerank=0.16ms evidence=2.27ms group_build=0.08ms group_sort=0.03ms
+[96/500] gpt4_5501fe77 candidates=48 q=25 analysis=0.58ms total=1.99ms snapshot=0.93ms rerank=0.91ms sparse=0.11ms lex_merge=0.03ms post=0.08ms routing=0.00ms seq_rerank=0.22ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[128/500] 80ec1f4f_abs candidates=46 q=14 analysis=0.57ms total=2.94ms snapshot=2.27ms rerank=2.26ms sparse=0.50ms lex_merge=0.02ms post=0.05ms routing=0.43ms seq_rerank=0.00ms evidence=1.47ms group_build=0.05ms group_sort=0.02ms
+[315/500] 2a1811e2 candidates=47 q=30 analysis=0.68ms total=6.25ms snapshot=4.75ms rerank=4.74ms sparse=2.05ms lex_merge=0.10ms post=0.15ms routing=1.80ms seq_rerank=0.00ms evidence=2.14ms group_build=0.08ms group_sort=0.02ms
+[440/500] 2133c1b5_abs candidates=52 q=16 analysis=0.64ms total=1.42ms snapshot=0.72ms rerank=0.71ms sparse=0.09ms lex_merge=0.01ms post=0.08ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[346/500] gpt4_88806d6e candidates=52 q=14 analysis=0.70ms total=1.21ms snapshot=0.55ms rerank=0.54ms sparse=0.06ms lex_merge=0.03ms post=0.03ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[35/500] 8550ddae candidates=46 q=16 analysis=0.63ms total=1.40ms snapshot=0.75ms rerank=0.74ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[113/500] 5a7937c8 candidates=43 q=18 analysis=0.86ms total=3.41ms snapshot=2.63ms rerank=2.62ms sparse=0.70ms lex_merge=0.01ms post=0.05ms routing=0.64ms seq_rerank=0.00ms evidence=1.65ms group_build=0.05ms group_sort=0.02ms
+[379/500] 184da446 candidates=42 q=21 analysis=0.58ms total=4.88ms snapshot=3.96ms rerank=3.94ms sparse=1.41ms lex_merge=0.05ms post=0.07ms routing=1.29ms seq_rerank=0.00ms evidence=2.06ms group_build=0.06ms group_sort=0.02ms
+[105/500] 2788b940 candidates=49 q=14 analysis=0.55ms total=3.63ms snapshot=2.92ms rerank=2.91ms sparse=0.81ms lex_merge=0.01ms post=0.06ms routing=0.73ms seq_rerank=0.00ms evidence=1.65ms group_build=0.07ms group_sort=0.02ms
+[66/500] 15745da0_abs candidates=51 q=14 analysis=0.61ms total=1.09ms snapshot=0.55ms rerank=0.54ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[191/500] 720133ac candidates=50 q=21 analysis=0.61ms total=4.67ms snapshot=3.69ms rerank=3.68ms sparse=1.19ms lex_merge=0.05ms post=0.06ms routing=1.08ms seq_rerank=0.00ms evidence=2.06ms group_build=0.06ms group_sort=0.02ms
+[50/500] 8a137a7f candidates=51 q=13 analysis=0.47ms total=1.22ms snapshot=0.59ms rerank=0.58ms sparse=0.06ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[253/500] gpt4_1916e0ea candidates=58 q=29 analysis=0.61ms total=5.99ms snapshot=4.64ms rerank=4.62ms sparse=1.83ms lex_merge=0.04ms post=0.08ms routing=1.70ms seq_rerank=0.00ms evidence=2.28ms group_build=0.07ms group_sort=0.03ms
+[129/500] eeda8a6d_abs candidates=51 q=15 analysis=0.82ms total=2.63ms snapshot=1.97ms rerank=1.96ms sparse=0.36ms lex_merge=0.01ms post=0.04ms routing=0.31ms seq_rerank=0.00ms evidence=1.36ms group_build=0.04ms group_sort=0.01ms
+[316/500] bbf86515 candidates=47 q=25 analysis=0.60ms total=5.26ms snapshot=4.16ms rerank=4.14ms sparse=1.39ms lex_merge=0.04ms post=0.11ms routing=1.23ms seq_rerank=0.00ms evidence=2.29ms group_build=0.07ms group_sort=0.03ms
+[81/500] c4a1ceb8 candidates=53 q=22 analysis=0.65ms total=4.55ms snapshot=3.57ms rerank=3.55ms sparse=1.01ms lex_merge=0.02ms post=0.11ms routing=0.88ms seq_rerank=0.00ms evidence=2.06ms group_build=0.08ms group_sort=0.03ms
+[4/500] 58bf7951 candidates=62 q=15 analysis=0.55ms total=1.30ms snapshot=0.68ms rerank=0.67ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[97/500] gpt4_2ba83207 candidates=53 q=20 analysis=0.64ms total=1.37ms snapshot=0.62ms rerank=0.61ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[441/500] 0ddfec37_abs candidates=49 q=18 analysis=0.69ms total=3.65ms snapshot=2.95ms rerank=2.94ms sparse=0.65ms lex_merge=0.00ms post=0.05ms routing=0.59ms seq_rerank=0.17ms evidence=1.71ms group_build=0.08ms group_sort=0.02ms
+[347/500] gpt4_4cd9eba1 candidates=47 q=32 analysis=0.63ms total=6.44ms snapshot=5.13ms rerank=5.11ms sparse=2.06ms lex_merge=0.05ms post=0.12ms routing=1.89ms seq_rerank=0.25ms evidence=2.22ms group_build=0.09ms group_sort=0.02ms
+[36/500] 60d45044 candidates=57 q=7 analysis=0.54ms total=0.96ms snapshot=0.55ms rerank=0.55ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[114/500] gpt4_ab202e7f candidates=46 q=13 analysis=0.76ms total=3.23ms snapshot=2.72ms rerank=2.71ms sparse=0.55ms lex_merge=0.01ms post=0.05ms routing=0.49ms seq_rerank=0.00ms evidence=1.83ms group_build=0.06ms group_sort=0.03ms
+[67/500] bc8a6e93_abs candidates=52 q=13 analysis=0.57ms total=1.53ms snapshot=0.68ms rerank=0.68ms sparse=0.07ms lex_merge=0.03ms post=0.04ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[106/500] 60bf93ed candidates=51 q=19 analysis=0.71ms total=3.05ms snapshot=2.43ms rerank=2.42ms sparse=0.64ms lex_merge=0.01ms post=0.04ms routing=0.59ms seq_rerank=0.00ms evidence=1.49ms group_build=0.06ms group_sort=0.02ms
+[51/500] 76d63226 candidates=49 q=10 analysis=0.53ms total=0.97ms snapshot=0.48ms rerank=0.47ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[192/500] 77eafa52 candidates=54 q=19 analysis=1.48ms total=3.11ms snapshot=2.62ms rerank=2.61ms sparse=0.76ms lex_merge=0.01ms post=0.05ms routing=0.69ms seq_rerank=0.00ms evidence=1.54ms group_build=0.06ms group_sort=0.01ms
+[380/500] 031748ae candidates=50 q=34 analysis=0.65ms total=4.98ms snapshot=3.57ms rerank=3.56ms sparse=1.29ms lex_merge=0.03ms post=0.09ms routing=1.17ms seq_rerank=0.10ms evidence=1.71ms group_build=0.07ms group_sort=0.02ms
+[254/500] gpt4_7a0daae1 candidates=65 q=25 analysis=0.76ms total=6.21ms snapshot=5.04ms rerank=5.02ms sparse=2.25ms lex_merge=0.06ms post=0.10ms routing=2.09ms seq_rerank=0.00ms evidence=2.23ms group_build=0.08ms group_sort=0.02ms
+[82/500] gpt4_a56e767c candidates=52 q=10 analysis=0.62ms total=2.22ms snapshot=1.85ms rerank=1.84ms sparse=0.35ms lex_merge=0.00ms post=0.03ms routing=0.31ms seq_rerank=0.00ms evidence=1.25ms group_build=0.05ms group_sort=0.01ms
+[98/500] 2318644b candidates=44 q=17 analysis=0.59ms total=3.11ms snapshot=2.46ms rerank=2.45ms sparse=0.56ms lex_merge=0.01ms post=0.05ms routing=0.51ms seq_rerank=0.00ms evidence=1.61ms group_build=0.06ms group_sort=0.02ms
+[317/500] gpt4_5dcc0aab candidates=55 q=14 analysis=0.84ms total=1.02ms snapshot=0.54ms rerank=0.53ms sparse=0.06ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[130/500] 60bf93ed_abs candidates=56 q=19 analysis=0.69ms total=3.97ms snapshot=3.16ms rerank=3.15ms sparse=0.90ms lex_merge=0.02ms post=0.05ms routing=0.83ms seq_rerank=0.00ms evidence=1.89ms group_build=0.06ms group_sort=0.02ms
+[5/500] 1e043500 candidates=53 q=11 analysis=0.51ms total=1.51ms snapshot=0.93ms rerank=0.91ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.27ms evidence=0.00ms group_build=0.13ms group_sort=0.00ms
+[442/500] f685340e_abs candidates=45 q=19 analysis=0.63ms total=1.79ms snapshot=0.91ms rerank=0.89ms sparse=0.12ms lex_merge=0.04ms post=0.09ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[348/500] gpt4_93f6379c candidates=43 q=21 analysis=0.56ms total=2.71ms snapshot=1.91ms rerank=1.90ms sparse=0.41ms lex_merge=0.01ms post=0.05ms routing=0.35ms seq_rerank=0.00ms evidence=1.18ms group_build=0.04ms group_sort=0.01ms
+[37/500] 3f1e9474 candidates=55 q=10 analysis=0.55ms total=3.27ms snapshot=0.50ms rerank=0.49ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[52/500] 86f00804 candidates=46 q=7 analysis=0.55ms total=1.15ms snapshot=0.69ms rerank=0.69ms sparse=0.06ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[115/500] gpt4_e05b82a6 candidates=47 q=23 analysis=0.65ms total=5.03ms snapshot=3.65ms rerank=3.64ms sparse=1.03ms lex_merge=0.03ms post=0.07ms routing=0.93ms seq_rerank=0.00ms evidence=2.26ms group_build=0.06ms group_sort=0.02ms
+[107/500] 9d25d4e0 candidates=47 q=17 analysis=0.73ms total=3.67ms snapshot=3.03ms rerank=3.02ms sparse=0.67ms lex_merge=0.01ms post=0.05ms routing=0.60ms seq_rerank=0.16ms evidence=1.86ms group_build=0.07ms group_sort=0.02ms
+[68/500] 19b5f2b3_abs candidates=53 q=8 analysis=0.54ms total=0.96ms snapshot=0.61ms rerank=0.60ms sparse=0.03ms lex_merge=0.01ms post=0.02ms routing=0.00ms seq_rerank=0.21ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[255/500] gpt4_468eb063 candidates=45 q=12 analysis=0.63ms total=3.23ms snapshot=2.74ms rerank=2.73ms sparse=0.68ms lex_merge=0.01ms post=0.04ms routing=0.63ms seq_rerank=0.00ms evidence=1.75ms group_build=0.07ms group_sort=0.02ms
+[193/500] 8979f9ec candidates=45 q=29 analysis=0.62ms total=4.07ms snapshot=3.02ms rerank=3.00ms sparse=0.97ms lex_merge=0.02ms post=0.07ms routing=0.88ms seq_rerank=0.00ms evidence=1.68ms group_build=0.06ms group_sort=0.01ms
+[381/500] 4d6b87c8 candidates=56 q=13 analysis=0.67ms total=3.19ms snapshot=2.59ms rerank=2.58ms sparse=0.57ms lex_merge=0.01ms post=0.05ms routing=0.50ms seq_rerank=0.00ms evidence=1.65ms group_build=0.07ms group_sort=0.03ms
+[83/500] 6cb6f249 candidates=43 q=17 analysis=0.77ms total=3.34ms snapshot=2.74ms rerank=2.73ms sparse=0.74ms lex_merge=0.01ms post=0.06ms routing=0.67ms seq_rerank=0.00ms evidence=1.71ms group_build=0.05ms group_sort=0.02ms
+[6/500] c5e8278d candidates=45 q=11 analysis=0.54ms total=0.98ms snapshot=0.69ms rerank=0.64ms sparse=0.05ms lex_merge=0.02ms post=0.03ms routing=0.00ms seq_rerank=0.22ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[131/500] edced276_abs candidates=52 q=16 analysis=0.57ms total=3.47ms snapshot=2.77ms rerank=2.76ms sparse=0.78ms lex_merge=0.01ms post=0.08ms routing=0.68ms seq_rerank=0.00ms evidence=1.59ms group_build=0.06ms group_sort=0.02ms
+[318/500] gpt4_0b2f1d21 candidates=56 q=26 analysis=0.50ms total=4.44ms snapshot=3.37ms rerank=3.35ms sparse=0.84ms lex_merge=0.03ms post=0.09ms routing=0.71ms seq_rerank=0.00ms evidence=2.00ms group_build=0.07ms group_sort=0.03ms
+[99/500] 2ce6a0f2 candidates=52 q=20 analysis=0.69ms total=6.80ms snapshot=4.96ms rerank=4.94ms sparse=1.81ms lex_merge=0.05ms post=0.10ms routing=1.66ms seq_rerank=0.19ms evidence=2.47ms group_build=0.08ms group_sort=0.03ms
+[443/500] 89941a94 candidates=47 q=29 analysis=0.60ms total=2.04ms snapshot=0.94ms rerank=0.92ms sparse=0.13ms lex_merge=0.03ms post=0.10ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[38/500] 86b68151 candidates=49 q=11 analysis=0.58ms total=1.09ms snapshot=0.58ms rerank=0.57ms sparse=0.06ms lex_merge=0.03ms post=0.03ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[53/500] 8e9d538c candidates=50 q=17 analysis=0.60ms total=2.90ms snapshot=2.22ms rerank=2.21ms sparse=0.54ms lex_merge=0.01ms post=0.04ms routing=0.49ms seq_rerank=0.00ms evidence=1.38ms group_build=0.05ms group_sort=0.01ms
+[69/500] 29f2956b_abs candidates=55 q=13 analysis=0.75ms total=3.85ms snapshot=3.31ms rerank=3.30ms sparse=1.02ms lex_merge=0.02ms post=0.06ms routing=0.94ms seq_rerank=0.00ms evidence=1.99ms group_build=0.06ms group_sort=0.02ms
+[108/500] 129d1232 candidates=50 q=19 analysis=0.78ms total=3.71ms snapshot=2.88ms rerank=2.86ms sparse=0.63ms lex_merge=0.02ms post=0.06ms routing=0.55ms seq_rerank=0.00ms evidence=1.87ms group_build=0.07ms group_sort=0.03ms
+[116/500] gpt4_731e37d7 candidates=53 q=23 analysis=0.74ms total=3.36ms snapshot=2.61ms rerank=2.60ms sparse=0.75ms lex_merge=0.01ms post=0.07ms routing=0.67ms seq_rerank=0.10ms evidence=1.47ms group_build=0.06ms group_sort=0.01ms
+[194/500] 0100672e candidates=50 q=14 analysis=0.64ms total=1.96ms snapshot=1.44ms rerank=1.43ms sparse=0.29ms lex_merge=0.01ms post=0.03ms routing=0.24ms seq_rerank=0.00ms evidence=0.90ms group_build=0.04ms group_sort=0.02ms
+[256/500] gpt4_7abb270c candidates=51 q=16 analysis=0.58ms total=1.35ms snapshot=0.70ms rerank=0.69ms sparse=0.10ms lex_merge=0.03ms post=0.07ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[349/500] b29f3365 candidates=55 q=26 analysis=0.61ms total=1.79ms snapshot=0.77ms rerank=0.75ms sparse=0.11ms lex_merge=0.04ms post=0.07ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[382/500] 0f05491a candidates=47 q=24 analysis=0.57ms total=5.44ms snapshot=4.20ms rerank=4.18ms sparse=1.21ms lex_merge=0.04ms post=0.08ms routing=1.09ms seq_rerank=0.00ms evidence=2.45ms group_build=0.08ms group_sort=0.02ms
+[84/500] 46a3abf7 candidates=55 q=22 analysis=0.67ms total=5.04ms snapshot=4.13ms rerank=4.10ms sparse=1.34ms lex_merge=0.05ms post=0.07ms routing=1.22ms seq_rerank=0.00ms evidence=2.27ms group_build=0.06ms group_sort=0.02ms
+[7/500] 6ade9755 candidates=52 q=9 analysis=0.54ms total=0.58ms snapshot=0.30ms rerank=0.29ms sparse=0.03ms lex_merge=0.00ms post=0.02ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.02ms group_sort=0.00ms
+[132/500] gpt4_372c3eed_abs candidates=46 q=30 analysis=0.61ms total=4.74ms snapshot=3.56ms rerank=3.55ms sparse=1.30ms lex_merge=0.02ms post=0.07ms routing=1.20ms seq_rerank=0.00ms evidence=1.87ms group_build=0.05ms group_sort=0.02ms
+[100/500] gpt4_d12ceb0e candidates=47 q=12 analysis=0.65ms total=1.50ms snapshot=0.71ms rerank=0.70ms sparse=0.10ms lex_merge=0.04ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[319/500] f0853d11 candidates=48 q=31 analysis=0.67ms total=4.41ms snapshot=3.36ms rerank=3.35ms sparse=1.12ms lex_merge=0.02ms post=0.10ms routing=1.00ms seq_rerank=0.00ms evidence=1.78ms group_build=0.06ms group_sort=0.01ms
+[444/500] 07741c45 candidates=52 q=10 analysis=0.66ms total=0.86ms snapshot=0.41ms rerank=0.41ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[39/500] 577d4d32 candidates=49 q=16 analysis=0.67ms total=1.44ms snapshot=0.70ms rerank=0.69ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[109/500] 60472f9c candidates=49 q=15 analysis=0.61ms total=3.27ms snapshot=2.53ms rerank=2.51ms sparse=0.58ms lex_merge=0.01ms post=0.07ms routing=0.50ms seq_rerank=0.00ms evidence=1.53ms group_build=0.06ms group_sort=0.02ms
+[350/500] gpt4_2f56ae70 candidates=47 q=14 analysis=0.58ms total=1.01ms snapshot=0.51ms rerank=0.50ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[117/500] edced276 candidates=49 q=23 analysis=0.63ms total=4.62ms snapshot=3.71ms rerank=3.70ms sparse=1.32ms lex_merge=0.02ms post=0.07ms routing=1.24ms seq_rerank=0.00ms evidence=2.03ms group_build=0.06ms group_sort=0.02ms
+[54/500] 311778f1 candidates=55 q=20 analysis=0.77ms total=5.26ms snapshot=4.42ms rerank=4.41ms sparse=2.06ms lex_merge=0.01ms post=0.08ms routing=1.97ms seq_rerank=0.17ms evidence=1.70ms group_build=0.08ms group_sort=0.02ms
+[257/500] gpt4_1e4a8aeb candidates=48 q=28 analysis=0.69ms total=4.50ms snapshot=3.59ms rerank=3.58ms sparse=1.23ms lex_merge=0.01ms post=0.07ms routing=1.15ms seq_rerank=0.00ms evidence=1.99ms group_build=0.06ms group_sort=0.02ms
+[195/500] a96c20ee candidates=54 q=13 analysis=0.57ms total=1.05ms snapshot=0.47ms rerank=0.47ms sparse=0.04ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.03ms group_sort=0.00ms
+[70/500] f4f1d8a4_abs candidates=50 q=12 analysis=0.53ms total=1.49ms snapshot=0.83ms rerank=0.82ms sparse=0.08ms lex_merge=0.04ms post=0.03ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[383/500] 08e075c7 candidates=49 q=14 analysis=0.54ms total=1.03ms snapshot=0.57ms rerank=0.56ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[85/500] 36b9f61e candidates=49 q=22 analysis=0.67ms total=3.66ms snapshot=2.94ms rerank=2.93ms sparse=0.88ms lex_merge=0.01ms post=0.06ms routing=0.80ms seq_rerank=0.00ms evidence=1.74ms group_build=0.06ms group_sort=0.02ms
+[101/500] 00ca467f candidates=49 q=11 analysis=0.52ms total=3.49ms snapshot=2.82ms rerank=2.81ms sparse=0.86ms lex_merge=0.04ms post=0.04ms routing=0.78ms seq_rerank=0.00ms evidence=1.60ms group_build=0.06ms group_sort=0.02ms
+[8/500] 6f9b354f candidates=52 q=12 analysis=0.47ms total=1.10ms snapshot=0.49ms rerank=0.48ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.03ms group_sort=0.00ms
+[133/500] 8a2466db candidates=54 q=18 analysis=0.60ms total=1.32ms snapshot=0.71ms rerank=0.70ms sparse=0.10ms lex_merge=0.01ms post=0.08ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[55/500] c19f7a0b candidates=48 q=13 analysis=0.56ms total=1.30ms snapshot=0.72ms rerank=0.71ms sparse=0.08ms lex_merge=0.04ms post=0.04ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[351/500] 6613b389 candidates=43 q=14 analysis=0.57ms total=2.47ms snapshot=1.94ms rerank=1.93ms sparse=0.46ms lex_merge=0.01ms post=0.04ms routing=0.40ms seq_rerank=0.00ms evidence=1.20ms group_build=0.04ms group_sort=0.02ms
+[40/500] ec81a493 candidates=53 q=21 analysis=0.75ms total=3.74ms snapshot=2.72ms rerank=2.71ms sparse=1.00ms lex_merge=0.04ms post=0.07ms routing=0.89ms seq_rerank=0.00ms evidence=1.36ms group_build=0.06ms group_sort=0.01ms
+[320/500] gpt4_6ed717ea candidates=49 q=26 analysis=0.87ms total=4.49ms snapshot=3.56ms rerank=3.55ms sparse=1.25ms lex_merge=0.03ms post=0.06ms routing=1.16ms seq_rerank=0.00ms evidence=1.90ms group_build=0.06ms group_sort=0.02ms
+[445/500] 7161e7e2 candidates=48 q=44 analysis=0.57ms total=2.67ms snapshot=0.84ms rerank=0.82ms sparse=0.14ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[282/500] gpt4_b0863698 candidates=44 q=15 analysis=0.78ms total=3.68ms snapshot=3.11ms rerank=3.10ms sparse=0.89ms lex_merge=0.01ms post=0.05ms routing=0.83ms seq_rerank=0.00ms evidence=1.94ms group_build=0.05ms group_sort=0.01ms
+[196/500] 92a0aa75 candidates=46 q=15 analysis=0.62ms total=1.36ms snapshot=0.74ms rerank=0.73ms sparse=0.11ms lex_merge=0.02ms post=0.09ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[118/500] 10d9b85a candidates=46 q=19 analysis=0.80ms total=4.23ms snapshot=3.32ms rerank=3.31ms sparse=0.89ms lex_merge=0.02ms post=0.07ms routing=0.79ms seq_rerank=0.00ms evidence=1.95ms group_build=0.07ms group_sort=0.02ms
+[258/500] gpt4_4fc4f797 candidates=46 q=32 analysis=0.79ms total=6.18ms snapshot=4.72ms rerank=4.70ms sparse=2.01ms lex_merge=0.04ms post=0.07ms routing=1.90ms seq_rerank=0.00ms evidence=2.24ms group_build=0.06ms group_sort=0.02ms
+[71/500] 0a995998 candidates=45 q=15 analysis=0.60ms total=3.52ms snapshot=2.93ms rerank=2.92ms sparse=0.78ms lex_merge=0.01ms post=0.06ms routing=0.71ms seq_rerank=0.00ms evidence=1.84ms group_build=0.06ms group_sort=0.02ms
+[384/500] f9e8c073 candidates=54 q=16 analysis=0.70ms total=3.73ms snapshot=3.16ms rerank=3.02ms sparse=0.62ms lex_merge=0.01ms post=0.06ms routing=0.56ms seq_rerank=0.00ms evidence=2.03ms group_build=0.06ms group_sort=0.17ms
+[86/500] 28dc39ac candidates=39 q=15 analysis=0.64ms total=8.08ms snapshot=7.43ms rerank=7.42ms sparse=0.72ms lex_merge=0.02ms post=0.05ms routing=0.65ms seq_rerank=0.00ms evidence=6.25ms group_build=0.07ms group_sort=0.03ms
+[56/500] 4100d0a0 candidates=51 q=3 analysis=0.56ms total=0.80ms snapshot=0.57ms rerank=0.57ms sparse=0.03ms lex_merge=0.00ms post=0.03ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.21ms group_sort=0.00ms
+[328/500] gpt4_4edbafa2 candidates=42 q=20 analysis=0.62ms total=4.01ms snapshot=3.00ms rerank=2.99ms sparse=0.10ms lex_merge=0.02ms post=0.07ms routing=0.00ms seq_rerank=0.15ms evidence=2.21ms group_build=0.08ms group_sort=0.02ms
+[134/500] 06878be2 candidates=50 q=21 analysis=0.55ms total=1.65ms snapshot=0.78ms rerank=0.77ms sparse=0.08ms lex_merge=0.01ms post=0.07ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[9/500] 58ef2f1c candidates=54 q=17 analysis=0.64ms total=1.69ms snapshot=0.76ms rerank=0.75ms sparse=0.10ms lex_merge=0.04ms post=0.05ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[41/500] 15745da0 candidates=50 q=14 analysis=0.65ms total=1.07ms snapshot=0.57ms rerank=0.56ms sparse=0.04ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[119/500] e3038f8c candidates=48 q=12 analysis=0.65ms total=3.81ms snapshot=3.34ms rerank=3.32ms sparse=0.83ms lex_merge=0.02ms post=0.05ms routing=0.76ms seq_rerank=0.00ms evidence=1.96ms group_build=0.08ms group_sort=0.02ms
+[321/500] gpt4_70e84552 candidates=51 q=21 analysis=0.61ms total=2.91ms snapshot=2.22ms rerank=2.21ms sparse=0.55ms lex_merge=0.01ms post=0.05ms routing=0.49ms seq_rerank=0.00ms evidence=1.37ms group_build=0.04ms group_sort=0.01ms
+[352/500] gpt4_78cf46a3 candidates=53 q=32 analysis=0.65ms total=5.22ms snapshot=3.96ms rerank=3.94ms sparse=1.25ms lex_merge=0.04ms post=0.09ms routing=1.12ms seq_rerank=0.00ms evidence=2.16ms group_build=0.06ms group_sort=0.03ms
+[446/500] c4f10528 candidates=44 q=43 analysis=0.77ms total=2.47ms snapshot=0.85ms rerank=0.84ms sparse=0.14ms lex_merge=0.04ms post=0.10ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[197/500] 3fe836c9 candidates=46 q=27 analysis=0.65ms total=4.92ms snapshot=4.18ms rerank=4.16ms sparse=1.36ms lex_merge=0.05ms post=0.07ms routing=1.23ms seq_rerank=0.00ms evidence=2.24ms group_build=0.07ms group_sort=0.02ms
+[283/500] gpt4_68e94287 candidates=52 q=24 analysis=0.68ms total=5.03ms snapshot=3.95ms rerank=3.93ms sparse=1.15ms lex_merge=0.03ms post=0.15ms routing=0.98ms seq_rerank=0.00ms evidence=2.34ms group_build=0.06ms group_sort=0.03ms
+[72/500] 6d550036 candidates=53 q=12 analysis=0.60ms total=2.96ms snapshot=2.30ms rerank=2.29ms sparse=0.53ms lex_merge=0.01ms post=0.04ms routing=0.47ms seq_rerank=0.00ms evidence=1.48ms group_build=0.06ms group_sort=0.02ms
+[259/500] 4dfccbf7 candidates=51 q=37 analysis=0.70ms total=5.87ms snapshot=4.49ms rerank=4.46ms sparse=1.55ms lex_merge=0.03ms post=0.10ms routing=1.42ms seq_rerank=0.15ms evidence=2.24ms group_build=0.09ms group_sort=0.02ms
+[385/500] 41698283 candidates=46 q=13 analysis=0.90ms total=1.19ms snapshot=0.58ms rerank=0.56ms sparse=0.06ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[57/500] 29f2956b candidates=51 q=13 analysis=0.71ms total=4.40ms snapshot=3.76ms rerank=3.75ms sparse=1.17ms lex_merge=0.03ms post=0.07ms routing=1.07ms seq_rerank=0.00ms evidence=2.18ms group_build=0.09ms group_sort=0.02ms
+[87/500] gpt4_2f8be40d candidates=49 q=11 analysis=0.64ms total=3.79ms snapshot=3.40ms rerank=3.38ms sparse=0.73ms lex_merge=0.01ms post=0.06ms routing=0.66ms seq_rerank=0.16ms evidence=2.16ms group_build=0.07ms group_sort=0.02ms
+[10/500] f8c5f88b candidates=51 q=13 analysis=0.54ms total=1.90ms snapshot=0.87ms rerank=0.86ms sparse=0.09ms lex_merge=0.04ms post=0.05ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[329/500] c8090214 candidates=49 q=23 analysis=0.57ms total=4.09ms snapshot=3.15ms rerank=3.13ms sparse=1.00ms lex_merge=0.01ms post=0.08ms routing=0.92ms seq_rerank=0.00ms evidence=1.78ms group_build=0.06ms group_sort=0.02ms
+[135/500] 75832dbd candidates=51 q=18 analysis=0.61ms total=1.35ms snapshot=0.66ms rerank=0.64ms sparse=0.08ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[120/500] 2b8f3739 candidates=48 q=19 analysis=0.73ms total=3.35ms snapshot=2.72ms rerank=2.70ms sparse=0.66ms lex_merge=0.01ms post=0.06ms routing=0.59ms seq_rerank=0.00ms evidence=1.73ms group_build=0.06ms group_sort=0.02ms
+[42/500] e01b8e2f candidates=58 q=11 analysis=0.57ms total=1.01ms snapshot=0.47ms rerank=0.46ms sparse=0.06ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.08ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[322/500] a3838d2b candidates=48 q=21 analysis=0.60ms total=3.94ms snapshot=3.01ms rerank=2.99ms sparse=0.86ms lex_merge=0.02ms post=0.08ms routing=0.77ms seq_rerank=0.00ms evidence=1.79ms group_build=0.05ms group_sort=0.02ms
+[353/500] gpt4_0a05b494 candidates=46 q=26 analysis=0.64ms total=1.95ms snapshot=0.83ms rerank=0.82ms sparse=0.11ms lex_merge=0.04ms post=0.07ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[198/500] 1c549ce4 candidates=48 q=20 analysis=0.67ms total=5.14ms snapshot=4.14ms rerank=4.12ms sparse=1.37ms lex_merge=0.05ms post=0.09ms routing=1.23ms seq_rerank=0.00ms evidence=2.26ms group_build=0.06ms group_sort=0.03ms
+[447/500] 89527b6b candidates=47 q=36 analysis=0.65ms total=2.15ms snapshot=0.84ms rerank=0.82ms sparse=0.11ms lex_merge=0.03ms post=0.08ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[284/500] gpt4_e414231e candidates=47 q=32 analysis=0.61ms total=6.20ms snapshot=4.48ms rerank=4.47ms sparse=1.88ms lex_merge=0.04ms post=0.08ms routing=1.76ms seq_rerank=0.00ms evidence=2.09ms group_build=0.06ms group_sort=0.02ms
+[73/500] gpt4_59c863d7 candidates=48 q=14 analysis=0.58ms total=3.65ms snapshot=3.07ms rerank=3.05ms sparse=0.66ms lex_merge=0.02ms post=0.05ms routing=0.59ms seq_rerank=0.00ms evidence=2.01ms group_build=0.07ms group_sort=0.03ms
+[58/500] 1faac195 candidates=46 q=8 analysis=0.56ms total=1.12ms snapshot=0.69ms rerank=0.68ms sparse=0.06ms lex_merge=0.03ms post=0.03ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[386/500] 2698e78f candidates=53 q=12 analysis=0.55ms total=0.92ms snapshot=0.45ms rerank=0.45ms sparse=0.04ms lex_merge=0.00ms post=0.03ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.03ms group_sort=0.00ms
+[11/500] 5d3d2817 candidates=55 q=9 analysis=0.58ms total=0.91ms snapshot=0.50ms rerank=0.49ms sparse=0.07ms lex_merge=0.00ms post=0.07ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[88/500] 2e6d26dc candidates=57 q=22 analysis=0.84ms total=4.10ms snapshot=3.35ms rerank=3.34ms sparse=0.93ms lex_merge=0.01ms post=0.07ms routing=0.85ms seq_rerank=0.00ms evidence=1.97ms group_build=0.07ms group_sort=0.03ms
+[136/500] 0edc2aef candidates=49 q=14 analysis=0.58ms total=1.40ms snapshot=0.67ms rerank=0.66ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[260/500] gpt4_61e13b3c candidates=50 q=47 analysis=0.64ms total=6.95ms snapshot=5.14ms rerank=5.12ms sparse=1.86ms lex_merge=0.04ms post=0.13ms routing=1.68ms seq_rerank=0.00ms evidence=2.66ms group_build=0.06ms group_sort=0.03ms
+[330/500] gpt4_483dd43c candidates=54 q=20 analysis=0.63ms total=3.37ms snapshot=2.73ms rerank=2.72ms sparse=0.65ms lex_merge=0.01ms post=0.06ms routing=0.58ms seq_rerank=0.00ms evidence=1.68ms group_build=0.07ms group_sort=0.02ms
+[121/500] 1a8a66a6 candidates=51 q=10 analysis=0.73ms total=2.25ms snapshot=1.76ms rerank=1.75ms sparse=0.44ms lex_merge=0.01ms post=0.04ms routing=0.38ms seq_rerank=0.00ms evidence=1.04ms group_build=0.05ms group_sort=0.02ms
+[323/500] gpt4_93159ced candidates=43 q=20 analysis=0.65ms total=4.22ms snapshot=3.35ms rerank=3.34ms sparse=0.84ms lex_merge=0.03ms post=0.10ms routing=0.70ms seq_rerank=0.13ms evidence=1.86ms group_build=0.09ms group_sort=0.02ms
+[43/500] bc8a6e93 candidates=48 q=13 analysis=0.54ms total=1.48ms snapshot=0.76ms rerank=0.75ms sparse=0.09ms lex_merge=0.04ms post=0.04ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[354/500] gpt4_1a1dc16d candidates=49 q=20 analysis=0.66ms total=4.01ms snapshot=3.23ms rerank=3.22ms sparse=0.92ms lex_merge=0.02ms post=0.07ms routing=0.83ms seq_rerank=0.00ms evidence=1.87ms group_build=0.07ms group_sort=0.02ms
+[199/500] 6c49646a candidates=47 q=17 analysis=0.65ms total=4.44ms snapshot=3.62ms rerank=3.60ms sparse=0.84ms lex_merge=0.02ms post=0.07ms routing=0.75ms seq_rerank=0.00ms evidence=2.34ms group_build=0.07ms group_sort=0.03ms
+[448/500] e9327a54 candidates=53 q=39 analysis=0.82ms total=2.66ms snapshot=0.92ms rerank=0.90ms sparse=0.13ms lex_merge=0.04ms post=0.09ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[285/500] gpt4_7ca326fa candidates=56 q=23 analysis=0.71ms total=2.58ms snapshot=0.45ms rerank=0.45ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.03ms group_sort=0.00ms
+[59/500] faba32e5 candidates=50 q=21 analysis=0.76ms total=1.84ms snapshot=0.87ms rerank=0.86ms sparse=0.15ms lex_merge=0.02ms post=0.13ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[387/500] b6019101 candidates=57 q=17 analysis=0.60ms total=4.97ms snapshot=4.18ms rerank=4.17ms sparse=1.24ms lex_merge=0.03ms post=0.06ms routing=1.14ms seq_rerank=0.19ms evidence=2.37ms group_build=0.08ms group_sort=0.02ms
+[74/500] b5ef892d candidates=56 q=21 analysis=0.70ms total=5.51ms snapshot=4.64ms rerank=4.62ms sparse=1.42ms lex_merge=0.03ms post=0.08ms routing=1.31ms seq_rerank=0.17ms evidence=2.57ms group_build=0.08ms group_sort=0.03ms
+[12/500] 7527f7e2 candidates=46 q=10 analysis=0.68ms total=1.85ms snapshot=1.35ms rerank=1.34ms sparse=0.31ms lex_merge=0.01ms post=0.04ms routing=0.26ms seq_rerank=0.00ms evidence=0.75ms group_build=0.03ms group_sort=0.01ms
+[89/500] gpt4_15e38248 candidates=48 q=24 analysis=0.61ms total=5.24ms snapshot=4.30ms rerank=4.29ms sparse=1.52ms lex_merge=0.02ms post=0.06ms routing=1.43ms seq_rerank=0.00ms evidence=2.30ms group_build=0.06ms group_sort=0.02ms
+[137/500] 35a27287 candidates=54 q=19 analysis=0.58ms total=1.13ms snapshot=0.55ms rerank=0.54ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.09ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[261/500] gpt4_45189cb4 candidates=49 q=13 analysis=0.58ms total=1.26ms snapshot=0.70ms rerank=0.68ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[331/500] e4e14d04 candidates=46 q=22 analysis=0.68ms total=3.39ms snapshot=2.57ms rerank=2.55ms sparse=0.08ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=1.94ms group_build=0.07ms group_sort=0.02ms
+[324/500] gpt4_2d58bcd6 candidates=48 q=24 analysis=0.55ms total=3.80ms snapshot=2.90ms rerank=2.89ms sparse=0.79ms lex_merge=0.03ms post=0.06ms routing=0.70ms seq_rerank=0.00ms evidence=1.72ms group_build=0.07ms group_sort=0.02ms
+[44/500] ccb36322 candidates=47 q=19 analysis=0.60ms total=1.21ms snapshot=0.63ms rerank=0.61ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[122/500] c2ac3c61 candidates=54 q=13 analysis=0.55ms total=3.13ms snapshot=2.41ms rerank=2.39ms sparse=0.47ms lex_merge=0.01ms post=0.05ms routing=0.40ms seq_rerank=0.00ms evidence=1.59ms group_build=0.06ms group_sort=0.03ms
+[355/500] gpt4_2f584639 candidates=49 q=24 analysis=0.62ms total=4.36ms snapshot=3.37ms rerank=3.35ms sparse=0.96ms lex_merge=0.04ms post=0.05ms routing=0.87ms seq_rerank=0.00ms evidence=1.94ms group_build=0.07ms group_sort=0.02ms
+[200/500] 1192316e candidates=43 q=19 analysis=0.68ms total=4.56ms snapshot=3.73ms rerank=3.71ms sparse=1.12ms lex_merge=0.04ms post=0.08ms routing=1.00ms seq_rerank=0.00ms evidence=2.20ms group_build=0.06ms group_sort=0.02ms
+[449/500] 4c36ccef candidates=52 q=24 analysis=0.66ms total=1.88ms snapshot=0.88ms rerank=0.86ms sparse=0.12ms lex_merge=0.04ms post=0.08ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[388/500] 45dc21b6 candidates=50 q=14 analysis=0.64ms total=3.62ms snapshot=3.04ms rerank=3.03ms sparse=0.80ms lex_merge=0.04ms post=0.04ms routing=0.72ms seq_rerank=0.00ms evidence=1.91ms group_build=0.06ms group_sort=0.02ms
+[286/500] gpt4_7bc6cf22 candidates=52 q=26 analysis=0.68ms total=5.42ms snapshot=4.30ms rerank=4.29ms sparse=1.50ms lex_merge=0.04ms post=0.08ms routing=1.38ms seq_rerank=0.00ms evidence=2.31ms group_build=0.07ms group_sort=0.02ms
+[75/500] e831120c candidates=52 q=38 analysis=0.70ms total=5.81ms snapshot=4.04ms rerank=4.03ms sparse=1.40ms lex_merge=0.02ms post=0.10ms routing=1.27ms seq_rerank=0.00ms evidence=2.09ms group_build=0.06ms group_sort=0.02ms
+[60/500] f4f1d8a4 candidates=58 q=18 analysis=1.36ms total=2.07ms snapshot=0.76ms rerank=0.75ms sparse=0.10ms lex_merge=0.05ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[13/500] c960da58 candidates=48 q=8 analysis=5.32ms total=1.56ms snapshot=1.10ms rerank=1.10ms sparse=0.22ms lex_merge=0.00ms post=0.03ms routing=0.19ms seq_rerank=0.00ms evidence=0.67ms group_build=0.04ms group_sort=0.01ms
+[138/500] 32260d93 candidates=47 q=14 analysis=0.73ms total=1.25ms snapshot=0.79ms rerank=0.78ms sparse=0.04ms lex_merge=0.00ms post=0.04ms routing=0.00ms seq_rerank=0.32ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[90/500] 88432d0a candidates=46 q=18 analysis=0.63ms total=4.15ms snapshot=3.57ms rerank=3.56ms sparse=1.14ms lex_merge=0.02ms post=0.05ms routing=1.07ms seq_rerank=0.15ms evidence=1.95ms group_build=0.10ms group_sort=0.02ms
+[262/500] 2ebe6c90 candidates=47 q=20 analysis=0.62ms total=3.52ms snapshot=2.87ms rerank=2.86ms sparse=0.77ms lex_merge=0.01ms post=0.04ms routing=0.71ms seq_rerank=0.00ms evidence=1.82ms group_build=0.06ms group_sort=0.02ms
+[332/500] c9f37c46 candidates=53 q=37 analysis=0.87ms total=4.81ms snapshot=3.23ms rerank=3.21ms sparse=0.13ms lex_merge=0.03ms post=0.10ms routing=0.00ms seq_rerank=0.13ms evidence=2.32ms group_build=0.08ms group_sort=0.02ms
+[123/500] bf659f65 candidates=56 q=14 analysis=0.60ms total=2.96ms snapshot=2.30ms rerank=2.29ms sparse=0.46ms lex_merge=0.01ms post=0.05ms routing=0.40ms seq_rerank=0.00ms evidence=1.51ms group_build=0.06ms group_sort=0.02ms
+[325/500] gpt4_65aabe59 candidates=45 q=26 analysis=0.58ms total=4.57ms snapshot=3.51ms rerank=3.49ms sparse=0.87ms lex_merge=0.03ms post=0.08ms routing=0.76ms seq_rerank=0.00ms evidence=2.09ms group_build=0.06ms group_sort=0.02ms
+[45/500] 001be529 candidates=55 q=16 analysis=0.57ms total=1.45ms snapshot=0.67ms rerank=0.66ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[201/500] 0ea62687 candidates=47 q=25 analysis=0.62ms total=5.39ms snapshot=4.22ms rerank=4.21ms sparse=1.89ms lex_merge=0.05ms post=0.08ms routing=1.76ms seq_rerank=0.00ms evidence=1.87ms group_build=0.09ms group_sort=0.02ms
+[356/500] gpt4_213fd887 candidates=47 q=33 analysis=0.67ms total=5.91ms snapshot=4.22ms rerank=4.20ms sparse=1.42ms lex_merge=0.05ms post=0.08ms routing=1.29ms seq_rerank=0.00ms evidence=2.28ms group_build=0.07ms group_sort=0.02ms
+[287/500] 2ebe6c92 candidates=51 q=12 analysis=0.77ms total=1.18ms snapshot=0.57ms rerank=0.56ms sparse=0.06ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[14/500] 3b6f954b candidates=52 q=13 analysis=0.60ms total=1.36ms snapshot=0.70ms rerank=0.70ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[450/500] 6ae235be candidates=48 q=43 analysis=0.68ms total=2.82ms snapshot=1.03ms rerank=1.01ms sparse=0.16ms lex_merge=0.05ms post=0.11ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[76/500] 3a704032 candidates=51 q=13 analysis=0.68ms total=3.13ms snapshot=2.73ms rerank=2.72ms sparse=0.66ms lex_merge=0.01ms post=0.05ms routing=0.60ms seq_rerank=0.15ms evidence=1.65ms group_build=0.07ms group_sort=0.02ms
+[61/500] c14c00dd candidates=54 q=8 analysis=0.49ms total=1.09ms snapshot=0.66ms rerank=0.65ms sparse=0.05ms lex_merge=0.02ms post=0.03ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[389/500] 5a4f22c0 candidates=50 q=19 analysis=0.61ms total=1.72ms snapshot=0.74ms rerank=0.73ms sparse=0.09ms lex_merge=0.02ms post=0.07ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[139/500] 195a1a1b candidates=48 q=13 analysis=0.57ms total=1.05ms snapshot=0.63ms rerank=0.62ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[91/500] 80ec1f4f candidates=48 q=17 analysis=0.67ms total=3.92ms snapshot=3.10ms rerank=3.09ms sparse=0.80ms lex_merge=0.02ms post=0.07ms routing=0.72ms seq_rerank=0.00ms evidence=1.94ms group_build=0.05ms group_sort=0.02ms
+[263/500] gpt4_e061b84f candidates=50 q=26 analysis=0.77ms total=4.40ms snapshot=3.52ms rerank=3.51ms sparse=1.06ms lex_merge=0.01ms post=0.07ms routing=0.97ms seq_rerank=0.11ms evidence=1.99ms group_build=0.06ms group_sort=0.02ms
+[333/500] gpt4_2c50253f candidates=60 q=10 analysis=0.72ms total=1.26ms snapshot=0.71ms rerank=0.70ms sparse=0.07ms lex_merge=0.03ms post=0.04ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[124/500] gpt4_372c3eed candidates=46 q=30 analysis=0.65ms total=5.39ms snapshot=3.92ms rerank=3.91ms sparse=1.43ms lex_merge=0.05ms post=0.10ms routing=1.29ms seq_rerank=0.00ms evidence=1.96ms group_build=0.06ms group_sort=0.03ms
+[326/500] 982b5123 candidates=48 q=19 analysis=0.62ms total=5.22ms snapshot=4.34ms rerank=4.33ms sparse=1.64ms lex_merge=0.04ms post=0.05ms routing=1.55ms seq_rerank=0.00ms evidence=2.25ms group_build=0.08ms group_sort=0.02ms
+[46/500] b320f3f8 candidates=50 q=18 analysis=0.67ms total=1.39ms snapshot=0.66ms rerank=0.65ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[202/500] 67e0d0f2 candidates=53 q=14 analysis=0.67ms total=3.63ms snapshot=2.90ms rerank=2.88ms sparse=0.67ms lex_merge=0.01ms post=0.06ms routing=0.60ms seq_rerank=0.00ms evidence=1.76ms group_build=0.06ms group_sort=0.03ms
+[357/500] gpt4_5438fa52 candidates=53 q=22 analysis=0.61ms total=4.19ms snapshot=3.32ms rerank=3.30ms sparse=0.84ms lex_merge=0.01ms post=0.08ms routing=0.75ms seq_rerank=0.00ms evidence=2.02ms group_build=0.06ms group_sort=0.02ms
+[15/500] 726462e0 candidates=48 q=20 analysis=0.61ms total=1.29ms snapshot=0.62ms rerank=0.61ms sparse=0.07ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[288/500] gpt4_e061b84g candidates=59 q=21 analysis=0.64ms total=4.18ms snapshot=3.19ms rerank=3.18ms sparse=0.14ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.16ms evidence=2.35ms group_build=0.09ms group_sort=0.03ms
+[390/500] 6071bd76 candidates=48 q=29 analysis=0.72ms total=1.65ms snapshot=0.66ms rerank=0.65ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[62/500] 36580ce8 candidates=61 q=17 analysis=0.66ms total=1.31ms snapshot=0.61ms rerank=0.60ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.08ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[77/500] gpt4_d84a3211 candidates=51 q=26 analysis=0.66ms total=4.83ms snapshot=3.69ms rerank=3.67ms sparse=1.41ms lex_merge=0.05ms post=0.11ms routing=1.25ms seq_rerank=0.00ms evidence=1.76ms group_build=0.07ms group_sort=0.02ms
+[140/500] afdc33df candidates=46 q=20 analysis=0.81ms total=1.37ms snapshot=0.62ms rerank=0.61ms sparse=0.07ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[451/500] 7e00a6cb candidates=66 q=44 analysis=0.63ms total=2.28ms snapshot=0.87ms rerank=0.85ms sparse=0.14ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[92/500] d23cf73b candidates=55 q=26 analysis=0.68ms total=5.67ms snapshot=4.47ms rerank=4.45ms sparse=2.00ms lex_merge=0.02ms post=0.10ms routing=1.87ms seq_rerank=0.00ms evidence=1.83ms group_build=0.05ms group_sort=0.02ms
+[264/500] 370a8ff4 candidates=51 q=25 analysis=0.69ms total=6.42ms snapshot=4.30ms rerank=4.28ms sparse=1.69ms lex_merge=0.01ms post=0.09ms routing=1.58ms seq_rerank=0.13ms evidence=2.02ms group_build=0.07ms group_sort=0.03ms
+[203/500] bb7c3b45 candidates=47 q=16 analysis=0.62ms total=4.18ms snapshot=3.27ms rerank=3.26ms sparse=0.96ms lex_merge=0.06ms post=0.07ms routing=0.82ms seq_rerank=0.00ms evidence=1.80ms group_build=0.11ms group_sort=0.02ms
+[157/500] a89d7624 candidates=51 q=17 analysis=0.63ms total=2.01ms snapshot=0.96ms rerank=0.94ms sparse=0.16ms lex_merge=0.10ms post=0.07ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[334/500] dcfa8644 candidates=47 q=38 analysis=0.66ms total=9.62ms snapshot=8.09ms rerank=8.07ms sparse=1.44ms lex_merge=0.02ms post=0.08ms routing=1.34ms seq_rerank=0.14ms evidence=1.88ms group_build=0.06ms group_sort=0.02ms
+[327/500] b9cfe692 candidates=51 q=31 analysis=0.82ms total=4.94ms snapshot=3.72ms rerank=3.70ms sparse=1.03ms lex_merge=0.02ms post=0.08ms routing=0.93ms seq_rerank=0.15ms evidence=2.00ms group_build=0.08ms group_sort=0.03ms
+[125/500] gpt4_2f91af09 candidates=58 q=46 analysis=0.83ms total=7.46ms snapshot=5.81ms rerank=5.77ms sparse=2.17ms lex_merge=0.03ms post=0.18ms routing=1.95ms seq_rerank=0.19ms evidence=2.75ms group_build=0.08ms group_sort=0.03ms
+[16/500] 94f70d80 candidates=51 q=15 analysis=0.53ms total=1.40ms snapshot=0.73ms rerank=0.72ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[289/500] 71017277 candidates=53 q=14 analysis=0.57ms total=0.87ms snapshot=0.36ms rerank=0.36ms sparse=0.03ms lex_merge=0.00ms post=0.02ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.02ms group_sort=0.00ms
+[358/500] gpt4_c27434e8 candidates=52 q=31 analysis=0.61ms total=4.23ms snapshot=3.11ms rerank=3.10ms sparse=0.76ms lex_merge=0.02ms post=0.07ms routing=0.67ms seq_rerank=0.00ms evidence=1.87ms group_build=0.06ms group_sort=0.02ms
+[391/500] e493bb7c candidates=56 q=16 analysis=0.63ms total=1.20ms snapshot=0.52ms rerank=0.51ms sparse=0.05ms lex_merge=0.00ms post=0.04ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[407/500] 0e4e4c46 candidates=53 q=14 analysis=0.68ms total=1.36ms snapshot=0.63ms rerank=0.63ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[266/500] gpt4_4ef30696 candidates=52 q=36 analysis=0.73ms total=5.89ms snapshot=4.42ms rerank=4.40ms sparse=1.81ms lex_merge=0.03ms post=0.10ms routing=1.68ms seq_rerank=0.00ms evidence=2.11ms group_build=0.06ms group_sort=0.02ms
+[141/500] caf03d32 candidates=55 q=25 analysis=0.82ms total=2.04ms snapshot=0.78ms rerank=0.77ms sparse=0.13ms lex_merge=0.04ms post=0.09ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[452/500] 1903aded candidates=53 q=37 analysis=0.62ms total=2.56ms snapshot=1.00ms rerank=0.98ms sparse=0.17ms lex_merge=0.04ms post=0.12ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[93/500] gpt4_7fce9456 candidates=46 q=22 analysis=0.70ms total=4.45ms snapshot=3.57ms rerank=3.55ms sparse=0.86ms lex_merge=0.02ms post=0.06ms routing=0.79ms seq_rerank=0.00ms evidence=2.35ms group_build=0.06ms group_sort=0.02ms
+[204/500] ba358f49 candidates=42 q=17 analysis=0.61ms total=3.85ms snapshot=3.07ms rerank=3.06ms sparse=0.64ms lex_merge=0.02ms post=0.05ms routing=0.57ms seq_rerank=0.21ms evidence=1.92ms group_build=0.06ms group_sort=0.02ms
+[265/500] gpt4_d6585ce8 candidates=55 q=28 analysis=0.70ms total=5.38ms snapshot=4.13ms rerank=4.12ms sparse=1.27ms lex_merge=0.03ms post=0.10ms routing=1.13ms seq_rerank=0.14ms evidence=2.10ms group_build=0.07ms group_sort=0.03ms
+[290/500] b46e15ee candidates=44 q=15 analysis=0.57ms total=1.15ms snapshot=0.55ms rerank=0.54ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[17/500] 66f24dbb candidates=55 q=14 analysis=0.56ms total=1.70ms snapshot=0.76ms rerank=0.74ms sparse=0.12ms lex_merge=0.06ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[336/500] gpt4_9a159967 candidates=47 q=14 analysis=0.70ms total=1.29ms snapshot=0.74ms rerank=0.73ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[158/500] b0479f84 candidates=50 q=19 analysis=0.65ms total=1.84ms snapshot=0.82ms rerank=0.80ms sparse=0.13ms lex_merge=0.04ms post=0.09ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[335/500] gpt4_b4a80587 candidates=47 q=30 analysis=0.62ms total=5.37ms snapshot=4.08ms rerank=4.06ms sparse=1.31ms lex_merge=0.04ms post=0.11ms routing=1.16ms seq_rerank=0.00ms evidence=2.17ms group_build=0.07ms group_sort=0.02ms
+[359/500] gpt4_fe651585 candidates=50 q=13 analysis=0.55ms total=0.72ms snapshot=0.28ms rerank=0.28ms sparse=0.02ms lex_merge=0.00ms post=0.02ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.01ms group_sort=0.00ms
+[469/500] 8752c811 candidates=58 q=34 analysis=0.70ms total=3.24ms snapshot=0.97ms rerank=0.94ms sparse=0.16ms lex_merge=0.03ms post=0.12ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[408/500] 4b24c848 candidates=52 q=12 analysis=0.69ms total=2.71ms snapshot=2.17ms rerank=2.15ms sparse=0.79ms lex_merge=0.02ms post=0.03ms routing=0.74ms seq_rerank=0.00ms evidence=1.03ms group_build=0.06ms group_sort=0.02ms
+[392/500] 618f13b2 candidates=52 q=34 analysis=0.69ms total=6.28ms snapshot=4.29ms rerank=4.27ms sparse=1.63ms lex_merge=0.05ms post=0.15ms routing=1.43ms seq_rerank=0.00ms evidence=1.94ms group_build=0.06ms group_sort=0.02ms
+[267/500] gpt4_ec93e27f candidates=48 q=14 analysis=0.66ms total=4.68ms snapshot=3.76ms rerank=3.74ms sparse=1.23ms lex_merge=0.06ms post=0.04ms routing=1.13ms seq_rerank=0.00ms evidence=2.00ms group_build=0.07ms group_sort=0.02ms
+[142/500] 54026fce candidates=52 q=19 analysis=0.66ms total=4.51ms snapshot=2.04ms rerank=2.02ms sparse=0.15ms lex_merge=0.05ms post=0.10ms routing=0.00ms seq_rerank=0.21ms evidence=0.00ms group_build=0.26ms group_sort=0.00ms
+[24/500] 75499fd8 candidates=52 q=6 analysis=1.61ms total=0.81ms snapshot=0.50ms rerank=0.50ms sparse=0.04ms lex_merge=0.02ms post=0.02ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[453/500] ceb54acb candidates=52 q=49 analysis=0.93ms total=2.46ms snapshot=0.95ms rerank=0.93ms sparse=0.14ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[291/500] gpt4_d6585ce9 candidates=43 q=15 analysis=0.73ms total=1.28ms snapshot=0.69ms rerank=0.68ms sparse=0.07ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[205/500] 61f8c8f8 candidates=50 q=22 analysis=0.65ms total=6.10ms snapshot=4.72ms rerank=4.70ms sparse=1.40ms lex_merge=0.03ms post=0.10ms routing=1.26ms seq_rerank=0.00ms evidence=2.54ms group_build=0.10ms group_sort=0.22ms
+[18/500] ad7109d1 candidates=49 q=13 analysis=0.54ms total=1.35ms snapshot=0.58ms rerank=0.57ms sparse=0.06ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[337/500] cc6d1ec1 candidates=46 q=19 analysis=0.68ms total=3.55ms snapshot=2.74ms rerank=2.72ms sparse=0.10ms lex_merge=0.02ms post=0.08ms routing=0.00ms seq_rerank=0.13ms evidence=2.00ms group_build=0.09ms group_sort=0.03ms
+[340/500] gpt4_7de946e7 candidates=55 q=29 analysis=0.57ms total=5.46ms snapshot=4.14ms rerank=4.12ms sparse=1.19ms lex_merge=0.04ms post=0.09ms routing=1.06ms seq_rerank=0.00ms evidence=2.40ms group_build=0.07ms group_sort=0.03ms
+[159/500] 1d4e3b97 candidates=46 q=31 analysis=0.68ms total=1.87ms snapshot=0.78ms rerank=0.77ms sparse=0.09ms lex_merge=0.02ms post=0.07ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[422/500] 7401057b candidates=50 q=23 analysis=0.64ms total=5.40ms snapshot=4.27ms rerank=4.25ms sparse=1.57ms lex_merge=0.05ms post=0.08ms routing=1.44ms seq_rerank=0.00ms evidence=2.24ms group_build=0.07ms group_sort=0.02ms
+[360/500] 8c18457d candidates=43 q=39 analysis=0.75ms total=6.88ms snapshot=5.06ms rerank=5.05ms sparse=1.88ms lex_merge=0.04ms post=0.12ms routing=1.72ms seq_rerank=0.00ms evidence=2.49ms group_build=0.07ms group_sort=0.03ms
+[470/500] 3249768e candidates=49 q=55 analysis=0.83ms total=3.11ms snapshot=1.01ms rerank=0.99ms sparse=0.17ms lex_merge=0.04ms post=0.13ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[409/500] 7e974930 candidates=47 q=19 analysis=0.69ms total=3.90ms snapshot=2.53ms rerank=2.51ms sparse=0.54ms lex_merge=0.01ms post=0.07ms routing=0.45ms seq_rerank=0.00ms evidence=1.61ms group_build=0.06ms group_sort=0.03ms
+[393/500] 72e3ee87 candidates=55 q=20 analysis=0.66ms total=5.71ms snapshot=4.53ms rerank=4.51ms sparse=1.46ms lex_merge=0.01ms post=0.11ms routing=1.34ms seq_rerank=0.00ms evidence=2.25ms group_build=0.17ms group_sort=0.03ms
+[143/500] 06f04340 candidates=56 q=17 analysis=0.62ms total=1.30ms snapshot=0.64ms rerank=0.63ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[25/500] 21436231 candidates=52 q=21 analysis=0.64ms total=4.85ms snapshot=3.62ms rerank=3.61ms sparse=1.08ms lex_merge=0.04ms post=0.07ms routing=0.96ms seq_rerank=0.00ms evidence=1.96ms group_build=0.07ms group_sort=0.02ms
+[268/500] 6e984301 candidates=56 q=25 analysis=0.63ms total=5.39ms snapshot=4.36ms rerank=4.33ms sparse=1.72ms lex_merge=0.04ms post=0.12ms routing=1.57ms seq_rerank=0.16ms evidence=2.02ms group_build=0.08ms group_sort=0.02ms
+[292/500] gpt4_1e4a8aec candidates=54 q=15 analysis=0.89ms total=1.11ms snapshot=0.56ms rerank=0.55ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[206/500] 60159905 candidates=48 q=19 analysis=1.39ms total=4.66ms snapshot=3.77ms rerank=3.75ms sparse=1.02ms lex_merge=0.02ms post=0.07ms routing=0.93ms seq_rerank=0.10ms evidence=2.32ms group_build=0.07ms group_sort=0.02ms
+[341/500] d01c6aa8 candidates=45 q=15 analysis=0.62ms total=1.18ms snapshot=0.59ms rerank=0.58ms sparse=0.10ms lex_merge=0.03ms post=0.07ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[19/500] af8d2e46 candidates=54 q=20 analysis=0.72ms total=6.37ms snapshot=5.32ms rerank=5.31ms sparse=1.63ms lex_merge=0.08ms post=0.07ms routing=1.48ms seq_rerank=0.00ms evidence=3.25ms group_build=0.07ms group_sort=0.02ms
+[338/500] gpt4_8c8961ae candidates=55 q=23 analysis=0.64ms total=6.25ms snapshot=4.80ms rerank=4.78ms sparse=0.98ms lex_merge=0.01ms post=0.10ms routing=0.86ms seq_rerank=0.00ms evidence=3.21ms group_build=0.05ms group_sort=0.04ms
+[160/500] 07b6f563 candidates=53 q=13 analysis=0.62ms total=1.68ms snapshot=1.05ms rerank=1.02ms sparse=0.12ms lex_merge=0.01ms post=0.11ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[454/500] f523d9fe candidates=51 q=57 analysis=0.74ms total=2.75ms snapshot=0.90ms rerank=0.88ms sparse=0.15ms lex_merge=0.02ms post=0.13ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[423/500] cf22b7bf candidates=59 q=16 analysis=0.70ms total=8.89ms snapshot=7.66ms rerank=7.64ms sparse=1.45ms lex_merge=0.02ms post=0.09ms routing=1.34ms seq_rerank=0.00ms evidence=4.61ms group_build=0.14ms group_sort=0.03ms
+[361/500] gpt4_70e84552_abs candidates=52 q=22 analysis=0.61ms total=4.03ms snapshot=3.08ms rerank=3.07ms sparse=0.83ms lex_merge=0.02ms post=0.08ms routing=0.74ms seq_rerank=0.00ms evidence=1.83ms group_build=0.06ms group_sort=0.02ms
+[394/500] c4ea545c candidates=48 q=9 analysis=0.56ms total=0.75ms snapshot=0.50ms rerank=0.49ms sparse=0.04ms lex_merge=0.00ms post=0.03ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[410/500] 603deb26 candidates=54 q=28 analysis=0.74ms total=5.66ms snapshot=4.59ms rerank=4.56ms sparse=1.62ms lex_merge=0.05ms post=0.08ms routing=1.50ms seq_rerank=0.00ms evidence=2.37ms group_build=0.08ms group_sort=0.04ms
+[269/500] 8077ef71 candidates=49 q=14 analysis=0.68ms total=4.18ms snapshot=3.56ms rerank=3.54ms sparse=0.99ms lex_merge=0.02ms post=0.06ms routing=0.91ms seq_rerank=0.00ms evidence=2.17ms group_build=0.08ms group_sort=0.02ms
+[293/500] gpt4_f420262d candidates=44 q=16 analysis=0.62ms total=1.33ms snapshot=0.69ms rerank=0.68ms sparse=0.06ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[144/500] 6b7dfb22 candidates=47 q=30 analysis=0.67ms total=2.91ms snapshot=0.92ms rerank=0.90ms sparse=0.15ms lex_merge=0.05ms post=0.10ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[26/500] 95bcc1c8 candidates=50 q=22 analysis=2.16ms total=5.38ms snapshot=4.15ms rerank=4.14ms sparse=1.15ms lex_merge=0.03ms post=0.09ms routing=1.03ms seq_rerank=0.00ms evidence=2.54ms group_build=0.07ms group_sort=0.02ms
+[471/500] 1b9b7252 candidates=47 q=73 analysis=0.80ms total=4.78ms snapshot=1.36ms rerank=1.32ms sparse=0.20ms lex_merge=0.04ms post=0.15ms routing=0.00ms seq_rerank=0.25ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[20/500] dccbc061 candidates=51 q=10 analysis=0.59ms total=0.90ms snapshot=0.47ms rerank=0.46ms sparse=0.04ms lex_merge=0.00ms post=0.04ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.03ms group_sort=0.00ms
+[207/500] ef9cf60a candidates=58 q=10 analysis=0.64ms total=1.52ms snapshot=1.17ms rerank=1.16ms sparse=0.22ms lex_merge=0.00ms post=0.03ms routing=0.18ms seq_rerank=0.00ms evidence=0.77ms group_build=0.03ms group_sort=0.01ms
+[342/500] 993da5e2 candidates=54 q=30 analysis=0.70ms total=2.42ms snapshot=1.02ms rerank=0.96ms sparse=0.11ms lex_merge=0.03ms post=0.08ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.13ms group_sort=0.00ms
+[161/500] 1c0ddc50 candidates=52 q=14 analysis=0.61ms total=1.26ms snapshot=0.69ms rerank=0.68ms sparse=0.09ms lex_merge=0.02ms post=0.07ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[339/500] gpt4_d9af6064 candidates=53 q=23 analysis=0.60ms total=10.43ms snapshot=8.70ms rerank=8.68ms sparse=0.92ms lex_merge=0.03ms post=0.06ms routing=0.82ms seq_rerank=0.00ms evidence=7.33ms group_build=0.07ms group_sort=0.04ms
+[424/500] a2f3aa27 candidates=48 q=10 analysis=0.66ms total=4.03ms snapshot=3.36ms rerank=3.35ms sparse=0.89ms lex_merge=0.04ms post=0.05ms routing=0.81ms seq_rerank=0.00ms evidence=1.99ms group_build=0.11ms group_sort=0.03ms
+[455/500] 0e5e2d1a candidates=49 q=64 analysis=0.81ms total=8.59ms snapshot=4.77ms rerank=4.74ms sparse=1.59ms lex_merge=0.03ms post=0.15ms routing=1.40ms seq_rerank=0.00ms evidence=2.24ms group_build=0.07ms group_sort=0.03ms
+[362/500] gpt4_93159ced_abs candidates=46 q=20 analysis=0.65ms total=4.94ms snapshot=4.01ms rerank=3.99ms sparse=0.77ms lex_merge=0.01ms post=0.07ms routing=0.69ms seq_rerank=0.14ms evidence=2.70ms group_build=0.07ms group_sort=0.03ms
+[411/500] 59524333 candidates=45 q=7 analysis=0.76ms total=0.99ms snapshot=0.68ms rerank=0.59ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[395/500] 01493427 candidates=51 q=20 analysis=0.65ms total=4.76ms snapshot=3.78ms rerank=3.75ms sparse=0.96ms lex_merge=0.03ms post=0.10ms routing=0.83ms seq_rerank=0.00ms evidence=2.33ms group_build=0.07ms group_sort=0.02ms
+[27/500] 0862e8bf candidates=53 q=6 analysis=0.64ms total=1.02ms snapshot=0.74ms rerank=0.72ms sparse=0.06ms lex_merge=0.03ms post=0.02ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[270/500] gpt4_f420262c candidates=50 q=17 analysis=0.66ms total=4.04ms snapshot=3.25ms rerank=3.23ms sparse=0.75ms lex_merge=0.05ms post=0.06ms routing=0.63ms seq_rerank=0.13ms evidence=1.97ms group_build=0.07ms group_sort=0.02ms
+[208/500] 73d42213 candidates=51 q=11 analysis=0.68ms total=1.11ms snapshot=0.60ms rerank=0.59ms sparse=0.06ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[472/500] 1568498a candidates=49 q=35 analysis=0.70ms total=1.92ms snapshot=0.75ms rerank=0.73ms sparse=0.11ms lex_merge=0.03ms post=0.08ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[21/500] c8c3f81d candidates=56 q=11 analysis=0.99ms total=1.32ms snapshot=0.65ms rerank=0.64ms sparse=0.06ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[145/500] 1a1907b4 candidates=52 q=31 analysis=0.67ms total=2.77ms snapshot=0.91ms rerank=0.89ms sparse=0.14ms lex_merge=0.05ms post=0.10ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[294/500] gpt4_59149c78 candidates=54 q=28 analysis=0.74ms total=4.53ms snapshot=3.28ms rerank=3.26ms sparse=0.13ms lex_merge=0.04ms post=0.08ms routing=0.00ms seq_rerank=0.15ms evidence=2.48ms group_build=0.08ms group_sort=0.03ms
+[399/500] db467c8c candidates=49 q=13 analysis=0.56ms total=1.04ms snapshot=0.59ms rerank=0.56ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[162/500] 0a34ad58 candidates=48 q=24 analysis=0.62ms total=4.42ms snapshot=3.23ms rerank=3.21ms sparse=0.10ms lex_merge=0.03ms post=0.06ms routing=0.00ms seq_rerank=0.21ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[425/500] c7dc5443 candidates=48 q=15 analysis=0.54ms total=1.57ms snapshot=0.64ms rerank=0.63ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[343/500] a3045048 candidates=58 q=22 analysis=0.86ms total=4.52ms snapshot=3.61ms rerank=3.58ms sparse=1.43ms lex_merge=0.03ms post=0.08ms routing=1.33ms seq_rerank=0.00ms evidence=1.81ms group_build=0.05ms group_sort=0.02ms
+[363/500] 982b5123_abs candidates=46 q=9 analysis=0.58ms total=1.08ms snapshot=0.60ms rerank=0.59ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[456/500] fea54f57 candidates=53 q=51 analysis=0.78ms total=3.20ms snapshot=1.15ms rerank=1.13ms sparse=0.20ms lex_merge=0.06ms post=0.14ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[28/500] 853b0a1d candidates=52 q=17 analysis=0.63ms total=1.62ms snapshot=0.76ms rerank=0.75ms sparse=0.08ms lex_merge=0.04ms post=0.04ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[412/500] 5831f84d candidates=44 q=25 analysis=0.82ms total=4.96ms snapshot=3.86ms rerank=3.84ms sparse=1.13ms lex_merge=0.02ms post=0.08ms routing=1.03ms seq_rerank=0.00ms evidence=2.28ms group_build=0.07ms group_sort=0.03ms
+[22/500] 8ebdbe50 candidates=48 q=11 analysis=0.61ms total=1.63ms snapshot=0.96ms rerank=0.95ms sparse=0.10ms lex_merge=0.01ms post=0.08ms routing=0.00ms seq_rerank=0.29ms evidence=0.00ms group_build=0.12ms group_sort=0.00ms
+[146/500] 09d032c9 candidates=44 q=20 analysis=0.61ms total=1.67ms snapshot=0.69ms rerank=0.67ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[209/500] bc149d6b candidates=50 q=24 analysis=0.76ms total=5.30ms snapshot=4.16ms rerank=4.14ms sparse=1.41ms lex_merge=0.04ms post=0.08ms routing=1.29ms seq_rerank=0.13ms evidence=2.16ms group_build=0.08ms group_sort=0.03ms
+[396/500] 6a27ffc2 candidates=53 q=24 analysis=0.65ms total=5.66ms snapshot=4.39ms rerank=4.37ms sparse=1.61ms lex_merge=0.06ms post=0.08ms routing=1.47ms seq_rerank=0.00ms evidence=2.21ms group_build=0.07ms group_sort=0.03ms
+[295/500] gpt4_e414231f candidates=51 q=15 analysis=0.59ms total=1.39ms snapshot=0.64ms rerank=0.63ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[400/500] 7a87bd0c candidates=49 q=14 analysis=0.54ms total=1.09ms snapshot=0.59ms rerank=0.58ms sparse=0.05ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[163/500] d3ab962e candidates=53 q=18 analysis=0.73ms total=2.72ms snapshot=2.09ms rerank=2.08ms sparse=0.50ms lex_merge=0.00ms post=0.06ms routing=0.44ms seq_rerank=0.00ms evidence=1.30ms group_build=0.06ms group_sort=0.02ms
+[271/500] gpt4_8e165409 candidates=53 q=46 analysis=0.68ms total=6.96ms snapshot=4.90ms rerank=4.88ms sparse=2.10ms lex_merge=0.05ms post=0.11ms routing=1.94ms seq_rerank=0.00ms evidence=2.16ms group_build=0.06ms group_sort=0.02ms
+[426/500] 06db6396 candidates=53 q=16 analysis=0.75ms total=3.45ms snapshot=2.87ms rerank=2.86ms sparse=0.88ms lex_merge=0.02ms post=0.10ms routing=0.77ms seq_rerank=0.00ms evidence=1.61ms group_build=0.07ms group_sort=0.02ms
+[473/500] 6222b6eb candidates=48 q=66 analysis=0.73ms total=3.59ms snapshot=1.08ms rerank=1.06ms sparse=0.16ms lex_merge=0.02ms post=0.13ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[414/500] affe2881 candidates=49 q=19 analysis=0.70ms total=3.92ms snapshot=3.08ms rerank=3.06ms sparse=0.85ms lex_merge=0.02ms post=0.05ms routing=0.78ms seq_rerank=0.00ms evidence=1.84ms group_build=0.06ms group_sort=0.02ms
+[364/500] c8090214_abs candidates=57 q=19 analysis=0.68ms total=4.16ms snapshot=3.22ms rerank=3.20ms sparse=0.99ms lex_merge=0.01ms post=0.07ms routing=0.89ms seq_rerank=0.00ms evidence=1.89ms group_build=0.06ms group_sort=0.02ms
+[23/500] 6b168ec8 candidates=52 q=6 analysis=0.66ms total=1.47ms snapshot=1.26ms rerank=1.26ms sparse=0.27ms lex_merge=0.01ms post=0.03ms routing=0.24ms seq_rerank=0.00ms evidence=0.78ms group_build=0.04ms group_sort=0.02ms
+[413/500] eace081b candidates=48 q=14 analysis=3.40ms total=1.37ms snapshot=0.61ms rerank=0.60ms sparse=0.07ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[296/500] gpt4_4929293b candidates=52 q=24 analysis=0.59ms total=4.32ms snapshot=3.42ms rerank=3.40ms sparse=0.12ms lex_merge=0.03ms post=0.09ms routing=0.00ms seq_rerank=0.14ms evidence=2.57ms group_build=0.08ms group_sort=0.03ms
+[29/500] a06e4cfe candidates=57 q=21 analysis=0.73ms total=2.47ms snapshot=1.03ms rerank=1.02ms sparse=0.09ms lex_merge=0.04ms post=0.05ms routing=0.00ms seq_rerank=0.25ms evidence=0.00ms group_build=0.14ms group_sort=0.00ms
+[210/500] 099778bb candidates=47 q=17 analysis=0.63ms total=1.59ms snapshot=0.64ms rerank=0.63ms sparse=0.08ms lex_merge=0.01ms post=0.07ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[401/500] e61a7584 candidates=50 q=13 analysis=0.70ms total=1.45ms snapshot=0.83ms rerank=0.82ms sparse=0.08ms lex_merge=0.04ms post=0.04ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[397/500] 2133c1b5 candidates=57 q=16 analysis=0.60ms total=1.27ms snapshot=0.60ms rerank=0.59ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[164/500] 2311e44b candidates=53 q=16 analysis=0.67ms total=4.43ms snapshot=3.69ms rerank=3.67ms sparse=0.85ms lex_merge=0.01ms post=0.06ms routing=0.77ms seq_rerank=0.00ms evidence=2.10ms group_build=0.07ms group_sort=0.03ms
+[427/500] 3ba21379 candidates=46 q=11 analysis=0.62ms total=1.10ms snapshot=0.56ms rerank=0.56ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[147/500] 38146c39 candidates=49 q=24 analysis=0.65ms total=2.07ms snapshot=0.91ms rerank=0.89ms sparse=0.13ms lex_merge=0.05ms post=0.08ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[457/500] cc539528 candidates=48 q=44 analysis=0.77ms total=2.99ms snapshot=1.04ms rerank=1.03ms sparse=0.17ms lex_merge=0.05ms post=0.12ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[272/500] gpt4_74aed68e candidates=48 q=35 analysis=0.79ms total=6.52ms snapshot=4.99ms rerank=4.98ms sparse=2.01ms lex_merge=0.03ms post=0.11ms routing=1.88ms seq_rerank=0.00ms evidence=2.47ms group_build=0.07ms group_sort=0.02ms
+[474/500] e8a79c70 candidates=48 q=39 analysis=1.00ms total=6.04ms snapshot=4.63ms rerank=4.61ms sparse=1.48ms lex_merge=0.02ms post=0.09ms routing=1.37ms seq_rerank=0.00ms evidence=2.60ms group_build=0.07ms group_sort=0.03ms
+[415/500] 50635ada candidates=48 q=30 analysis=0.67ms total=2.94ms snapshot=1.46ms rerank=1.41ms sparse=0.19ms lex_merge=0.06ms post=0.13ms routing=0.00ms seq_rerank=0.24ms evidence=0.00ms group_build=0.14ms group_sort=0.00ms
+[365/500] gpt4_c27434e8_abs candidates=50 q=25 analysis=0.57ms total=4.74ms snapshot=3.49ms rerank=3.47ms sparse=0.90ms lex_merge=0.04ms post=0.06ms routing=0.79ms seq_rerank=0.00ms evidence=2.13ms group_build=0.06ms group_sort=0.02ms
+[297/500] gpt4_468eb064 candidates=53 q=15 analysis=0.69ms total=1.23ms snapshot=0.74ms rerank=0.73ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[30/500] 37d43f65 candidates=49 q=9 analysis=0.70ms total=1.50ms snapshot=1.10ms rerank=1.09ms sparse=0.22ms lex_merge=0.01ms post=0.03ms routing=0.18ms seq_rerank=0.00ms evidence=0.69ms group_build=0.03ms group_sort=0.01ms
+[402/500] 1cea1afa candidates=54 q=11 analysis=0.65ms total=2.73ms snapshot=2.19ms rerank=2.18ms sparse=0.43ms lex_merge=0.01ms post=0.06ms routing=0.37ms seq_rerank=0.00ms evidence=1.45ms group_build=0.07ms group_sort=0.02ms
+[398/500] 18bc8abd candidates=47 q=13 analysis=0.67ms total=1.44ms snapshot=0.64ms rerank=0.63ms sparse=0.09ms lex_merge=0.01ms post=0.08ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[211/500] 09ba9854 candidates=46 q=22 analysis=0.71ms total=4.09ms snapshot=3.08ms rerank=3.07ms sparse=0.84ms lex_merge=0.03ms post=0.06ms routing=0.74ms seq_rerank=0.00ms evidence=1.83ms group_build=0.06ms group_sort=0.02ms
+[172/500] 51c32626 candidates=53 q=16 analysis=0.66ms total=1.54ms snapshot=0.69ms rerank=0.68ms sparse=0.09ms lex_merge=0.01ms post=0.07ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[165/500] cc06de0d candidates=44 q=28 analysis=0.74ms total=6.17ms snapshot=5.21ms rerank=5.19ms sparse=1.15ms lex_merge=0.03ms post=0.07ms routing=1.06ms seq_rerank=0.00ms evidence=3.64ms group_build=0.06ms group_sort=0.02ms
+[148/500] d24813b1 candidates=47 q=19 analysis=0.59ms total=1.97ms snapshot=0.88ms rerank=0.87ms sparse=0.11ms lex_merge=0.04ms post=0.06ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[428/500] 9bbe84a2 candidates=54 q=24 analysis=0.61ms total=1.76ms snapshot=0.75ms rerank=0.74ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[485/500] 5809eb10 candidates=57 q=48 analysis=0.86ms total=2.82ms snapshot=0.98ms rerank=0.95ms sparse=0.17ms lex_merge=0.03ms post=0.13ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[458/500] dc439ea3 candidates=49 q=49 analysis=0.68ms total=2.61ms snapshot=1.06ms rerank=1.03ms sparse=0.13ms lex_merge=0.02ms post=0.11ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[416/500] e66b632c candidates=47 q=20 analysis=0.52ms total=2.03ms snapshot=0.89ms rerank=0.88ms sparse=0.11ms lex_merge=0.03ms post=0.08ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[273/500] bcbe585f candidates=48 q=26 analysis=0.70ms total=5.60ms snapshot=4.24ms rerank=4.23ms sparse=1.33ms lex_merge=0.01ms post=0.13ms routing=1.18ms seq_rerank=0.00ms evidence=2.28ms group_build=0.07ms group_sort=0.04ms
+[475/500] d596882b candidates=45 q=51 analysis=0.73ms total=3.32ms snapshot=1.26ms rerank=1.24ms sparse=0.19ms lex_merge=0.05ms post=0.14ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[366/500] gpt4_fe651585_abs candidates=51 q=13 analysis=0.59ms total=1.11ms snapshot=0.61ms rerank=0.61ms sparse=0.05ms lex_merge=0.02ms post=0.02ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[31/500] b86304ba candidates=43 q=19 analysis=0.70ms total=3.36ms snapshot=2.64ms rerank=2.63ms sparse=0.57ms lex_merge=0.01ms post=0.06ms routing=0.49ms seq_rerank=0.00ms evidence=1.68ms group_build=0.06ms group_sort=0.02ms
+[298/500] gpt4_fa19884d candidates=56 q=14 analysis=0.60ms total=1.52ms snapshot=0.91ms rerank=0.90ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[403/500] ed4ddc30 candidates=47 q=16 analysis=0.75ms total=2.78ms snapshot=2.14ms rerank=2.13ms sparse=0.49ms lex_merge=0.01ms post=0.07ms routing=0.41ms seq_rerank=0.00ms evidence=1.32ms group_build=0.06ms group_sort=0.02ms
+[461/500] 58470ed2 candidates=53 q=37 analysis=0.78ms total=2.57ms snapshot=1.01ms rerank=1.00ms sparse=0.13ms lex_merge=0.01ms post=0.12ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[212/500] d6062bb9 candidates=52 q=21 analysis=0.75ms total=4.55ms snapshot=3.64ms rerank=3.63ms sparse=1.00ms lex_merge=0.02ms post=0.07ms routing=0.91ms seq_rerank=0.00ms evidence=2.15ms group_build=0.08ms group_sort=0.02ms
+[166/500] a11281a2 candidates=52 q=20 analysis=0.62ms total=2.86ms snapshot=0.82ms rerank=0.76ms sparse=0.09ms lex_merge=0.02ms post=0.07ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[149/500] 57f827a0 candidates=53 q=19 analysis=0.73ms total=1.41ms snapshot=0.79ms rerank=0.77ms sparse=0.11ms lex_merge=0.03ms post=0.09ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[173/500] d905b33f candidates=51 q=18 analysis=0.65ms total=1.84ms snapshot=1.13ms rerank=1.12ms sparse=0.08ms lex_merge=0.01ms post=0.07ms routing=0.00ms seq_rerank=0.54ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[429/500] 10e09553 candidates=49 q=30 analysis=0.63ms total=5.49ms snapshot=3.84ms rerank=3.83ms sparse=1.22ms lex_merge=0.03ms post=0.07ms routing=1.12ms seq_rerank=0.00ms evidence=2.18ms group_build=0.06ms group_sort=0.02ms
+[459/500] 18dcd5a5 candidates=50 q=42 analysis=0.74ms total=5.45ms snapshot=3.86ms rerank=3.84ms sparse=1.62ms lex_merge=0.03ms post=0.08ms routing=1.51ms seq_rerank=0.00ms evidence=1.69ms group_build=0.07ms group_sort=0.02ms
+[417/500] 0ddfec37 candidates=57 q=18 analysis=0.75ms total=3.93ms snapshot=3.07ms rerank=3.05ms sparse=0.93ms lex_merge=0.01ms post=0.08ms routing=0.84ms seq_rerank=0.15ms evidence=1.56ms group_build=0.08ms group_sort=0.02ms
+[486/500] 41275add candidates=57 q=42 analysis=0.72ms total=2.95ms snapshot=0.96ms rerank=0.94ms sparse=0.12ms lex_merge=0.02ms post=0.10ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[274/500] gpt4_21adecb5 candidates=54 q=24 analysis=0.69ms total=4.78ms snapshot=3.77ms rerank=3.75ms sparse=1.46ms lex_merge=0.02ms post=0.05ms routing=1.39ms seq_rerank=0.00ms evidence=1.81ms group_build=0.06ms group_sort=0.02ms
+[367/500] 6a1eabeb candidates=41 q=16 analysis=0.57ms total=1.58ms snapshot=0.86ms rerank=0.84ms sparse=0.11ms lex_merge=0.02ms post=0.08ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[476/500] e3fc4d6e candidates=58 q=57 analysis=0.78ms total=3.88ms snapshot=1.19ms rerank=1.17ms sparse=0.19ms lex_merge=0.05ms post=0.14ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[278/500] eac54adc candidates=46 q=23 analysis=0.80ms total=4.81ms snapshot=3.86ms rerank=3.85ms sparse=0.98ms lex_merge=0.02ms post=0.08ms routing=0.88ms seq_rerank=0.19ms evidence=2.19ms group_build=0.09ms group_sort=0.02ms
+[404/500] 8fb83627 candidates=45 q=15 analysis=0.59ms total=3.40ms snapshot=2.73ms rerank=2.71ms sparse=0.57ms lex_merge=0.01ms post=0.06ms routing=0.50ms seq_rerank=0.00ms evidence=1.78ms group_build=0.06ms group_sort=0.03ms
+[299/500] 9a707b82 candidates=56 q=19 analysis=0.77ms total=1.42ms snapshot=0.70ms rerank=0.69ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[167/500] 4f54b7c9 candidates=49 q=16 analysis=0.63ms total=2.34ms snapshot=1.76ms rerank=1.75ms sparse=0.41ms lex_merge=0.00ms post=0.06ms routing=0.35ms seq_rerank=0.00ms evidence=1.07ms group_build=0.04ms group_sort=0.01ms
+[213/500] 157a136e candidates=50 q=13 analysis=0.62ms total=2.66ms snapshot=2.17ms rerank=2.16ms sparse=0.40ms lex_merge=0.01ms post=0.05ms routing=0.35ms seq_rerank=0.00ms evidence=1.45ms group_build=0.06ms group_sort=0.03ms
+[174/500] 7405e8b1 candidates=49 q=27 analysis=0.56ms total=2.12ms snapshot=0.89ms rerank=0.88ms sparse=0.12ms lex_merge=0.01ms post=0.10ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[430/500] dad224aa candidates=51 q=11 analysis=0.68ms total=1.53ms snapshot=0.74ms rerank=0.72ms sparse=0.09ms lex_merge=0.03ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[462/500] 8cf51dda candidates=47 q=49 analysis=0.83ms total=3.16ms snapshot=1.14ms rerank=1.13ms sparse=0.14ms lex_merge=0.04ms post=0.10ms routing=0.00ms seq_rerank=0.23ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[150/500] 95228167 candidates=51 q=31 analysis=0.67ms total=2.85ms snapshot=1.42ms rerank=1.40ms sparse=0.16ms lex_merge=0.05ms post=0.12ms routing=0.00ms seq_rerank=0.58ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[418/500] f685340e candidates=44 q=25 analysis=0.63ms total=1.72ms snapshot=0.71ms rerank=0.70ms sparse=0.10ms lex_merge=0.03ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[275/500] 5e1b23de candidates=46 q=16 analysis=0.69ms total=4.60ms snapshot=3.81ms rerank=3.80ms sparse=0.84ms lex_merge=0.01ms post=0.05ms routing=0.78ms seq_rerank=0.00ms evidence=2.64ms group_build=0.06ms group_sort=0.02ms
+[487/500] 4388e9dd candidates=44 q=37 analysis=0.93ms total=2.12ms snapshot=0.77ms rerank=0.76ms sparse=0.10ms lex_merge=0.03ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[460/500] 488d3006 candidates=53 q=61 analysis=0.79ms total=3.62ms snapshot=0.79ms rerank=0.77ms sparse=0.14ms lex_merge=0.04ms post=0.10ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[368/500] 6aeb4375 candidates=47 q=14 analysis=0.66ms total=3.09ms snapshot=2.15ms rerank=2.14ms sparse=0.52ms lex_merge=0.01ms post=0.06ms routing=0.45ms seq_rerank=0.00ms evidence=1.30ms group_build=0.05ms group_sort=0.04ms
+[279/500] gpt4_7ddcf75f candidates=50 q=21 analysis=0.64ms total=5.17ms snapshot=4.08ms rerank=4.07ms sparse=1.24ms lex_merge=0.03ms post=0.08ms routing=1.12ms seq_rerank=0.00ms evidence=2.35ms group_build=0.07ms group_sort=0.03ms
+[300/500] eac54add candidates=45 q=19 analysis=0.64ms total=1.50ms snapshot=0.56ms rerank=0.56ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[405/500] b01defab candidates=51 q=17 analysis=0.61ms total=2.29ms snapshot=0.79ms rerank=0.78ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[477/500] 51b23612 candidates=48 q=46 analysis=0.81ms total=3.03ms snapshot=0.94ms rerank=0.93ms sparse=0.13ms lex_merge=0.02ms post=0.10ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[214/500] c18a7dc8 candidates=50 q=15 analysis=0.73ms total=3.42ms snapshot=2.59ms rerank=2.58ms sparse=0.56ms lex_merge=0.01ms post=0.05ms routing=0.49ms seq_rerank=0.18ms evidence=1.49ms group_build=0.07ms group_sort=0.03ms
+[431/500] ba61f0b9 candidates=48 q=20 analysis=0.60ms total=3.35ms snapshot=2.69ms rerank=2.68ms sparse=0.63ms lex_merge=0.01ms post=0.04ms routing=0.59ms seq_rerank=0.00ms evidence=1.79ms group_build=0.05ms group_sort=0.02ms
+[168/500] 85fa3a3f candidates=50 q=41 analysis=0.72ms total=6.78ms snapshot=4.95ms rerank=4.92ms sparse=1.99ms lex_merge=0.05ms post=0.14ms routing=1.80ms seq_rerank=0.00ms evidence=2.31ms group_build=0.06ms group_sort=0.02ms
+[151/500] 505af2f5 candidates=55 q=20 analysis=0.65ms total=1.58ms snapshot=0.70ms rerank=0.68ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[175/500] f35224e0 candidates=56 q=27 analysis=0.75ms total=4.73ms snapshot=3.58ms rerank=3.56ms sparse=1.08ms lex_merge=0.02ms post=0.14ms routing=0.93ms seq_rerank=0.00ms evidence=1.95ms group_build=0.07ms group_sort=0.03ms
+[463/500] 1d4da289 candidates=57 q=61 analysis=1.25ms total=4.29ms snapshot=1.61ms rerank=1.58ms sparse=0.29ms lex_merge=0.07ms post=0.21ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[419/500] cc5ded98 candidates=54 q=13 analysis=0.72ms total=4.06ms snapshot=3.19ms rerank=3.18ms sparse=0.93ms lex_merge=0.02ms post=0.04ms routing=0.87ms seq_rerank=0.00ms evidence=1.89ms group_build=0.07ms group_sort=0.02ms
+[276/500] gpt4_98f46fc6 candidates=49 q=23 analysis=0.78ms total=5.21ms snapshot=4.24ms rerank=4.23ms sparse=0.86ms lex_merge=0.03ms post=0.08ms routing=0.75ms seq_rerank=0.00ms evidence=2.88ms group_build=0.07ms group_sort=0.02ms
+[305/500] gpt4_b5700ca0 candidates=52 q=14 analysis=0.91ms total=1.01ms snapshot=0.56ms rerank=0.55ms sparse=0.06ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[369/500] 830ce83f candidates=49 q=14 analysis=0.69ms total=1.01ms snapshot=0.50ms rerank=0.49ms sparse=0.04ms lex_merge=0.00ms post=0.04ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[488/500] 4baee567 candidates=51 q=37 analysis=0.70ms total=7.08ms snapshot=5.56ms rerank=5.54ms sparse=2.18ms lex_merge=0.10ms post=0.12ms routing=1.96ms seq_rerank=0.00ms evidence=2.67ms group_build=0.09ms group_sort=0.03ms
+[301/500] 4dfccbf8 candidates=49 q=16 analysis=0.62ms total=1.17ms snapshot=0.61ms rerank=0.60ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[406/500] 22d2cb42 candidates=49 q=8 analysis=0.57ms total=0.79ms snapshot=0.51ms rerank=0.50ms sparse=0.03ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[280/500] gpt4_a2d1d1f6 candidates=50 q=31 analysis=0.67ms total=5.58ms snapshot=4.46ms rerank=4.44ms sparse=1.64ms lex_merge=0.03ms post=0.06ms routing=1.55ms seq_rerank=0.00ms evidence=2.38ms group_build=0.07ms group_sort=0.02ms
+[215/500] a3332713 candidates=45 q=17 analysis=0.91ms total=2.78ms snapshot=2.21ms rerank=2.20ms sparse=0.50ms lex_merge=0.01ms post=0.06ms routing=0.44ms seq_rerank=0.00ms evidence=1.40ms group_build=0.05ms group_sort=0.02ms
+[432/500] 42ec0761 candidates=51 q=12 analysis=0.58ms total=1.04ms snapshot=0.53ms rerank=0.52ms sparse=0.05ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[152/500] 75f70248 candidates=45 q=17 analysis=0.62ms total=1.32ms snapshot=0.62ms rerank=0.61ms sparse=0.07ms lex_merge=0.02ms post=0.04ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[176/500] 6456829e candidates=50 q=13 analysis=0.66ms total=3.47ms snapshot=2.84ms rerank=2.83ms sparse=0.92ms lex_merge=0.02ms post=0.05ms routing=0.85ms seq_rerank=0.00ms evidence=1.62ms group_build=0.05ms group_sort=0.02ms
+[169/500] 9aaed6a3 candidates=54 q=15 analysis=0.67ms total=2.25ms snapshot=1.63ms rerank=1.62ms sparse=0.31ms lex_merge=0.01ms post=0.04ms routing=0.26ms seq_rerank=0.10ms evidence=0.96ms group_build=0.05ms group_sort=0.05ms
+[478/500] 3e321797 candidates=57 q=55 analysis=0.81ms total=3.67ms snapshot=1.33ms rerank=1.31ms sparse=0.24ms lex_merge=0.03ms post=0.20ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[277/500] gpt4_af6db32f candidates=45 q=17 analysis=0.86ms total=4.30ms snapshot=3.55ms rerank=3.54ms sparse=1.03ms lex_merge=0.01ms post=0.06ms routing=0.95ms seq_rerank=0.00ms evidence=2.18ms group_build=0.06ms group_sort=0.03ms
+[464/500] 8464fc84 candidates=49 q=46 analysis=0.66ms total=3.34ms snapshot=0.82ms rerank=0.81ms sparse=0.13ms lex_merge=0.03ms post=0.10ms routing=0.00ms seq_rerank=0.09ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[306/500] gpt4_68e94288 candidates=44 q=19 analysis=0.59ms total=1.88ms snapshot=0.87ms rerank=0.86ms sparse=0.10ms lex_merge=0.03ms post=0.07ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[370/500] 852ce960 candidates=41 q=24 analysis=0.64ms total=1.75ms snapshot=0.82ms rerank=0.81ms sparse=0.09ms lex_merge=0.04ms post=0.04ms routing=0.00ms seq_rerank=0.19ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[420/500] dfde3500 candidates=47 q=23 analysis=0.62ms total=1.93ms snapshot=0.84ms rerank=0.83ms sparse=0.11ms lex_merge=0.03ms post=0.08ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[302/500] 0bc8ad93 candidates=48 q=23 analysis=0.73ms total=1.50ms snapshot=0.52ms rerank=0.51ms sparse=0.07ms lex_merge=0.01ms post=0.06ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[489/500] 561fabcd candidates=50 q=36 analysis=0.75ms total=2.33ms snapshot=0.89ms rerank=0.87ms sparse=0.13ms lex_merge=0.02ms post=0.11ms routing=0.00ms seq_rerank=0.08ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[170/500] 1f2b8d4f candidates=53 q=28 analysis=0.68ms total=2.02ms snapshot=0.90ms rerank=0.89ms sparse=0.11ms lex_merge=0.02ms post=0.09ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[281/500] gpt4_85da3956 candidates=56 q=27 analysis=0.72ms total=5.54ms snapshot=4.40ms rerank=4.39ms sparse=1.49ms lex_merge=0.01ms post=0.07ms routing=1.41ms seq_rerank=0.00ms evidence=2.30ms group_build=0.12ms group_sort=0.02ms
+[433/500] 5c40ec5b candidates=52 q=14 analysis=0.70ms total=3.72ms snapshot=3.14ms rerank=3.12ms sparse=0.94ms lex_merge=0.02ms post=0.04ms routing=0.88ms seq_rerank=0.00ms evidence=1.87ms group_build=0.06ms group_sort=0.02ms
+[372/500] d7c942c3 candidates=49 q=15 analysis=0.87ms total=1.39ms snapshot=0.65ms rerank=0.64ms sparse=0.07ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[216/500] 55241a1f candidates=49 q=35 analysis=0.88ms total=5.27ms snapshot=3.74ms rerank=3.72ms sparse=1.15ms lex_merge=0.03ms post=0.10ms routing=1.02ms seq_rerank=0.00ms evidence=2.13ms group_build=0.06ms group_sort=0.02ms
+[177/500] a4996e51 candidates=48 q=21 analysis=0.67ms total=5.48ms snapshot=4.53ms rerank=4.50ms sparse=1.22ms lex_merge=0.02ms post=0.06ms routing=1.14ms seq_rerank=0.00ms evidence=2.54ms group_build=0.11ms group_sort=0.03ms
+[153/500] d6233ab6 candidates=47 q=29 analysis=0.76ms total=2.02ms snapshot=0.75ms rerank=0.74ms sparse=0.10ms lex_merge=0.02ms post=0.08ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[479/500] e982271f candidates=58 q=45 analysis=0.73ms total=3.02ms snapshot=0.94ms rerank=0.92ms sparse=0.14ms lex_merge=0.04ms post=0.10ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[371/500] 945e3d21 candidates=51 q=16 analysis=0.74ms total=1.80ms snapshot=0.77ms rerank=0.76ms sparse=0.10ms lex_merge=0.03ms post=0.07ms routing=0.00ms seq_rerank=0.16ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[374/500] 89941a93 candidates=53 q=7 analysis=0.62ms total=1.33ms snapshot=1.11ms rerank=1.10ms sparse=0.20ms lex_merge=0.00ms post=0.03ms routing=0.16ms seq_rerank=0.00ms evidence=0.75ms group_build=0.03ms group_sort=0.01ms
+[303/500] 6e984302 candidates=46 q=18 analysis=0.80ms total=1.92ms snapshot=1.05ms rerank=1.05ms sparse=0.13ms lex_merge=0.04ms post=0.09ms routing=0.00ms seq_rerank=0.21ms evidence=0.00ms group_build=0.26ms group_sort=0.00ms
+[307/500] gpt4_2655b836 candidates=46 q=23 analysis=0.67ms total=1.44ms snapshot=0.71ms rerank=0.69ms sparse=0.09ms lex_merge=0.03ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[171/500] e6041065 candidates=46 q=15 analysis=0.60ms total=1.20ms snapshot=0.56ms rerank=0.55ms sparse=0.06ms lex_merge=0.01ms post=0.05ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.05ms group_sort=0.00ms
+[465/500] 8aef76bc candidates=54 q=47 analysis=0.76ms total=5.31ms snapshot=1.18ms rerank=1.16ms sparse=0.19ms lex_merge=0.05ms post=0.14ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[434/500] c6853660 candidates=48 q=21 analysis=1.17ms total=4.22ms snapshot=3.36ms rerank=3.35ms sparse=0.83ms lex_merge=0.02ms post=0.07ms routing=0.74ms seq_rerank=0.00ms evidence=2.17ms group_build=0.06ms group_sort=0.02ms
+[490/500] b759caee candidates=55 q=49 analysis=0.86ms total=3.69ms snapshot=1.12ms rerank=1.09ms sparse=0.18ms lex_merge=0.04ms post=0.14ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.08ms group_sort=0.00ms
+[373/500] 71315a70 candidates=57 q=17 analysis=0.70ms total=3.71ms snapshot=2.99ms rerank=2.97ms sparse=0.75ms lex_merge=0.01ms post=0.12ms routing=0.63ms seq_rerank=0.00ms evidence=1.73ms group_build=0.08ms group_sort=0.03ms
+[481/500] fca762bc candidates=43 q=54 analysis=0.91ms total=3.90ms snapshot=1.37ms rerank=1.34ms sparse=0.21ms lex_merge=0.05ms post=0.15ms routing=0.00ms seq_rerank=0.20ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[217/500] a08a253f candidates=54 q=14 analysis=0.68ms total=4.46ms snapshot=3.78ms rerank=3.77ms sparse=1.11ms lex_merge=0.01ms post=0.06ms routing=1.03ms seq_rerank=0.13ms evidence=2.13ms group_build=0.08ms group_sort=0.02ms
+[154/500] 1da05512 candidates=47 q=22 analysis=0.74ms total=2.61ms snapshot=0.79ms rerank=0.77ms sparse=0.15ms lex_merge=0.05ms post=0.09ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[178/500] 3c1045c8 candidates=52 q=16 analysis=0.65ms total=4.47ms snapshot=3.77ms rerank=3.75ms sparse=1.05ms lex_merge=0.02ms post=0.09ms routing=0.94ms seq_rerank=0.00ms evidence=2.26ms group_build=0.07ms group_sort=0.04ms
+[309/500] gpt4_76048e76 candidates=51 q=18 analysis=0.75ms total=4.99ms snapshot=4.18ms rerank=4.16ms sparse=1.09ms lex_merge=0.03ms post=0.04ms routing=1.02ms seq_rerank=0.00ms evidence=2.58ms group_build=0.08ms group_sort=0.03ms
+[219/500] 078150f1 candidates=47 q=22 analysis=1.00ms total=4.39ms snapshot=3.62ms rerank=3.59ms sparse=1.02ms lex_merge=0.01ms post=0.07ms routing=0.94ms seq_rerank=0.00ms evidence=2.14ms group_build=0.07ms group_sort=0.04ms
+[375/500] ce6d2d27 candidates=51 q=14 analysis=0.70ms total=1.22ms snapshot=0.64ms rerank=0.63ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[304/500] gpt4_8279ba03 candidates=46 q=15 analysis=0.68ms total=1.66ms snapshot=0.77ms rerank=0.76ms sparse=0.09ms lex_merge=0.05ms post=0.05ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.10ms group_sort=0.00ms
+[180/500] 681a1674 candidates=52 q=11 analysis=0.65ms total=1.80ms snapshot=1.38ms rerank=1.37ms sparse=0.28ms lex_merge=0.00ms post=0.04ms routing=0.23ms seq_rerank=0.00ms evidence=0.90ms group_build=0.03ms group_sort=0.01ms
+[480/500] 352ab8bd candidates=52 q=63 analysis=0.68ms total=4.13ms snapshot=1.23ms rerank=1.20ms sparse=0.19ms lex_merge=0.03ms post=0.15ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[308/500] gpt4_2487a7cb candidates=50 q=37 analysis=0.65ms total=7.67ms snapshot=5.18ms rerank=5.16ms sparse=1.69ms lex_merge=0.02ms post=0.11ms routing=1.56ms seq_rerank=0.00ms evidence=2.75ms group_build=0.08ms group_sort=0.02ms
+[466/500] 71a3fd6b candidates=47 q=39 analysis=0.86ms total=7.56ms snapshot=5.75ms rerank=5.72ms sparse=2.87ms lex_merge=0.03ms post=1.18ms routing=1.66ms seq_rerank=0.00ms evidence=2.22ms group_build=0.07ms group_sort=0.03ms
+[435/500] 26bdc477 candidates=50 q=15 analysis=0.66ms total=4.07ms snapshot=3.25ms rerank=3.24ms sparse=0.65ms lex_merge=0.01ms post=0.05ms routing=0.59ms seq_rerank=0.00ms evidence=2.00ms group_build=0.17ms group_sort=0.03ms
+[155/500] fca70973 candidates=47 q=19 analysis=0.60ms total=1.33ms snapshot=0.62ms rerank=0.61ms sparse=0.07ms lex_merge=0.02ms post=0.05ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[491/500] ac031881 candidates=49 q=30 analysis=0.68ms total=2.39ms snapshot=0.91ms rerank=0.89ms sparse=0.22ms lex_merge=0.03ms post=0.19ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[218/500] f0e564bc candidates=53 q=25 analysis=0.93ms total=5.17ms snapshot=4.00ms rerank=3.99ms sparse=1.35ms lex_merge=0.06ms post=0.08ms routing=1.21ms seq_rerank=0.00ms evidence=2.15ms group_build=0.07ms group_sort=0.02ms
+[179/500] 60036106 candidates=46 q=29 analysis=0.70ms total=4.56ms snapshot=3.20ms rerank=3.19ms sparse=0.74ms lex_merge=0.01ms post=0.09ms routing=0.63ms seq_rerank=0.00ms evidence=2.01ms group_build=0.06ms group_sort=0.02ms
+[482/500] 7a8d0b71 candidates=46 q=48 analysis=0.78ms total=6.51ms snapshot=4.48ms rerank=4.45ms sparse=1.71ms lex_merge=0.05ms post=0.14ms routing=1.52ms seq_rerank=0.00ms evidence=2.11ms group_build=0.07ms group_sort=0.03ms
+[235/500] gpt4_f49edff3 candidates=47 q=68 analysis=0.75ms total=3.96ms snapshot=1.43ms rerank=1.41ms sparse=0.22ms lex_merge=0.04ms post=0.18ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[220/500] 8cf4d046 candidates=47 q=15 analysis=0.69ms total=1.36ms snapshot=0.69ms rerank=0.68ms sparse=0.06ms lex_merge=0.00ms post=0.06ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[310/500] gpt4_2312f94c candidates=48 q=24 analysis=0.65ms total=4.80ms snapshot=3.80ms rerank=3.79ms sparse=1.07ms lex_merge=0.03ms post=0.04ms routing=0.99ms seq_rerank=0.00ms evidence=2.26ms group_build=0.08ms group_sort=0.02ms
+[436/500] 0977f2af candidates=47 q=23 analysis=0.60ms total=1.68ms snapshot=0.78ms rerank=0.77ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[181/500] e25c3b8d candidates=51 q=14 analysis=0.68ms total=3.93ms snapshot=3.13ms rerank=3.11ms sparse=0.77ms lex_merge=0.04ms post=0.04ms routing=0.69ms seq_rerank=0.00ms evidence=1.93ms group_build=0.07ms group_sort=0.03ms
+[483/500] a40e080f candidates=49 q=40 analysis=0.78ms total=2.47ms snapshot=0.89ms rerank=0.87ms sparse=0.14ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[493/500] 16c90bf4 candidates=59 q=55 analysis=0.72ms total=3.26ms snapshot=0.94ms rerank=0.92ms sparse=0.15ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[484/500] 8b9d4367 candidates=56 q=43 analysis=0.69ms total=2.96ms snapshot=0.94ms rerank=0.93ms sparse=0.15ms lex_merge=0.02ms post=0.13ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[467/500] 2bf43736 candidates=49 q=60 analysis=0.73ms total=9.34ms snapshot=1.35ms rerank=1.33ms sparse=0.22ms lex_merge=0.08ms post=0.14ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[156/500] b6025781 candidates=50 q=23 analysis=0.69ms total=2.20ms snapshot=0.86ms rerank=0.85ms sparse=0.12ms lex_merge=0.04ms post=0.08ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[184/500] ef66a6e5 candidates=49 q=13 analysis=0.68ms total=3.94ms snapshot=3.37ms rerank=3.35ms sparse=0.94ms lex_merge=0.02ms post=0.06ms routing=0.86ms seq_rerank=0.00ms evidence=2.00ms group_build=0.07ms group_sort=0.03ms
+[227/500] 21d02d0d candidates=49 q=20 analysis=0.79ms total=4.71ms snapshot=3.92ms rerank=3.91ms sparse=0.83ms lex_merge=0.03ms post=0.07ms routing=0.74ms seq_rerank=0.00ms evidence=2.21ms group_build=0.07ms group_sort=0.03ms
+[221/500] a346bb18 candidates=51 q=16 analysis=0.61ms total=4.23ms snapshot=3.52ms rerank=3.50ms sparse=0.80ms lex_merge=0.02ms post=0.06ms routing=0.72ms seq_rerank=0.00ms evidence=2.28ms group_build=0.08ms group_sort=0.03ms
+[468/500] 70b3e69b candidates=50 q=56 analysis=0.87ms total=3.19ms snapshot=0.94ms rerank=0.92ms sparse=0.14ms lex_merge=0.03ms post=0.11ms routing=0.00ms seq_rerank=0.11ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[236/500] 71017276 candidates=49 q=23 analysis=0.67ms total=4.58ms snapshot=3.52ms rerank=3.51ms sparse=1.14ms lex_merge=0.03ms post=0.09ms routing=1.02ms seq_rerank=0.00ms evidence=1.95ms group_build=0.07ms group_sort=0.03ms
+[492/500] 28bcfaac candidates=52 q=48 analysis=0.74ms total=3.30ms snapshot=1.06ms rerank=1.04ms sparse=0.19ms lex_merge=0.04ms post=0.15ms routing=0.00ms seq_rerank=0.17ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[311/500] 0bb5a684 candidates=43 q=28 analysis=0.71ms total=5.41ms snapshot=4.31ms rerank=4.29ms sparse=1.43ms lex_merge=0.01ms post=0.09ms routing=1.33ms seq_rerank=0.00ms evidence=2.45ms group_build=0.06ms group_sort=0.02ms
+[223/500] 8e91e7d9 candidates=50 q=12 analysis=0.68ms total=3.35ms snapshot=2.83ms rerank=2.82ms sparse=0.71ms lex_merge=0.01ms post=0.07ms routing=0.64ms seq_rerank=0.00ms evidence=1.68ms group_build=0.08ms group_sort=0.02ms
+[182/500] 4adc0475 candidates=47 q=27 analysis=0.73ms total=5.41ms snapshot=4.10ms rerank=4.08ms sparse=1.25ms lex_merge=0.02ms post=0.13ms routing=1.10ms seq_rerank=0.00ms evidence=2.24ms group_build=0.06ms group_sort=0.03ms
+[312/500] 08f4fc43 candidates=50 q=36 analysis=0.72ms total=6.96ms snapshot=5.28ms rerank=5.26ms sparse=2.22ms lex_merge=0.05ms post=0.12ms routing=2.05ms seq_rerank=0.00ms evidence=2.45ms group_build=0.08ms group_sort=0.03ms
+[183/500] 4bc144e2 candidates=49 q=14 analysis=0.71ms total=4.40ms snapshot=3.68ms rerank=3.66ms sparse=1.09ms lex_merge=0.05ms post=0.04ms routing=1.00ms seq_rerank=0.00ms evidence=2.15ms group_build=0.08ms group_sort=0.03ms
+[231/500] a96c20ee_abs candidates=57 q=20 analysis=0.60ms total=1.82ms snapshot=0.71ms rerank=0.70ms sparse=0.08ms lex_merge=0.02ms post=0.06ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[229/500] 6456829e_abs candidates=55 q=17 analysis=0.75ms total=3.30ms snapshot=2.62ms rerank=2.61ms sparse=0.53ms lex_merge=0.01ms post=0.06ms routing=0.46ms seq_rerank=0.00ms evidence=1.69ms group_build=0.07ms group_sort=0.02ms
+[185/500] 5025383b candidates=50 q=18 analysis=0.69ms total=1.41ms snapshot=0.65ms rerank=0.64ms sparse=0.06ms lex_merge=0.01ms post=0.04ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[228/500] 2311e44b_abs candidates=53 q=13 analysis=0.60ms total=3.28ms snapshot=2.73ms rerank=2.71ms sparse=0.64ms lex_merge=0.01ms post=0.05ms routing=0.58ms seq_rerank=0.00ms evidence=1.76ms group_build=0.07ms group_sort=0.02ms
+[225/500] e56a43b9 candidates=46 q=13 analysis=0.65ms total=1.42ms snapshot=0.89ms rerank=0.88ms sparse=0.15ms lex_merge=0.01ms post=0.03ms routing=0.11ms seq_rerank=0.00ms evidence=0.54ms group_build=0.03ms group_sort=0.01ms
+[222/500] 37f165cf candidates=46 q=22 analysis=0.60ms total=1.84ms snapshot=0.97ms rerank=0.96ms sparse=0.10ms lex_merge=0.01ms post=0.09ms routing=0.00ms seq_rerank=0.22ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[494/500] c8f1aeed candidates=52 q=84 analysis=0.88ms total=5.00ms snapshot=1.31ms rerank=1.28ms sparse=0.25ms lex_merge=0.03ms post=0.21ms routing=0.00ms seq_rerank=0.14ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[237/500] b46e15ed candidates=48 q=25 analysis=0.80ms total=5.84ms snapshot=4.60ms rerank=4.58ms sparse=1.65ms lex_merge=0.04ms post=0.09ms routing=1.52ms seq_rerank=0.15ms evidence=2.33ms group_build=0.09ms group_sort=0.04ms
+[232/500] ba358f49_abs candidates=49 q=11 analysis=0.67ms total=1.02ms snapshot=0.54ms rerank=0.53ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.18ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[186/500] a1cc6108 candidates=44 q=11 analysis=0.58ms total=1.09ms snapshot=0.52ms rerank=0.51ms sparse=0.04ms lex_merge=0.01ms post=0.03ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.04ms group_sort=0.00ms
+[497/500] e48988bc candidates=54 q=48 analysis=0.78ms total=3.22ms snapshot=1.11ms rerank=1.09ms sparse=0.21ms lex_merge=0.05ms post=0.16ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[499/500] 65240037 candidates=52 q=38 analysis=0.91ms total=2.37ms snapshot=0.86ms rerank=0.84ms sparse=0.12ms lex_merge=0.02ms post=0.10ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[500/500] 778164c6 candidates=53 q=49 analysis=0.87ms total=3.87ms snapshot=1.21ms rerank=1.18ms sparse=0.16ms lex_merge=0.03ms post=0.13ms routing=0.00ms seq_rerank=0.10ms evidence=0.00ms group_build=0.11ms group_sort=0.00ms
+[498/500] 1de5cff2 candidates=48 q=50 analysis=0.74ms total=3.60ms snapshot=1.17ms rerank=1.14ms sparse=0.19ms lex_merge=0.07ms post=0.12ms routing=0.00ms seq_rerank=0.15ms evidence=0.00ms group_build=0.09ms group_sort=0.00ms
+[187/500] 9ee3ecd6 candidates=54 q=20 analysis=0.75ms total=4.89ms snapshot=3.84ms rerank=3.83ms sparse=1.00ms lex_merge=0.03ms post=0.08ms routing=0.89ms seq_rerank=0.00ms evidence=2.44ms group_build=0.06ms group_sort=0.03ms
+[249/500] gpt4_6dc9b45b candidates=51 q=21 analysis=0.66ms total=4.59ms snapshot=3.52ms rerank=3.50ms sparse=1.05ms lex_merge=0.02ms post=0.09ms routing=0.94ms seq_rerank=0.00ms evidence=1.91ms group_build=0.08ms group_sort=0.02ms
+[248/500] gpt4_7f6b06db candidates=54 q=24 analysis=0.61ms total=5.12ms snapshot=4.01ms rerank=3.99ms sparse=1.33ms lex_merge=0.03ms post=0.08ms routing=1.21ms seq_rerank=0.12ms evidence=1.94ms group_build=0.11ms group_sort=0.03ms
+[247/500] gpt4_1d80365e candidates=53 q=20 analysis=0.68ms total=4.58ms snapshot=3.54ms rerank=3.52ms sparse=1.04ms lex_merge=0.03ms post=0.07ms routing=0.95ms seq_rerank=0.00ms evidence=2.07ms group_build=0.07ms group_sort=0.02ms
+[230/500] e5ba910e_abs candidates=52 q=15 analysis=0.72ms total=3.50ms snapshot=2.81ms rerank=2.80ms sparse=0.74ms lex_merge=0.02ms post=0.06ms routing=0.66ms seq_rerank=0.00ms evidence=1.71ms group_build=0.07ms group_sort=0.02ms
+[239/500] 0bc8ad92 candidates=52 q=19 analysis=0.60ms total=2.91ms snapshot=2.26ms rerank=2.25ms sparse=0.65ms lex_merge=0.01ms post=0.10ms routing=0.54ms seq_rerank=0.00ms evidence=1.32ms group_build=0.05ms group_sort=0.02ms
+[245/500] gpt4_e072b769 candidates=47 q=23 analysis=0.66ms total=5.13ms snapshot=4.27ms rerank=4.25ms sparse=1.29ms lex_merge=0.03ms post=0.07ms routing=1.19ms seq_rerank=0.00ms evidence=2.57ms group_build=0.07ms group_sort=0.02ms
+[250/500] gpt4_8279ba02 candidates=51 q=12 analysis=0.63ms total=4.16ms snapshot=3.62ms rerank=3.61ms sparse=1.06ms lex_merge=0.03ms post=0.04ms routing=0.98ms seq_rerank=0.00ms evidence=2.21ms group_build=0.07ms group_sort=0.02ms
+[226/500] efc3f7c2 candidates=49 q=15 analysis=0.64ms total=3.74ms snapshot=2.96ms rerank=2.94ms sparse=0.66ms lex_merge=0.03ms post=0.04ms routing=0.59ms seq_rerank=0.00ms evidence=1.93ms group_build=0.07ms group_sort=0.03ms
+[241/500] gpt4_4929293a candidates=47 q=19 analysis=0.58ms total=4.42ms snapshot=3.41ms rerank=3.40ms sparse=1.08ms lex_merge=0.04ms post=0.07ms routing=0.97ms seq_rerank=0.00ms evidence=1.85ms group_build=0.07ms group_sort=0.03ms
+[246/500] 0db4c65d candidates=45 q=72 analysis=0.82ms total=8.92ms snapshot=5.79ms rerank=5.77ms sparse=2.16ms lex_merge=0.03ms post=0.19ms routing=1.93ms seq_rerank=0.19ms evidence=2.64ms group_build=0.07ms group_sort=0.03ms
+[240/500] af082822 candidates=44 q=19 analysis=0.72ms total=4.29ms snapshot=3.48ms rerank=3.47ms sparse=1.04ms lex_merge=0.02ms post=0.06ms routing=0.95ms seq_rerank=0.00ms evidence=2.06ms group_build=0.06ms group_sort=0.02ms
+[244/500] gpt4_1d4ab0c9 candidates=54 q=34 analysis=0.69ms total=6.37ms snapshot=5.04ms rerank=5.03ms sparse=1.77ms lex_merge=0.04ms post=0.09ms routing=1.64ms seq_rerank=0.00ms evidence=2.66ms group_build=0.06ms group_sort=0.03ms
+[495/500] eaca4986 candidates=50 q=47 analysis=1.08ms total=4.85ms snapshot=2.18ms rerank=2.16ms sparse=0.16ms lex_merge=0.03ms post=0.12ms routing=0.00ms seq_rerank=0.13ms evidence=0.00ms group_build=0.07ms group_sort=0.00ms
+[242/500] gpt4_b5700ca9 candidates=55 q=26 analysis=0.73ms total=5.14ms snapshot=4.02ms rerank=4.01ms sparse=1.30ms lex_merge=0.01ms post=0.07ms routing=1.21ms seq_rerank=0.00ms evidence=2.30ms group_build=0.07ms group_sort=0.02ms
+[496/500] c7cf7dfd candidates=52 q=53 analysis=0.85ms total=3.62ms snapshot=1.12ms rerank=1.09ms sparse=0.18ms lex_merge=0.04ms post=0.14ms routing=0.00ms seq_rerank=0.12ms evidence=0.00ms group_build=0.06ms group_sort=0.00ms
+[234/500] gpt4_59149c77 candidates=51 q=40 analysis=0.73ms total=7.47ms snapshot=5.63ms rerank=5.61ms sparse=2.99ms lex_merge=0.03ms post=0.10ms routing=2.85ms seq_rerank=0.00ms evidence=2.08ms group_build=0.06ms group_sort=0.02ms
+[233/500] 09ba9854_abs candidates=52 q=22 analysis=0.63ms total=4.90ms snapshot=3.83ms rerank=3.81ms sparse=1.26ms lex_merge=0.05ms post=0.07ms routing=1.15ms seq_rerank=0.00ms evidence=2.02ms group_build=0.06ms group_sort=0.03ms
+[243/500] 9a707b81 candidates=58 q=34 analysis=0.72ms total=6.40ms snapshot=4.69ms rerank=4.68ms sparse=2.12ms lex_merge=0.04ms post=0.09ms routing=1.99ms seq_rerank=0.13ms evidence=1.99ms group_build=0.07ms group_sort=0.02ms
+[238/500] gpt4_fa19884c candidates=47 q=36 analysis=0.68ms total=7.22ms snapshot=5.43ms rerank=5.41ms sparse=2.30ms lex_merge=0.05ms post=0.12ms routing=2.12ms seq_rerank=0.00ms evidence=2.47ms group_build=0.08ms group_sort=0.03ms
+[224/500] 87f22b4a candidates=49 q=14 analysis=0.68ms total=3.69ms snapshot=3.21ms rerank=3.19ms sparse=0.66ms lex_merge=0.01ms post=0.05ms routing=0.59ms seq_rerank=0.15ms evidence=1.95ms group_build=0.12ms group_sort=0.04ms
+[437/500] 6aeb4375_abs candidates=47 q=14 analysis=0.69ms total=3.09ms snapshot=2.48ms rerank=2.46ms sparse=0.50ms lex_merge=0.01ms post=0.05ms routing=0.44ms seq_rerank=0.00ms evidence=1.60ms group_build=0.07ms group_sort=0.02ms
+[421/500] 69fee5aa candidates=53 q=14 analysis=0.72ms total=6.34ms snapshot=5.40ms rerank=5.38ms sparse=2.77ms lex_merge=0.05ms post=0.11ms routing=2.61ms seq_rerank=0.00ms evidence=1.96ms group_build=0.17ms group_sort=0.02ms
+wrote benchmark report to comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz

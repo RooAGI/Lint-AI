@@ -1,4 +1,4 @@
-# Lint-AI server
+# Membrick server
 
 `server` exposes a versioned memory API backed by `MemoryService`. The storage
 engine is an implementation detail of that service; clients should use the
@@ -20,21 +20,21 @@ Use an explicit index directory for a persistent evaluation instance:
 ```bash
 cargo run --release --bin server -- \
   --bind 127.0.0.1:8080 \
-  --index /var/lib/lint-ai/memory-index \
+  --index /var/lib/membrick/memory-index \
   --server-token "$SERVER_TOKEN"
 ```
 
 `--bind` defaults to `127.0.0.1:8080`. If `--index` is omitted, the server
-discovers indexes under `<project-root>/.lint-ai` and uses the shared
+discovers indexes under `<project-root>/.membrick` and uses the shared
 `workspace-memory` store when present, falling back to a legacy Codex MCP index,
-the first discovered index, or an in-memory store. Use `--index` to select one
-store explicitly.
+another legacy MCP index, or creates persistent `workspace-memory` when no
+index exists. Use `--index` to select the workspace backing store explicitly.
 Bekind linguistic enrichment is disabled by default. Pass `--bekind` to enable
 its optional index-time tags and query-time analysis; when disabled, the server
 does not call or prewarm the Bekind daemon.
-Provider lifecycle telemetry is read from `<project-root>/.lint-ai/provider-telemetry`;
+Provider lifecycle telemetry is read from `<project-root>/.membrick/provider-telemetry`;
 the project root defaults to the server's current directory and can be set with
-`--project-root` or `LINT_AI_PROJECT_ROOT`.
+`--project-root` or `MEMBRICK_PROJECT_ROOT`.
 See [Telemetry](telemetry.md) for the telemetry streams, retention bounds,
 provider coverage, privacy behavior, and dashboard endpoints.
 With only `--project-root`, one server can inspect the shared workspace store
@@ -42,13 +42,15 @@ and the shared memory store in the dashboard. A project now uses this
 layout:
 
 ```text
-.lint-ai/
+.membrick/
   workspace-memory/   # code and documentation, indexed once for the project
   memory/             # session memories, shared by all agents
 ```
 
-MCP search composes `workspace-memory` with the shared `memory/` store at query
-time; the provider travels on each document (`integration`, `author_agent`,
+The resident service composes `workspace-memory` with the shared `memory/`
+store when publishing a generation; searches retain that published view. This
+composition reuses published segments. It does not reopen either store or
+rebuild indexes for each query. For attribution, the provider travels on each document (`integration`, `author_agent`,
 `{provider}-session:{id}` group ids) instead of in the directory layout.
 Legacy per-provider stores (`claude-memory/`, `codex-memory/`,
 `gemini-cli-memory/`, `agy-memory/`, `muse-memory/`) are migrated into
@@ -66,7 +68,7 @@ Use `--single-index` for the non-segmented layout or `--global-index` to query
 every segmented shard. These modes are intended primarily for controlled
 comparisons instead of the default routed segmented layout.
 
-By default, each multi-segment query runs the routed arm only, using the gated
+By default, each multi-segment query runs the routed arm only, using the
 coverage-local router. Pass `--fuse-global` to also run the corpus-wide
 all-segments arm and fuse it with the routed arm via reciprocal rank fusion.
 See `docs/benchmark-results.md` for the measured trade-off.
@@ -78,22 +80,53 @@ the router comparison in `docs/benchmark-results.md`:
 |---|---|
 | `sparse` | sparse overlap |
 | `local-distinctiveness` | plain local distinctiveness |
-| `coverage-local` | coverage-weighted local distinctiveness |
+| `coverage-local` | coverage-weighted local distinctiveness (**default**) |
 | `coverage-team` | coverage team selection |
 | `team-coverage-local` | team coverage local distinctiveness |
 | `typed-evidence-additive` | typed evidence, additive |
-| `gated-coverage-local` | gated coverage-local (**default**) |
+| `gated-coverage-local` | gated coverage-local |
 | `gated-coverage-team` | gated coverage-team |
 
-The default is the measured best recall-per-latency trade-off from the
-full 500-question comparison; the other values exist for controlled
-comparisons.
+The 500-question segmented benchmark found higher recall and MRR with
+coverage-local than plain local distinctiveness, with a small latency increase
+for fixed top-5 routing. On the separate 13,974-document project profile, plain
+local distinctiveness had a 15 ms warm-search median; gated coverage-local
+took about 700 ms. That gated strategy is distinct from the coverage-local
+default. Other routing values remain selectable for controlled comparisons.
+
+Before the single-writer consolidation, on 2026-10-11 a release server
+opened the existing 13,974-document workspace
+in 5.53 s and returned the first Codex MCP search in 177 ms (5 results); total
+process start to first results was 5.71 s. This is a cold process with the
+persistent index caches already populated. The provider MCP latency harness
+then ran 20 requests per concurrency after three warm-ups. At concurrency 1,
+median/p99 was 101.85/103.89 ms (9.84 requests/s); at concurrency 10,
+median/p99 was 239.86/333.70 ms (37.16 requests/s). These measurements include
+session handling and response serialization. The resident write-visibility
+checks also passed: provider and hook writes were searchable through the
+published view after their write routes completed. Raw route results are in
+the [provider MCP latency report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/provider-mcp-latency-refactor-2026-10-11.json).
+
+The release query harness seeded 13,974 synthetic workspace records in 14
+session groups, then ran 100 requests after 10 warm-ups. `/search` measured
+478.63 requests/s at concurrency 1 (p50 2.054 ms, p99 2.457 ms) and 1,134.28
+requests/s at concurrency 10 (p50 8.554 ms, p99 18.182 ms). The separate
+write harness used the same seed size and two 3-second repetitions. For
+single-record `/add/batch`, median accepted/published throughput was
+126.97/71.67 records/s with 3.474 ms p50 latency. For 128-record batches,
+throughput was 10,899.67/3,351.03 records/s with 3.987 ms p50 latency. Each
+cell's final written record was searchable after flush. These synthetic
+harnesses test the workspace `/search` and `/add/batch` paths; the provider MCP
+latency harness above measures its route separately. Reports:
+[query](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-query-refactor-2026-10-11.json),
+[writes](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-refactor-2026-10-11.json).
+
 By default the server binds only to localhost, such as `127.0.0.1:8080` or
 `[::1]:8080`. To bind a container or another network interface, explicitly pass
 `--allow-non-loopback` and configure `SERVER_TOKEN` or `JWT_SECRET`. This option
 cannot be combined with `--allow-unauthenticated`. Keep the host port private
 or place remote access behind an authenticated, encrypted proxy. See
-[Run Lint-AI with Docker](docker.md) for a localhost-only Compose setup.
+[Run Membrick with Docker](docker.md) for a localhost-only Compose setup.
 
 For a single-tenant deployment, also set `--tenant-id TENANT` (or
 `SERVER_TENANT_ID`). Requests whose `user_id` does not match this configured
@@ -131,18 +164,169 @@ The legacy routes are `POST /add`, `POST /add/batch`, `POST /search`,
 backward compatibility.
 
 Provider integrations use `POST /provider-memory/add/batch` and
-`POST /provider-memory/search` when they need the shared provider store
-regardless of the server's selected primary index.
+`POST /provider-memory/search` for shared captured memories. The resident
+`MemoryService` opens its workspace and captured-memory backing stores once
+per canonical project root. Both stores are private to that owner; providers
+never hold writable indexes. The batch-add endpoint has no workspace field and
+targets the primary workspace. Provider search may specify a workspace;
+requests without one use the primary `project_root`.
 
-Hermes and OpenClaw share one server process and provider memory store.
-Hermes uses `POST /provider-memory/add/batch` to write into
-`.lint-ai/memory/`, and `POST /provider-memory/search` to search that store
-composed with the workspace index. OpenClaw lifecycle callbacks use
-`/integrations/openclaw/hooks/{kind}` when the server is built with the
-`openclaw` feature; captures also land in `.lint-ai/memory/`. Both plugins use
-`LINTAI_SERVER_URL` and `LINTAI_SERVER_TOKEN` to configure their HTTP
-connection. The server uses plain HTTP. Keep it on loopback for local agent
-setups; for remote agents, use a separately secured tunnel or proxy.
+### Resident `MemoryService` ownership
+
+For each active workspace, the server has one mutable `MemoryService` owner,
+one bounded `StagedWriter` queue, and one published immutable search view. The
+service owns the captured-memory store and a boxed workspace service. Server
+state contains no separately writable workspace or provider owner. A registry
+maps canonical project roots to these resident runtimes.
+
+```mermaid
+flowchart LR
+    Clients[MCP tools, hooks, HTTP mutations] --> Queue[Per-workspace bounded write queue]
+    Watcher[Workspace watcher] --> Queue
+    Queue --> Writer[Per-workspace writer]
+    Writer --> Owner[Resident MemoryService for that workspace]
+    Owner --> Workspace[Private workspace store]
+    Owner --> Captured[Private shared captured-memory store]
+    Owner --> Builder[One frozen generation builder]
+    Builder -->|return completed generation| Owner
+    Owner -->|publish combined snapshot| Published[Published immutable search view]
+    Search[Search requests] --> Published
+```
+
+Workspace and captured-memory operations use target facades over the same
+queue. A facade does not create another writer, owner, or publication gate.
+`MemoryService` selects the backing store internally. MCP adds, hook upserts,
+board creation and posting, update/delete/supersede/expire operations,
+key-phrase backfill, and watcher reconciliation all use this queue.
+
+The writer tracks accepted, published, checkpointed, and visible revisions
+for each backing store. A workspace-wide flush captures both stores' target
+revisions and waits until both are published and checkpointed. At most one
+background generation builds at a time across the stores; the writer can
+continue admitting staged adds while that frozen generation builds. Existing
+journal recovery, receipt idempotency, and staged acknowledgement behavior
+are preserved. Synchronous lifecycle and board commands drain prior staged
+writes through the owner and publish the combined view before replying.
+Clean stores do not require another checkpoint for every board write.
+
+### Multiple project workspaces
+
+One server process can serve multiple project roots. The startup
+`--project-root` is opened immediately as the primary workspace. MCP tool
+calls, provider hook upserts, and provider-memory searches include their
+workspace root; the server canonicalizes that path and lazily opens one
+resident runtime for it. The primary root is allowed by default. Additional
+roots must be listed with repeatable `--workspace-root` options. Matching is
+exact after canonicalization, so a request for a parent directory or an
+unlisted sibling is rejected before the server opens or indexes it. For
+example:
+
+```bash
+cargo run --release --bin server -- \\
+  --project-root /Users/louis/sources/Membrick \\
+  --workspace-root /Users/louis/sources/roo-agent-builder \\
+  --max-active-workspaces 8
+```
+
+The active-workspace limit includes the primary root and defaults to 8. A
+request for an allowed root beyond the resident limit returns `429`; restart
+the server to release resident workspaces. Idle eviction is not implemented.
+Concurrent first-open attempts reserve capacity, and only one initialization
+is performed per canonical root. The runtime owns that project's workspace store,
+shared provider-memory store, `MemoryService`, staged writer, published search
+view, and workspace watcher. Later requests for the same canonical root reuse
+that runtime. Different roots initialize independently, so opening one project
+does not block searches against an already-open project.
+
+This lets Codex, Claude Code, or other provider processes for several folders
+point at the same local HTTP server. Keep the server bound to loopback for the
+single-user setup. The primary workspace still controls the dashboard and
+legacy requests that omit a workspace. MCP adapters send the workspace on each
+request, and writes and searches for that root reach the same resident owner.
+Each active workspace remains resident until the server exits. Do not run a
+second server process against the same workspace stores; the on-disk writer is
+single-process. See
+[Index concurrency](index-concurrency.md) for the registry, per-workspace
+writer, and publication model.
+
+`POST /provider-memory/add/batch` is a compatibility exception: its request
+does not contain a workspace and it writes to the primary workspace. Use the
+workspace-aware MCP upsert and hook routes for additional project roots.
+
+### Single-writer verification, 2026-10-11
+
+The refactor passes 39 server/writer tests, 97 `MemoryService` tests, and
+`cargo check --all-targets`. Coverage includes shared queue admission,
+acceptance while a generation is paused, a global visibility barrier covering
+both stores, recovery after a queued delete, and retained immutable views.
+A board-write regression fails on the previous implementation with
+`acknowledged board post is absent from the published search snapshot`, passes
+with the new path, and fails again after restoring and recompiling the old
+implementation.
+
+The broader library suite has five hook-test failures that also reproduce
+on the pre-consolidation source: Claude/Codex session-start directory and
+session-summary formatting assertions, plus the OpenClaw legacy bootstrap
+composition test. These are existing failures, separate from the passing
+resident owner, queue, visibility, and recovery checks.
+
+Paired release measurements use isolated workspaces with 13,974 synthetic
+records across 14 seed batches. Query cells use 100 measured requests and
+five warmups at concurrency 1 and 10. Batch-write cells use batch size 128,
+eight seconds of writes, two warmups, and three repetitions.
+
+| Measurement | Previous two writers | One resident writer |
+|---|---:|---:|
+| Warm `/search` p50, concurrency 1 | 1.853 ms | 1.894 ms |
+| Warm `/search` p50, concurrency 10 | 8.980 ms | 9.172 ms |
+| Accepted batch-write records/s, median | 5,961.83 | 6,017.54 |
+| Published batch-write records/s, median including final flush | 2,786.94 | 2,902.42 |
+| Batch-write acknowledgement p99, median | 5.018 ms | 5.011 ms |
+
+These short synthetic measurements support comparable warm-query and staged
+write performance; they are not a new cold-start measurement of the real
+workspace or a long-duration throughput guarantee. All measured final writes
+were searchable after flush. Raw results are in
+`comparison/results/query-single-writer-{control,refactor}-2026-10-11.json`
+and `comparison/results/write-only-single-writer-batch8s-{control,refactor}-2026-10-11.json`.
+The earlier three-second write trials are retained in
+`comparison/results/write-only-single-writer-{control,refactor}-2026-10-11.json`;
+their batch results varied with whether a request crossed snapshot capture
+at the end of the measurement window.
+
+Codex, Claude Code, Gemini, Agy, Muse, OpenClaw, and Hermes MCP memory tools
+use `POST /provider-memory/mcp/tools/call`. Each request supplies the
+workspace root, provider, session, and tool arguments. The server canonicalizes
+the root and routes `add_memory` through that workspace's resident writer with
+the captured-memory target, while searches read its published snapshot.
+
+Provider hooks use the same workspace owner. `POST
+/provider-memory/mcp/documents/upsert` accepts either one `document` or a
+`documents` batch with workspace, provider, session, and user context. The
+writer publishes the complete batch before acknowledging it. Roo tool-result
+replay can include `replace_group` with a
+filter key and value so removed chunks disappear in the same publication.
+Codex, Claude, Gemini-compatible, Agy, OpenClaw, and Roo Runtime hooks use the
+resident search route for retrieval. Workspace file-change captures are also
+batched through the resident writer. The backend watches the configured
+workspace, reconciles Markdown changes into its retained workspace store, and
+publishes them through the same writer before recording the new filesystem
+fingerprint.
+Configure provider processes with `MEMBRICK_SERVER_URL` (default
+`http://127.0.0.1:8080`) and, when server-token authentication is enabled,
+`MEMBRICK_SERVER_TOKEN`. The legacy `LINTAI_SERVER_URL` and
+`LINTAI_SERVER_TOKEN` names remain accepted. Start the shared Membrick server
+before starting provider processes. They return a transport error if that
+resident backend is unavailable; they do not open a local fallback index.
+
+Hermes and OpenClaw can share one server process. OpenClaw hook payloads with a
+workspace directory are routed to that workspace's runtime. Hermes currently
+uses the legacy `/provider-memory/add/batch` endpoint, which writes to the
+primary workspace; its `/provider-memory/search` request can include an
+optional `workspace` field. Both plugins use `MEMBRICK_SERVER_URL` and
+`MEMBRICK_SERVER_TOKEN` to configure their HTTP connection. The server uses
+plain HTTP. Keep it on loopback for local agent setups; for remote agents, use
+a separately secured tunnel or proxy.
 
 ## Dashboard and observability
 
@@ -207,9 +391,9 @@ runs:
 | Routed segment | 237.84 req/s | 1,512.31 req/s | 5.91 ms | 11.97 ms |
 
 The five-run summary and raw repetitions are in
-[`throughput-layout-latest.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-layout-latest.json).
+[`throughput-layout-latest.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-layout-latest.json).
 An earlier five-run cold-start experiment is preserved separately in
-[`throughput-layout-cold-start-2026-09-17.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-layout-cold-start-2026-09-17.json);
+[`throughput-layout-cold-start-2026-09-17.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-layout-cold-start-2026-09-17.json);
 it produced different medians and must not be merged with the later run.
 
 ### Current single-index optimization diagnostic
@@ -230,7 +414,7 @@ The run used a local Darwin arm64 host; the exact hardware model was not
 captured. The source was the `274b5c1` checkout with uncommitted working-tree
 changes, so these numbers describe that measured build only. The full result
 and command are in
-[`throughput-single-index-2026-10-03.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-single-index-2026-10-03.json).
+[`throughput-single-index-2026-10-03.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-single-index-2026-10-03.json).
 Because this run used warm-ups and only one repetition, compare it with the
 published v0.2.0 cold-start medians as directional evidence, not as a strict
 apples-to-apples release regression or release claim.
@@ -248,7 +432,7 @@ contains exactly one global segment:
 This is the pre-fix working-tree diagnostic. It had one repetition and its
 exact hardware model and server feature set were not captured. The command and
 full result are in
-[`throughput-global-segmented-2026-10-03.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-global-segmented-2026-10-03.json).
+[`throughput-global-segmented-2026-10-03.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-global-segmented-2026-10-03.json).
 
 The one-segment filter fix switched this case to the same bitmap-based filter
 path used by single-index mode. The rerun used the same workload and 100
@@ -263,7 +447,7 @@ That is 2.8x the pre-fix throughput at C=1 and 2.3x at C=10 in these single
 runs. The after-fix result is close to the separate single-index diagnostic;
 these remain working-tree measurements, not release claims. Full results are
 in
-[`throughput-global-one-segment-2026-10-03.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-global-one-segment-2026-10-03.json).
+[`throughput-global-one-segment-2026-10-03.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-global-one-segment-2026-10-03.json).
 
 #### Why the one-segment path is slower
 
@@ -287,9 +471,9 @@ for the segmented snapshot; after the fix it took 0.034–0.037 ms. The index
 query fell from about 3.8–4.3 ms to about 1.0–1.4 ms. This confirms the
 bitmap-versus-allow-list difference caused most of the gap; it is not inherent
 to one segment. Relevant code is in
-[`persistence.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/pipeline/persistence.rs)
+[`persistence.rs`](https://github.com/RooAGI/Membrick/blob/main/src/pipeline/persistence.rs)
 and
-[`query_plan.rs`](https://github.com/RooAGI/Lint-AI/blob/main/src/query_plan.rs).
+[`query_plan.rs`](https://github.com/RooAGI/Membrick/blob/main/src/query_plan.rs).
 
 #### Multi-segment routed filter cost
 
@@ -317,9 +501,9 @@ multi-segment C=10 result remains lower because it executes five routed segment
 queries. The earlier and follow-up runs used different request counts, so
 compare their throughput only directionally. Both are working-tree diagnostics,
 not release benchmarks. The result is in
-[`throughput-routed-multisegment-filter-fix-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-multisegment-filter-fix-2026-10-04.json);
+[`throughput-routed-multisegment-filter-fix-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-multisegment-filter-fix-2026-10-04.json);
 the earlier baseline profile is in
-[`throughput-routed-multisegment-profile-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-multisegment-profile-2026-10-04.json).
+[`throughput-routed-multisegment-profile-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-multisegment-profile-2026-10-04.json).
 
 The standalone HTTP benchmark does not initialize provider MCP watchers. Query
 telemetry is recorded in memory on this request path; provider MCP telemetry
@@ -327,7 +511,7 @@ continues to use the persisted project ledger. All measurements are local
 loopback results, not an internet-facing SLA; they exclude network distance,
 TLS termination, and client-side processing. Benchmark scripts, workload
 definitions, and artifacts are in
-[`comparison/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/README.md).
+[`comparison/README.md`](https://github.com/RooAGI/Membrick/blob/main/comparison/README.md).
 
 A warmed Instruments Time Profiler capture of the fixed 23-segment route ran
 under C=10 load for 17 seconds (20,013 requests, 1,177 req/s, p50 8.64 ms,
@@ -338,7 +522,7 @@ and memory copy/compare functions. This points the next investigation toward
 shard-local candidate scoring and ranking. Only 32.5% of sample rows had
 resolved symbols, so the profile is directional and its raw sample counts
 should not be read as CPU percentages. See
-[`throughput-routed-multisegment-time-profile-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-multisegment-time-profile-2026-10-04.json).
+[`throughput-routed-multisegment-time-profile-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-multisegment-time-profile-2026-10-04.json).
 
 The first ranking optimization replaces full candidate sorts with partial
 selection of the top 100 candidates for reranking and top 200 for final group
@@ -348,7 +532,7 @@ from 1,024 to 1,054 req/s. Median per-shard candidate-rank time moved from
 0.075 ms to 0.017 ms. This is a modest throughput gain; ranking was a small
 part of total query time, so further work should target candidate scoring and
 accumulation. Full results are in
-[`throughput-routed-partial-ranking-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-partial-ranking-2026-10-04.json).
+[`throughput-routed-partial-ranking-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-partial-ranking-2026-10-04.json).
 
 A single-segment profile on the same 23,366-record corpus measured 356 req/s
 at C=1 and 1,916 req/s at C=10. The index query reported 2,404 candidates
@@ -361,7 +545,7 @@ moved from 356 to 360 req/s, while C=10 moved from 1,916 to 1,773 req/s.
 That is not a demonstrated end-to-end gain. The
 `candidate_accumulation_ms` timing covers the same loop as `metadata_ms`, so
 those values overlap and must not be added. See
-[`throughput-single-segment-internal-profile-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-single-segment-internal-profile-2026-10-04.json).
+[`throughput-single-segment-internal-profile-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-single-segment-internal-profile-2026-10-04.json).
 
 A follow-up sampled one candidate in every 64 to separate candidate resolution
 from topic, document-type, and claim scoring. Candidate resolution averaged
@@ -376,17 +560,17 @@ the profile artifact above.
 
 The sampled substage profiler has since been removed from the query loop. The
 candidate-ID vector and `candidates.entry(doc_u32).or_default()` lookup are
-restored. I reran the benchmark with `LINT_AI_QUERY_TIMINGS=1`, matching the
+restored. I reran the benchmark with `MEMBRICK_QUERY_TIMINGS=1`, matching the
 setting recorded for the 1,916 req/s run. Across three runs, the median was
 374 req/s at C=1 and 1,922 req/s at C=10. C=10 ranged from 1,765 to 2,115
 req/s, so the rerun is consistent with 1,916 within benchmark variation. The
 earlier 371/1,850 run had timing unset and is a separate uninstrumented result.
-The runner sets `LINT_AI_DISABLE_QUERY_CACHE`, but current source does not read
+The runner sets `MEMBRICK_DISABLE_QUERY_CACHE`, but current source does not read
 it; effective cache behavior is the default, and the earlier artifact's
 "disabled" cache label cannot be verified from current code. Results are in
-[`throughput-single-segment-restored-profile-rerun-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-single-segment-restored-profile-rerun-2026-10-04.json)
+[`throughput-single-segment-restored-profile-rerun-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-single-segment-restored-profile-rerun-2026-10-04.json)
 and the uninstrumented run is recorded in
-[`throughput-single-segment-revert-rerun-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-single-segment-revert-rerun-2026-10-04.json).
+[`throughput-single-segment-revert-rerun-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-single-segment-revert-rerun-2026-10-04.json).
 
 #### Routed throughput and shared Rayon pool
 
@@ -415,7 +599,7 @@ evidence. Full benchmark tables and artifacts are in the
 The separate stage timer supersedes older labels: `filter_ms` describes
 document filtering, not route scoring, and `default_segment_execution_ms`
 included coordinator setup. See the
-[`throughput-routed-query-stage-profile-2026-10-04.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-routed-query-stage-profile-2026-10-04.json)
+[`throughput-routed-query-stage-profile-2026-10-04.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-routed-query-stage-profile-2026-10-04.json)
 for the definitions and full measurements.
 
 #### Mixed read/write load
@@ -437,7 +621,7 @@ about 27.5 times the single-add record rate. Median request latency ranged from
 294 ms to 1,341 ms as batch size increased. All writes succeeded and each
 repetition's final record was searchable. Treat these as working-tree
 diagnostics, not release capacity claims. See the [full results and setup](comparison.md#write-only-diagnostic-2026-10-05)
-and [raw report](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/throughput-write-only-2026-10-05.json).
+and [raw report](https://github.com/RooAGI/Membrick/blob/main/comparison/results/throughput-write-only-2026-10-05.json).
 
 A follow-up profile attributed about 44% of sampled write-path CPU time to full
 semantic snapshot persistence and about 35% to segment and routing-summary

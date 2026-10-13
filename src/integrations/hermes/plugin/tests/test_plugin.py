@@ -1,4 +1,4 @@
-"""Unit tests for the hermes-plugin-lintai directory plugin.
+"""Unit tests for the hermes-plugin-membrick directory plugin.
 
 Stdlib unittest only — no dependencies. Run from the plugin directory:
     python3 -m unittest discover -s tests -v
@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import __init__ as plugin
 from __init__ import (
-    LintaiPlugin,
-    LintaiClient,
+    MembrickPlugin,
+    MembrickClient,
     WriteQueue,
     build_session_record,
     build_subagent_start_record,
@@ -51,9 +51,9 @@ class FakeCtx:
         self.hooks.setdefault(name, []).append(fn)
 
 
-class LintaiClientRouteTest(unittest.TestCase):
+class MembrickClientRouteTest(unittest.TestCase):
     def test_uses_provider_memory_http_routes(self):
-        client = LintaiClient("http://127.0.0.1:8080", "hermes")
+        client = MembrickClient("http://127.0.0.1:8080", "hermes")
         client._post = Mock(side_effect=[{"data": [{"content": "hit"}]}, {"ok": True}])
 
         self.assertEqual(client.search("needle", top_k=3), [{"content": "hit"}])
@@ -343,7 +343,7 @@ class PluginHookTest(unittest.TestCase):
     def _plugin(self, **cfg_overrides):
         cfg = load_config(env={}, hermes_home="/nonexistent-dir")
         cfg.update(cfg_overrides)
-        p = LintaiPlugin(config=cfg)
+        p = MembrickPlugin(config=cfg)
         p.client = FakeClient(hits=[{"content": "user likes tea",
                                      "score": 0.95}])
         # swap the queue for a threadless one

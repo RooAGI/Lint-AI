@@ -39,7 +39,7 @@ mod lint_pipeline {
 
     fn setup_fixture() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "lint_ai_fixture_{}_{}",
+            "membrick_fixture_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

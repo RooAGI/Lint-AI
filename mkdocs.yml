@@ -1,8 +1,8 @@
-site_name: Lint-AI
-site_description: Lint-AI is open-source agent memory for Claude Code, Codex, and Gemini CLI. Retrieve current evidence, track superseded decisions, and preserve history.
-site_url: https://rooagi.github.io/Lint-AI/
-repo_url: https://github.com/RooAGI/Lint-AI
-repo_name: RooAGI/Lint-AI
+site_name: Membrick
+site_description: Membrick is open-source agent memory for Claude Code, Codex, and Gemini CLI. Retrieve current evidence, track superseded decisions, and preserve history.
+site_url: https://rooagi.github.io/Membrick/
+repo_url: https://github.com/RooAGI/Membrick
+repo_name: RooAGI/Membrick
 edit_uri: edit/main/docs/
 
 theme:
@@ -57,9 +57,11 @@ nav:
       - HTTP server: server.md
       - Docker: docker.md
       - MCP interface: mcp.md
+      - Node.js binding: node.md
+      - Update notifications: update-notifications.md
   - Agents:
       - Overview: connect-agent.md
-      - How Lint-AI remembers: agent-memory.md
+      - How Membrick remembers: agent-memory.md
       - Agent Integration: agents.md
       - Stale Agent Memory: stale-memory.md
       - Session Recording: session-recording-design.md
@@ -101,6 +103,7 @@ nav:
   - Languages:
       - Korean: korean.md
   - Releases:
+      - 0.4.0: releases/0.4.0.md
       - 0.3.0: releases/0.3.0.md
       - Tantivy upgrade verification: releases/tantivy-0.26.2-verification.md
       - 0.2.1: releases/0.2.1.md
@@ -159,7 +162,7 @@ extra:
   analytics_id: !ENV [GOOGLE_ANALYTICS_ID, ""]
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/RooAGI/Lint-AI
-      name: Lint-AI on GitHub
+      link: https://github.com/RooAGI/Membrick
+      name: Membrick on GitHub
 
 copyright: Apache-2.0 licensed · Built by <a href="https://www.rooagi.com">RooAGI</a>

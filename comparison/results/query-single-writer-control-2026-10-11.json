@@ -1,0 +1,30 @@
+{
+  "mode": "segment",
+  "records": 13974,
+  "seed_sessions": 14,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 5,
+  "server": "/tmp/lint-ai-before-single-writer-server",
+  "measurements": [
+    {
+      "concurrency": 1,
+      "requests": 100,
+      "p50_ms": 1.853,
+      "p90_ms": 2.01,
+      "p99_ms": 2.596,
+      "mean_ms": 1.884,
+      "throughput_per_s": 527.73
+    },
+    {
+      "concurrency": 10,
+      "requests": 100,
+      "p50_ms": 8.98,
+      "p90_ms": 13.072,
+      "p99_ms": 19.667,
+      "mean_ms": 8.905,
+      "throughput_per_s": 1076.99
+    }
+  ],
+  "server_binary_sha256": "9f331b9ebdf9a2b33f3874b20d7d40b87db1a9b3be090f83504c1c6e01413b85",
+  "isolated_workspace": true
+}

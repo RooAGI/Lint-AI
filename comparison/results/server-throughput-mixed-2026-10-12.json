@@ -1,0 +1,376 @@
+{
+  "benchmark": "http-mixed-read-write-load",
+  "created_at_utc": "2026-10-13T01:48:46.399039+00:00",
+  "source_revision": "95a1d8e54ada3a113647bd54a8e6cceaec6a7e79",
+  "source_tree": "working tree",
+  "host": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm"
+  },
+  "server": "target/release/server",
+  "server_binary_sha256": "1786c063bbd650424f42c2211c85d76beccc702c56d0d1cdd789023e46d7bfa4",
+  "records_before_load": 23366,
+  "readers": 10,
+  "writers": 1,
+  "write_batch_records": 8,
+  "write_interval_ms": 0,
+  "writer_session_group": null,
+  "writer_session_distribution": "unique-per-write",
+  "configured_phase_seconds": 15,
+  "configured_control_seconds": 15,
+  "repetitions": 3,
+  "runs": [
+    {
+      "repetition": 1,
+      "records_before_load": 23366,
+      "seed_sessions": 23,
+      "readers": 10,
+      "writers": 1,
+      "write_batch_records": 8,
+      "write_interval_ms": 0,
+      "writer_session_group": null,
+      "writer_session_distribution": "unique-per-write",
+      "configured_phase_seconds": 15,
+      "configured_control_seconds": 15,
+      "phases": [
+        {
+          "phase": "read-only-control",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 0,
+          "write_batch_records": 8,
+          "write_interval_ms": 0,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 15.004,
+            "requests": 12120,
+            "successful_requests": 12120,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 807.77,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 11.953,
+              "p95": 19.299,
+              "p99": 24.946,
+              "mean": 12.376
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 15.004,
+            "requests": 0,
+            "successful_requests": 0,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 0.0,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "mean": null
+            }
+          },
+          "flush_seconds": 0.0,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 0.0,
+          "post_write_visibility": null
+        },
+        {
+          "phase": "concurrent-read-write",
+          "reader_workers": 10,
+          "empty_search_responses": 36694,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 1,
+          "write_batch_records": 8,
+          "write_interval_ms": 0,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 15.004,
+            "requests": 38541,
+            "successful_requests": 38541,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 2568.63,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 3.297,
+              "p95": 6.971,
+              "p99": 15.657,
+              "mean": 3.89
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 15.004,
+            "requests": 2670,
+            "successful_requests": 2670,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 177.95,
+            "records_accepted": 21360,
+            "latency_ms": {
+              "p50": 4.398,
+              "p95": 6.966,
+              "p99": 9.931,
+              "mean": 5.606
+            }
+          },
+          "flush_seconds": 30.002,
+          "flush_status": 408,
+          "flush_error": "{\"detail\":\"request timed out\"}",
+          "published_write_records_per_second": 474.6,
+          "post_write_visibility": {
+            "checked": true,
+            "http_status": 200,
+            "written_record_visible": false,
+            "query": "Mixedloadunique21359"
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 2,
+      "records_before_load": 23366,
+      "seed_sessions": 23,
+      "readers": 10,
+      "writers": 1,
+      "write_batch_records": 8,
+      "write_interval_ms": 0,
+      "writer_session_group": null,
+      "writer_session_distribution": "unique-per-write",
+      "configured_phase_seconds": 15,
+      "configured_control_seconds": 15,
+      "phases": [
+        {
+          "phase": "read-only-control",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 0,
+          "write_batch_records": 8,
+          "write_interval_ms": 0,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 15.009,
+            "requests": 13453,
+            "successful_requests": 13453,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 896.34,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 10.799,
+              "p95": 17.005,
+              "p99": 20.717,
+              "mean": 11.151
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 15.009,
+            "requests": 0,
+            "successful_requests": 0,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 0.0,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "mean": null
+            }
+          },
+          "flush_seconds": 0.0,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 0.0,
+          "post_write_visibility": null
+        },
+        {
+          "phase": "concurrent-read-write",
+          "reader_workers": 10,
+          "empty_search_responses": 41671,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 1,
+          "write_batch_records": 8,
+          "write_interval_ms": 0,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 16.414,
+            "requests": 43550,
+            "successful_requests": 43550,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 2653.21,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 2.984,
+              "p95": 5.836,
+              "p99": 12.93,
+              "mean": 3.443
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 16.414,
+            "requests": 2739,
+            "successful_requests": 2739,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 166.87,
+            "records_accepted": 21912,
+            "latency_ms": {
+              "p50": 4.228,
+              "p95": 6.444,
+              "p99": 9.544,
+              "mean": 5.98
+            }
+          },
+          "flush_seconds": 30.003,
+          "flush_status": 408,
+          "flush_error": "{\"detail\":\"request timed out\"}",
+          "published_write_records_per_second": 472.07,
+          "post_write_visibility": {
+            "checked": true,
+            "http_status": 200,
+            "written_record_visible": false,
+            "query": "Mixedloadunique21911"
+          }
+        }
+      ]
+    },
+    {
+      "repetition": 3,
+      "records_before_load": 23366,
+      "seed_sessions": 23,
+      "readers": 10,
+      "writers": 1,
+      "write_batch_records": 8,
+      "write_interval_ms": 0,
+      "writer_session_group": null,
+      "writer_session_distribution": "unique-per-write",
+      "configured_phase_seconds": 15,
+      "configured_control_seconds": 15,
+      "phases": [
+        {
+          "phase": "read-only-control",
+          "reader_workers": 10,
+          "empty_search_responses": 0,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 0,
+          "write_batch_records": 8,
+          "write_interval_ms": 0,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 15.008,
+            "requests": 14314,
+            "successful_requests": 14314,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 953.77,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 10.24,
+              "p95": 15.864,
+              "p99": 19.793,
+              "mean": 10.479
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 15.008,
+            "requests": 0,
+            "successful_requests": 0,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 0.0,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": null,
+              "p95": null,
+              "p99": null,
+              "mean": null
+            }
+          },
+          "flush_seconds": 0.0,
+          "flush_status": 204,
+          "flush_error": null,
+          "published_write_records_per_second": 0.0,
+          "post_write_visibility": null
+        },
+        {
+          "phase": "concurrent-read-write",
+          "reader_workers": 10,
+          "empty_search_responses": 43510,
+          "reader_user_id": "bench-user",
+          "writer_user_id": "mixed-bench-user",
+          "writer_workers": 1,
+          "write_batch_records": 8,
+          "write_interval_ms": 0,
+          "search": {
+            "operation": "search",
+            "elapsed_seconds": 15.295,
+            "requests": 45304,
+            "successful_requests": 45304,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 2961.99,
+            "records_accepted": 0,
+            "latency_ms": {
+              "p50": 2.832,
+              "p95": 5.706,
+              "p99": 12.637,
+              "mean": 3.31
+            }
+          },
+          "write": {
+            "operation": "write",
+            "elapsed_seconds": 15.295,
+            "requests": 2523,
+            "successful_requests": 2523,
+            "rejected_429": 0,
+            "other_errors": 0,
+            "requests_per_second": 164.95,
+            "records_accepted": 20184,
+            "latency_ms": {
+              "p50": 4.202,
+              "p95": 6.112,
+              "p99": 9.221,
+              "mean": 6.05
+            }
+          },
+          "flush_seconds": 30.003,
+          "flush_status": 408,
+          "flush_error": "{\"detail\":\"request timed out\"}",
+          "published_write_records_per_second": 445.58,
+          "post_write_visibility": {
+            "checked": true,
+            "http_status": 200,
+            "written_record_visible": false,
+            "query": "Mixedloadunique20183"
+          }
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Each repetition uses a fresh server process and temporary index.",
+    "Read-only control and mixed phases are paired on one server and corpus per repetition.",
+    "Search queries vary by nonce to prevent repeated-query cache reuse in either phase.",
+    "Write requests are /add/batch calls with distinct request IDs.",
+    "Each writer can optionally wait between write batches to model sparse update rates.",
+    "HTTP 429 responses are counted as rejected writes, not retried.",
+    "Each mixed phase searches for a record from a successfully accepted write after load ends."
+  ]
+}

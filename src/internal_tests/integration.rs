@@ -1,4 +1,4 @@
-// Public-API integration tests for the curated `lint_ai` surface.
+// Public-API integration tests for the curated `membrick` surface.
 // White-box tests for crate-internal modules live in `src/` unit tests.
 use crate::index::{DocRecord, MemoryIndex, Provenance};
 use crate::{RankedTerm, Tier1Entity};
@@ -45,7 +45,7 @@ fn query_baseline_still_works_without_semantic_match() {
             index_version: "test".to_string(),
         },
         content_hash: String::new(),
-            semantic_tags: Vec::new(),
+        semantic_tags: Vec::new(),
     }]);
 
     let results = index.query("docker", 10);
@@ -226,7 +226,7 @@ fn semantic_expansion_improves_recall_for_synonyms() {
             index_version: "test".to_string(),
         },
         content_hash: String::new(),
-            semantic_tags: Vec::new(),
+        semantic_tags: Vec::new(),
     }]);
 
     // "occupation" expands to "job" in bundled lexical subsets.

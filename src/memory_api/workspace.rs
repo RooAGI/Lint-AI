@@ -141,6 +141,7 @@ pub(super) fn with_shared_memory_service<T>(
     root: &Path,
     operation: impl FnOnce(&mut MemoryService) -> Result<T>,
 ) -> Result<T> {
+    crate::state_paths::migrate_legacy_state_dir(root)?;
     let memory_root = shared_memory_root(root);
     fs::create_dir_all(&memory_root)?;
     let lock_path = memory_root.join(".board-operation.lock");
@@ -155,7 +156,7 @@ pub(super) fn with_shared_memory_service<T>(
     operation(&mut service)
 }
 
-/// Directory name (under `.lint-ai/`) for the shared cross-provider memory
+/// Directory name (under `.membrick/`) for the shared cross-provider memory
 /// store. All agents read and write the same memory; the provider is kept as
 /// per-document attribution (`filters.provider`, `author_agent`, and the
 /// `{provider}-session:{id}` group id) rather than as a storage silo.
@@ -173,7 +174,7 @@ const LEGACY_PROVIDERS: &[RecordingProvider] = &[
     RecordingProvider::RooRuntime,
 ];
 
-/// Directory name (under `.lint-ai/`) of the legacy per-provider memory silo
+/// Directory name (under `.membrick/`) of the legacy per-provider memory silo
 /// for `provider`, e.g. `codex-memory`.
 fn legacy_provider_memory_dir(provider: RecordingProvider) -> String {
     format!("{}-memory", provider.as_str())
@@ -181,7 +182,7 @@ fn legacy_provider_memory_dir(provider: RecordingProvider) -> String {
 
 /// Path to the shared memory store for a workspace root.
 pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
-    root.join(".lint-ai").join(SHARED_MEMORY_DIR)
+    root.join(".membrick").join(SHARED_MEMORY_DIR)
 }
 
 /// One-time, idempotent migration of legacy per-provider memory stores into
@@ -190,11 +191,11 @@ pub fn shared_memory_root(root: &Path) -> std::path::PathBuf {
 /// and the legacy directory is removed only after the shared store refreshes
 /// successfully. Failures leave the legacy directory untouched.
 pub(super) fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
-    let lint_ai = root.join(".lint-ai");
+    let membrick = root.join(".membrick");
     let mut migrated_any = false;
     for provider in LEGACY_PROVIDERS {
         let provider = *provider;
-        let legacy_root = lint_ai.join(legacy_provider_memory_dir(provider));
+        let legacy_root = membrick.join(legacy_provider_memory_dir(provider));
         if !legacy_root.exists() {
             continue;
         }
@@ -249,7 +250,7 @@ pub(super) fn migrate_legacy_provider_memory_dirs(root: &Path) -> Result<()> {
 }
 
 /// Normalize a document copied out of a legacy per-provider silo.
-/// Older Lint-AI versions stamped documents with `filters.integration`
+/// Older Membrick versions stamped documents with `filters.integration`
 /// (values like "claude-code", and the key itself is pre-canonicalization);
 /// the shared store and the MCP `provider` search argument use the
 /// canonical `filters.provider` values. The legacy directory is
@@ -281,12 +282,12 @@ pub fn segmented_store_options() -> PipelineOptions {
     }
 }
 
-/// The shared project corpus. It contains workspace files once; provider
-/// memories stay in their own stores and are composed into an in-memory query
-/// view for the requesting provider.
+/// The shared project corpus contains workspace files once. Captured memories
+/// live in the shared memory store. One resident owner publishes both stores
+/// into the immutable view searched by every provider.
 pub const WORKSPACE_MEMORY_NAME: &str = "workspace-memory";
 pub fn trace_event(event: &str) {
-    let Some(path) = std::env::var_os("LINT_AI_MCP_TRACE_PATH") else {
+    let Some(path) = std::env::var_os("MEMBRICK_MCP_TRACE_PATH") else {
         return;
     };
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -305,7 +306,8 @@ pub(super) fn open_persistent_store(
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<MemoryService> {
-    let index_root = root.join(".lint-ai").join(index_name);
+    crate::state_paths::migrate_legacy_state_dir(root)?;
+    let index_root = root.join(".membrick").join(index_name);
     let _init_lock = StoreInitLock::acquire(&index_root)?;
     let mut store = MemoryService::at_path(&index_root, segmented_store_options())?;
     let state = workspace_state(root, ignore_paths)?;
@@ -324,14 +326,14 @@ pub(super) fn open_persistent_store(
         store.refresh_index()?;
         write_index_state(&index_root, &state)?;
     }
-    if sync_memory_documents(&root.join(".lint-ai").join(memory_name), &mut store)? {
+    if sync_memory_documents(&root.join(".membrick").join(memory_name), &mut store)? {
         store.refresh_index()?;
     }
     Ok(store)
 }
 
-/// Open the persistent workspace memory and compose it with one provider's
-/// private memory store. The composed store is intentionally in-memory: it
+/// Open the persistent workspace and shared captured-memory stores and return
+/// their detached read view for legacy library adapters. The composed store is intentionally in-memory: it
 /// transfers the already-published workspace and provider segments rather than
 /// reprocessing source documents, then recomputes only cross-store routing and
 /// ranking statistics.
@@ -341,15 +343,71 @@ pub(super) fn open_workspace_memory_store(
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<MemoryService> {
+    open_workspace_memory_owner(root, memory_name, ignore_paths, source_documents)?
+        .published_read_view()
+}
+
+/// Open one resident owner for a workspace. It retains the persistent
+/// workspace store and the writable provider-memory store; staged
+/// publication composes their snapshots for search without reopening either
+/// store on each request.
+pub(super) fn open_workspace_memory_owner(
+    root: &Path,
+    memory_name: &str,
+    ignore_paths: &[String],
+    source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
+) -> Result<MemoryService> {
+    let workspace_root = root.join(".membrick").join(WORKSPACE_MEMORY_NAME);
+    open_workspace_memory_owner_at(
+        root,
+        &workspace_root,
+        memory_name,
+        ignore_paths,
+        source_documents,
+    )
+}
+
+pub(super) fn open_workspace_memory_owner_at(
+    root: &Path,
+    workspace_root: &Path,
+    memory_name: &str,
+    ignore_paths: &[String],
+    source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
+) -> Result<MemoryService> {
+    open_workspace_memory_owner_with_options_at(
+        root,
+        workspace_root,
+        memory_name,
+        ignore_paths,
+        segmented_store_options(),
+        source_documents,
+    )
+}
+
+pub(super) fn open_workspace_memory_owner_with_options_at(
+    root: &Path,
+    workspace_root: &Path,
+    memory_name: &str,
+    ignore_paths: &[String],
+    options: PipelineOptions,
+    source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
+) -> Result<MemoryService> {
+    crate::state_paths::migrate_legacy_state_dir(root)?;
+    anyhow::ensure!(
+        matches!(
+            options.memory_index_layout,
+            MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+        ),
+        "resident workspace and provider stores require segmented indexes"
+    );
     // One-time migration: legacy per-provider silos (e.g. `claude-memory/`)
     // merge into the shared `memory/` store. New callers pass
     // `SHARED_MEMORY_DIR`; the parameter is kept for the transition.
     if memory_name == SHARED_MEMORY_DIR {
         migrate_legacy_provider_memory_dirs(root)?;
     }
-    let workspace_root = root.join(".lint-ai").join(WORKSPACE_MEMORY_NAME);
-    let _init_lock = StoreInitLock::acquire(&workspace_root)?;
-    let mut workspace = MemoryService::at_path(&workspace_root, segmented_store_options())?;
+    let _init_lock = StoreInitLock::acquire(workspace_root)?;
+    let mut workspace = MemoryService::at_path(workspace_root, options.clone())?;
     let state = workspace_state(root, ignore_paths)?;
     if workspace.is_empty() || !index_is_current(&workspace_root, &state) {
         for doc_id in workspace
@@ -364,15 +422,15 @@ pub(super) fn open_workspace_memory_store(
             workspace.upsert(document);
         }
         workspace.refresh_index()?;
-        write_index_state(&workspace_root, &state)?;
+        write_index_state(workspace_root, &state)?;
     }
 
-    let memory_root = root.join(".lint-ai").join(memory_name);
-    let provider_memory = memory_root
-        .exists()
-        .then(|| MemoryService::at_path(&memory_root, segmented_store_options()))
-        .transpose()?;
-    MemoryService::compose_segmented(workspace, provider_memory)
+    let memory_root = root.join(".membrick").join(memory_name);
+    let provider_memory = MemoryService::at_path(&memory_root, options)?;
+    Ok(MemoryService::retain_workspace_store(
+        provider_memory,
+        workspace,
+    ))
 }
 
 pub(super) fn sync_memory_documents(
@@ -414,6 +472,8 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         .iter_mut()
         .for_each(|path| *path = path.to_lowercase());
     ignore_paths.sort();
+    // The graph adapter scans Markdown across the workspace. Match that
+    // corpus while avoiding invalidation from unrelated source files.
     let mut entries = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -423,6 +483,12 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         })
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "md")
+        })
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(root).ok()?.to_path_buf();
             let metadata = entry.metadata().ok()?;
@@ -443,7 +509,7 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         fingerprint.update(modified.subsec_nanos().to_le_bytes());
     }
     Ok(json!({
-        "version": 2,
+        "version": 3,
         "filesystem_fingerprint": format!("{:x}", fingerprint.finalize()),
         "ignore_paths": ignore_paths,
     }))
@@ -452,7 +518,7 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
 fn workspace_path_is_ignored(relative: &Path, ignore_paths: &[String]) -> bool {
     let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
     path.split('/')
-        .any(|component| component == ".git" || component == ".lint-ai")
+        .any(|component| component == ".git" || component == ".membrick")
         || ignore_paths.iter().any(|fragment| path.contains(fragment))
 }
 
@@ -473,6 +539,16 @@ fn write_index_state(index_root: &Path, state: &Value) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn persist_workspace_index_state(
+    root: &Path,
+    index_root: &Path,
+    ignore_paths: &[String],
+) -> Result<()> {
+    let _init_lock = StoreInitLock::acquire(&index_root)?;
+    let state = workspace_state(root, ignore_paths)?;
+    write_index_state(&index_root, &state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,7 +561,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         let root = base.join(format!(
-            "lint-ai-shared-board-{name}-{}-{}",
+            "membrick-shared-board-{name}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -494,6 +570,35 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&root);
         root
+    }
+
+    #[test]
+    fn resident_owner_retains_the_persistent_workspace_service() {
+        let root = board_test_root("resident-workspace-owner");
+        fs::create_dir_all(&root).unwrap();
+        let mut owner = open_workspace_memory_owner(&root, SHARED_MEMORY_DIR, &[], || {
+            Ok(vec![document(
+                "workspace-initial",
+                "docs/readme.md",
+                "initial workspace guide",
+            )])
+        })
+        .unwrap();
+        assert!(owner.has_workspace_store());
+        {
+            let workspace = owner.memory_store_mut(super::super::MemoryStore::Workspace);
+            workspace.upsert(document(
+                "workspace-updated",
+                "docs/updated.md",
+                "resident workspace update is visible",
+            ));
+            workspace.refresh_index().unwrap();
+        }
+        let published = owner.published_read_view().unwrap();
+        assert!(published
+            .source_document_by_id("workspace-updated")
+            .is_some());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -661,7 +766,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         let root = temp_base.join(format!(
-            "lint-ai-workspace-memory-{}",
+            "membrick-workspace-memory-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -669,12 +774,12 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
 
-        // Legacy per-provider silos, as written by older Lint-AI versions.
+        // Legacy per-provider silos, as written by older Membrick versions.
         for (memory_name, id) in [
             ("codex-memory", "codex-session"),
             ("claude-memory", "claude-session"),
         ] {
-            let memory_root = root.join(".lint-ai").join(memory_name);
+            let memory_root = root.join(".membrick").join(memory_name);
             let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
             memory.upsert(document(id, &format!("{memory_name}://session"), id));
             memory.refresh().unwrap();
@@ -692,10 +797,10 @@ mod tests {
         .unwrap();
 
         assert!(root
-            .join(".lint-ai/workspace-memory/metadata.json")
+            .join(".membrick/workspace-memory/metadata.json")
             .is_file());
-        assert!(!root.join(".lint-ai/codex-memory").exists());
-        assert!(!root.join(".lint-ai/claude-memory").exists());
+        assert!(!root.join(".membrick/codex-memory").exists());
+        assert!(!root.join(".membrick/claude-memory").exists());
         assert!(shared.source_document_by_id("workspace-guide").is_some());
         assert!(shared.source_document_by_id("codex-session").is_some());
         assert!(shared.source_document_by_id("claude-session").is_some());
@@ -713,13 +818,13 @@ mod tests {
 
     #[test]
     fn migration_preserves_provider_integration_state() {
-        use crate::integrations::session_recording::{lint_ai_enabled, set_lint_ai_state};
+        use crate::integrations::session_recording::{membrick_enabled, set_membrick_state};
 
         let temp_base = std::env::temp_dir()
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         let root = temp_base.join(format!(
-            "lint-ai-migration-state-{}",
+            "membrick-migration-state-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -729,7 +834,7 @@ mod tests {
 
         // A provider disabled under the old layout: state file lives in the
         // legacy directory, which holds no memory documents.
-        let legacy = root.join(".lint-ai").join("codex-memory");
+        let legacy = root.join(".membrick").join("codex-memory");
         fs::create_dir_all(&legacy).unwrap();
         fs::write(
             legacy.join("integration.json"),
@@ -742,12 +847,14 @@ mod tests {
         // The legacy directory is gone, but the disabled state survived at the
         // new location instead of being silently reset to enabled.
         assert!(!legacy.exists());
-        assert!(root.join(".lint-ai/codex-state/integration.json").is_file());
-        assert!(!lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
+        assert!(root
+            .join(".membrick/codex-state/integration.json")
+            .is_file());
+        assert!(!membrick_enabled(RecordingProvider::Codex, &root).unwrap());
 
         // The new location round-trips through the public state API.
-        set_lint_ai_state(RecordingProvider::Codex, &root, true).unwrap();
-        assert!(lint_ai_enabled(RecordingProvider::Codex, &root).unwrap());
+        set_membrick_state(RecordingProvider::Codex, &root, true).unwrap();
+        assert!(membrick_enabled(RecordingProvider::Codex, &root).unwrap());
 
         let _ = fs::remove_dir_all(root);
     }
@@ -762,7 +869,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir());
         let root = temp_base.join(format!(
-            "lint-ai-migration-provider-filter-{}",
+            "membrick-migration-provider-filter-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -770,7 +877,7 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
 
-        // Legacy silos, as written by older Lint-AI versions: documents carry
+        // Legacy silos, as written by older Membrick versions: documents carry
         // the old `filters.integration` key (values like "claude-code", not
         // the canonical "claude") instead of `filters.provider`.
         fn legacy_document(doc_id: &str, integration: &str) -> SourceDocument {
@@ -788,7 +895,7 @@ mod tests {
             ("codex-memory", "legacy-codex-memory", "codex"),
             ("claude-memory", "legacy-claude-memory", "claude-code"),
         ] {
-            let memory_root = root.join(".lint-ai").join(memory_name);
+            let memory_root = root.join(".membrick").join(memory_name);
             let mut memory = IndexStore::at_path(&memory_root, segmented_store_options()).unwrap();
             memory.upsert(legacy_document(doc_id, integration));
             memory.refresh().unwrap();
@@ -796,7 +903,7 @@ mod tests {
 
         migrate_legacy_provider_memory_dirs(&root).unwrap();
 
-        let shared_root = root.join(".lint-ai").join(SHARED_MEMORY_DIR);
+        let shared_root = root.join(".membrick").join(SHARED_MEMORY_DIR);
         let mut shared = IndexStore::at_path(&shared_root, segmented_store_options()).unwrap();
 
         // Metadata was normalized to the canonical provider values.
@@ -857,7 +964,7 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join(format!(
-                "lint-ai-{name}-{}",
+                "membrick-{name}-{}",
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -932,9 +1039,9 @@ mod tests {
         use std::process::Command;
         // Child mode: the re-executed test binary holds the lock, signals
         // readiness, then sleeps until killed.
-        if std::env::var_os("LINT_AI_LOCK_CRASH_CHILD").is_some() {
+        if std::env::var_os("MEMBRICK_LOCK_CRASH_CHILD").is_some() {
             let root = std::path::PathBuf::from(
-                std::env::var("LINT_AI_LOCK_CRASH_ROOT").expect("crash child root"),
+                std::env::var("MEMBRICK_LOCK_CRASH_ROOT").expect("crash child root"),
             );
             let ready = root.join("holder-ready");
             let _ = with_shared_memory_service(&root, |_| {
@@ -954,8 +1061,8 @@ mod tests {
                  shared_store_write_lock_survives_crashed_holder",
             )
             .arg("--nocapture")
-            .env("LINT_AI_LOCK_CRASH_CHILD", "1")
-            .env("LINT_AI_LOCK_CRASH_ROOT", &root)
+            .env("MEMBRICK_LOCK_CRASH_CHILD", "1")
+            .env("MEMBRICK_LOCK_CRASH_ROOT", &root)
             .spawn()
             .expect("spawn crash child");
         // Wait until the child actually holds the lock.

@@ -139,9 +139,12 @@ pub enum IndexInspectView {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "lint-ai", version = env!("CARGO_PKG_VERSION"))]
-/// CLI arguments for the lint-ai binary.
+#[command(name = "membrick", version = env!("CARGO_PKG_VERSION"))]
+/// CLI arguments for the membrick binary.
 pub struct Args {
+    /// Skip the interactive release update check for this invocation.
+    #[arg(long)]
+    pub no_update_check: bool,
     #[arg(default_value = ".")]
     pub path: String,
     #[arg(long)]
@@ -170,7 +173,7 @@ pub struct Args {
     pub llm_chunk_strategy: LlmChunkStrategy,
     #[arg(long, value_enum)]
     pub export_graph: Option<GraphExportFormat>,
-    #[arg(long, default_value = "lint-ai-graph.dot")]
+    #[arg(long, default_value = "membrick-graph.dot")]
     pub graph_out: String,
     #[arg(long, value_enum, default_value = "doc")]
     pub graph_level: GraphLevel,
@@ -178,7 +181,7 @@ pub struct Args {
     pub show_chunk_graph_stats: bool,
     #[arg(long)]
     pub export_ontology: bool,
-    #[arg(long, default_value = "lint-ai-ontology.json")]
+    #[arg(long, default_value = "membrick-ontology.json")]
     pub ontology_out: String,
     #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json")]
     pub tier0_index_out: Option<String>,
@@ -227,7 +230,7 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_install: bool,
-    /// Replace a user-modified Lint-AI Claude skill explicitly.
+    /// Replace a user-modified Membrick Claude skill explicitly.
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_force_skill: bool,
@@ -328,15 +331,15 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "agy")]
     pub agy_config: Option<String>,
-    /// Install the lint-ai MCP server and memory skill for OpenClaw.
+    /// Install the membrick MCP server and memory skill for OpenClaw.
     #[arg(long)]
     #[cfg(feature = "openclaw")]
     pub openclaw_install: bool,
-    /// Replace an existing user-modified OpenClaw lint-ai skill.
+    /// Replace an existing user-modified OpenClaw membrick skill.
     #[arg(long)]
     #[cfg(feature = "openclaw")]
     pub openclaw_force_skill: bool,
-    /// Run the lint-ai MCP server over stdio for OpenClaw.
+    /// Run the membrick MCP server over stdio for OpenClaw.
     #[arg(long)]
     #[cfg(feature = "openclaw")]
     pub openclaw_serve: bool,
@@ -368,15 +371,15 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "openclaw")]
     pub openclaw_plugin_dir: Option<String>,
-    /// Install the lint-ai MCP server and memory skill for Hermes.
+    /// Install the membrick MCP server and memory skill for Hermes.
     #[arg(long)]
     #[cfg(feature = "hermes")]
     pub hermes_install: bool,
-    /// Replace an existing user-modified Hermes lint-ai skill.
+    /// Replace an existing user-modified Hermes membrick skill.
     #[arg(long)]
     #[cfg(feature = "hermes")]
     pub hermes_force_skill: bool,
-    /// Run the lint-ai MCP server over stdio for Hermes.
+    /// Run the membrick MCP server over stdio for Hermes.
     #[arg(long)]
     #[cfg(feature = "hermes")]
     pub hermes_serve: bool,
@@ -422,9 +425,9 @@ pub struct Args {
     #[arg(long)]
     pub replay_session: Option<String>,
     #[arg(long)]
-    pub replay_enable_lint_ai: bool,
-    #[arg(long, conflicts_with = "replay_enable_lint_ai")]
-    pub replay_disable_lint_ai: bool,
+    pub replay_enable_membrick: bool,
+    #[arg(long, conflicts_with = "replay_enable_membrick")]
+    pub replay_disable_membrick: bool,
     #[arg(long, value_enum, default_value = "claude")]
     pub session_provider: SessionProvider,
     #[arg(long)]
@@ -456,7 +459,7 @@ mod tests {
     #[test]
     fn parses_recall_query_and_result_count() {
         let args = Args::try_parse_from([
-            "lint-ai",
+            "membrick",
             "--recall",
             "why did we drop embeddings",
             "--result-count",
@@ -471,15 +474,15 @@ mod tests {
     #[test]
     fn parses_index_inspection_view() {
         let args = Args::try_parse_from([
-            "lint-ai",
+            "membrick",
             "--inspect-index",
-            ".lint-ai/memory",
+            ".membrick/memory",
             "--inspect-view",
             "source-documents",
         ])
         .unwrap();
 
-        assert_eq!(args.inspect_index.as_deref(), Some(".lint-ai/memory"));
+        assert_eq!(args.inspect_index.as_deref(), Some(".membrick/memory"));
         assert!(matches!(
             args.inspect_view,
             IndexInspectView::SourceDocuments
@@ -488,7 +491,7 @@ mod tests {
 
     #[test]
     fn parses_review_flag() {
-        let args = Args::try_parse_from(["lint-ai", "--review", "docs"]).unwrap();
+        let args = Args::try_parse_from(["membrick", "--review", "docs"]).unwrap();
 
         assert!(args.review);
         assert_eq!(args.path, "docs");
@@ -501,7 +504,7 @@ mod tests {
         assert!(!help.contains("--claude-code-install"));
         assert!(!help.contains("--claude-code-verify-mcp"));
 
-        let error = Args::try_parse_from(["lint-ai", "--claude-code-install"])
+        let error = Args::try_parse_from(["membrick", "--claude-code-install"])
             .expect_err("Claude Code install should be unavailable without the feature")
             .to_string();
         assert!(!error.contains("--claude-code-verify-mcp"));
@@ -522,7 +525,7 @@ mod tests {
         assert!(!help.contains("--codex-install"));
         assert!(!help.contains("--codex-verify-mcp"));
 
-        let error = Args::try_parse_from(["lint-ai", "--codex-install"])
+        let error = Args::try_parse_from(["membrick", "--codex-install"])
             .expect_err("Codex install should be unavailable without the feature")
             .to_string();
         assert!(!error.contains("--codex-verify-mcp"));
@@ -543,7 +546,7 @@ mod tests {
         assert!(!help.contains("--muse-install"));
         assert!(!help.contains("--muse-verify-mcp"));
 
-        let error = Args::try_parse_from(["lint-ai", "--muse-install"])
+        let error = Args::try_parse_from(["membrick", "--muse-install"])
             .expect_err("Muse Code install should be unavailable without the feature")
             .to_string();
         assert!(!error.contains("--muse-verify-mcp"));

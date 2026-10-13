@@ -29,6 +29,26 @@ pub struct WorkspaceChangeEvent {
     pub after: Option<String>,
 }
 
+impl WorkspaceChangeEvent {
+    /// The workspace source index currently contains Markdown documents only.
+    /// Provider activity and source-file changes are still captured separately,
+    /// but must not invalidate the full Markdown index.
+    pub fn affects_workspace_index(&self, _root: &Path) -> bool {
+        if self.file_path == "<watcher-error>" {
+            return true;
+        }
+        let path = Path::new(&self.file_path);
+        let is_markdown = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension == "md");
+        if !is_markdown {
+            return false;
+        }
+        true
+    }
+}
+
 /// Debounced project-file changes shared by every long-lived index consumer.
 pub struct WorkspaceWatcher {
     _watcher: Debouncer<RecommendedWatcher, RecommendedCache>,
@@ -257,7 +277,7 @@ fn pipeline_workspace_path_is_ignored(relative: &Path, ignore_paths: &[String]) 
     workspace_path_is_sensitive(relative)
         || path
             .split('/')
-            .any(|component| component == ".git" || component == ".lint-ai")
+            .any(|component| component == ".git" || component == ".membrick")
         || ignore_paths.iter().any(|fragment| path.contains(fragment))
 }
 
@@ -268,7 +288,7 @@ mod security_tests {
     #[test]
     fn tracked_file_reads_reject_symlinks_and_linked_parents() {
         let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
-            "lint-ai-watcher-links-{}-{}",
+            "membrick-watcher-links-{}-{}",
             std::process::id(),
             workspace_now_ms()
         ));

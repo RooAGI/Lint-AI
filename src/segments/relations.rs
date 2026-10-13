@@ -336,7 +336,7 @@ pub(crate) fn python_executable() -> String {
 
 /// Path to the Behood relation extractor script.
 ///
-/// Behood owns the relation-extraction judgment; lint-ai consumes it.
+/// Behood owns the relation-extraction judgment; membrick consumes it.
 /// Resolution order:
 /// 1. `BEHOOD_RELATIONS` env var (explicit override)
 /// 2. Bundled `scripts/spacy_relations.py` (backward compatibility)
@@ -1684,7 +1684,7 @@ pub fn answer_kind_from_behood(
         return Some(AnswerKind::Place);
     }
     // Behood judges "when" / "what time" / "how long" as time-kind at query
-    // time. Lint-ai uses this to apply the temporal filter.
+    // time. Membrick uses this to apply the temporal filter.
     if crate::behood_query::query_has_kind(entities, "time") {
         return Some(AnswerKind::Date);
     }
@@ -1824,7 +1824,7 @@ pub fn analyze_fact_question(question: &str) -> Option<StructuredFactQuery> {
     let time_window = extract_time_window(question);
     // Answer kind: behood's query-time kind judgment first (it judges
     // "what places" as place-kind), falling back to keyword matching.
-    // Luyi's design: behood provides the kinds; lint-ai uses them.
+    // Luyi's design: behood provides the kinds; membrick uses them.
     let answer_kind =
         answer_kind_from_behood(&behood_entities).or_else(|| extract_answer_kind(question));
     // Object/date-seeking questions with one person and no time window take

@@ -1,4 +1,4 @@
-use crate::query_semantics::QueryRoutingIntent;
+use crate::query_semantics::{QueryEvidenceRequirements, QueryRoutingIntent};
 use crate::source::KeyPhrase;
 use crate::tier1::{RankedTerm, Tier1Entity};
 use chrono::NaiveDate;
@@ -19,12 +19,122 @@ pub struct Provenance {
     pub index_version: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimStatus {
+    Planned,
+    Ongoing,
+    Completed,
+    Negated,
+}
+
+impl ClaimStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "planned" => Some(Self::Planned),
+            "ongoing" => Some(Self::Ongoing),
+            "completed" => Some(Self::Completed),
+            "negated" => Some(Self::Negated),
+            _ => None,
+        }
+    }
+}
+
+/// Source-grounding for one claim. `source_document_id` and `source` identify
+/// the containing document; turn and chunk ids narrow that provenance when
+/// the source provides them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEvidence {
+    pub source_document_id: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_chunk_id: Option<String>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_byte: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_byte: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Claim {
     pub subject: String,
     pub predicate: String,
     pub object: String,
     pub confidence: f32,
+    /// Assertion modality/polarity. Missing on legacy or unclassified claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<ClaimStatus>,
+    /// Time the claimed event occurs, distinct from the document timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_time: Option<String>,
+    /// Exact evidence and its source location when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ClaimEvidence>,
+}
+
+#[cfg(test)]
+mod claim_contract_tests {
+    use super::{Claim, ClaimStatus};
+
+    #[test]
+    fn claim_round_trips_status_event_time_and_evidence() {
+        let value = serde_json::json!({
+            "subject": "user",
+            "predicate": "participated_in",
+            "object": "company charity soccer tournament",
+            "confidence": 0.9,
+            "status": "planned",
+            "event_time": "2023-06-17T00:00:00Z",
+            "evidence": {
+                "source_document_id": "turn-17",
+                "source": "memory://user/session/17",
+                "source_turn_id": "17",
+                "source_chunk_id": "turn-17::chunk-0",
+                "text": "I will participate in the company charity soccer tournament today.",
+                "start_byte": 0,
+                "end_byte": 69
+            }
+        });
+
+        let claim: Claim = serde_json::from_value(value.clone()).unwrap();
+        let encoded = serde_json::to_value(claim).unwrap();
+        assert_eq!(encoded["subject"], value["subject"]);
+        assert_eq!(encoded["predicate"], value["predicate"]);
+        assert_eq!(encoded["object"], value["object"]);
+        assert_eq!(encoded["status"], value["status"]);
+        assert_eq!(encoded["event_time"], value["event_time"]);
+        assert_eq!(encoded["evidence"], value["evidence"]);
+    }
+
+    #[test]
+    fn legacy_claims_deserialize_with_unavailable_contract_fields() {
+        let value = serde_json::json!({
+            "subject": "user",
+            "predicate": "participated_in",
+            "object": "race",
+            "confidence": 0.8
+        });
+
+        let claim: Claim = serde_json::from_value(value).unwrap();
+        assert!(claim.status.is_none());
+        assert!(claim.event_time.is_none());
+        assert!(claim.evidence.is_none());
+    }
+
+    #[test]
+    fn claim_status_accepts_only_contract_values() {
+        assert_eq!(ClaimStatus::parse("planned"), Some(ClaimStatus::Planned));
+        assert_eq!(ClaimStatus::parse("ongoing"), Some(ClaimStatus::Ongoing));
+        assert_eq!(
+            ClaimStatus::parse("completed"),
+            Some(ClaimStatus::Completed)
+        );
+        assert_eq!(ClaimStatus::parse("negated"), Some(ClaimStatus::Negated));
+        assert_eq!(ClaimStatus::parse("positive"), None);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,6 +712,28 @@ pub struct QueryDiagnostics {
     /// an incomplete fan-out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shard_completeness: Option<crate::segments::ShardQueryCompleteness>,
+    /// Per-group evidence scoring details for the single-question diagnostic
+    /// harness. Kept out of the serialized diagnostics API.
+    #[serde(skip)]
+    pub(crate) evidence_groups: Vec<EvidenceGroupDiagnostics>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EvidenceGroupDiagnostics {
+    pub group_id: String,
+    pub pre_evidence_rank: usize,
+    pub base_score: f32,
+    pub evidence_score: f32,
+    pub evidence_boost: f32,
+    pub final_score: f32,
+    pub supporting_docs: usize,
+    pub term_matches: usize,
+    pub numbers: usize,
+    pub units: usize,
+    pub dates: usize,
+    pub predicates: usize,
+    pub required_relation_docs: usize,
+    pub penalty: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -623,6 +755,7 @@ pub struct TemporalQueryContext<'a> {
     pub hard_filter: bool,
     pub time_hint: Option<TemporalQueryHint>,
     pub query_routing_intent: Option<QueryRoutingIntent>,
+    pub evidence_requirements: QueryEvidenceRequirements,
     pub has_explicit_temporal: bool,
     pub allowed_doc_ids: Option<&'a HashSet<String>>,
     pub allowed_doc_bitmap: Option<&'a RoaringBitmap>,
@@ -640,6 +773,7 @@ impl<'a> Default for TemporalQueryContext<'a> {
             hard_filter: false,
             time_hint: None,
             query_routing_intent: None,
+            evidence_requirements: QueryEvidenceRequirements::default(),
             has_explicit_temporal: false,
             allowed_doc_ids: None,
             allowed_doc_bitmap: None,
@@ -665,6 +799,7 @@ pub(crate) struct EvidenceFeatures {
     pub(crate) has_date: bool,
     pub(crate) has_temporal_terms: bool,
     pub(crate) predicate_signal: bool,
+    pub(crate) required_relation_supported: bool,
     pub(crate) distractor_penalty: f32,
 }
 

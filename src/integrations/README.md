@@ -9,7 +9,7 @@ particular, `memory`, `context`, `session`, `message`, `event`, and `recall`
 are distinct concepts; recording a session does not automatically create
 durable memory.
 
-Lint-AI has two complementary integration paths:
+Membrick has two complementary integration paths:
 
 1. **Lifecycle hooks** retrieve and capture session memory automatically.
 2. **MCP** exposes the indexed workspace and memory store as callable tools.
@@ -26,7 +26,7 @@ not require MCP to be running.
 
 | Concern | Lifecycle hooks | MCP server |
 | --- | --- | --- |
-| Invocation | Client lifecycle event starts Lint-AI automatically | Client or model explicitly calls an MCP tool |
+| Invocation | Client lifecycle event starts Membrick automatically | Client or model explicitly calls an MCP tool |
 | Retrieval | Runs at prompt/session lifecycle events | Runs when `search` is selected |
 | Capture | Stop, compaction, and session-end hooks persist memory | MCP does not automatically capture conversations |
 | Primary role | Automatic durable session memory | Explicit workspace and memory search |
@@ -52,16 +52,16 @@ continues.
 
 ## Memory Layer and Hooks
 
-The Lint-AI memory layer is the durable project-local store used to carry
+The Membrick memory layer is the durable project-local store used to carry
 relevant context between agent sessions. It is not the client provider's
-built-in memory layer. The provider's native memory and Lint-AI memory can be
+built-in memory layer. The provider's native memory and Membrick memory can be
 enabled independently, or both can be enabled for comparison and fallback.
 
 All providers share one memory store per project; only the lifecycle payloads
 and transcript formats differ per provider:
 
 ```text
-<project>/.lint-ai/memory/
+<project>/.membrick/memory/
 ```
 
 Every record is tagged with its provider and session provenance
@@ -70,10 +70,10 @@ decision recorded by Claude is visible to Codex and vice versa. This keeps
 Claude and Codex hook payloads distinguishable as lifecycle formats while
 letting all agents search the same index.
 
-On first run, legacy per-provider stores (`.lint-ai/claude-memory/`,
-`.lint-ai/codex-memory/`, `.lint-ai/gemini-cli-memory/`,
-`.lint-ai/agy-memory/`, `.lint-ai/muse-memory/`) are migrated into
-`.lint-ai/memory/` and removed once their migration succeeds.
+On first run, legacy per-provider stores (`.membrick/claude-memory/`,
+`.membrick/codex-memory/`, `.membrick/gemini-cli-memory/`,
+`.membrick/agy-memory/`, `.membrick/muse-memory/`) are migrated into
+`.membrick/memory/` and removed once their migration succeeds.
 
 ### Retrieval hooks
 
@@ -178,7 +178,7 @@ The server accepts both newline-delimited JSON-RPC and MCP
 Index state is persisted below the project and synchronized before searches:
 
 ```text
-<project>/.lint-ai/memory/
+<project>/.membrick/memory/
 ```
 
 The shared store serves every provider through the same indexing and
@@ -192,20 +192,20 @@ Both integrations expose the same MCP control surface:
 ```text
 list_memories         { limit: 1..100 }
 record_session       { action: start | stop | status }
-enable_lint_ai       {}
-disable_lint_ai      {}
-lint_ai_status       {}
+enable_membrick       {}
+disable_membrick      {}
+membrick_status       {}
 ```
 
 Recording is an independent, capture-only event archive. It can be enabled
-without memory retrieval, and enabling Lint-AI turns recording on by default.
+without memory retrieval, and enabling Membrick turns recording on by default.
 Users can stop recording without disabling memory. Archives are stored under
 provider-specific session roots and can be promoted into the corresponding
 segmented memory store later.
 
 Replay is an orchestrated new provider session rather than a conversation
 fork. It always records a new `replay-*` archive, supports explicit
-`--replay-enable-lint-ai` and `--replay-disable-lint-ai` arms, and preserves the
+`--replay-enable-membrick` and `--replay-disable-membrick` arms, and preserves the
 baseline archive. Codex resumes the provider conversation after its first
 prompt; Claude runs prompts independently because it lacks a portable resume
 API.
@@ -228,17 +228,17 @@ cargo build --release --features claude-code
 Install into a project:
 
 ```bash
-./lint-ai --claude-code-install /path/to/repo
+./membrick --claude-code-install /path/to/repo
 ```
 
 Installation configures the project MCP entry, lifecycle hooks, and the
 project-scoped skill:
 
 ```text
-/path/to/repo/.claude/skills/lint-ai-memory/SKILL.md
+/path/to/repo/.claude/skills/membrick-memory/SKILL.md
 ```
 
-The skill guides Claude to call `mcp__lint-ai__search` first for questions
+The skill guides Claude to call `mcp__membrick__search` first for questions
 about project history, prior decisions, or earlier work. Skills are
 model-invoked guidance, not enforcement; Claude may still choose repository
 tools instead. A direct MCP client can verify server capability independently
@@ -247,13 +247,13 @@ of model tool selection.
 Run the server directly:
 
 ```bash
-./lint-ai --claude-code-serve /path/to/repo
+./membrick --claude-code-serve /path/to/repo
 ```
 
 Verify startup and tool discovery:
 
 ```bash
-./lint-ai --claude-code-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick --claude-code-verify-mcp /path/to/repo --mcp-timeout-ms 30000
 ```
 
 ## Codex
@@ -267,7 +267,7 @@ cargo build --release --features codex
 Install into a project:
 
 ```bash
-./lint-ai --codex-install /path/to/repo
+./membrick --codex-install /path/to/repo
 ```
 
 Installation updates the Codex MCP configuration and hook settings while
@@ -277,13 +277,13 @@ prompt retrieval, tool-use context, compaction, and session capture.
 Run the server directly:
 
 ```bash
-./lint-ai --codex-serve /path/to/repo
+./membrick --codex-serve /path/to/repo
 ```
 
 Verify startup and tool discovery:
 
 ```bash
-./lint-ai --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
 ```
 
 ## Hook and MCP Responsibilities

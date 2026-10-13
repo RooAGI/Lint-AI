@@ -25,7 +25,20 @@ pub const HABITUAL_TAG: &str = "habitual";
 /// Admitted closed-set kind tags (Luyi 2026-09-28). Each new category needs
 /// its own explicit admission here: bekind reporting a kind does NOT
 /// automatically tag it.
-pub const ADMITTED_KIND_TAGS: &[&str] = &["herb", "food", "restaurant", "dining", "eat", "cafe", "bar", "park", "gym", "exercise", "drink", "run"];
+pub const ADMITTED_KIND_TAGS: &[&str] = &[
+    "herb",
+    "food",
+    "restaurant",
+    "dining",
+    "eat",
+    "cafe",
+    "bar",
+    "park",
+    "gym",
+    "exercise",
+    "drink",
+    "run",
+];
 
 /// Venue lexicon (Luyi 2026-10-07): "where" questions point to venue kinds,/// Pure tag emission from one document's scope verdict. Unit-testable, no
 /// I/O. Emits the canonical temporal words verbatim (bekind already emits
@@ -126,6 +139,9 @@ pub fn batch_doc_kind_tags(contents: &[&str]) -> Vec<Vec<String>> {
 /// One batched daemon call per layer, plus the caller-owned food lexicon
 /// (bekind under-extracts food entities).
 pub fn batch_doc_semantic_tags(contents: &[&str]) -> Vec<Vec<String>> {
+    if contents.is_empty() || !crate::behood_query::is_enabled() {
+        return vec![Vec::new(); contents.len()];
+    }
     let scope_tags = batch_doc_scope_tags(contents);
     let kind_tags = batch_doc_kind_tags(contents);
     let activity_tags = crate::behood_query::analyze_activity_categories(contents);
@@ -209,7 +225,11 @@ mod tests {
     #[test]
     fn doc_kind_tags_emit_admitted_herb_and_food_only() {
         assert_eq!(
-            doc_kind_tags(&kind_verdict(&[("cilantro", "herb"), ("coffee", "food"), ("Jean", "person")])),
+            doc_kind_tags(&kind_verdict(&[
+                ("cilantro", "herb"),
+                ("coffee", "food"),
+                ("Jean", "person")
+            ])),
             vec!["food".to_string(), "herb".to_string()]
         );
     }
@@ -227,7 +247,6 @@ mod tests {
             vec!["herb".to_string()]
         );
     }
-
 
     /// The `semantic_tags` index field uses tantivy's default TEXT analyzer;
     /// every tag token ("weekend", "weekday", "habitual", "herb") must survive

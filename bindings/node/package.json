@@ -1,0 +1,56 @@
+{
+  "name": "membrick",
+  "version": "0.4.0",
+  "description": "Membrick's Rust MemoryService binding and CLI for Node.js",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RooAGI/Membrick.git",
+    "directory": "bindings/node"
+  },
+  "homepage": "https://github.com/RooAGI/Membrick/tree/main/bindings/node",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "membrick": "bin/membrick.js"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "bin/membrick.js",
+    "README.md",
+    "*.node"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "napi build --platform --release && node scripts/sync-types.cjs",
+    "build:debug": "napi build --platform && node scripts/sync-types.cjs",
+    "test": "node --test"
+  },
+  "napi": {
+    "binaryName": "membrick_node",
+    "packageName": "@rooagi/membrick",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "optionalDependencies": {
+    "@rooagi/membrick-darwin-arm64": "0.4.0",
+    "@rooagi/membrick-darwin-x64": "0.4.0",
+    "@rooagi/membrick-linux-arm64-gnu": "0.4.0",
+    "@rooagi/membrick-linux-x64-gnu": "0.4.0",
+    "@rooagi/membrick-win32-x64-msvc": "0.4.0"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.4.0"
+  }
+}

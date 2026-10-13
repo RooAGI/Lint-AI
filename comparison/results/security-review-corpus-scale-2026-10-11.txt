@@ -1,0 +1,6 @@
+loaded 19829 unique sessions from 500 questions
+size,eligible_queries,build_ms,query_p50_ms,query_p95_ms,recall_any_at_k
+1000,20,1253.90,0.970,1.560,1.0000
+5000,100,6361.70,2.336,3.758,0.9700
+10000,100,12950.54,2.882,4.796,0.9100
+19829,100,27816.65,2.518,4.169,0.8000

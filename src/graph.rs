@@ -237,7 +237,7 @@ impl Graph {
     ///
     /// Example (crate-internal; `graph` is not part of the public API):
     /// ```ignore
-    /// use lint_ai::graph::Graph;
+    /// use membrick::graph::Graph;
     /// let graph = Graph::build("docs", 5_000_000, 50_000, 20, 100_000_000).unwrap();
     /// println!("pages: {}", graph.pages.len());
     /// ```

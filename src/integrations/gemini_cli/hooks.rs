@@ -1,5 +1,5 @@
 use crate::integrations::session_recording::{
-    lint_ai_enabled, record_event_if_enabled, RecordingProvider,
+    membrick_enabled, record_event_if_enabled, RecordingProvider,
 };
 use crate::memory_api::MemoryService;
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
@@ -98,13 +98,16 @@ pub fn run_hook_for(
     if let Err(error) =
         record_event_if_enabled(provider, &root, &input.session_id, kind.event_name(), raw)
     {
-        eprintln!("warning: Lint-AI {provider_label} session recording failed open: {error:#}");
+        eprintln!("warning: Membrick {provider_label} session recording failed open: {error:#}");
     }
-    let output =
+    let mut output =
         handle_hook(kind, &input, &root, provider, provider_label).unwrap_or_else(|error| {
-            eprintln!("warning: Lint-AI {provider_label} hook failed open: {error:#}");
+            eprintln!("warning: Membrick {provider_label} hook failed open: {error:#}");
             GeminiHookOutput::default()
         });
+    if kind == GeminiHookKind::SessionStart {
+        output.system_message = crate::updater::take_update_notice();
+    }
     let mut stdout = std::io::stdout().lock();
     serde_json::to_writer(&mut stdout, &output)?;
     stdout.write_all(b"\n")?;
@@ -136,13 +139,13 @@ fn handle_hook(
     if kind == GeminiHookKind::SessionStart {
         return Ok(GeminiHookOutput {
             system_message: Some(
-                "Lint-AI hooks active; session recording follows the configured recording state."
+                "Membrick hooks active; session recording follows the configured recording state."
                     .into(),
             ),
             ..Default::default()
         });
     }
-    if !lint_ai_enabled(provider, _root)? {
+    if !membrick_enabled(provider, _root)? {
         return Ok(GeminiHookOutput::default());
     }
     match kind {
@@ -160,66 +163,52 @@ fn handle_hook(
         return Ok(GeminiHookOutput::default());
     }
     let started = std::time::Instant::now();
-    let memory = crate::integrations::mcp_index::shared_memory_root(_root);
-    if !memory.exists() {
-        let _ = crate::telemetry::record_memory_retrieval(
-            _root,
-            provider.as_str(),
-            &input.session_id,
-            &query,
-            0,
-            &[],
-        );
-        return Ok(GeminiHookOutput::default());
-    }
-    let options = PipelineOptions {
-        memory_index_layout: MemoryIndexLayout::Segmented {
-            query_top_n: 3,
-            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
-        },
-        ..PipelineOptions::default()
-    };
-    let mut store = MemoryService::at_path(&memory, options)?;
-    if store.is_empty() {
-        let _ = crate::telemetry::record_memory_retrieval(
-            _root,
-            provider.as_str(),
-            &input.session_id,
-            &query,
-            started.elapsed().as_millis() as u64,
-            &[],
-        );
-        return Ok(GeminiHookOutput::default());
-    }
-    let results = store.observe_plain_query(&query, provider.as_str(), Some(&input.session_id), 5);
+    let results = crate::integrations::mcp_tools::search_hook_documents(
+        _root,
+        provider.as_str(),
+        Some(&input.session_id),
+        &query,
+        5,
+    );
     let _ = crate::telemetry::record_project_query(
         _root,
         started.elapsed().as_millis() as u64,
         results.is_err(),
-        results.as_ref().is_ok_and(Vec::is_empty),
+        results.as_ref().is_ok_and(|value| {
+            value
+                .get("results")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        }),
     );
     let mut context = String::new();
     let mut retrieved_memories = Vec::new();
-    for result in results? {
-        if let Some(record) = store.record_by_id(&result.doc_id) {
-            let excerpt = record
-                .content
-                .lines()
-                .take(8)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !excerpt.trim().is_empty() {
-                context.push_str(&format!("\n- Source: {}\n  {}\n", record.source, excerpt));
-                retrieved_memories.push(serde_json::json!({
-                    "source": record.source,
-                    "type": record.filters.get("document_type").map(String::as_str).unwrap_or("memory"),
-                    "score": result.score,
-                    "excerpt": excerpt,
-                }));
-            }
-            if context.len() > 8_000 {
-                break;
-            }
+    for result in results?
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let content = result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let source = result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let excerpt = content.lines().take(8).collect::<Vec<_>>().join("\n");
+        if !excerpt.trim().is_empty() {
+            context.push_str(&format!("\n- Source: {}\n  {}\n", source, excerpt));
+            retrieved_memories.push(serde_json::json!({
+                "source": source,
+                "type": result.get("document_type").and_then(Value::as_str).unwrap_or("memory"),
+                "score": result.get("score"),
+                "excerpt": excerpt,
+            }));
+        }
+        if context.len() > 8_000 {
+            break;
         }
     }
     let _ = crate::telemetry::record_memory_retrieval(
@@ -283,11 +272,13 @@ fn capture(
         key_phrases: Vec::new(),
         key_phrase_extraction_hash: String::new(),
     };
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document);
-        store.refresh_index()?;
-        Ok(GeminiHookOutput::default())
-    })
+    crate::integrations::mcp_tools::upsert_hook_document(
+        root,
+        provider.as_str(),
+        &input.session_id,
+        document,
+    )?;
+    Ok(GeminiHookOutput::default())
 }
 
 fn current_timestamp() -> String {
@@ -399,7 +390,7 @@ mod tests {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
-            .join(format!("lint-ai-gemini-hook-{name}-{nonce}"));
+            .join(format!("membrick-gemini-hook-{name}-{nonce}"));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -412,6 +403,18 @@ mod tests {
         .unwrap();
         assert_eq!(input.tool_name.as_deref(), Some("read_file"));
         assert_eq!(GeminiHookKind::BeforeTool.event_name(), "BeforeTool");
+    }
+
+    #[test]
+    fn update_notice_serializes_as_host_visible_system_message() {
+        let output = GeminiHookOutput {
+            hook_specific_output: None,
+            system_message: Some("Membrick 0.4.1 is available".to_string()),
+        };
+        assert_eq!(
+            serde_json::to_value(output).unwrap(),
+            serde_json::json!({"systemMessage": "Membrick 0.4.1 is available"})
+        );
     }
 
     #[test]
@@ -551,8 +554,8 @@ mod tests {
                 .starts_with(&format!("{provider}-session:")));
         }
         // The legacy per-provider silos are gone.
-        assert!(!root.join(".lint-ai/gemini-cli-memory").exists());
-        assert!(!root.join(".lint-ai/agy-memory").exists());
+        assert!(!root.join(".membrick/gemini-cli-memory").exists());
+        assert!(!root.join(".membrick/agy-memory").exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

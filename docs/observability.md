@@ -1,17 +1,17 @@
 # Observability
 
-See how Lint-AI is working across your project and connected agents. The local
+See how Membrick is working across your project and connected agents. The local
 dashboard brings memory index health, search activity, and provider activity
 together in one place.
 
 ## Dashboard
 
-When the Lint-AI server is running, open
+When the Membrick server is running, open
 [`http://127.0.0.1:8080/dashboard`](http://127.0.0.1:8080/dashboard).
 
 ### Start the dashboard
 
-From a Lint-AI source checkout, start the local server for a project. This
+From a Membrick source checkout, start the local server for a project. This
 example includes Claude Code and Codex provider views:
 
 ```bash
@@ -23,24 +23,24 @@ cargo run --release --bin server --features claude-code,codex -- \
 
 Replace `/path/to/project` with the project directory. Then open
 [`http://127.0.0.1:8080/dashboard`](http://127.0.0.1:8080/dashboard). The
-server discovers the project's `.lint-ai/` data and the dashboard shows
+server discovers the project's `.membrick/` data and the dashboard shows
 separate provider views when their features are compiled and their integrations
 have reported activity. See the [HTTP server guide](server.md) for server
 options and API behavior.
 
-<section class="dashboard-slideshow" data-dashboard-slideshow aria-label="Lint-AI dashboard screenshots">
+<section class="dashboard-slideshow" data-dashboard-slideshow aria-label="Membrick dashboard screenshots">
   <div class="dashboard-slideshow__stage">
     <div class="dashboard-slideshow__track">
       <figure class="dashboard-slide is-active" data-dashboard-slide>
-        <img src="../assets/lint-ai-dashboard-overview.jpg" alt="Dashboard overview with project status and recent activity" loading="eager">
+        <img src="../assets/membrick-dashboard-overview.jpg" alt="Dashboard overview with project status and recent activity" loading="eager">
         <figcaption><strong>Overview</strong><span>Project health, query activity, and recent events</span></figcaption>
       </figure>
       <figure class="dashboard-slide" data-dashboard-slide>
-        <img src="../assets/lint-ai-dashboard-index.jpg" alt="Dashboard showing memory index topology and segments" loading="lazy">
+        <img src="../assets/membrick-dashboard-index.jpg" alt="Dashboard showing memory index topology and segments" loading="lazy">
         <figcaption><strong>Memory index</strong><span>Index health, freshness, and segment layout</span></figcaption>
       </figure>
       <figure class="dashboard-slide" data-dashboard-slide>
-        <img src="../assets/lint-ai-dashboard-providers.jpg" alt="Dashboard showing agent activity and usage information" loading="lazy">
+        <img src="../assets/membrick-dashboard-providers.jpg" alt="Dashboard showing agent activity and usage information" loading="lazy">
         <figcaption><strong>Agent activity</strong><span>Provider activity, sessions, and available usage data</span></figcaption>
       </figure>
     </div>
@@ -68,12 +68,12 @@ The dashboard refreshes every five seconds. It shows:
 
 An agent lifecycle is the sequence of events while someone uses an agent: a
 session starts, a prompt arrives, tools run, a turn finishes, and eventually
-the session ends. The agent host emits these events. Lint-AI does not poll the
+the session ends. The agent host emits these events. Membrick does not poll the
 agent or invent its own lifecycle events.
 
-When you install an integration, it registers Lint-AI with the host's hook
+When you install an integration, it registers Membrick with the host's hook
 system. At the appropriate point, the host sends a small event payload to the
-Lint-AI hook command or plugin callback. Lint-AI records a bounded, sanitized
+Membrick hook command or plugin callback. Membrick records a bounded, sanitized
 event for the dashboard. Some hooks also look up memory or save a useful
 outcome; many just report that something happened.
 
@@ -82,7 +82,7 @@ sequenceDiagram
     participant U as Person
     participant A as AI agent
     participant H as Agent hook
-    participant L as Lint-AI
+    participant L as Membrick
     participant D as Dashboard
     U->>A: Start session and send prompt
     A->>H: Emit lifecycle event
@@ -95,9 +95,9 @@ sequenceDiagram
 ```
 
 The event names differ by agent because each host has its own hook system.
-These are examples of events Lint-AI can receive:
+These are examples of events Membrick can receive:
 
-| Agent | Events Lint-AI can receive |
+| Agent | Events Membrick can receive |
 |---|---|
 | Claude Code | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Stop`, `SessionEnd`, and subagent events |
 | Codex | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, and subagent events |
@@ -126,7 +126,7 @@ Token usage also depends on what that agent makes available.
 
 Query statistics are bounded and do not store query text, session IDs, or memory
 content. Provider activity is stored in bounded local ledgers under
-`.lint-ai/provider-telemetry/`; selected events can contain short, redacted
+`.membrick/provider-telemetry/`; selected events can contain short, redacted
 previews. Full session recording is a separate feature. See
 [telemetry details](telemetry.md) for coverage, retention, and file-watcher
 behavior.
@@ -152,7 +152,7 @@ The server also exposes aggregate metrics for monitoring tools:
 The same query, agent activity, and memory index summaries are available to
 Prometheus through `GET /metrics`. See [Prometheus](prometheus.md) for scrape
 configuration, the metric list, and which dashboard details stay in the event
-view. Lint-AI exposes Prometheus metrics today; it does not currently export
+view. Membrick exposes Prometheus metrics today; it does not currently export
 OpenTelemetry OTLP data.
 
 See the [server setup](server.md) to start the dashboard, and

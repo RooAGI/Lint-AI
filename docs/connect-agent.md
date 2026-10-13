@@ -1,9 +1,9 @@
-# Connect Lint-AI to your AI agent
+# Connect Membrick to your AI agent
 
-Lint-AI can give supported AI agents memory that carries across work sessions.
+Membrick can give supported AI agents memory that carries across work sessions.
 Install it once for a project and the agent can look up earlier decisions and
 save useful outcomes as it works. Memories from connected agents are kept in
-the project's `.lint-ai/memory` folder.
+the project's `.membrick/memory` folder.
 
 ## Choose your agent
 
@@ -21,27 +21,45 @@ the project's `.lint-ai/memory` folder.
 ## Install for Codex, Claude Code, Gemini CLI, or Antigravity
 
 Open a terminal in the project folder and run the command for your agent. The
-installer downloads and checksum-verifies the official Lint-AI release,
+installer downloads and checksum-verifies the official Membrick release,
 configures the selected agent, and checks that its MCP connection works.
 
 ```bash
 # Codex
-curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh -s -- --agent codex --project .
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh | sh -s -- --agent codex --project .
 
 # Claude Code
-curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh -s -- --agent claude --project .
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh | sh -s -- --agent claude --project .
 
 # Gemini CLI
-curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh -s -- --agent gemini --project .
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh | sh -s -- --agent gemini --project .
 
 # Antigravity CLI
-curl -fsSL https://raw.githubusercontent.com/RooAGI/Lint-AI/main/scripts/install.sh | sh -s -- --agent agy --project .
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh | sh -s -- --agent agy --project .
 ```
 
 Restart the agent if it was already open. Then ask a question about a past
 project decision, or ask the agent to remember an outcome from the current
-session. The agent uses Lint-AI's memory tools and lifecycle integration in
+session. The agent uses Membrick's memory tools and lifecycle integration in
 the background.
+
+## Migrate from Lint-AI
+
+Existing Lint-AI users can install Membrick and update one agent connection in
+one step. From the project directory, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/migrate-lint-ai.sh | sh -s -- --agent codex --project .
+```
+
+Replace `codex` with `claude`, `gemini`, or `agy` for another supported agent.
+The migration installs Membrick, updates that agent's configuration while
+preserving unrelated settings, and verifies the MCP connection. Existing
+`.lint-ai` project state is moved to `.membrick` by Membrick on startup, with
+its contents preserved. If both directories exist, migration stops so you can
+merge them deliberately. The old `lint-ai` executable is left installed; once
+you have confirmed Membrick works, remove it using the package manager that
+installed it.
 
 ## OpenClaw and Hermes
 
@@ -53,9 +71,9 @@ what is automatic:
   recall hook, and capture plugin, then restart the Gateway.
 - [Set up Hermes](hermes.md): install the MCP connection and memory skill.
   The optional hooks plugin adds automatic recall and capture and requires the
-  Lint-AI server to be running.
+  Membrick server to be running.
 
-Both integrations use the same project memory folder, `.lint-ai/memory`, as
+Both integrations use the same project memory folder, `.membrick/memory`, as
 the other agents. The agents do not need to be switched to a different memory
 provider.
 
@@ -65,8 +83,8 @@ provider.
 - Supported lifecycle integrations can recall relevant memories at the start
   of work and capture outcomes when work finishes.
 - You can add or remove memories yourself by editing files in
-  `.lint-ai/memory`.
-- You can turn memory behavior on or off with the agent's Lint-AI controls;
+  `.membrick/memory`.
+- You can turn memory behavior on or off with the agent's Membrick controls;
   this does not delete saved memories.
 
 See [Quickstart](quickstart.md) to try memory directly from the command line,

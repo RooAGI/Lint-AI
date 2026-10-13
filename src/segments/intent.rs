@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use crate::index::{SearchResult, TemporalQueryContext};
 use crate::lang::Lang;
+use crate::query_semantics::{analyze_query, QueryAnalysis, QueryIntent};
 use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
 
 use super::catalog::query_connection_profile;
@@ -34,44 +35,8 @@ use super::relations::PredicateFamily;
 use super::routing::SegmentRoutingStrategy;
 use super::segmented::SegmentedMemoryIndex;
 
-/// What the question is actually asking for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum IntentOperation {
-    /// Default: single-fact lookup. Never fires the intent path.
-    Lookup,
-    /// Sum/aggregate a value across operands ("in total", "how many ... and").
-    Aggregate,
-    /// Difference between two operand timestamps ("how many days between X and Y").
-    TemporalDiff,
-    /// Order operands/options by time ("which first", "most recent").
-    TemporalOrder,
-    /// Choose among explicit options ("A or B").
-    Choose,
-    /// Filter a class of events by a pivot event ("events before X").
-    TemporalFilter,
-    /// "both X and Y <verb>": intersect per-subject relation objects.
-    SharedRelation,
-}
-
-impl IntentOperation {
-    fn as_str(self) -> &'static str {
-        match self {
-            IntentOperation::Lookup => "lookup",
-            IntentOperation::Aggregate => "aggregate",
-            IntentOperation::TemporalDiff => "temporal-diff",
-            IntentOperation::TemporalOrder => "temporal-order",
-            IntentOperation::Choose => "choose",
-            IntentOperation::TemporalFilter => "temporal-filter",
-            IntentOperation::SharedRelation => "shared-relation",
-        }
-    }
-
-    /// True for operations whose retrieval needs per-operand fan-out + union,
-    /// or relation intersection. Lookup never fires a special path.
-    fn is_multi_operand(self) -> bool {
-        !matches!(self, IntentOperation::Lookup)
-    }
-}
+/// Backwards-compatible name for the shared analysis intent type.
+pub type IntentOperation = QueryIntent;
 
 /// One operand scope: a slice of the question playing one role.
 #[derive(Debug, Clone)]
@@ -679,41 +644,40 @@ fn detect_shared_relation(question: &str) -> Option<SharedRelationQuery> {
 }
 
 pub fn reveal_question(question: &str) -> RevealedQuestion {
+    let analysis = analyze_query(question);
+    reveal_question_with_analysis(question, &analysis)
+}
+
+/// Decompose a question using the intent already assigned by shared query
+/// analysis. Segmented retrieval owns operand parsing, while intent
+/// classification remains part of query analysis for every layout.
+pub fn reveal_question_with_analysis(question: &str, analysis: &QueryAnalysis) -> RevealedQuestion {
     let q = question.trim();
     let q_lower = q.to_lowercase();
     // Shared-relation ("both X and Y") takes precedence over scope splitting.
-    if let Some(srq) = detect_shared_relation(q) {
-        let answer_shape = format!(
-            "intersection of {} objects across {}",
-            srq.family.as_str(),
-            srq.subjects.join(", ")
-        );
-        return RevealedQuestion {
-            operation: IntentOperation::SharedRelation,
-            operands: Vec::new(),
-            time_constraint: None,
-            answer_shape,
-            fallback_reason: None,
-            shared_relation: Some(srq),
-        };
+    if analysis.intent == QueryIntent::SharedRelation {
+        if let Some(srq) = detect_shared_relation(q) {
+            let answer_shape = format!(
+                "intersection of {} objects across {}",
+                srq.family.as_str(),
+                srq.subjects.join(", ")
+            );
+            return RevealedQuestion {
+                operation: QueryIntent::SharedRelation,
+                operands: Vec::new(),
+                time_constraint: None,
+                answer_shape,
+                fallback_reason: None,
+                shared_relation: Some(srq),
+            };
+        }
     }
     let how_many = q_lower.starts_with("how many")
         || q_lower.starts_with("how much")
         || q_lower.starts_with("how long")
         || q_lower.contains("how many");
     let time_unit = has_any(&q_lower, &["day", "week", "month", "year", "hour"]);
-    let order_markers = has_any(
-        &q_lower,
-        &[
-            "first",
-            "last",
-            "earliest",
-            "latest",
-            "most recent",
-            "oldest",
-            "newest",
-        ],
-    );
+    let operation = analysis.intent;
     let agg_markers = has_any(&q_lower, &["in total", "total", "combined", "altogether"]);
 
     let (kind, scope_texts) = split_scopes(q);
@@ -743,48 +707,48 @@ pub fn reveal_question(question: &str) -> RevealedQuestion {
         })
         .collect();
 
-    let (operation, answer_shape, fallback_reason) = match &kind {
-        SplitKind::Between if operands.len() == 2 && how_many && time_unit => (
-            IntentOperation::TemporalDiff,
-            "difference of per-operand timestamps".to_string(),
-            None,
-        ),
-        SplitKind::Between => (
-            IntentOperation::Lookup,
+    let (answer_shape, fallback_reason) = match (&kind, operation) {
+        (SplitKind::Between, QueryIntent::TemporalDiff)
+            if operands.len() == 2 && how_many && time_unit =>
+        {
+            ("difference of per-operand timestamps".to_string(), None)
+        }
+        (SplitKind::Between, _) => (
             String::new(),
             Some("between without a measurable time-unit question".to_string()),
         ),
-        SplitKind::Options if order_markers => (
-            IntentOperation::TemporalOrder,
-            "argmin/argmax over option timestamps".to_string(),
-            None,
-        ),
-        SplitKind::Options => (
-            IntentOperation::Choose,
-            "select among options by evidence".to_string(),
-            None,
-        ),
-        SplitKind::And if operands.len() >= 2 && (agg_markers || how_many) => (
-            IntentOperation::Aggregate,
-            "sum/aggregate of per-operand values".to_string(),
-            None,
-        ),
-        SplitKind::And => (
-            IntentOperation::Lookup,
+        (SplitKind::Options, QueryIntent::TemporalOrder) => {
+            ("argmin/argmax over option timestamps".to_string(), None)
+        }
+        (SplitKind::Options, QueryIntent::Choose) => {
+            ("select among options by evidence".to_string(), None)
+        }
+        (SplitKind::And, QueryIntent::Aggregate)
+            if operands.len() >= 2 && (agg_markers || how_many) =>
+        {
+            ("sum/aggregate of per-operand values".to_string(), None)
+        }
+        (SplitKind::And, _) => (
             String::new(),
-            Some("and-split without aggregate markers".to_string()),
+            Some("and-split without aggregate intent".to_string()),
         ),
-        SplitKind::Filter { direction, .. } => (
-            IntentOperation::TemporalFilter,
+        (SplitKind::Filter { direction, .. }, QueryIntent::TemporalFilter) => (
             format!("filter class events {direction} the pivot event"),
             None,
         ),
-        SplitKind::Single => (
-            IntentOperation::Lookup,
+        (SplitKind::Single, QueryIntent::TemporalOrder) => (
+            "temporal ordering requested without decomposable operands".to_string(),
+            Some("sequence intent has no explicit operands for segmented retrieval".to_string()),
+        ),
+        (SplitKind::Single, QueryIntent::Lookup) => (
             single_scope_answer_type(&q_lower)
                 .unwrap_or_default()
                 .to_string(),
             Some("single-scope lookup: adaptive covers it".to_string()),
+        ),
+        (_, _) => (
+            String::new(),
+            Some("analysis intent does not match a supported segmented decomposition".to_string()),
         ),
     };
 
@@ -909,7 +873,8 @@ impl SegmentedMemoryIndex {
         strategy: SegmentRoutingStrategy,
         temporal: TemporalQueryContext<'_>,
     ) -> Option<(SegmentQueryOutput, IntentDiagnostics)> {
-        let revealed = reveal_question(query);
+        let analysis = analyze_query(query);
+        let revealed = reveal_question_with_analysis(query, &analysis);
         if revealed.fallback_reason.is_some() || !revealed.operation.is_multi_operand() {
             return None;
         }
@@ -1082,13 +1047,34 @@ mod tests {
     }
 
     #[test]
+    fn reveal_temporal_order_uses_shared_before_cue() {
+        let q =
+            "Which device did I get before the other, the Samsung Galaxy S22 or the Dell XPS 13?";
+        let r = reveal_question(q);
+        assert_eq!(r.operation, IntentOperation::TemporalOrder);
+        assert!(r.fallback_reason.is_none(), "r: {r:?}");
+        assert_eq!(r.operands.len(), 2);
+    }
+
+    #[test]
     fn reveal_temporal_order_keeps_real_time_window() {
         let q = "Which vehicle did I take care of first in February, the bike or the car?";
         let r = reveal_question(q);
-        // Options carry no entities: lookup fallback (adaptive covers it).
-        assert_eq!(r.operation, IntentOperation::Lookup);
+        // Analysis identifies the temporal-order intent. Operand validation
+        // still decides whether the specialized segmented path can run.
+        assert_eq!(r.operation, IntentOperation::TemporalOrder);
         assert!(r.fallback_reason.is_some());
         assert_eq!(r.time_constraint.as_deref(), Some("february"));
+    }
+
+    #[test]
+    fn sports_sequence_is_in_analysis_even_without_explicit_operands() {
+        let q = "What is the order of the three sports events I participated in during the past month, from earliest to latest?";
+        let analysis = analyze_query(q);
+        assert_eq!(analysis.intent, QueryIntent::TemporalOrder);
+        let revealed = reveal_question_with_analysis(q, &analysis);
+        assert_eq!(revealed.operation, IntentOperation::TemporalOrder);
+        assert!(revealed.fallback_reason.is_some());
     }
 
     #[test]

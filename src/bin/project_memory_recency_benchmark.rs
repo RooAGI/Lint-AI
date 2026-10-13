@@ -11,10 +11,10 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 #[derive(Debug, Parser)]
-#[command(about = "Evaluate freshness on a persisted Lint-AI project memory corpus")]
+#[command(about = "Evaluate freshness on a persisted Membrick project memory corpus")]
 struct Args {
     /// Path to semantic/records.json produced by IndexStore.
-    #[arg(long, default_value = ".lint-ai/memory/semantic/records.json")]
+    #[arg(long, default_value = ".membrick/memory/semantic/records.json")]
     records: PathBuf,
 }
 
@@ -122,7 +122,7 @@ pub(crate) fn main() -> Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "benchmark": "lint-ai-project-memory-recency",
+            "benchmark": "membrick-project-memory-recency",
             "records_path": args.records,
             "record_count": timestamp_by_id.len(),
             "query_count": QUERIES.len(),

@@ -6,21 +6,28 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Repo = 'RooAGI/Lint-AI'
+$Repo = 'RooAGI/Membrick'
 $BaseUrl = "https://github.com/$Repo/releases/latest/download"
-$Asset = 'lint-ai-windows-x86_64.exe'
-$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("lint-ai-" + [guid]::NewGuid().ToString('N'))
+$Asset = 'membrick-windows-x86_64.exe'
+$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("membrick-" + [guid]::NewGuid().ToString('N'))
 $BinaryTemp = Join-Path $TempDir $Asset
-$ChecksumTemp = "$BinaryTemp.sha256"
-$InstalledBinary = Join-Path $InstallDir 'lint-ai.exe'
+$ChecksumTemp = Join-Path $TempDir 'SHA256SUMS'
+$InstalledBinary = Join-Path $InstallDir 'membrick.exe'
 
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 try {
-    Write-Host 'Downloading official Lint-AI release for Windows x86_64...'
+    Write-Host 'Downloading official Membrick release for Windows x86_64...'
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset" -OutFile $BinaryTemp
-    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset.sha256" -OutFile $ChecksumTemp
-
-    $Expected = ((Get-Content -Raw $ChecksumTemp).Trim() -split '\s+')[0].ToLowerInvariant()
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/SHA256SUMS" -OutFile $ChecksumTemp
+        $ChecksumLine = Get-Content $ChecksumTemp | Where-Object { $_ -match "\s+$([regex]::Escape($Asset))$" } | Select-Object -First 1
+        if (-not $ChecksumLine) { throw "No checksum found for $Asset; refusing to install." }
+        $Expected = ($ChecksumLine.Trim() -split '\s+')[0].ToLowerInvariant()
+    } catch {
+        # Support releases published before the aggregate manifest was introduced.
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset.sha256" -OutFile $ChecksumTemp
+        $Expected = ((Get-Content -Raw $ChecksumTemp).Trim() -split '\s+')[0].ToLowerInvariant()
+    }
     $Actual = (Get-FileHash -Algorithm SHA256 $BinaryTemp).Hash.ToLowerInvariant()
     if ($Expected -ne $Actual) {
         throw 'Checksum verification failed; refusing to install.'
@@ -29,6 +36,7 @@ try {
     Write-Host 'Checksum verified.'
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item -Force $BinaryTemp $InstalledBinary
+    New-Item -ItemType File -Force -Path (Join-Path $InstallDir '.membrick-managed') | Out-Null
 
     $Version = & $InstalledBinary --version
     Write-Host "Installed $Version to $InstalledBinary"
@@ -38,7 +46,7 @@ try {
     if ($PathEntries -notcontains $InstallDir) {
         $NewUserPath = if ([string]::IsNullOrWhiteSpace($UserPath)) { $InstallDir } else { "$UserPath;$InstallDir" }
         [Environment]::SetEnvironmentVariable('Path', $NewUserPath, 'User')
-        Write-Host "Added $InstallDir to your user PATH. Open a new terminal to use lint-ai by name."
+        Write-Host "Added $InstallDir to your user PATH. Open a new terminal to use membrick by name."
     }
     if (($env:Path -split ';') -notcontains $InstallDir) {
         $env:Path = "$InstallDir;$env:Path"
@@ -64,17 +72,17 @@ try {
             }
         }
 
-        Write-Host "Configuring Lint-AI for $Agent in $Project..."
+        Write-Host "Configuring Membrick for $Agent in $Project..."
         & $InstalledBinary $InstallFlag $Project
-        if ($LASTEXITCODE -ne 0) { throw "Lint-AI $Agent configuration failed." }
+        if ($LASTEXITCODE -ne 0) { throw "Membrick $Agent configuration failed." }
 
-        Write-Host 'Verifying the Lint-AI MCP runtime...'
+        Write-Host 'Verifying the Membrick MCP runtime...'
         & $InstalledBinary $VerifyFlag $Project
-        if ($LASTEXITCODE -ne 0) { throw 'Lint-AI MCP verification failed.' }
+        if ($LASTEXITCODE -ne 0) { throw 'Membrick MCP verification failed.' }
 
-        Write-Host "Lint-AI is installed, configured for $Agent, and MCP verification passed."
+        Write-Host "Membrick is installed, configured for $Agent, and MCP verification passed."
     } else {
-        Write-Host 'Lint-AI is installed. Re-run with -Agent codex|claude|gemini|agy to configure an agent.'
+        Write-Host 'Membrick is installed. Re-run with -Agent codex|claude|gemini|agy to configure an agent.'
     }
 }
 finally {

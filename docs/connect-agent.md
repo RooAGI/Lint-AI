@@ -43,6 +43,24 @@ project decision, or ask the agent to remember an outcome from the current
 session. The agent uses Membrick's memory tools and lifecycle integration in
 the background.
 
+## Migrate from Lint-AI
+
+Existing Lint-AI users can install Membrick and update one agent connection in
+one step. From the project directory, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/migrate-lint-ai.sh | sh -s -- --agent codex --project .
+```
+
+Replace `codex` with `claude`, `gemini`, or `agy` for another supported agent.
+The migration installs Membrick, updates that agent's configuration while
+preserving unrelated settings, and verifies the MCP connection. Existing
+`.lint-ai` project state is moved to `.membrick` by Membrick on startup, with
+its contents preserved. If both directories exist, migration stops so you can
+merge them deliberately. The old `lint-ai` executable is left installed; once
+you have confirmed Membrick works, remove it using the package manager that
+installed it.
+
 ## OpenClaw and Hermes
 
 OpenClaw and Hermes have their own setup steps because each host loads its

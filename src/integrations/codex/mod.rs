@@ -85,6 +85,17 @@ struct CodexMcp {
     store: Mutex<Option<crate::memory_api::MemoryService>>,
 }
 
+fn codex_update_tool_approval_config() -> TomlValue {
+    let mut update = TomlMap::new();
+    update.insert(
+        "approval_mode".to_string(),
+        TomlValue::String("prompt".to_string()),
+    );
+    let mut tools = TomlMap::new();
+    tools.insert("update_membrick".to_string(), TomlValue::Table(update));
+    TomlValue::Table(tools)
+}
+
 pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<PathBuf> {
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),
@@ -134,6 +145,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
         TomlValue::Array(vec![TomlValue::String("--codex-serve".to_string())]),
     );
     entry.insert("enabled".to_string(), TomlValue::Boolean(false));
+    entry.insert("tools".to_string(), codex_update_tool_approval_config());
     mcp_servers.insert("membrick".to_string(), TomlValue::Table(entry));
 
     // Codex Desktop and newer Codex CLI builds gate lifecycle hooks behind
@@ -204,6 +216,7 @@ pub fn install_project_config(root: &Path) -> Result<PathBuf> {
         "cwd".to_string(),
         TomlValue::String(root.to_string_lossy().into_owned()),
     );
+    entry.insert("tools".to_string(), codex_update_tool_approval_config());
     mcp_servers.insert("membrick".to_string(), TomlValue::Table(entry));
     write_text_object(&config_path, &toml::to_string_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
@@ -459,6 +472,10 @@ impl CodexMcp {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+
+        if tool_name == "update_membrick" {
+            return mcp_tools::call_update_tool(id, &arguments);
+        }
 
         if mcp_tools::resident_backend_enabled()
             && matches!(
@@ -865,6 +882,7 @@ impl CodexMcp {
         .into_iter()
         .chain(mcp_tools::board_tool_definitions())
         .chain(mcp_tools::memory_tool_definitions())
+        .chain(std::iter::once(mcp_tools::update_tool_definition()))
         .collect()
     }
 }
@@ -1356,7 +1374,8 @@ args = ["old"]
                 "board_get".to_string(),
                 "board_search".to_string(),
                 "add_memory".to_string(),
-                "get_memory".to_string()
+                "get_memory".to_string(),
+                "update_membrick".to_string()
             ]
         );
         fs::remove_dir_all(root).unwrap();

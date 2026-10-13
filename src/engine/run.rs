@@ -526,6 +526,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
             args.agy_settings.as_deref().map(Path::new),
         )?;
         println!("Wrote AGY hook settings to {}", written.display());
+        let written = crate::integrations::agy::install_update_permission(None)?;
+        println!("Configured AGY update approval in {}", written.display());
         return Ok(());
     }
 

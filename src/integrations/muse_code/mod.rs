@@ -450,6 +450,10 @@ impl MuseMcp {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
+        if tool_name == "update_membrick" {
+            return mcp_tools::call_update_tool(id, &arguments);
+        }
+
         if crate::integrations::mcp_tools::resident_backend_enabled()
             && matches!(
                 tool_name,
@@ -738,6 +742,7 @@ impl MuseMcp {
                 description: "Report whether Membrick memory behavior is enabled for this project.".to_string(),
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
+            mcp_tools::update_tool_definition(),
         ]
     }
 }

@@ -155,6 +155,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         .to_string_lossy()
         .into_owned();
     let mut settings = read_json_object(&settings_path)?;
+    ensure_update_permission_prompt(&mut settings)?;
     let hooks = settings
         .entry("hooks".to_string())
         .or_insert_with(|| json!({}));
@@ -199,6 +200,26 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
 
     write_json_object(&settings_path, &settings)?;
     Ok(settings_path)
+}
+
+fn ensure_update_permission_prompt(settings: &mut serde_json::Map<String, Value>) -> Result<()> {
+    let permissions = settings
+        .entry("permissions".to_string())
+        .or_insert_with(|| json!({}));
+    let permissions = permissions
+        .as_object_mut()
+        .context("Claude settings 'permissions' must be an object")?;
+    let ask = permissions
+        .entry("ask".to_string())
+        .or_insert_with(|| json!([]));
+    let ask = ask
+        .as_array_mut()
+        .context("Claude settings 'permissions.ask' must be an array")?;
+    let rule = "mcp__membrick__update_membrick";
+    if !ask.iter().any(|existing| existing.as_str() == Some(rule)) {
+        ask.push(Value::String(rule.to_string()));
+    }
+    Ok(())
 }
 
 /// Render the compact state indicator consumed by Claude Code's status line.
@@ -383,6 +404,10 @@ impl ClaudeMcp {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+
+        if tool_name == "update_membrick" {
+            return mcp_tools::call_update_tool(id, &arguments);
+        }
 
         if crate::integrations::mcp_tools::resident_backend_enabled()
             && matches!(
@@ -792,6 +817,7 @@ impl ClaudeMcp {
         .into_iter()
         .chain(mcp_tools::board_tool_definitions())
         .chain(mcp_tools::memory_tool_definitions())
+        .chain(std::iter::once(mcp_tools::update_tool_definition()))
         .collect()
     }
 }
@@ -1156,7 +1182,8 @@ mod tests {
                 "board_get".to_string(),
                 "board_search".to_string(),
                 "add_memory".to_string(),
-                "get_memory".to_string()
+                "get_memory".to_string(),
+                "update_membrick".to_string()
             ]
         );
         fs::remove_dir_all(root).unwrap();

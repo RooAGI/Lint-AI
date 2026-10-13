@@ -73,6 +73,57 @@ fn resident_error_response(id: Option<Value>, code: i64, message: &str) -> JsonR
     }
 }
 
+/// Common updater action exposed by every provider-local MCP server. The host
+/// client owns the approval prompt; the updater still validates the cached
+/// target version and install source before changing the installation.
+pub(crate) fn update_tool_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "update_membrick".to_string(),
+        description: "Update Membrick to the version shown in its update notice. Ask the user for approval before calling this tool; it runs the package manager or replaces the managed Membrick binary.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "version": {"type": "string", "description": "The exact available version shown in the Membrick update notice."}
+            },
+            "required": ["version"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+pub(crate) fn call_update_tool(
+    id: Option<Value>,
+    arguments: &Value,
+) -> anyhow::Result<JsonRpcResponse> {
+    if let Some(name) = arguments
+        .as_object()
+        .and_then(|object| object.keys().find(|key| key.as_str() != "version"))
+    {
+        return Ok(resident_error_response(
+            id,
+            -32602,
+            &format!("unknown update_membrick argument: {name}"),
+        ));
+    }
+    let version = arguments
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|version| !version.is_empty());
+    let Some(version) = version else {
+        return Ok(resident_error_response(
+            id,
+            -32602,
+            "update_membrick requires the version shown in the update notice",
+        ));
+    };
+    let message = match crate::updater::install_cached_update(version) {
+        Ok(message) => message,
+        Err(error) => format!("Membrick update was not installed: {error:#}"),
+    };
+    Ok(resident_text_response(id, &message))
+}
+
 /// Forward workspace memory tools to the resident Membrick server.
 /// Provider MCP processes must not open a second workspace/provider index.
 pub(crate) fn call_resident_tool(

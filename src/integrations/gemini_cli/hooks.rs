@@ -406,6 +406,18 @@ mod tests {
     }
 
     #[test]
+    fn update_notice_serializes_as_host_visible_system_message() {
+        let output = GeminiHookOutput {
+            hook_specific_output: None,
+            system_message: Some("Membrick 0.4.1 is available".to_string()),
+        };
+        assert_eq!(
+            serde_json::to_value(output).unwrap(),
+            serde_json::json!({"systemMessage": "Membrick 0.4.1 is available"})
+        );
+    }
+
+    #[test]
     fn gemini_compatible_hooks_capture_persist_and_retrieve_for_both_providers() {
         for (provider, label) in [
             (RecordingProvider::Gemini, "Gemini"),

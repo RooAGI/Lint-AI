@@ -306,6 +306,10 @@ impl GeminiMcp {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
+        if name == "update_membrick" {
+            return mcp_tools::call_update_tool(id, &args);
+        }
+
         if mcp_tools::resident_backend_enabled()
             && matches!(
                 name,
@@ -521,6 +525,7 @@ fn tool_definitions(provider_display_name: &str) -> Vec<ToolDefinition> {
     let mut tools = tools;
     tools.extend(mcp_tools::board_tool_definitions());
     tools.extend(mcp_tools::memory_tool_definitions());
+    tools.push(mcp_tools::update_tool_definition());
     tools
 }
 

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 const SERVER_NAME: &str = "membrick";
 const HOOK_MARKER: &str = "--agy-hook";
+const UPDATE_PERMISSION: &str = "mcp(membrick/update_membrick)";
 
 pub type AgyServerOptions<'a> = GeminiCliServerOptions<'a>;
 
@@ -100,6 +101,30 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
     Ok(path)
 }
 
+/// Require explicit AGY approval for the self-update MCP action.
+pub fn install_update_permission(settings_path: Option<&Path>) -> Result<PathBuf> {
+    let path = settings_path
+        .map(Path::to_path_buf)
+        .unwrap_or(default_permission_settings_path()?);
+    let mut settings = read_json_object(&path)?;
+    let permissions = settings.entry("permissions").or_insert_with(|| json!({}));
+    let permissions = permissions
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("AGY permissions must be an object"))?;
+    let ask = permissions.entry("ask").or_insert_with(|| json!([]));
+    let ask = ask
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("AGY permissions.ask must be an array"))?;
+    if !ask
+        .iter()
+        .any(|rule| rule.as_str() == Some(UPDATE_PERMISSION))
+    {
+        ask.push(Value::String(UPDATE_PERMISSION.to_string()));
+    }
+    write_json_object(&path, &settings)?;
+    Ok(path)
+}
+
 pub fn run_server(root: &Path, options: AgyServerOptions<'_>) -> Result<()> {
     gemini_cli::run_server_for(root, RecordingProvider::Agy, "agy", "Gemini", options)
 }
@@ -115,6 +140,9 @@ fn default_config_path() -> Result<PathBuf> {
 }
 fn default_settings_path() -> Result<PathBuf> {
     Ok(home_dir()?.join(".gemini/config/hooks.json"))
+}
+fn default_permission_settings_path() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".gemini/antigravity-cli/settings.json"))
 }
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {

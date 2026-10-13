@@ -140,7 +140,7 @@ mod tests {
             .as_nanos();
         let path = std::env::temp_dir().join(format!("lint-ai-muse-hooks-{name}-{nanos}"));
         fs::create_dir_all(&path).unwrap();
-        path
+        path.canonicalize().unwrap()
     }
 
     fn input(root: &Path, event: &str) -> MuseHookInput {

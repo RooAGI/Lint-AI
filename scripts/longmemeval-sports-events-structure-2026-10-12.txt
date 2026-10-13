@@ -1,0 +1,134 @@
+Indexing 50 haystack sessions for 'gpt4_e061b84f'...
+Indexed. Answer sessions: ["answer_8c64ce25_2", "answer_8c64ce25_1", "answer_8c64ce25_3"]
+Original question: What is the order of the three sports events I participated in during the past month, from earliest to latest?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_8c64ce25_2 timestamp=Some("2023-06-02T00:00:00+00:00")
+    (no native event/temporal claims)
+  answer_8c64ce25_1 timestamp=Some("2023-06-10T00:00:00+00:00")
+    (no native event/temporal claims)
+  answer_8c64ce25_3 timestamp=Some("2023-06-17T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: What is the order of the three sports events I participated in during the past month, from earliest to latest?
+  reference date: Some("2023/07/01 (Sat) 20:43")
+  normalized query: what is the order of the three sport event particip in dure the past month from earliest to latest
+  augmented/search query: What is the order of the three sports events I participated in during the past month, from earliest to latest? three sports events past month earliest latest is order participated past month
+  kind: What
+  analyzed intent: TemporalOrder
+  routing intent: Some(Sequence)
+  evidence requirements: QueryEvidenceRequirements { relation: Some(PersonalParticipation), minimum_distinct_objects: Some(3), order: Some(EventDateAscending) }
+  time hint: Some(Mixed)
+  temporal phrase: Some("during the past month")
+  temporal source: Some("fuzzydate")
+  resolved temporal anchor: Some("2023-07-01")
+  temporal window: Some("2023-06-01")..Some("2023-07-01")
+  anchor date: Some("2023-07-01")
+  anchor window: Some("2023-06-01..2023-07-01")
+  window days: 30
+  explicit temporal: true
+  hard temporal filter: true
+  spans:
+    QuestionWord: "what" => "what" (source=heuristic, score=0.700)
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "three sports events" => "three sport event" (source=pos, score=0.400)
+    NounPhrase: "past month" => "past month" (source=pos, score=0.400)
+    NounPhrase: "earliest" => "earliest" (source=pos, score=0.400)
+    NounPhrase: "latest" => "latest" (source=pos, score=0.400)
+    VerbPhrase: "is" => "is" (source=pos, score=0.350)
+    VerbPhrase: "order" => "order" (source=pos, score=0.350)
+    VerbPhrase: "participated" => "particip" (source=pos, score=0.350)
+    Temporal: "during the past month" => "dure the past month" (source=fuzzydate, score=0.800)
+    Subject: "What" => "what" (source=heuristic, score=0.750)
+    Object: "latest" => "latest" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=53 lexical_hits=282 candidates=282 evidence_groups=27 evidence_ms=1.66
+  post-evidence group ranking (top 15 plus answer sessions):
+    1. 0a6bf5e4_1 base=81.937 evidence=10.215 boost=6.310 final=71.860 pre=1 support=11 terms=20 num=3 unit=11 date=11 pred=4 required_relation_docs=0 penalty=1.050
+    2. 77dd7700 base=66.202 evidence=3.420 boost=5.950 final=58.912 pre=3 support=7 terms=8 num=4 unit=7 date=7 pred=1 required_relation_docs=0 penalty=0.350
+    3. 73bc3176_2 base=69.226 evidence=1.663 boost=3.042 final=58.424 pre=2 support=5 terms=8 num=2 unit=5 date=5 pred=1 required_relation_docs=0 penalty=2.800
+    4. bab3f409 base=59.911 evidence=10.545 boost=6.180 final=54.108 pre=4 support=12 terms=25 num=4 unit=12 date=12 pred=1 required_relation_docs=0 penalty=0.700
+    5. 539c2346_3 base=52.542 evidence=5.538 boost=6.180 final=48.214 pre=5 support=10 terms=15 num=3 unit=10 date=10 pred=1 required_relation_docs=0 penalty=0.700
+    6. ultrachat_436674 base=43.039 evidence=9.400 boost=6.880 final=41.311 pre=6 support=8 terms=19 num=0 unit=8 date=8 pred=2 required_relation_docs=0 penalty=0.000
+    7. ultrachat_356174 base=41.823 evidence=3.040 boost=4.720 final=38.178 pre=7 support=2 terms=4 num=0 unit=2 date=2 pred=2 required_relation_docs=0 penalty=0.000
+    8. 11a8f823_1 base=35.523 evidence=7.122 boost=6.660 final=35.078 pre=8 support=9 terms=14 num=3 unit=9 date=9 pred=3 required_relation_docs=0 penalty=0.700
+    9. ultrachat_308277 base=24.234 evidence=6.988 boost=7.010 final=26.397 pre=11 support=9 terms=13 num=3 unit=9 date=9 pred=4 required_relation_docs=0 penalty=0.350
+   10. 78d28576_2 base=25.241 evidence=6.325 boost=5.960 final=26.152 pre=9 support=8 terms=10 num=3 unit=8 date=8 pred=4 required_relation_docs=0 penalty=1.400
+   11. sharegpt_8ns7j9U_0 base=24.430 evidence=3.467 boost=5.868 final=25.412 pre=10 support=4 terms=9 num=0 unit=4 date=4 pred=0 required_relation_docs=0 penalty=0.000
+   12. answer_8c64ce25_3 base=18.062 evidence=10.483 boost=5.960 final=20.410 pre=12 support=12 terms=24 num=2 unit=12 date=12 pred=4 required_relation_docs=0 penalty=1.400 ANSWER
+   13. 2aee3e70 base=15.275 evidence=6.558 boost=6.660 final=18.880 pre=13 support=10 terms=12 num=3 unit=10 date=10 pred=4 required_relation_docs=0 penalty=0.700
+   14. sharegpt_E3FiZj3_62 base=14.593 evidence=3.937 boost=6.697 final=18.372 pre=16 support=14 terms=14 num=1 unit=14 date=14 pred=1 required_relation_docs=0 penalty=0.000
+   15. c58fdf1e_2 base=15.044 evidence=6.905 boost=5.960 final=17.995 pre=15 support=9 terms=12 num=4 unit=9 date=9 pred=4 required_relation_docs=0 penalty=1.400
+   17. answer_8c64ce25_1 base=12.848 evidence=7.290 boost=6.530 final=16.808 pre=17 support=10 terms=16 num=4 unit=10 date=10 pred=1 required_relation_docs=0 penalty=0.350 ANSWER
+   19. answer_8c64ce25_2 base=8.165 evidence=5.350 boost=7.080 final=13.612 pre=21 support=4 terms=7 num=0 unit=4 date=4 pred=3 required_relation_docs=0 penalty=0.000 ANSWER
+
+  deep index gold-session presence:
+    answer_8c64ce25_2: candidate rank=39 score=6.626 doc_id=doc:memory:v2:17aadb412d6482334a17ac0f199852e99e4b815448e9af4e060093b11f0df424
+    answer_8c64ce25_1: candidate rank=31 score=8.280 doc_id=doc:memory:v2:ae8b0a58607c26b78a8bc85f513ab7a2fdb906fbda8c10a68419a245a8afd766
+    answer_8c64ce25_3: candidate rank=22 score=11.894 doc_id=doc:memory:v2:f072890ed57cd18b67b23200d3583c6190212acc2bcfaab7c543951003dcbf28
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:337c64602b3fc0463240fec69e21b726ef89665b013cb57c630500609739906f session=Some("77dd7700") score=60.179 structured_evidence=[]
+    2. id=doc:memory:v2:68d3c78da440cc04e5c9227db261a4d2653356b075be7cf0c17d385bba3f068d session=Some("0a6bf5e4_1") score=56.691 structured_evidence=[]
+    3. id=doc:memory:v2:17ce5c1c4f6aa9cec88302352e74baa2c4121d53355897b72207dd8d625a2fa1 session=Some("73bc3176_2") score=53.696 structured_evidence=[]
+    4. id=doc:memory:v2:7cc5e45b49988c6ac17b138bc937e3a59e7e9048e5ae24e9d018d420537a80e8 session=Some("bab3f409") score=51.813 structured_evidence=[]
+    5. id=doc:memory:v2:d14fe637cb29026550c25939b0c37b380dfded3357a79299ba7183806e1684e2 session=Some("0a6bf5e4_1") score=50.898 structured_evidence=[]
+    6. id=doc:memory:v2:e6110740805fe8c0e24a3dd4e129e8ca8c38ce31d8d6a1a2b71920c646328227 session=Some("73bc3176_2") score=48.855 structured_evidence=[]
+    7. id=doc:memory:v2:307fa60a56b8abbb5f441f6a156fd7c4bb9e1a88beb7b9c402839ca7ad8f6b00 session=Some("539c2346_3") score=41.278 structured_evidence=[]
+    8. id=doc:memory:v2:0ea167919cb6e32e52ff56d0b061025c8ab9ab650572fae9d63cd3384f8789e3 session=Some("ultrachat_356174") score=37.900 structured_evidence=[]
+    9. id=doc:memory:v2:4df83305ffa403f0e67ff5a731414af3917041d8005c3ca90249bcddf6c04174 session=Some("ultrachat_436674") score=36.662 structured_evidence=[]
+    10. id=doc:memory:v2:ecd03a745a472eb660ef152e9a2491039b9d1d883bfe91573af6e382c80191d5 session=Some("11a8f823_1") score=28.103 structured_evidence=[]
+    11. id=doc:memory:v2:f34f9647c6ccbd2a48a3147d3198600a59f8f2ec5b22d68888b5895d1451cc93 session=Some("539c2346_3") score=20.423 structured_evidence=[]
+    12. id=doc:memory:v2:155fdd7a44a8f3477bdde452fa52986b381e5d4731fd454f48f46ee31e422b44 session=Some("78d28576_2") score=19.492 structured_evidence=[]
+    13. id=doc:memory:v2:bd953b995b9ef8d9699e743528ccd5bb039120ec33a49079fddc8068b7c40ec1 session=Some("ultrachat_308277") score=19.205 structured_evidence=[]
+    14. id=doc:memory:v2:cb123f43007dbc8bfd47dcde73b27944c333bf6405f6dcc493527526f2c4132c session=Some("sharegpt_8ns7j9U_0") score=18.547 structured_evidence=[]
+    15. id=doc:memory:v2:304cae2d95ba3171036b11a835f9bad0cfe23f9856087898457452764a86185a session=Some("bab3f409") score=15.894 structured_evidence=[]
+    16. id=doc:memory:v2:6a8f678eac2fa380c49a3343b51d90e0ee88e9b0324e37214b5e7cd8bb9d419f session=Some("78d28576_2") score=14.521 structured_evidence=[]
+    17. id=doc:memory:v2:6c729ffdcd646f925c756d1fd3770a832865fb504a0f869190230f8298447a00 session=Some("11a8f823_1") score=14.222 structured_evidence=[]
+    18. id=doc:memory:v2:4b6887b4304c004fd50319afe5a47dd70a86f30756aff182138149ac2e7fc338 session=Some("ultrachat_356174") score=13.309 structured_evidence=[]
+    19. id=doc:memory:v2:5e2d0a023c4fa101250008d791ffabba0b7ac4f90ebcf069b0d69a9928a17ff8 session=Some("c58fdf1e_2") score=12.936 structured_evidence=[]
+    20. id=doc:memory:v2:921f4479cd232d414115d1f5051fa755697be7882118f11658a6d75df131bd85 session=Some("ultrachat_436674") score=12.871 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=282 candidates=282 evidence_groups=27 evidence_ms=1.68
+  post-evidence group ranking (top 15 plus answer sessions):
+    1. 0a6bf5e4_1 base=81.937 evidence=10.215 boost=6.310 final=71.860 pre=1 support=11 terms=20 num=3 unit=11 date=11 pred=4 required_relation_docs=0 penalty=1.050
+    2. 77dd7700 base=66.202 evidence=3.420 boost=5.950 final=58.912 pre=3 support=7 terms=8 num=4 unit=7 date=7 pred=1 required_relation_docs=0 penalty=0.350
+    3. 73bc3176_2 base=69.226 evidence=1.663 boost=3.042 final=58.424 pre=2 support=5 terms=8 num=2 unit=5 date=5 pred=1 required_relation_docs=0 penalty=2.800
+    4. bab3f409 base=59.911 evidence=10.545 boost=6.180 final=54.108 pre=4 support=12 terms=25 num=4 unit=12 date=12 pred=1 required_relation_docs=0 penalty=0.700
+    5. 539c2346_3 base=52.542 evidence=5.538 boost=6.180 final=48.214 pre=5 support=10 terms=15 num=3 unit=10 date=10 pred=1 required_relation_docs=0 penalty=0.700
+    6. ultrachat_436674 base=43.039 evidence=9.400 boost=6.880 final=41.311 pre=6 support=8 terms=19 num=0 unit=8 date=8 pred=2 required_relation_docs=0 penalty=0.000
+    7. ultrachat_356174 base=41.823 evidence=3.040 boost=4.720 final=38.178 pre=7 support=2 terms=4 num=0 unit=2 date=2 pred=2 required_relation_docs=0 penalty=0.000
+    8. 11a8f823_1 base=35.523 evidence=7.122 boost=6.660 final=35.078 pre=8 support=9 terms=14 num=3 unit=9 date=9 pred=3 required_relation_docs=0 penalty=0.700
+    9. ultrachat_308277 base=24.234 evidence=6.988 boost=7.010 final=26.397 pre=11 support=9 terms=13 num=3 unit=9 date=9 pred=4 required_relation_docs=0 penalty=0.350
+   10. 78d28576_2 base=25.241 evidence=6.325 boost=5.960 final=26.152 pre=9 support=8 terms=10 num=3 unit=8 date=8 pred=4 required_relation_docs=0 penalty=1.400
+   11. sharegpt_8ns7j9U_0 base=24.430 evidence=3.467 boost=5.868 final=25.412 pre=10 support=4 terms=9 num=0 unit=4 date=4 pred=0 required_relation_docs=0 penalty=0.000
+   12. answer_8c64ce25_3 base=18.062 evidence=10.483 boost=5.960 final=20.410 pre=12 support=12 terms=24 num=2 unit=12 date=12 pred=4 required_relation_docs=0 penalty=1.400 ANSWER
+   13. 2aee3e70 base=15.275 evidence=6.558 boost=6.660 final=18.880 pre=13 support=10 terms=12 num=3 unit=10 date=10 pred=4 required_relation_docs=0 penalty=0.700
+   14. sharegpt_E3FiZj3_62 base=14.593 evidence=3.937 boost=6.697 final=18.372 pre=16 support=14 terms=14 num=1 unit=14 date=14 pred=1 required_relation_docs=0 penalty=0.000
+   15. c58fdf1e_2 base=15.044 evidence=6.905 boost=5.960 final=17.995 pre=15 support=9 terms=12 num=4 unit=9 date=9 pred=4 required_relation_docs=0 penalty=1.400
+   17. answer_8c64ce25_1 base=12.848 evidence=7.290 boost=6.530 final=16.808 pre=17 support=10 terms=16 num=4 unit=10 date=10 pred=1 required_relation_docs=0 penalty=0.350 ANSWER
+   19. answer_8c64ce25_2 base=8.165 evidence=5.350 boost=7.080 final=13.612 pre=21 support=4 terms=7 num=0 unit=4 date=4 pred=3 required_relation_docs=0 penalty=0.000 ANSWER
+
+  service-depth index gold-session presence:
+    answer_8c64ce25_2: absent from service-depth index results
+    answer_8c64ce25_1: absent from service-depth index results
+    answer_8c64ce25_3: absent from service-depth index results
+
+(8.7ms) top sessions:
+  1. 77dd7700 (score 60.1793)
+  2. 0a6bf5e4_1 (score 56.6909)
+  3. 73bc3176_2 (score 53.6964)
+  4. bab3f409 (score 51.8127)
+  5. 539c2346_3 (score 41.2784)
+  6. ultrachat_356174 (score 37.9000)
+  7. ultrachat_436674 (score 36.6617)
+  8. 11a8f823_1 (score 28.1031)
+  9. 78d28576_2 (score 19.4922)
+  10. ultrachat_308277 (score 19.2051)
+  11. sharegpt_8ns7j9U_0 (score 18.5475)
+  12. c58fdf1e_2 (score 12.9361)
+
+query>

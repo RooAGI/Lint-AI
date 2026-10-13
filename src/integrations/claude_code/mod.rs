@@ -234,10 +234,14 @@ pub fn run_server(root: &Path, options: ClaudeCodeServerOptions<'_>) -> Result<(
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
-        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
-            root,
-            options.ignore_paths,
-        )?),
+        workspace_watcher: if cfg!(test) {
+            Some(mcp_index::WorkspaceWatcher::new(
+                root,
+                options.ignore_paths,
+            )?)
+        } else {
+            None
+        },
         store: Mutex::new(None),
     };
     mcp.serve()
@@ -249,6 +253,10 @@ impl ClaudeMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        anyhow::ensure!(
+            !mcp_tools::resident_backend_enabled(),
+            "MCP memory indexes are owned by the resident Lint-AI server"
+        );
         let file_changes = self
             .workspace_watcher
             .as_ref()
@@ -375,6 +383,28 @@ impl ClaudeMcp {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
+        if crate::integrations::mcp_tools::resident_backend_enabled()
+            && matches!(
+                tool_name,
+                "search"
+                    | "info"
+                    | "list_memories"
+                    | "board_open"
+                    | "board_list"
+                    | "board_info"
+                    | "board_post"
+                    | "board_read"
+                    | "board_get"
+                    | "board_search"
+                    | "add_memory"
+                    | "get_memory"
+            )
+        {
+            return crate::integrations::mcp_tools::call_resident_tool(
+                id, &self.root, "claude", tool_name, &arguments,
+            );
+        }
+
         match tool_name {
             "search" => {
                 if let Some(name) =
@@ -405,6 +435,7 @@ impl ClaudeMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // Stateful search: an explicit session id scopes follow-up
                 // resolution and temporal-anchor carry to this provider's
@@ -568,6 +599,7 @@ impl ClaudeMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
@@ -585,6 +617,8 @@ impl ClaudeMcp {
             | "board_get" | "board_search" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // Resolve the session from the composed service, which tracks
                 // hook activity, then perform board operations against the
                 // persistent shared-memory service. Do not mutate the
@@ -634,7 +668,6 @@ impl ClaudeMcp {
             "add_memory" | "get_memory" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
-                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // `add_memory` is a write: run it against the persistent
                 // shared-memory service. The composed view is in-memory
                 // only, so a view write would vanish on process exit and stay
@@ -667,8 +700,7 @@ impl ClaudeMcp {
                         },
                     )
                     .map_err(|error| error.to_string());
-                    // Re-sync the view so this process observes its own
-                    // write without waiting for the next pre-dispatch sync.
+                    #[cfg(test)]
                     if write.is_ok() {
                         service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                     }

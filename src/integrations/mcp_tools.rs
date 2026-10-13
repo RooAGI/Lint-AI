@@ -16,7 +16,311 @@ pub(crate) const PROVIDER_FILTER_VALUES: &[&str] = &[
     "muse",
     "openclaw",
     "hermes",
+    "rooagi_runtime",
 ];
+
+pub(crate) const fn resident_backend_enabled() -> bool {
+    !cfg!(test)
+}
+
+/// Whether the resident backend has either half of the searchable project
+/// view on disk. Lifecycle hooks use this to avoid creating empty stores just
+/// to run their default session-start query.
+pub(crate) fn has_search_store(root: &Path) -> bool {
+    let lint_ai_root = root.join(".lint-ai");
+    lint_ai_root
+        .join(crate::integrations::mcp_index::SHARED_MEMORY_DIR)
+        .is_dir()
+        || lint_ai_root
+            .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME)
+            .is_dir()
+}
+
+fn resident_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("valid resident server HTTP client configuration")
+    })
+}
+
+fn resident_text_response(id: Option<Value>, text: &str) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0",
+        id,
+        result: Some(json!({"content":[{"type":"text","text":text}]})),
+        error: None,
+    }
+}
+
+fn resident_error_response(id: Option<Value>, code: i64, message: &str) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0",
+        id,
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message: message.to_string(),
+        }),
+    }
+}
+
+/// Forward workspace memory tools to the resident Lint-AI server.
+/// Provider MCP processes must not open a second workspace/provider index.
+pub(crate) fn call_resident_tool(
+    id: Option<Value>,
+    root: &Path,
+    provider: &str,
+    tool: &str,
+    arguments: &Value,
+) -> anyhow::Result<JsonRpcResponse> {
+    let root = root.canonicalize()?;
+    let base_url =
+        std::env::var("LINTAI_SERVER_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+    let url = format!(
+        "{}/provider-memory/mcp/tools/call",
+        base_url.trim_end_matches('/')
+    );
+    let mut request = resident_http_client()
+        .post(url)
+        .json(&json!({
+            "workspace": root,
+            "provider": provider,
+            "user_id": std::env::var("LINTAI_USER_ID").unwrap_or_else(|_| MCP_MEMORY_USER_ID.to_string()),
+            "session_id": arguments.get("session_id"),
+            "tool": tool,
+            "arguments": arguments,
+        }));
+    if let Ok(token) = std::env::var("LINTAI_SERVER_TOKEN") {
+        if !token.trim().is_empty() {
+            request = request.bearer_auth(token.trim());
+        }
+    }
+    let response = match request.send() {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(resident_error_response(
+                id,
+                -32002,
+                &format!("resident Lint-AI server unavailable: {error}"),
+            ));
+        }
+    };
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .unwrap_or_else(|error| json!({"detail":error.to_string()}));
+    if !status.is_success() {
+        return Ok(resident_error_response(
+            id,
+            -32602,
+            body.get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("resident memory tool failed"),
+        ));
+    }
+    Ok(resident_text_response(
+        id,
+        &serde_json::to_string_pretty(&body)?,
+    ))
+}
+
+/// Publish a hook capture through the resident workspace owner.
+pub(crate) fn upsert_hook_document(
+    root: &Path,
+    provider: &str,
+    session_id: &str,
+    document: crate::SourceDocument,
+) -> anyhow::Result<()> {
+    upsert_hook_documents(root, provider, session_id, vec![document])
+}
+
+/// Publish a batch of hook captures through the resident workspace owner.
+pub(crate) fn upsert_hook_documents(
+    root: &Path,
+    provider: &str,
+    session_id: &str,
+    documents: Vec<crate::SourceDocument>,
+) -> anyhow::Result<()> {
+    #[cfg(test)]
+    {
+        return MemoryService::with_shared_memory(root, |service| {
+            for document in documents {
+                service.upsert(document);
+            }
+            service.refresh_index()
+        });
+    }
+    #[cfg(not(test))]
+    {
+        anyhow::ensure!(
+            PROVIDER_FILTER_VALUES.contains(&provider),
+            "invalid provider"
+        );
+        let root = root.canonicalize()?;
+        let base_url = std::env::var("LINTAI_SERVER_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let mut request = resident_http_client()
+            .post(format!(
+                "{}/provider-memory/mcp/documents/upsert",
+                base_url.trim_end_matches('/')
+            ))
+            .json(&json!({
+                "workspace": root,
+                "provider": provider,
+                "session_id": session_id,
+                "user_id": std::env::var("LINTAI_USER_ID").unwrap_or_else(|_| MCP_MEMORY_USER_ID.to_string()),
+                "documents": documents,
+            }));
+        if let Ok(token) = std::env::var("LINTAI_SERVER_TOKEN") {
+            if !token.trim().is_empty() {
+                request = request.bearer_auth(token.trim());
+            }
+        }
+        let response = request.send()?;
+        anyhow::ensure!(
+            response.status().is_success(),
+            "resident memory server rejected hook capture: {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        );
+        Ok(())
+    }
+}
+
+pub(crate) fn replace_hook_documents(
+    root: &Path,
+    provider: &str,
+    session_id: &str,
+    key: &str,
+    value: &str,
+    documents: Vec<crate::SourceDocument>,
+) -> anyhow::Result<()> {
+    #[cfg(test)]
+    {
+        return MemoryService::with_shared_memory(root, |service| {
+            service.replace_source_group(key, value, documents)?;
+            service.refresh_index()
+        });
+    }
+    #[cfg(not(test))]
+    {
+        anyhow::ensure!(
+            PROVIDER_FILTER_VALUES.contains(&provider),
+            "invalid provider"
+        );
+        let root = root.canonicalize()?;
+        let base_url = std::env::var("LINTAI_SERVER_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let mut request = resident_http_client()
+            .post(format!(
+                "{}/provider-memory/mcp/documents/upsert",
+                base_url.trim_end_matches('/')
+            ))
+            .json(&json!({
+                "workspace": root,
+                "provider": provider,
+                "session_id": session_id,
+                "user_id": std::env::var("LINTAI_USER_ID").unwrap_or_else(|_| MCP_MEMORY_USER_ID.to_string()),
+                "replace_group":{"key":key,"value":value},
+                "documents": documents,
+            }));
+        if let Ok(token) = std::env::var("LINTAI_SERVER_TOKEN") {
+            if !token.trim().is_empty() {
+                request = request.bearer_auth(token.trim());
+            }
+        }
+        let response = request.send()?;
+        anyhow::ensure!(
+            response.status().is_success(),
+            "resident memory server rejected hook capture: {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        );
+        Ok(())
+    }
+}
+
+/// Search the resident published view for a hook retrieval request.
+pub(crate) fn search_hook_documents(
+    root: &Path,
+    provider: &str,
+    session_id: Option<&str>,
+    query: &str,
+    top_k: usize,
+) -> anyhow::Result<Value> {
+    #[cfg(test)]
+    {
+        let ignore_paths = [
+            "node_modules",
+            "target",
+            "dist",
+            "build",
+            "vendor",
+            "coverage",
+            ".git",
+        ]
+        .map(str::to_string);
+        return MemoryService::open_workspace(
+            root,
+            crate::integrations::mcp_index::SHARED_MEMORY_DIR,
+            &ignore_paths,
+            || {
+                let input = crate::adapters::AdapterInput {
+                    root,
+                    max_bytes: 5_000_000,
+                    max_files: 50_000,
+                    max_depth: 20,
+                    max_total_bytes: 100_000_000,
+                };
+                let graph = crate::adapters::build_project_graph(&input)?;
+                let graph = crate::adapters::apply_ignore_paths(graph, &ignore_paths);
+                Ok(crate::adapters::graph_to_source_documents(&graph))
+            },
+        )
+        .and_then(|mut service| {
+            if provider == "rooagi_runtime" {
+                let response = service.search(crate::memory_api::SearchRequest {
+                    query: query.to_string(),
+                    options: None,
+                    user_id: String::new(),
+                    top_k,
+                    session_id: session_id.map(str::to_string),
+                    scope: None,
+                    filters: None,
+                    reference_date: None,
+                })?;
+                return Ok(
+                    json!({"results": response.data.into_iter().map(|hit| json!({
+                    "id":hit.id,"content":hit.content,"score":hit.score,"created_at":hit.created_at
+                })).collect::<Vec<_>>()}),
+                );
+            }
+            let results = service.observe_plain_query(query, provider, session_id, top_k)?;
+            Ok(search_results(&service, results))
+        });
+    }
+    #[cfg(not(test))]
+    {
+        let mut arguments = json!({"query":query,"top_k":top_k});
+        if let Some(session_id) = session_id.filter(|session_id| !session_id.trim().is_empty()) {
+            arguments["session_id"] = json!(session_id);
+        }
+        let response = call_resident_tool(None, root, provider, "search", &arguments)?;
+        if let Some(error) = response.error {
+            anyhow::bail!("resident search failed: {}", error.message);
+        }
+        let encoded = response
+            .result
+            .as_ref()
+            .and_then(|result| result.pointer("/content/0/text"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("resident search returned no result payload"))?;
+        Ok(serde_json::from_str(encoded)?)
+    }
+}
 
 /// JSON Schema fragment for the optional `provider` search argument.
 pub(crate) fn provider_argument_schema() -> Value {
@@ -145,6 +449,9 @@ pub fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Va
                 "superseded_by": result.superseded_by,
                 "relation_confidence": result.relation_confidence,
                 "relation_evidence": result.relation_evidence,
+                "document_type": document.filters.get("document_type"),
+                "branch": document.filters.get("branch"),
+                "revision": document.filters.get("revision"),
             }))
         })
         .collect::<Vec<_>>();
@@ -575,7 +882,7 @@ pub(crate) fn dispatch_memory_tool(
     service: &mut MemoryService,
     provider: &str,
 ) -> Result<Value, String> {
-    use crate::memory_api::{AddRequest, GetRequest, Message};
+    use crate::memory_api::GetRequest;
 
     fn get_str<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
         args.get(name)
@@ -598,38 +905,7 @@ pub(crate) fn dispatch_memory_tool(
 
     match tool {
         "add_memory" => {
-            let content = get_str(arguments, "content")?;
-            let request_id = get_str(arguments, "request_id")?;
-            let role = arguments
-                .get("role")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .unwrap_or("assistant");
-            if role != "user" && role != "assistant" {
-                return Err("role must be \"user\" or \"assistant\"".to_string());
-            }
-            // Same session resolution as search: explicit arg, else the
-            // session most recently seen active in this workspace.
-            let session_id = resolve_search_session_id(arguments, &*service, provider)?
-                .ok_or_else(|| "no active session: pass session_id to add_memory".to_string())?;
-            let request = AddRequest {
-                request_id: request_id.to_string(),
-                messages: vec![Message {
-                    role: role.to_string(),
-                    // No server-injected wall-clock time: the request fingerprint
-                    // covers the whole message, so a fresh timestamp per call
-                    // would make every retry of the same request_id look like
-                    // a conflicting request. The document timestamp is
-                    // display-only (export), not a retrieval input.
-                    timestamp: None,
-                    content: content.to_string(),
-                    expires_at_ms: None,
-                    supersedes_id: None,
-                }],
-                user_id: MCP_MEMORY_USER_ID.to_string(),
-                session_id,
-            };
+            let request = build_add_memory_request(arguments, service, provider)?;
             let response = service.add(request).map_err(|e| e.to_string())?;
             serde_json::to_value(&response).map_err(|e| e.to_string())
         }
@@ -651,6 +927,55 @@ pub(crate) fn dispatch_memory_tool(
         }
         _ => Err(format!("unknown memory tool: {tool}")),
     }
+}
+
+pub(crate) fn build_add_memory_request(
+    arguments: &Value,
+    service: &MemoryService,
+    provider: &str,
+) -> Result<crate::memory_api::AddRequest, String> {
+    use crate::memory_api::{AddRequest, Message};
+    if arguments.as_object().is_some_and(|args| {
+        args.keys()
+            .any(|key| !["content", "request_id", "session_id", "role"].contains(&key.as_str()))
+    }) {
+        return Err("unknown add_memory argument".to_string());
+    }
+    let content = arguments
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "content is required".to_string())?;
+    let request_id = arguments
+        .get("request_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "request_id is required".to_string())?;
+    let role = arguments
+        .get("role")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("assistant");
+    if role != "user" && role != "assistant" {
+        return Err("role must be \"user\" or \"assistant\"".to_string());
+    }
+    let session_id = resolve_search_session_id(arguments, service, provider)?
+        .ok_or_else(|| "no active session: pass session_id to add_memory".to_string())?;
+    Ok(AddRequest {
+        request_id: request_id.to_string(),
+        messages: vec![Message {
+            role: role.to_string(),
+            timestamp: None,
+            content: content.to_string(),
+            expires_at_ms: None,
+            supersedes_id: None,
+        }],
+        user_id: MCP_MEMORY_USER_ID.to_string(),
+        session_id,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -678,8 +1003,8 @@ pub(crate) fn call_board_or_memory_tool(
     root: &Path,
     provider: &str,
 ) -> anyhow::Result<JsonRpcResponse> {
-    let shared_root = crate::integrations::mcp_index::shared_memory_root(root);
-    service.sync_shared_memory(&shared_root)?;
+    #[cfg(test)]
+    service.sync_shared_memory(&crate::integrations::mcp_index::shared_memory_root(root))?;
     // Board owner/workspace: the workspace root scopes boards;
     // "mcp" is the stable owner for agent-posted boards.
     let workspace = root.to_string_lossy().to_string();
@@ -722,10 +1047,9 @@ pub(crate) fn call_board_or_memory_tool(
             _ => Err(format!("unknown tool: {tool_name}")),
         }
     };
-    // After a successful write, re-sync the view so this process observes
-    // its own write without waiting for the next pre-dispatch sync.
+    #[cfg(test)]
     if is_write && result.is_ok() {
-        service.sync_shared_memory(&shared_root)?;
+        service.sync_shared_memory(&crate::integrations::mcp_index::shared_memory_root(root))?;
     }
     match result {
         Ok(payload) => Ok(JsonRpcResponse {

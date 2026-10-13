@@ -154,10 +154,14 @@ pub fn run_server_for(
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
-        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
-            root,
-            options.ignore_paths,
-        )?),
+        workspace_watcher: if cfg!(test) {
+            Some(mcp_index::WorkspaceWatcher::new(
+                root,
+                options.ignore_paths,
+            )?)
+        } else {
+            None
+        },
     };
     server.serve()
 }
@@ -195,6 +199,10 @@ impl GeminiMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("Gemini MCP store lock poisoned"))?;
+        anyhow::ensure!(
+            !mcp_tools::resident_backend_enabled(),
+            "MCP memory indexes are owned by the resident Lint-AI server"
+        );
         let file_changes = self
             .workspace_watcher
             .as_ref()
@@ -296,6 +304,32 @@ impl GeminiMcp {
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
+
+        if mcp_tools::resident_backend_enabled()
+            && matches!(
+                name,
+                "search"
+                    | "info"
+                    | "list_memories"
+                    | "board_open"
+                    | "board_list"
+                    | "board_info"
+                    | "board_post"
+                    | "board_read"
+                    | "board_get"
+                    | "board_search"
+                    | "add_memory"
+                    | "get_memory"
+            )
+        {
+            return mcp_tools::call_resident_tool(
+                id,
+                &self.root,
+                self.provider.as_str(),
+                name,
+                &args,
+            );
+        }
         match name {
             "search" => {
                 let query = args
@@ -317,6 +351,7 @@ impl GeminiMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 service.refresh_index()?;
                 // Stateful search: an explicit session id scopes follow-up
@@ -382,6 +417,7 @@ impl GeminiMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 service.refresh_index()?;
                 Ok(text_response(

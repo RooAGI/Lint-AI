@@ -16,6 +16,10 @@ use std::time::Instant;
 /// path filters by user ownership, so every haystack session is indexed
 /// under this user and every query searches as this user.
 const BENCHMARK_USER_ID: &str = "benchmark-user";
+// LongMemEval labels sessions, while MemoryService returns per-document
+// memories. Fetch a wider document window before collapsing hits to sessions,
+// or a session with several matching turns can consume multiple top-k slots.
+const SESSION_RESULT_OVERSAMPLE: usize = 4;
 
 #[derive(Debug, Parser)]
 #[command(name = "haystack-scoped-benchmark")]
@@ -40,6 +44,10 @@ struct Args {
     /// Enable beKIND semantic tags (occupation/activity hypernyms).
     #[arg(long)]
     bekind: bool,
+
+    /// Enable structured-fact retrieval, including native participation claims.
+    #[arg(long, action = ArgAction::SetTrue)]
+    structured_fact_retrieval: bool,
 
     /// Enable CombSUM fusion: run multiple query variants and sum scores.
     #[arg(long)]
@@ -279,8 +287,8 @@ fn combsum_search(
 
     // Generate variants
     let variants = vec![
-        question.to_string(),                    // Original
-        strip_temporal_phrases(question),        // No temporal (broader)
+        question.to_string(),             // Original
+        strip_temporal_phrases(question), // No temporal (broader)
     ];
 
     // Run each variant, collect scores per doc_id
@@ -339,10 +347,7 @@ fn rrf_search(
 
     const RRF_K: f32 = 60.0;
 
-    let variants = vec![
-        question.to_string(),
-        strip_temporal_phrases(question),
-    ];
+    let variants = vec![question.to_string(), strip_temporal_phrases(question)];
 
     let mut rrf_scores: HashMap<String, f32> = HashMap::new();
     let mut doc_map: HashMap<String, crate::SearchMemory> = HashMap::new();
@@ -363,7 +368,9 @@ fn rrf_search(
         for (rank, result) in resp.data.iter().enumerate() {
             let rrf = 1.0 / (RRF_K + rank as f32 + 1.0);
             *rrf_scores.entry(result.id.clone()).or_insert(0.0) += rrf;
-            doc_map.entry(result.id.clone()).or_insert_with(|| result.clone());
+            doc_map
+                .entry(result.id.clone())
+                .or_insert_with(|| result.clone());
         }
     }
 
@@ -419,9 +426,9 @@ fn prf_search(
         .map(|s| s.to_string())
         .collect();
     let stopwords: std::collections::HashSet<&str> = [
-        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
-        "had", "do", "does", "did", "will", "would", "could", "should", "what",
-        "which", "who", "whom", "how", "when", "where", "why", "i", "my", "you",
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has", "had", "do",
+        "does", "did", "will", "would", "could", "should", "what", "which", "who", "whom", "how",
+        "when", "where", "why", "i", "my", "you",
     ]
     .into_iter()
     .collect();
@@ -430,7 +437,10 @@ fn prf_search(
     for doc in &initial.data {
         for term in doc.content.to_lowercase().split_whitespace() {
             let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
-            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+            if clean.len() > 2
+                && !stopwords.contains(clean.as_str())
+                && !query_terms.contains(&clean)
+            {
                 *term_freq.entry(clean).or_insert(0) += 1;
             }
         }
@@ -493,8 +503,8 @@ fn rm3_search(
         .map(|s| s.to_string())
         .collect();
     let stopwords: std::collections::HashSet<&str> = [
-        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
-        "had", "do", "does", "did", "will", "would", "could", "should",
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has", "had", "do",
+        "does", "did", "will", "would", "could", "should",
     ]
     .into_iter()
     .collect();
@@ -504,7 +514,10 @@ fn rm3_search(
         let weight = doc.score.max(0.01); // Avoid zero weights
         for term in doc.content.to_lowercase().split_whitespace() {
             let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
-            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+            if clean.len() > 2
+                && !stopwords.contains(clean.as_str())
+                && !query_terms.contains(&clean)
+            {
                 *rm_weights.entry(clean).or_insert(0.0) += weight;
             }
         }
@@ -565,8 +578,8 @@ fn bo1_search(
         .map(|s| s.to_string())
         .collect();
     let stopwords: std::collections::HashSet<&str> = [
-        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has",
-        "had", "do", "does", "did", "will", "would", "could", "should",
+        "the", "a", "an", "is", "was", "were", "are", "be", "been", "have", "has", "had", "do",
+        "does", "did", "will", "would", "could", "should",
     ]
     .into_iter()
     .collect();
@@ -579,7 +592,10 @@ fn bo1_search(
         let mut seen_in_doc = std::collections::HashSet::new();
         for term in doc.content.to_lowercase().split_whitespace() {
             let clean: String = term.chars().filter(|c| c.is_alphanumeric()).collect();
-            if clean.len() > 2 && !stopwords.contains(clean.as_str()) && !query_terms.contains(&clean) {
+            if clean.len() > 2
+                && !stopwords.contains(clean.as_str())
+                && !query_terms.contains(&clean)
+            {
                 *tf_map.entry(clean.clone()).or_insert(0) += 1;
                 if seen_in_doc.insert(clean.clone()) {
                     *df_map.entry(clean).or_insert(0) += 1;
@@ -622,11 +638,22 @@ fn bo1_search(
 /// Simple heuristic: remove common temporal patterns.
 fn strip_temporal_phrases(question: &str) -> String {
     let temporal_patterns = [
-        "two weeks ago", "three weeks ago", "four weeks ago",
-        "a week ago", "two months ago", "three months ago",
-        "last week", "last month", "last Tuesday", "last Friday", "last Saturday",
-        "past month", "past three months", "a couple of days ago",
-        "10 days ago", "5 days ago",
+        "two weeks ago",
+        "three weeks ago",
+        "four weeks ago",
+        "a week ago",
+        "two months ago",
+        "three months ago",
+        "last week",
+        "last month",
+        "last Tuesday",
+        "last Friday",
+        "last Saturday",
+        "past month",
+        "past three months",
+        "a couple of days ago",
+        "10 days ago",
+        "5 days ago",
     ];
     let mut result = question.to_string();
     for pattern in &temporal_patterns {
@@ -676,6 +703,7 @@ pub(crate) fn main() -> Result<()> {
         args.prf,
         args.rm3,
         args.bo1,
+        args.structured_fact_retrieval,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -708,6 +736,7 @@ fn run_scoped_benchmark(
     prf: bool,
     rm3: bool,
     bo1: bool,
+    structured_fact_retrieval: bool,
 ) -> Result<BenchmarkReport> {
     let abstention_types = HashSet::from([
         "single-session-user_abs".to_string(),
@@ -743,9 +772,9 @@ fn run_scoped_benchmark(
     // MemoryService applies them on both the add() and search() paths.
     // ner_provider is the master Python-free switch: Heuristic (the
     // default) skips all spaCy subprocesses via PipelineOptions::python_free().
-    // structured_fact_retrieval stays off for the benchmark: the spaCy
-    // dependency-parse extractor is too slow/brittle for 500 questions
-    // (120s timeout killed the first attempt) when ner_provider=spacy.
+    // Structured-fact retrieval is opt-in for benchmark compatibility. When
+    // enabled, native participation claims are queried directly; other fact
+    // questions may use the configured structured extractor.
     //
     // Indexing uses add_batch() (one refresh per question) instead of
     // add() in a loop (one refresh per session) — same semantics, ~50x
@@ -776,7 +805,7 @@ fn run_scoped_benchmark(
             chunk_max_tokens: 800,
             text_rerank_ngram,
             text_rerank_lcs,
-            structured_fact_retrieval: false,
+            structured_fact_retrieval,
             memory_index_layout,
             ..PipelineOptions::default()
         };
@@ -843,22 +872,53 @@ fn run_scoped_benchmark(
         // --prf: pseudo-relevance feedback expansion
         // --rm3: relevance model 3 expansion
         let search_start = Instant::now();
+        let retrieval_depth = max_k.saturating_mul(SESSION_RESULT_OVERSAMPLE);
         let response = if combsum {
-            combsum_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+            combsum_search(
+                &mut service,
+                &entry.question,
+                retrieval_depth,
+                &entry.question_id,
+                Some(&entry.question_date),
+            )?
         } else if rrf {
-            rrf_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+            rrf_search(
+                &mut service,
+                &entry.question,
+                retrieval_depth,
+                &entry.question_id,
+                Some(&entry.question_date),
+            )?
         } else if prf {
-            prf_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+            prf_search(
+                &mut service,
+                &entry.question,
+                retrieval_depth,
+                &entry.question_id,
+                Some(&entry.question_date),
+            )?
         } else if rm3 {
-            rm3_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+            rm3_search(
+                &mut service,
+                &entry.question,
+                retrieval_depth,
+                &entry.question_id,
+                Some(&entry.question_date),
+            )?
         } else if bo1 {
-            bo1_search(&mut service, &entry.question, max_k, &entry.question_id, Some(&entry.question_date))?
+            bo1_search(
+                &mut service,
+                &entry.question,
+                retrieval_depth,
+                &entry.question_id,
+                Some(&entry.question_date),
+            )?
         } else {
             service
                 .search(SearchRequest {
                     query: entry.question.clone(),
                     user_id: BENCHMARK_USER_ID.to_string(),
-                    top_k: max_k,
+                    top_k: retrieval_depth,
                     session_id: None,
                     scope: None,
                     filters: None,
@@ -878,7 +938,10 @@ fn run_scoped_benchmark(
                 .iter()
                 .filter_map(|m| m.session_id.clone())
                 .collect(),
-        );
+        )
+        .into_iter()
+        .take(max_k)
+        .collect::<Vec<_>>();
 
         let relevant = candidate_session_ids
             .iter()

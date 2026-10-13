@@ -160,66 +160,52 @@ fn handle_hook(
         return Ok(GeminiHookOutput::default());
     }
     let started = std::time::Instant::now();
-    let memory = crate::integrations::mcp_index::shared_memory_root(_root);
-    if !memory.exists() {
-        let _ = crate::telemetry::record_memory_retrieval(
-            _root,
-            provider.as_str(),
-            &input.session_id,
-            &query,
-            0,
-            &[],
-        );
-        return Ok(GeminiHookOutput::default());
-    }
-    let options = PipelineOptions {
-        memory_index_layout: MemoryIndexLayout::Segmented {
-            query_top_n: 3,
-            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
-        },
-        ..PipelineOptions::default()
-    };
-    let mut store = MemoryService::at_path(&memory, options)?;
-    if store.is_empty() {
-        let _ = crate::telemetry::record_memory_retrieval(
-            _root,
-            provider.as_str(),
-            &input.session_id,
-            &query,
-            started.elapsed().as_millis() as u64,
-            &[],
-        );
-        return Ok(GeminiHookOutput::default());
-    }
-    let results = store.observe_plain_query(&query, provider.as_str(), Some(&input.session_id), 5);
+    let results = crate::integrations::mcp_tools::search_hook_documents(
+        _root,
+        provider.as_str(),
+        Some(&input.session_id),
+        &query,
+        5,
+    );
     let _ = crate::telemetry::record_project_query(
         _root,
         started.elapsed().as_millis() as u64,
         results.is_err(),
-        results.as_ref().is_ok_and(Vec::is_empty),
+        results.as_ref().is_ok_and(|value| {
+            value
+                .get("results")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        }),
     );
     let mut context = String::new();
     let mut retrieved_memories = Vec::new();
-    for result in results? {
-        if let Some(record) = store.record_by_id(&result.doc_id) {
-            let excerpt = record
-                .content
-                .lines()
-                .take(8)
-                .collect::<Vec<_>>()
-                .join("\n");
-            if !excerpt.trim().is_empty() {
-                context.push_str(&format!("\n- Source: {}\n  {}\n", record.source, excerpt));
-                retrieved_memories.push(serde_json::json!({
-                    "source": record.source,
-                    "type": record.filters.get("document_type").map(String::as_str).unwrap_or("memory"),
-                    "score": result.score,
-                    "excerpt": excerpt,
-                }));
-            }
-            if context.len() > 8_000 {
-                break;
-            }
+    for result in results?
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let content = result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let source = result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let excerpt = content.lines().take(8).collect::<Vec<_>>().join("\n");
+        if !excerpt.trim().is_empty() {
+            context.push_str(&format!("\n- Source: {}\n  {}\n", source, excerpt));
+            retrieved_memories.push(serde_json::json!({
+                "source": source,
+                "type": result.get("document_type").and_then(Value::as_str).unwrap_or("memory"),
+                "score": result.get("score"),
+                "excerpt": excerpt,
+            }));
+        }
+        if context.len() > 8_000 {
+            break;
         }
     }
     let _ = crate::telemetry::record_memory_retrieval(
@@ -283,11 +269,13 @@ fn capture(
         key_phrases: Vec::new(),
         key_phrase_extraction_hash: String::new(),
     };
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document);
-        store.refresh_index()?;
-        Ok(GeminiHookOutput::default())
-    })
+    crate::integrations::mcp_tools::upsert_hook_document(
+        root,
+        provider.as_str(),
+        &input.session_id,
+        document,
+    )?;
+    Ok(GeminiHookOutput::default())
 }
 
 fn current_timestamp() -> String {

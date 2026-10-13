@@ -1,9 +1,10 @@
 //! Memory Add/Search API backed by Lint-AI's `IndexStore`.
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
+use crate::index::ClaimStatus;
 use crate::pipeline::{PipelineOptions, Tier1NerProvider};
 use crate::query_plan::PreparedQuery;
-use crate::query_semantics::analyze_query;
+use crate::query_semantics::{QueryEvidenceOrder, QueryEvidenceRelation};
 use crate::segments::relations::{
     analyze_fact_question, extract_relations_via_spacy, query_structured, relation_turns_from_docs,
     try_extract_key_phrases_via_spacy, RelationIndex,
@@ -34,6 +35,34 @@ mod staged;
 pub use staged::StagedAddResponse;
 
 const USER_FILTER: &str = "memory_user_id";
+
+fn is_workspace_markdown_document(document: &SourceDocument) -> bool {
+    document.source == document.doc_id
+        && Path::new(&document.source)
+            .extension()
+            .is_some_and(|extension| extension == "md")
+}
+
+fn workspace_documents_equal(left: &SourceDocument, right: &SourceDocument) -> bool {
+    left.doc_id == right.doc_id
+        && left.source == right.source
+        && left.content == right.content
+        && left.concept == right.concept
+        && left.group_id == right.group_id
+        && left.headings == right.headings
+        && left.links == right.links
+        && left.timestamp == right.timestamp
+        && left.doc_length == right.doc_length
+        && left.author_agent == right.author_agent
+        && left.filters == right.filters
+        && left.key_phrase_extraction_hash == right.key_phrase_extraction_hash
+        && left.key_phrases.len() == right.key_phrases.len()
+        && left
+            .key_phrases
+            .iter()
+            .zip(&right.key_phrases)
+            .all(|(left, right)| left.text == right.text && left.kind == right.kind)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddRequest {
@@ -239,8 +268,33 @@ pub struct SearchMemory {
     pub relation_evidence: Vec<String>,
 }
 
+/// Backing corpus selected by the resident workspace owner. Callers enqueue
+/// mutations; only MemoryService chooses and exposes the internal service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MemoryStore {
+    Captured,
+    Workspace,
+}
+
+impl MemoryStore {
+    pub(crate) const fn slot(self) -> usize {
+        match self {
+            Self::Captured => 0,
+            Self::Workspace => 1,
+        }
+    }
+}
+
 pub struct MemoryService {
     store: IndexStore,
+    /// Private workspace backing service owned by the resident memory owner.
+    /// The one writer selects either this service or the shared captured-memory
+    /// `store`; publication composes their snapshots for resident searches.
+    workspace_store: Option<Box<MemoryService>>,
+    /// Shared immutable search snapshot published by the resident writer.
+    /// The owner and HTTP writer retain the same handle so searches never
+    /// need to reopen or recompose either backing store.
+    published_search_view: Option<Arc<std::sync::RwLock<Arc<MemoryService>>>>,
     superseded_ids: HashSet<(String, String)>,
     request_fingerprints: HashMap<(String, String), String>,
     /// Cached write-adjudication receipts by (user_id, request_id), so an
@@ -536,6 +590,11 @@ fn structured_fact_results(
     if !store.options().structured_fact_retrieval || request.query.trim().is_empty() {
         return Vec::new();
     }
+    // Personal relationships are served from native claims written with each
+    // DocRecord. This keeps retrieval in the normal write/query lifecycle.
+    if let Some(results) = native_relationship_results(store, superseded_ids, request) {
+        return results;
+    }
     // Classify before building: only structured fact questions pay for the
     // extractor subprocess. (query_structured re-analyzes; the classifier
     // itself is cheap string matching.)
@@ -599,6 +658,192 @@ fn structured_fact_results(
         .collect()
 }
 
+/// Return `Some(results)` when native claims support the query's personal
+/// relationship, including an empty result when no matching claims exist.
+/// `None` means the existing generic structured-fact path may handle it.
+fn native_relationship_results(
+    store: &IndexStore,
+    superseded_ids: &HashSet<(String, String)>,
+    request: &SearchRequest,
+) -> Option<Vec<crate::SearchResult>> {
+    let prepared = match request.reference_date.as_deref() {
+        Some(date) => PreparedQuery::new_at(&request.query, date),
+        None => PreparedQuery::new(&request.query),
+    };
+    let relation = prepared.temporal_context().evidence_requirements.relation?;
+    let (predicate, is_participation) = match relation {
+        QueryEvidenceRelation::PersonalParticipation => ("participated_in", true),
+        QueryEvidenceRelation::PersonalAcquisition => ("acquired", false),
+    };
+
+    let context = prepared.temporal_context();
+    let start = context.starts_from.and_then(crate::parse_reference_date);
+    let end = context.ends_at.and_then(crate::parse_reference_date);
+    let anchor = context.anchor_date.and_then(crate::parse_reference_date);
+    let relative_question = is_participation
+        && [
+            "relative",
+            "family",
+            "cousin",
+            "sister",
+            "brother",
+            "aunt",
+            "uncle",
+            "grandparent",
+        ]
+        .iter()
+        .any(|term| request.query.to_lowercase().contains(term));
+    let now_ms = unix_time_ms();
+    let mut results = Vec::new();
+    let mut event_dates = HashMap::new();
+    for record in store.records() {
+        let Some(source) = store.source_document_by_id(&record.doc_id) else {
+            continue;
+        };
+        if !owns_memory(source, &request.user_id) {
+            continue;
+        }
+        if superseded_ids.contains(&(request.user_id.clone(), record.doc_id.clone())) {
+            continue;
+        }
+        if source
+            .filters
+            .get("expires_at_ms")
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|expires_at| expires_at <= now_ms)
+        {
+            continue;
+        }
+        let claim = record.top_claims.iter().find(|claim| {
+            claim.predicate == predicate
+                && claim.confidence >= 0.35
+                && (is_participation || claim.status == Some(ClaimStatus::Completed))
+        });
+        let Some(claim) = claim else {
+            continue;
+        };
+        let event_of = is_participation
+            .then(|| {
+                record
+                    .top_claims
+                    .iter()
+                    .find(|edge| edge.predicate == "event_of" && edge.subject == claim.object)
+            })
+            .flatten();
+        let relative_edge = event_of.and_then(|event_of| {
+            record.top_claims.iter().find(|claim| {
+                claim.predicate == "relative_of"
+                    && claim.subject == event_of.object
+                    && claim.object == "user"
+            })
+        });
+        if relative_question && (event_of.is_none() || relative_edge.is_none()) {
+            continue;
+        }
+        let date = record
+            .timestamp
+            .as_deref()
+            .and_then(crate::parse_reference_date);
+        if context.hard_filter
+            && (date.is_none()
+                || start.is_some_and(|start| date.is_some_and(|date| date < start))
+                || end.is_some_and(|end| date.is_some_and(|date| date > end)))
+        {
+            continue;
+        }
+        event_dates.insert(record.doc_id.clone(), date);
+        let role = is_participation
+            .then(|| {
+                record
+                    .top_claims
+                    .iter()
+                    .find(|edge| edge.predicate == "participant_role" && edge.subject == "user")
+            })
+            .flatten();
+        let event_type = is_participation
+            .then(|| {
+                record
+                    .top_claims
+                    .iter()
+                    .find(|edge| edge.predicate == "event_type" && edge.subject == claim.object)
+            })
+            .flatten();
+        let event_time = is_participation
+            .then(|| {
+                record
+                    .top_claims
+                    .iter()
+                    .find(|edge| edge.predicate == "event_time" && edge.subject == claim.object)
+            })
+            .flatten();
+        let mut evidence = format!("user {} {}", predicate, claim.object);
+        if let Some(role) = role {
+            evidence.push_str(&format!("; role: {}", role.object));
+        }
+        if let Some(event_type) = event_type {
+            evidence.push_str(&format!("; event_type: {}", event_type.object));
+        }
+        if let Some(event_of) = event_of {
+            evidence.push_str(&format!("; event_of: {}", event_of.object));
+        }
+        if let Some(relative_edge) = relative_edge {
+            evidence.push_str(&format!(
+                "; {} relative_of {}",
+                relative_edge.subject, relative_edge.object
+            ));
+        }
+        if let Some(event_time) = event_time {
+            evidence.push_str(&format!("; event_time: {}", event_time.object));
+        }
+        let recency = match (date, anchor) {
+            (Some(date), Some(anchor)) => {
+                5.0 / (1.0 + date.signed_duration_since(anchor).num_days().unsigned_abs() as f32)
+            }
+            _ => 0.0,
+        };
+        results.push(crate::SearchResult {
+            doc_id: record.doc_id.clone(),
+            source: record.source.clone(),
+            group_id: record.group_id.clone(),
+            score: 100.0 + claim.confidence * 10.0 + recency,
+            score_breakdown: crate::index::ScoreBreakdown::default(),
+            matched_entities: vec![claim.object.clone()],
+            matched_terms: Vec::new(),
+            probable_topic: record.probable_topic.clone(),
+            doc_type_guess: record.doc_type_guess.clone(),
+            semantic_status: None,
+            superseded_by: None,
+            relation_confidence: Some(claim.confidence),
+            relation_evidence: vec![evidence],
+        });
+    }
+    let chronological =
+        context.evidence_requirements.order == Some(QueryEvidenceOrder::EventDateAscending);
+    results.sort_by(|a, b| {
+        let chronological_order = if chronological {
+            match (
+                event_dates.get(&a.doc_id).copied().flatten(),
+                event_dates.get(&b.doc_id).copied().flatten(),
+            ) {
+                (Some(a_date), Some(b_date)) => a_date.cmp(&b_date),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        chronological_order
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.doc_id.cmp(&b.doc_id))
+    });
+    Some(results)
+}
+
 /// Blend structured-fact evidence ahead of lexical results, deduplicating
 /// by document id and respecting `top_k`.
 fn blend_structured_first(
@@ -645,6 +890,22 @@ impl MemoryService {
             crate::pipeline::MemoryIndexSnapshot::Single(index) => Some(index),
             crate::pipeline::MemoryIndexSnapshot::Segmented(_) => None,
         }
+    }
+
+    /// Expose raw index-stage evidence to the single-question harness. This
+    /// uses the same resident snapshot as normal service searches.
+    pub(crate) fn query_index_with_diagnostics(
+        &self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &BTreeMap<String, String>,
+    ) -> anyhow::Result<(
+        Vec<crate::SearchResult>,
+        crate::index::QueryTimings,
+        crate::index::QueryDiagnostics,
+    )> {
+        self.store
+            .query_prepared_cached_with_diagnostics(prepared, top_k, filters)
     }
 
     /// Open a persistent memory service without exposing `IndexStore` in the
@@ -771,6 +1032,8 @@ impl MemoryService {
             .collect();
         Self {
             store,
+            workspace_store: None,
+            published_search_view: None,
             superseded_ids,
             request_fingerprints,
             request_receipts: HashMap::new(),
@@ -1722,7 +1985,7 @@ impl MemoryService {
         use std::collections::{HashMap, HashSet};
         let mut tag_to_docs: HashMap<String, Vec<String>> = HashMap::new();
         let mut doc_to_tags: HashMap<String, Vec<String>> = HashMap::new();
-        
+
         // Get all docs in this session by scanning results' sessions.
         // Actually, we need ALL docs in the session, not just results.
         // For now, use the top results' docs to build the mapping.
@@ -1736,8 +1999,14 @@ impl MemoryService {
                     }
                 }
                 for tag in &record.semantic_tags {
-                    tag_to_docs.entry(tag.clone()).or_default().push(result.doc_id.clone());
-                    doc_to_tags.entry(result.doc_id.clone()).or_default().push(tag.clone());
+                    tag_to_docs
+                        .entry(tag.clone())
+                        .or_default()
+                        .push(result.doc_id.clone());
+                    doc_to_tags
+                        .entry(result.doc_id.clone())
+                        .or_default()
+                        .push(tag.clone());
                 }
             }
         }
@@ -1750,7 +2019,8 @@ impl MemoryService {
                     let has_relevant = if is_where {
                         tags.iter().any(|t| t == "venue")
                     } else {
-                        tags.iter().any(|t| matches!(t.as_str(), "weekend" | "weekday" | "habitual"))
+                        tags.iter()
+                            .any(|t| matches!(t.as_str(), "weekend" | "weekday" | "habitual"))
                     };
                     if has_relevant {
                         result.score *= QUESTION_TYPE_BOOST;
@@ -1758,20 +2028,25 @@ impl MemoryService {
                 }
             }
         }
-        
+
         if tag_to_docs.is_empty() {
             if is_where || is_when {
-                results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                results.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
             }
             return results;
         }
-        
+
         // For each result doc, find co-linked docs via shared tags and boost them.
         // Boost factor: 1.2x for docs sharing at least one tag with a top result.
         const LINK_BOOST: f32 = 1.2;
-        let top_doc_ids: HashSet<String> = results.iter().take(5).map(|r| r.doc_id.clone()).collect();
+        let top_doc_ids: HashSet<String> =
+            results.iter().take(5).map(|r| r.doc_id.clone()).collect();
         let mut boost_map: HashMap<String, f32> = HashMap::new();
-        
+
         for doc_id in &top_doc_ids {
             if let Some(tags) = doc_to_tags.get(doc_id) {
                 for tag in tags {
@@ -1787,16 +2062,20 @@ impl MemoryService {
                 }
             }
         }
-        
+
         // Apply boosts to results.
         for result in &mut results {
             if let Some(boost) = boost_map.get(&result.doc_id) {
                 result.score *= boost;
             }
         }
-        
+
         // Re-sort by score (boost may have changed order).
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 
@@ -1812,25 +2091,22 @@ impl MemoryService {
         filters: &BTreeMap<String, String>,
         reference_date: Option<&str>,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
-        // Luyi 2026-09-27: wire the augmented query into production.
-        // analyze_query builds "original + terms" (focus terms, entities)
-        // for better routing coverage. This is the same formulation
-        // validated on LongMemEval (92.4% Any@5, 84.49% Frac@5).
-        let analysis = analyze_query(query);
-        let augmented_query = analysis.augmented_query.clone();
+        // Prepare the question once. Session follow-ups must be resolved from
+        // the raw question before PreparedQuery derives its analysis and
+        // augmented lexical search text.
         let mut prepared = if session_id.is_none() {
             // Reference date (Luyi 2026-10-09): when supplied, relative
             // temporal language resolves against it instead of the clock.
             match reference_date {
-                Some(ref_date) => PreparedQuery::new_at(&augmented_query, ref_date),
-                None => PreparedQuery::from_analysis(analysis),
+                Some(ref_date) => PreparedQuery::new_at(query, ref_date),
+                None => PreparedQuery::new(query),
             }
         } else {
             prepare_session_query(
                 &self.conversation_states,
                 scope,
                 session_id,
-                &augmented_query,
+                query,
                 reference_date,
             )
         };
@@ -1893,7 +2169,7 @@ impl MemoryService {
                     session_id: session_id.map(String::from),
                     scope: Some(scope.to_string()),
                     filters: None,
-                    reference_date: None,
+                    reference_date: reference_date.map(str::to_owned),
                 };
                 structured_fact_results(
                     &self.store,
@@ -1920,16 +2196,9 @@ impl MemoryService {
         Ok(results)
     }
 
-    /// Sync shared memory documents into the index. Runs before each MCP
-    /// search so the workspace sees memories recorded by other providers.
-    #[cfg(any(
-        feature = "claude-code",
-        feature = "codex",
-        feature = "gemini-cli",
-        feature = "agy",
-        feature = "muse-code",
-        feature = "roo-runtime"
-    ))]
+    /// Test-only compatibility path for exercising legacy MCP adapter
+    /// fallbacks. Production adapters use the resident server route.
+    #[cfg(test)]
     pub(crate) fn sync_shared_memory(
         &mut self,
         memory_root: &std::path::Path,
@@ -1937,8 +2206,7 @@ impl MemoryService {
         workspace::sync_memory_documents(memory_root, self)
     }
 
-    /// Refresh the index after syncing, so newly synced documents are
-    /// searchable. Only the Gemini CLI path needed this explicitly.
+    /// Refresh the index for test-only legacy adapter fallbacks.
     pub(crate) fn refresh_index(&mut self) -> anyhow::Result<()> {
         // Provider hooks run refresh_index() on a fresh service: apply any
         // completed background enrichment first, so phrases the worker
@@ -1948,21 +2216,17 @@ impl MemoryService {
         self.flush()
     }
 
-    /// Compose a workspace service with one provider's memory service into a
+    /// Compose workspace and shared captured-memory snapshots into a
     /// single in-memory query view. Transfers already-published segments
     /// rather than reprocessing source documents.
-    #[cfg(any(
-        feature = "claude-code",
-        feature = "codex",
-        feature = "gemini-cli",
-        feature = "agy",
-        feature = "muse-code",
-        feature = "roo-runtime"
-    ))]
     pub(crate) fn compose_segmented(
         workspace: Self,
         provider_memory: Option<Self>,
     ) -> anyhow::Result<Self> {
+        let provider_generation = provider_memory
+            .as_ref()
+            .map(|service| service.store.inspection().snapshot_revision)
+            .unwrap_or_else(|| workspace.store.inspection().snapshot_revision);
         // The composed view must keep the conversation-state store the hooks
         // write to: the provider memory's disk-backed store (opened under the
         // same `.lint-ai/memory/` root the hooks use), falling back to the
@@ -1974,13 +2238,90 @@ impl MemoryService {
             .as_ref()
             .map(|service| Arc::clone(&service.conversation_states))
             .unwrap_or_else(|| Arc::clone(&workspace.conversation_states));
+        let mut superseded_ids = workspace.superseded_ids.clone();
+        let mut request_fingerprints = workspace.request_fingerprints.clone();
+        if let Some(provider) = &provider_memory {
+            superseded_ids.extend(provider.superseded_ids.iter().cloned());
+            request_fingerprints.extend(
+                provider
+                    .request_fingerprints
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            );
+        }
         let composed = crate::IndexStore::compose_segmented(
             workspace.store,
             provider_memory.map(|service| service.store),
         )?;
-        let mut service = Self::new(composed);
-        service.conversation_states = conversation_states;
-        Ok(service)
+        let mut composed = composed;
+        composed.set_published_generation(provider_generation);
+        crate::preload_lexical_store();
+        Ok(Self {
+            store: composed,
+            workspace_store: None,
+            published_search_view: None,
+            superseded_ids,
+            request_fingerprints,
+            request_receipts: HashMap::new(),
+            receipts_path: None,
+            pending_adds: HashMap::new(),
+            publication: None,
+            conversation_states,
+            relations_cache: Mutex::new(RelationsCache::default()),
+            enrichment: Arc::new(Mutex::new(KeyPhraseEnrichment::default())),
+            board_state: Mutex::new(BoardState::default()),
+        })
+    }
+
+    /// Transfer workspace backing ownership into the resident service. No
+    /// external writable workspace handle survives this transfer. The writer
+    /// routes commands through this service and publishes both stores together.
+    pub(crate) fn retain_workspace_store(mut provider_memory: Self, workspace: Self) -> Self {
+        provider_memory.workspace_store = Some(Box::new(workspace));
+        provider_memory
+    }
+
+    pub(crate) fn has_workspace_store(&self) -> bool {
+        self.workspace_store.is_some()
+    }
+
+    pub(crate) fn memory_store(&self, target: MemoryStore) -> &Self {
+        match target {
+            MemoryStore::Workspace => self.workspace_store.as_deref().unwrap_or(self),
+            MemoryStore::Captured => self,
+        }
+    }
+
+    pub(crate) fn memory_store_mut(&mut self, target: MemoryStore) -> &mut Self {
+        match target {
+            MemoryStore::Workspace if self.workspace_store.is_some() => self
+                .workspace_store
+                .as_deref_mut()
+                .expect("workspace store present"),
+            _ => self,
+        }
+    }
+
+    pub(crate) fn retain_published_search_view(
+        &mut self,
+        view: Arc<std::sync::RwLock<Arc<MemoryService>>>,
+    ) {
+        self.published_search_view = Some(view);
+    }
+
+    pub(crate) fn published_search_view(&self) -> anyhow::Result<Option<Arc<MemoryService>>> {
+        self.published_search_view
+            .as_ref()
+            .map(|view| {
+                view.read()
+                    .map(|view| Arc::clone(&view))
+                    .map_err(|_| anyhow::anyhow!("published memory view poisoned"))
+            })
+            .transpose()
+    }
+
+    pub(crate) fn set_published_generation(&mut self, generation: u64) {
+        self.store.set_published_generation(generation);
     }
 
     /// True when the store holds no documents. Integration read paths use
@@ -2053,6 +2394,44 @@ impl MemoryService {
             self.upsert(document);
         }
         self.refresh_index()
+    }
+
+    /// Reconcile the workspace-file corpus after the resident server watcher
+    /// observes project changes. Provider memories and non-file documents are
+    /// left in their own stores and are never removed by this operation.
+    pub(crate) fn replace_workspace_documents(
+        &mut self,
+        documents: Vec<crate::SourceDocument>,
+    ) -> anyhow::Result<bool> {
+        let workspace_doc_ids = documents
+            .iter()
+            .map(|document| document.doc_id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let existing = self
+            .source_documents()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for document in &existing {
+            if is_workspace_markdown_document(document)
+                && !workspace_doc_ids.contains(document.doc_id.as_str())
+            {
+                self.remove(&document.doc_id);
+                changed = true;
+            }
+        }
+        for document in documents {
+            let unchanged = existing
+                .iter()
+                .find(|current| current.doc_id == document.doc_id)
+                .is_some_and(|current| workspace_documents_equal(current, &document));
+            if !unchanged {
+                self.upsert(document);
+                changed = true;
+            }
+        }
+        Ok(changed)
     }
 
     // -----------------------------------------------------------------------
@@ -2440,7 +2819,7 @@ impl MemoryService {
             key_phrases: vec![],
             key_phrase_extraction_hash: String::new(),
         };
-        self.store.upsert(doc);
+        self.upsert(doc);
         self.flush()?;
         Ok(post)
     }
@@ -2868,6 +3247,29 @@ impl MemoryService {
         crate::integrations::mcp_tools::search_results(self, results)
     }
 
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "roo-runtime"
+    ))]
+    pub(crate) fn search_agent_cached(
+        &self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+        filters: &BTreeMap<String, String>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let results =
+            self.search_with_filters_cached(query, scope, session_id, top_k, filters, None)?;
+        Ok(crate::integrations::mcp_tools::search_results(
+            self, results,
+        ))
+    }
+
     /// Format the memory list as the MCP list_memories payload.
     #[cfg(any(
         feature = "claude-code",
@@ -3088,10 +3490,11 @@ pub(crate) fn observe_session_search(
         .iter()
         .map(|span| span.text.clone())
         .collect();
-    let temporal_anchor = analysis
-        .temporal
-        .as_ref()
-        .and_then(|temporal| temporal.resolved_at.clone());
+    // `QueryAnalysis` is built before a reference date is applied, so its
+    // `QueryTemporal::resolved_at` may be relative to the machine clock.
+    // Carry the anchor from the prepared query instead; it has already been
+    // resolved against the request's reference date.
+    let temporal_anchor = prepared.temporal_context().anchor_date.map(str::to_string);
     let doc_ids: Vec<String> = results.iter().map(|r| r.doc_id.clone()).collect();
     let now_ms = unix_time_ms();
     states
@@ -4752,6 +5155,74 @@ mod tests {
 
     // --- Structured-fact production wiring ---
 
+    #[test]
+    fn temporal_participation_search_keeps_the_callers_reference_date() {
+        let mut service = MemoryService::in_memory(PipelineOptions {
+            ner_provider: Tier1NerProvider::Heuristic,
+            ..PipelineOptions::default()
+        });
+        for (request_id, session_id, content, timestamp) in [
+            (
+                "triathlon",
+                "session-triathlon",
+                "I just completed the Spring Sprint Triathlon today.",
+                1_685_664_000_000, // 2023-06-02 UTC
+            ),
+            (
+                "five-k",
+                "session-five-k",
+                "I just finished the Midsummer 5K Run today.",
+                1_686_355_200_000, // 2023-06-10 UTC
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    user_id: "user-1".into(),
+                    session_id: session_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        content: content.into(),
+                        timestamp: Some(timestamp),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                })
+                .expect("write event");
+        }
+
+        let response = service
+            .search(SearchRequest {
+                query: "What is the order of the three sports events I participated in during the past month, from earliest to latest?".into(),
+                options: None,
+                user_id: "user-1".into(),
+                top_k: 5,
+                session_id: None,
+                scope: None,
+                filters: None,
+                reference_date: Some("2023/07/01".into()),
+            })
+            .expect("search events");
+
+        let ordered_events: Vec<_> = response
+            .data
+            .iter()
+            .filter_map(|hit| {
+                hit.relation_evidence
+                    .first()
+                    .filter(|evidence| evidence.contains("participated_in"))
+                    .map(|evidence| evidence.as_str())
+            })
+            .collect();
+        assert_eq!(
+            ordered_events.len(),
+            2,
+            "structured events: {ordered_events:#?}"
+        );
+        assert!(ordered_events[0].contains("Spring Sprint Triathlon"));
+        assert!(ordered_events[1].contains("Midsummer 5K Run"));
+    }
+
     use crate::segments::relations::{RawRelation, RelationIndex, RelationTurn};
 
     fn structured_doc(
@@ -6185,6 +6656,33 @@ impl MemoryService {
         source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
     ) -> anyhow::Result<Self> {
         workspace::open_workspace_memory_store(root, memory_name, ignore_paths, source_documents)
+    }
+
+    pub(crate) fn open_workspace_owner(
+        root: &Path,
+        memory_name: &str,
+        ignore_paths: &[String],
+        source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
+    ) -> anyhow::Result<Self> {
+        workspace::open_workspace_memory_owner(root, memory_name, ignore_paths, source_documents)
+    }
+
+    pub(crate) fn open_workspace_owner_with_options_at(
+        root: &Path,
+        workspace_root: &Path,
+        memory_name: &str,
+        ignore_paths: &[String],
+        options: PipelineOptions,
+        source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
+    ) -> anyhow::Result<Self> {
+        workspace::open_workspace_memory_owner_with_options_at(
+            root,
+            workspace_root,
+            memory_name,
+            ignore_paths,
+            options,
+            source_documents,
+        )
     }
 
     pub(crate) fn open_persistent_workspace(

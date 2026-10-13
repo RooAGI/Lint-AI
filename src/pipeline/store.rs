@@ -1,10 +1,10 @@
 use super::{
-    build_doc_record_with_entities, chunk_lineage_key, current_time_ms, doc_record_content_hash,
-    ensure_store_metadata, execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot,
-    load_segment_manifest, load_semantic_state, persist_segment_manifest, persist_semantic_state,
-    persist_store_metadata, rank_key_entities_batched, source_document_from_record,
-    source_documents_to_tier1_inputs, IndexLocation, IndexStoreInspection, MemoryIndexLayout,
-    MemoryIndexSnapshot, PipelineOptions,
+    attach_bekind_evidence_claims, build_doc_record_with_entities, chunk_lineage_key,
+    current_time_ms, doc_record_content_hash, ensure_store_metadata,
+    execute_prepared_on_snapshot_parts, inspect_memory_index_snapshot, load_segment_manifest,
+    load_semantic_state, persist_segment_manifest, persist_semantic_state, persist_store_metadata,
+    rank_key_entities_batched, source_document_from_record, source_documents_to_tier1_inputs,
+    IndexLocation, IndexStoreInspection, MemoryIndexLayout, MemoryIndexSnapshot, PipelineOptions,
 };
 use crate::conversational_rerank::{RerankDocSource, RerankDocView};
 use crate::index::{
@@ -12,7 +12,7 @@ use crate::index::{
     SearchResult, SemanticAggregate, SemanticDocState,
 };
 use crate::query_plan::PreparedQuery;
-use crate::segments::{MemoryIndexSegment, SegmentedMemoryIndex};
+use crate::segments::SegmentedMemoryIndex;
 use crate::semantic_relations::SemanticRelationStore;
 use crate::source::KeyPhrase;
 use crate::source::SourceDocument;
@@ -318,6 +318,7 @@ fn build_memory_index_snapshot(
     global_index: Option<MemoryIndex>,
     layout: &MemoryIndexLayout,
     generation: u64,
+    segment_lexical_root: Option<&Path>,
 ) -> MemoryIndexSnapshot {
     match layout {
         MemoryIndexLayout::Single => MemoryIndexSnapshot::Single(
@@ -325,8 +326,10 @@ fn build_memory_index_snapshot(
         ),
         MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. } => {
             MemoryIndexSnapshot::Segmented(
-                SegmentedMemoryIndex::from_records_by_group_id_with_generation(
-                    &records, generation,
+                SegmentedMemoryIndex::from_records_by_group_id_with_lexical_root(
+                    &records,
+                    generation,
+                    segment_lexical_root,
                 ),
             )
         }
@@ -344,25 +347,6 @@ fn merge_composed_map<T>(
         }
     }
     Ok(())
-}
-
-fn take_segmented_snapshot(
-    snapshot: Option<Arc<MemoryIndexSnapshot>>,
-    namespace: &str,
-) -> Result<Vec<MemoryIndexSegment>> {
-    let Some(snapshot) = snapshot else {
-        return Ok(Vec::new());
-    };
-    let snapshot = Arc::try_unwrap(snapshot).map_err(|_| {
-        anyhow::anyhow!("cannot compose an index snapshot while it is still shared")
-    })?;
-    let MemoryIndexSnapshot::Segmented(mut segmented) = snapshot else {
-        anyhow::bail!("composed stores require segmented snapshots");
-    };
-    for segment in &mut segmented.segments {
-        segment.segment_id = format!("{namespace}:{}", segment.segment_id);
-    }
-    Ok(segmented.segments)
 }
 
 impl IndexStore {
@@ -505,6 +489,16 @@ impl IndexStore {
         }
     }
 
+    /// Set the generation reported by a detached composed view to the
+    /// generation of the writable store whose publication it represents.
+    /// Composition creates a fresh in-memory snapshot, so its internal
+    /// generation is otherwise always `1` and cannot drive staged barriers.
+    pub(crate) fn set_published_generation(&mut self, generation: u64) {
+        self.snapshot_revision = generation;
+        self.store_revision = generation;
+        self.checkpoint_revision = generation;
+    }
+
     #[cfg(test)]
     pub(crate) fn publication_maps_shared_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.source_docs, &other.source_docs)
@@ -594,32 +588,61 @@ impl IndexStore {
         ) {
             anyhow::bail!("composed stores require a segmented memory index layout");
         }
+        if provider_memory.as_ref().is_some_and(|provider| {
+            !matches!(
+                provider.options.memory_index_layout,
+                MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+            )
+        }) {
+            anyhow::bail!("provider memory must use a segmented memory index layout");
+        }
+
+        let workspace_segmented = match workspace.snapshot.as_deref() {
+            Some(MemoryIndexSnapshot::Segmented(index)) => Some(index),
+            Some(MemoryIndexSnapshot::Single(_)) => {
+                anyhow::bail!("composed stores require segmented snapshots")
+            }
+            None => None,
+        };
+        let provider_segmented = match provider_memory
+            .as_ref()
+            .and_then(|provider| provider.snapshot.as_deref())
+        {
+            Some(MemoryIndexSnapshot::Segmented(index)) => Some(index),
+            Some(MemoryIndexSnapshot::Single(_)) => {
+                anyhow::bail!("provider memory must use a segmented snapshot")
+            }
+            None => None,
+        };
+        let empty_segmented = SegmentedMemoryIndex::from_segments_with_generation(Vec::new(), 0)
+            .map_err(anyhow::Error::msg)?;
+        let workspace_segmented = workspace_segmented.unwrap_or(&empty_segmented);
+        let snapshot = if workspace_segmented.segments.is_empty()
+            && provider_segmented.is_none_or(|index| index.segments.is_empty())
+        {
+            None
+        } else {
+            Some(Arc::new(MemoryIndexSnapshot::Segmented(
+                SegmentedMemoryIndex::compose(workspace_segmented, provider_segmented, 1)
+                    .map_err(anyhow::Error::msg)?,
+            )))
+        };
 
         let IndexStore {
             source_docs,
             records,
             chunk_lifecycle,
-            snapshot: workspace_snapshot,
             options,
             ..
         } = workspace;
         let mut source_docs = Arc::unwrap_or_clone(source_docs);
         let mut records = Arc::unwrap_or_clone(records);
         let mut chunk_lifecycle = Arc::unwrap_or_clone(chunk_lifecycle);
-        let mut segments = take_segmented_snapshot(workspace_snapshot, "workspace")?;
-
         if let Some(provider_memory) = provider_memory {
-            if !matches!(
-                provider_memory.options.memory_index_layout,
-                MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
-            ) {
-                anyhow::bail!("provider memory must use a segmented memory index layout");
-            }
             let IndexStore {
                 source_docs: provider_docs,
                 records: provider_records,
                 chunk_lifecycle: provider_lifecycle,
-                snapshot: provider_snapshot,
                 ..
             } = provider_memory;
             merge_composed_map(
@@ -637,7 +660,6 @@ impl IndexStore {
                 Arc::unwrap_or_clone(provider_lifecycle),
                 "chunk lifecycle",
             )?;
-            segments.extend(take_segmented_snapshot(provider_snapshot, "provider")?);
         }
 
         let mut semantic_docs = HashMap::new();
@@ -655,12 +677,6 @@ impl IndexStore {
         let semantic_relations =
             SemanticRelationStore::try_from_documents(source_docs.values(), options.supersession)?;
 
-        let snapshot = (!segments.is_empty())
-            .then(|| SegmentedMemoryIndex::from_segments_with_generation(segments, 1))
-            .transpose()
-            .map_err(anyhow::Error::msg)?
-            .map(MemoryIndexSnapshot::Segmented)
-            .map(Arc::new);
         Ok(Self {
             options: PipelineOptions {
                 index_location: IndexLocation::InMemory,
@@ -709,39 +725,52 @@ impl IndexStore {
     fn build_with_store_paths(options: PipelineOptions, store_paths: StorePaths) -> Result<Self> {
         let (source_docs, records, chunk_lifecycle, loaded_snapshot) =
             load_semantic_state(&store_paths, &options.memory_index_layout)?;
-        let snapshot =
-            if let Some(global) = loaded_snapshot {
-                let records = records.values().cloned().collect::<Vec<_>>();
-                Some(build_memory_index_snapshot(
+        let segment_lexical_root = store_paths
+            .root
+            .as_deref()
+            .map(|root| root.join("segment-lexical"));
+        let snapshot = if let Some(global) = loaded_snapshot {
+            let records = records.values().cloned().collect::<Vec<_>>();
+            Some(build_memory_index_snapshot(
+                records,
+                Some(global),
+                &options.memory_index_layout,
+                0,
+                segment_lexical_root.as_deref(),
+            ))
+        } else if matches!(
+            options.memory_index_layout,
+            MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+        ) && !records.is_empty()
+        {
+            let records = records.values().cloned().collect::<Vec<_>>();
+            let manifest = load_segment_manifest(&store_paths)?;
+            let snapshot = manifest.and_then(|manifest| {
+                match SegmentedMemoryIndex::from_records_by_manifest_with_lexical_root(
+                    &records,
+                    &manifest,
+                    0,
+                    segment_lexical_root.as_deref(),
+                ) {
+                    Ok(segmented) => Some(MemoryIndexSnapshot::Segmented(segmented)),
+                    Err(error) => {
+                        eprintln!("warning: ignoring invalid persisted segment manifest: {error}");
+                        None
+                    }
+                }
+            });
+            Some(snapshot.unwrap_or_else(|| {
+                build_memory_index_snapshot(
                     records,
-                    Some(global),
+                    None,
                     &options.memory_index_layout,
                     0,
-                ))
-            } else if matches!(
-                options.memory_index_layout,
-                MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
-            ) && !records.is_empty()
-            {
-                let records = records.values().cloned().collect::<Vec<_>>();
-                let manifest = load_segment_manifest(&store_paths)?;
-                let snapshot = manifest.and_then(|manifest| {
-                    match SegmentedMemoryIndex::from_records_by_manifest(&records, &manifest, 0) {
-                        Ok(segmented) => Some(MemoryIndexSnapshot::Segmented(segmented)),
-                        Err(error) => {
-                            eprintln!(
-                                "warning: ignoring invalid persisted segment manifest: {error}"
-                            );
-                            None
-                        }
-                    }
-                });
-                Some(snapshot.unwrap_or_else(|| {
-                    build_memory_index_snapshot(records, None, &options.memory_index_layout, 0)
-                }))
-            } else {
-                None
-            };
+                    segment_lexical_root.as_deref(),
+                )
+            }))
+        } else {
+            None
+        };
         let mut semantic_docs = HashMap::new();
         let mut semantic_aggregate = SemanticAggregate::default();
         let mut chunk_latest_by_lineage = HashMap::new();
@@ -873,6 +902,7 @@ impl IndexStore {
             Some(global_index),
             &options.memory_index_layout,
             0,
+            None,
         );
         let mut source_docs = HashMap::new();
         let mut records = HashMap::new();
@@ -1219,12 +1249,18 @@ impl IndexStore {
                 let records = &self.records;
                 let layout = &self.options.memory_index_layout;
                 let store_revision = self.store_revision;
+                let segment_lexical_root = self
+                    .store_paths
+                    .root
+                    .as_deref()
+                    .map(|root| root.join("segment-lexical"));
                 Self::try_refresh_incremental(
                     snapshot,
                     records,
                     &reprocessed_doc_ids,
                     store_revision,
                     layout,
+                    segment_lexical_root.as_deref(),
                 )?
             };
             if !incremental {
@@ -1238,6 +1274,11 @@ impl IndexStore {
                     global_index,
                     &self.options.memory_index_layout,
                     self.store_revision,
+                    self.store_paths
+                        .root
+                        .as_deref()
+                        .map(|root| root.join("segment-lexical"))
+                        .as_deref(),
                 )));
             }
             self.snapshot_revision = self.store_revision;
@@ -1263,6 +1304,7 @@ impl IndexStore {
         reprocessed_doc_ids: &HashSet<String>,
         store_revision: u64,
         layout: &MemoryIndexLayout,
+        segment_lexical_root: Option<&Path>,
     ) -> Result<bool> {
         if !matches!(
             layout,
@@ -1274,11 +1316,12 @@ impl IndexStore {
             Some(MemoryIndexSnapshot::Segmented(previous)) => previous,
             _ => return Ok(false),
         };
-        let next = SegmentedMemoryIndex::refresh_changed(
+        let next = SegmentedMemoryIndex::refresh_changed_with_lexical_root(
             previous,
             records,
             reprocessed_doc_ids,
             store_revision,
+            segment_lexical_root,
         )
         .map_err(|error| anyhow::anyhow!("incremental segment refresh failed: {error}"))?;
         *snapshot = Some(Arc::new(MemoryIndexSnapshot::Segmented(next)));
@@ -1344,6 +1387,24 @@ impl IndexStore {
         }
         self.execute_prepared_on_snapshot(prepared, top_k, filters)
             .map(|(results, _, _)| results)
+    }
+
+    /// Query the current immutable snapshot and retain internal diagnostics.
+    /// This is intended for the single-question investigation harness.
+    pub(crate) fn query_prepared_cached_with_diagnostics(
+        &self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
+        if self.snapshot.is_none() {
+            return Ok((
+                Vec::new(),
+                QueryTimings::default(),
+                QueryDiagnostics::default(),
+            ));
+        }
+        self.execute_prepared_on_snapshot(prepared, top_k, filters)
     }
 
     pub fn query_filtered(
@@ -1442,8 +1503,7 @@ impl IndexStore {
         let mut entities_by_doc = rank_key_entities_batched(&tier1_inputs, &self.options)?;
         // Pass 3: per-doc bookkeeping (semantic aggregate, chunk lifecycle)
         // with the precomputed NER entities.
-        let mut reprocessed_doc_ids = HashSet::new();
-        let mut temporal_requires_rebuild = !self.tombstones.is_empty();
+        let mut rebuilt_records = Vec::with_capacity(rebuild_ids.len());
         for (doc_id, tier1_doc) in rebuild_ids.iter().zip(tier1_inputs.iter()) {
             let source_doc = self
                 .source_docs
@@ -1452,6 +1512,13 @@ impl IndexStore {
             let key_entities = entities_by_doc.remove(doc_id).unwrap_or_default();
             let record =
                 build_doc_record_with_entities(source_doc, tier1_doc, key_entities, &self.options)?;
+            rebuilt_records.push(record);
+        }
+        attach_bekind_evidence_claims(&mut rebuilt_records);
+
+        let mut reprocessed_doc_ids = HashSet::new();
+        let mut temporal_requires_rebuild = !self.tombstones.is_empty();
+        for (doc_id, record) in rebuild_ids.iter().zip(rebuilt_records) {
             self.semantic_aggregate.remove_doc(doc_id);
             let semantic_state = build_semantic_doc_state(&record, self.options.claim_extraction);
             self.semantic_aggregate.insert_doc_state(&semantic_state);

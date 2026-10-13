@@ -51,8 +51,7 @@ def add_requests(batch_size, sequence, session_count, writer_session_group=None)
 
 
 def run_cell(args, repetition, batch_size):
-    temp_root = ROOT / ".benchmark-tmp"
-    temp_root.mkdir(exist_ok=True)
+    temp_root = Path(tempfile.gettempdir()).resolve()
     with tempfile.TemporaryDirectory(
         prefix=f"lint-ai-write-only-{repetition}-{batch_size}-", dir=temp_root
     ) as index_tmp:
@@ -63,6 +62,7 @@ def run_cell(args, repetition, batch_size):
                 str(args.server_bin),
                 "--bind", bind,
                 "--index", index_tmp,
+                "--project-root", index_tmp,
                 "--refresh-interval-ms", str(args.refresh_interval_ms),
                 "--refresh-batch-size", str(args.refresh_batch_size),
                 "--checkpoint-interval-seconds", str(args.checkpoint_interval_seconds),
@@ -71,7 +71,7 @@ def run_cell(args, repetition, batch_size):
         )
         try:
             health = f"http://{bind}/health"
-            for _ in range(300):
+            for _ in range(max(1, int(args.startup_timeout_seconds * 10))):
                 try:
                     with urllib.request.urlopen(health, timeout=1):
                         break
@@ -174,6 +174,7 @@ def run_cell(args, repetition, batch_size):
                 server.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 server.kill()
+                server.wait()
 
 
 def main():
@@ -196,6 +197,7 @@ def main():
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=[1, 8, 32, 128])
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--port", type=int, default=18100)
+    parser.add_argument("--startup-timeout-seconds", type=float, default=120)
     parser.add_argument("--refresh-interval-ms", type=int, default=250)
     parser.add_argument("--refresh-batch-size", type=int, default=512)
     parser.add_argument("--checkpoint-interval-seconds", type=int, default=30)
@@ -208,6 +210,8 @@ def main():
         args.checkpoint_interval_seconds,
     ) < 1:
         parser.error("records, sessions, duration, repetitions, and refresh schedule values must be positive")
+    if args.startup_timeout_seconds <= 0:
+        parser.error("startup timeout must be positive")
     if args.warmup_requests < 0 or any(size < 1 or size > 128 for size in args.batch_sizes):
         parser.error("warm-up must be nonnegative and batch sizes must be in 1..=128")
     if args.endpoint == "add" and any(size != 1 for size in args.batch_sizes):

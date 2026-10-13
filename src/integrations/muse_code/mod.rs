@@ -300,10 +300,14 @@ pub fn run_server(root: &Path, options: MuseServerOptions<'_>) -> Result<()> {
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
-        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
-            root,
-            options.ignore_paths,
-        )?),
+        workspace_watcher: if cfg!(test) {
+            Some(mcp_index::WorkspaceWatcher::new(
+                root,
+                options.ignore_paths,
+            )?)
+        } else {
+            None
+        },
         store: Mutex::new(None),
     };
     mcp.serve()
@@ -315,6 +319,10 @@ impl MuseMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        anyhow::ensure!(
+            !mcp_tools::resident_backend_enabled(),
+            "MCP memory indexes are owned by the resident Lint-AI server"
+        );
         let file_changes = self
             .workspace_watcher
             .as_ref()
@@ -441,6 +449,28 @@ impl MuseMcp {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
+        if crate::integrations::mcp_tools::resident_backend_enabled()
+            && matches!(
+                tool_name,
+                "search"
+                    | "info"
+                    | "list_memories"
+                    | "board_open"
+                    | "board_list"
+                    | "board_info"
+                    | "board_post"
+                    | "board_read"
+                    | "board_get"
+                    | "board_search"
+                    | "add_memory"
+                    | "get_memory"
+            )
+        {
+            return crate::integrations::mcp_tools::call_resident_tool(
+                id, &self.root, "muse", tool_name, &arguments,
+            );
+        }
+
         match tool_name {
             "search" => {
                 if let Some(name) =
@@ -471,6 +501,7 @@ impl MuseMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // Stateful search: an explicit session id scopes follow-up
                 // resolution and temporal-anchor carry to this provider's
@@ -532,6 +563,7 @@ impl MuseMcp {
                     .clamp(1, 100) as usize;
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 Ok(text_response(
                     id,

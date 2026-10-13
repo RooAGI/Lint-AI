@@ -8,10 +8,14 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{Bm25StatisticsProvider, FuzzyTermQuery, Query, QueryParser};
-use tantivy::Term;
+use tantivy::query::{
+    Bm25StatisticsProvider, BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermSetQuery,
+};
 use tantivy::schema::document::TantivyDocument;
-use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT};
+use tantivy::schema::{
+    Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT,
+};
+use tantivy::Term;
 use tantivy::{doc, Index};
 
 use super::helpers::*;
@@ -31,8 +35,19 @@ fn stem_query_porter(query: &str) -> String {
     // Luyi 2026-10-10: location tags use natural forms ("United States"),
     // no normalization. Tantivy tokenizes naturally; tags field boost
     // distinguishes tag matches from content keyword matches.
-    const TAG_BASES: &[&str] = &["weekend", "weekday", "habitual", "herb", "food",
-        "gardening", "doctor", "culinary", "sports", "art", "music"];
+    const TAG_BASES: &[&str] = &[
+        "weekend",
+        "weekday",
+        "habitual",
+        "herb",
+        "food",
+        "gardening",
+        "doctor",
+        "culinary",
+        "sports",
+        "art",
+        "music",
+    ];
 
     // Systematic (Luyi 2026-10-10): tokenize on non-alphanumeric, mirroring
     // Tantivy's default tokenizer used for the tags field at index time.
@@ -64,6 +79,45 @@ fn stem_query_porter(query: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn bekind_tags_query(index: &Index, tags_field: Field, tags: &[String]) -> Option<Box<dyn Query>> {
+    use tantivy::query::{BooleanQuery, Occur, PhraseQuery, TermQuery};
+    use tantivy::tokenizer::TokenStream;
+
+    let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+    let mut tokenizer = index.tokenizers().get("default")?;
+    for tag in tags {
+        let mut stream = tokenizer.token_stream(tag);
+        let mut tokens: Vec<(usize, String)> = Vec::new();
+        stream.process(&mut |token| {
+            // The CJK tokenizer may emit a folded synonym at the same position.
+            // Keep one term per position so phrase offsets match index-time tokens.
+            if tokens.last().map(|(position, _)| *position) != Some(token.position) {
+                tokens.push((token.position, token.text.clone()));
+            }
+        });
+        let Some(first_position) = tokens.first().map(|(position, _)| *position) else {
+            continue;
+        };
+        let terms: Vec<(usize, Term)> = tokens
+            .into_iter()
+            .map(|(position, text)| {
+                (
+                    position - first_position,
+                    Term::from_field_text(tags_field, &text),
+                )
+            })
+            .collect();
+        let query: Box<dyn Query> = if terms.len() == 1 {
+            Box::new(TermQuery::new(terms[0].1.clone(), IndexRecordOption::Basic))
+        } else {
+            Box::new(PhraseQuery::new_with_offset(terms))
+        };
+        clauses.push((Occur::Should, query));
+    }
+
+    (!clauses.is_empty()).then(|| Box::new(BooleanQuery::new(clauses)) as Box<dyn Query>)
 }
 
 /// The chunk-content text indexed in the tantivy `content` field (and the
@@ -317,8 +371,17 @@ impl MemoryIndex {
                         .push(doc_id.clone());
                 }
             }
-            if claim_scoring {
-                for claim in &record.top_claims {
+            for claim in &record.top_claims {
+                if is_participation_claim(&claim.predicate) {
+                    claim_to_docs
+                        .entry(BEKIND_PARTICIPATION_POSTING.to_string())
+                        .or_default()
+                        .push(TermPosting {
+                            doc_id: doc_id.clone(),
+                            score: claim.confidence.max(0.1),
+                        });
+                }
+                if claim_scoring {
                     for token in claim_tokens(claim) {
                         claim_to_docs.entry(token).or_default().push(TermPosting {
                             doc_id: doc_id.clone(),
@@ -402,8 +465,10 @@ impl MemoryIndex {
         } else {
             term_to_docs.clear();
             entity_to_docs.clear();
+            // Keep only the dedicated beKIND candidate channel when general
+            // claim scoring is disabled.
             if !claim_scoring {
-                claim_to_docs.clear();
+                claim_to_docs.retain(|key, _| key == BEKIND_PARTICIPATION_POSTING);
             }
             for (term_u32, postings) in term_postings_chunk.iter().enumerate() {
                 let key = &term_u32_to_key[term_u32];
@@ -435,7 +500,7 @@ impl MemoryIndex {
             }
         }
 
-        if claim_scoring {
+        if claim_scoring || claim_to_docs.contains_key(BEKIND_PARTICIPATION_POSTING) {
             for postings in claim_to_docs.values_mut() {
                 postings.sort_by(|a, b| {
                     b.score
@@ -576,7 +641,7 @@ impl MemoryIndex {
     }
 
     fn load_from_core_with_options(
-        core: PersistedMemoryCore,
+        mut core: PersistedMemoryCore,
         records: Vec<DocRecord>,
         lexical_dir: Option<&Path>,
         claim_scoring: bool,
@@ -623,6 +688,26 @@ impl MemoryIndex {
                 });
             }
             docs.insert(record.doc_id.clone(), record);
+        }
+        // Recreate the dedicated evidence posting from persisted records so
+        // stores written before this posting existed gain it on open too.
+        core.claim_to_docs.remove(BEKIND_PARTICIPATION_POSTING);
+        for (doc_id, record) in &docs {
+            let confidence = record
+                .top_claims
+                .iter()
+                .filter(|claim| is_participation_claim(&claim.predicate))
+                .map(|claim| claim.confidence.max(0.1))
+                .fold(0.0f32, f32::max);
+            if confidence > 0.0 {
+                core.claim_to_docs
+                    .entry(BEKIND_PARTICIPATION_POSTING.to_string())
+                    .or_default()
+                    .push(TermPosting {
+                        doc_id: doc_id.clone(),
+                        score: confidence,
+                    });
+            }
         }
         let lexical = match Self::build_lexical_index(&docs, lexical_dir) {
             Ok(index) => Some(index),
@@ -691,7 +776,10 @@ impl MemoryIndex {
             claim_to_docs: if claim_scoring {
                 core.claim_to_docs
             } else {
-                HashMap::new()
+                core.claim_to_docs
+                    .into_iter()
+                    .filter(|(key, _)| key == BEKIND_PARTICIPATION_POSTING)
+                    .collect()
             },
             topic_to_docs: core.topic_to_docs,
             doc_type_to_docs: core.doc_type_to_docs,
@@ -1051,6 +1139,16 @@ impl MemoryIndex {
         top_k: usize,
         statistics: Option<&dyn Bm25StatisticsProvider>,
     ) -> Result<HashMap<String, f32>> {
+        self.lexical_bm25_with_doc_filter(query, top_k, statistics, None)
+    }
+
+    pub(crate) fn lexical_bm25_with_doc_filter(
+        &self,
+        query: &str,
+        top_k: usize,
+        statistics: Option<&dyn Bm25StatisticsProvider>,
+        allowed_doc_ids: Option<&std::collections::HashSet<String>>,
+    ) -> Result<HashMap<String, f32>> {
         let Some(lex) = self.lexical.as_ref() else {
             return Ok(HashMap::new());
         };
@@ -1173,10 +1271,8 @@ impl MemoryIndex {
                         1,    // edit distance
                         true, // prefix: term must share prefix (performance)
                     );
-                    let boosted_tags = tantivy::query::BoostQuery::new(
-                        Box::new(fuzzy_tags),
-                        LEXICAL_TAGS_BOOST,
-                    );
+                    let boosted_tags =
+                        tantivy::query::BoostQuery::new(Box::new(fuzzy_tags), LEXICAL_TAGS_BOOST);
                     should_clauses.push((tantivy::query::Occur::Should, Box::new(boosted_tags)));
                     // Fuzzy on content field (for "allergi" vs "allerg").
                     // Use lower boost than tags to avoid drowning exact matches.
@@ -1200,18 +1296,13 @@ impl MemoryIndex {
                 // from matching distractors' content.
                 let mut has_bekind_tags = false;
                 if !bekind_tags.is_empty() {
-                    use tantivy::query::TermSetQuery;
-                    let tag_terms: Vec<Term> = bekind_tags
-                        .iter()
-                        .map(|t| Term::from_field_text(lex.tags_f, t))
-                        .collect();
-                    if !tag_terms.is_empty() {
-                        let tags_query = TermSetQuery::new(tag_terms);
-                        let boosted_tags = tantivy::query::BoostQuery::new(
-                            Box::new(tags_query),
-                            LEXICAL_TAGS_BOOST,
-                        );
-                        should_clauses.push((tantivy::query::Occur::Should, Box::new(boosted_tags)));
+                    if let Some(tags_query) =
+                        bekind_tags_query(&lex.index, lex.tags_f, &bekind_tags)
+                    {
+                        let boosted_tags =
+                            tantivy::query::BoostQuery::new(tags_query, LEXICAL_TAGS_BOOST);
+                        should_clauses
+                            .push((tantivy::query::Occur::Should, Box::new(boosted_tags)));
                         has_bekind_tags = true;
                     }
                 }
@@ -1238,12 +1329,30 @@ impl MemoryIndex {
             cache.insert(query.to_string(), combined.clone());
             combined
         };
+        let filtered_query: Box<dyn Query> = if let Some(allowed_doc_ids) = allowed_doc_ids {
+            if allowed_doc_ids.is_empty() {
+                return Ok(HashMap::new());
+            }
+            let id_filter = TermSetQuery::new(
+                allowed_doc_ids
+                    .iter()
+                    .map(|doc_id| Term::from_field_text(lex.doc_id_f, doc_id)),
+            );
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Must, parsed.as_ref().box_clone()),
+                (Occur::Must, Box::new(id_filter)),
+            ]))
+        } else {
+            parsed.as_ref().box_clone()
+        };
         let collector = TopDocs::with_limit(top_k);
         let top_docs = match statistics {
-            Some(statistics) => {
-                searcher.search_with_statistics_provider(parsed.as_ref(), &collector, statistics)?
-            }
-            None => searcher.search(parsed.as_ref(), &collector)?,
+            Some(statistics) => searcher.search_with_statistics_provider(
+                filtered_query.as_ref(),
+                &collector,
+                statistics,
+            )?,
+            None => searcher.search(filtered_query.as_ref(), &collector)?,
         };
 
         let mut out = HashMap::new();
@@ -1301,6 +1410,41 @@ mod stem_query_porter_tests {
         assert_eq!(
             stem_query_porter("What gardening-related activity?"),
             "gardening related activity"
+        );
+    }
+}
+
+#[cfg(test)]
+mod bekind_tags_query_tests {
+    use super::*;
+    use tantivy::collector::TopDocs;
+    use tantivy::schema::{Schema, TEXT};
+
+    #[test]
+    fn multiword_bekind_tag_matches_tokenized_semantic_tag() {
+        let mut schema_builder = Schema::builder();
+        let tags_field = schema_builder.add_text_field("semantic_tags", TEXT);
+        let schema = schema_builder.build();
+        let index = Index::create_in_ram(schema);
+        crate::index::cjk_tokenizer::register_cjk_tokenizer(&index);
+
+        let mut writer = index.writer(50_000_000).expect("index writer");
+        writer
+            .add_document(doc!(tags_field => "live music"))
+            .expect("add semantic tag");
+        writer.commit().expect("commit semantic tag");
+
+        let searcher = index.reader().expect("index reader").searcher();
+        let query = bekind_tags_query(&index, tags_field, &["live music".to_string()])
+            .expect("Bekind tag query");
+        let hits = searcher
+            .search(query.as_ref(), &TopDocs::with_limit(10))
+            .expect("search semantic tags");
+
+        assert_eq!(
+            hits.len(),
+            1,
+            "multiword Bekind tag should match its indexed phrase"
         );
     }
 }

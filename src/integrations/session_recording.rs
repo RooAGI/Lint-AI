@@ -507,74 +507,76 @@ pub fn promote_recorded_session(
     let content = fs::read_to_string(&events_path)
         .with_context(|| format!("failed to read recorded session {}", events_path.display()))?;
     let group_id = format!("{}-session:{}", provider.as_str(), session_id);
-    // Promoted sessions land in the shared cross-provider memory store. The
-    // provider stays on the documents themselves (group id, `filters.provider`,
-    // `author_agent`, doc id) so attribution is preserved without a silo.
-    // The events file is read before taking the write lock; the whole
-    // upsert + refresh sequence runs under the cross-process lock so it
-    // cannot interleave with hook captures or MCP board/memory writes.
-    crate::memory_api::MemoryService::with_shared_memory(project_root, |store| {
-        let mut imported_document_ids = Vec::new();
-        let mut skipped_events = 0;
-
-        for line in content.lines() {
-            let event: Value = match serde_json::from_str(line) {
-                Ok(value) => value,
-                Err(_) => {
-                    skipped_events += 1;
-                    continue;
-                }
-            };
-            let kind = event.get("kind").and_then(Value::as_str).unwrap_or("event");
-            if matches!(kind, "session_start" | "session_end") {
+    // Promoted sessions land in the shared cross-provider memory store. Route
+    // them through the same resident owner as hook captures so publication
+    // cannot diverge from the provider's writable store.
+    let mut documents = Vec::new();
+    let mut imported_document_ids = Vec::new();
+    let mut skipped_events = 0;
+    for line in content.lines() {
+        let event: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(_) => {
                 skipped_events += 1;
                 continue;
             }
-            let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
-            let doc_id = format!(
-                "session-recording:{}:{}:{}",
-                provider.as_str(),
-                safe_component(session_id),
-                sequence
-            );
-            let mut filters = BTreeMap::new();
-            filters.insert("provider".to_string(), provider.as_str().to_string());
-            filters.insert("session_id".to_string(), session_id.to_string());
-            filters.insert("event_kind".to_string(), kind.to_string());
-            filters.insert("source_type".to_string(), "recorded-session".to_string());
-            let document = SourceDocument {
-                source: format!(
-                    "lint-ai://{}/session/{}/{}",
-                    provider.as_str(),
-                    session_id,
-                    sequence
-                ),
-                concept: "recorded-session".to_string(),
-                headings: vec![kind.to_string()],
-                links: vec![],
-                timestamp: event
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                doc_length: event_content(&event).len(),
-                author_agent: Some(provider.as_str().to_string()),
-                filters,
-                group_id: Some(group_id.clone()),
-                doc_id: doc_id.clone(),
-                content: event_content(&event),
-                key_phrases: Vec::new(),
-                key_phrase_extraction_hash: String::new(),
-            };
-            store.upsert(document);
-            imported_document_ids.push(doc_id);
+        };
+        let kind = event.get("kind").and_then(Value::as_str).unwrap_or("event");
+        if matches!(kind, "session_start" | "session_end") {
+            skipped_events += 1;
+            continue;
         }
-        store.refresh_index()?;
-        Ok(SessionImportReport {
-            session_id: session_id.to_string(),
-            group_id,
-            imported_document_ids,
-            skipped_events,
-        })
+        let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+        let doc_id = format!(
+            "session-recording:{}:{}:{}",
+            provider.as_str(),
+            safe_component(session_id),
+            sequence
+        );
+        let mut filters = BTreeMap::new();
+        filters.insert("provider".to_string(), provider.as_str().to_string());
+        filters.insert("session_id".to_string(), session_id.to_string());
+        filters.insert("event_kind".to_string(), kind.to_string());
+        filters.insert("source_type".to_string(), "recorded-session".to_string());
+        let body = event_content(&event);
+        documents.push(SourceDocument {
+            source: format!(
+                "lint-ai://{}/session/{}/{}",
+                provider.as_str(),
+                session_id,
+                sequence
+            ),
+            concept: "recorded-session".to_string(),
+            headings: vec![kind.to_string()],
+            links: vec![],
+            timestamp: event
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            doc_length: body.len(),
+            author_agent: Some(provider.as_str().to_string()),
+            filters,
+            group_id: Some(group_id.clone()),
+            doc_id: doc_id.clone(),
+            content: body,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        });
+        imported_document_ids.push(doc_id);
+    }
+    if !documents.is_empty() {
+        crate::integrations::mcp_tools::upsert_hook_documents(
+            project_root,
+            provider.as_str(),
+            session_id,
+            documents,
+        )?;
+    }
+    Ok(SessionImportReport {
+        session_id: session_id.to_string(),
+        group_id,
+        imported_document_ids,
+        skipped_events,
     })
 }
 
@@ -683,6 +685,11 @@ pub(crate) fn capture_workspace_file_changes(
             filters.insert("file_path".to_string(), change.file_path.clone());
             filters.insert("event".to_string(), change.event.clone());
             filters.insert("captured_by".to_string(), provider.as_str().to_string());
+            filters.insert("provider".to_string(), provider.as_str().to_string());
+            filters.insert(
+                "session_id".to_string(),
+                format!("{}:workspace-watcher", provider.as_str()),
+            );
 
             let diff = workspace_file_diff(change.before.as_deref(), change.after.as_deref());
             let content = format!(
@@ -710,12 +717,13 @@ pub(crate) fn capture_workspace_file_changes(
     if documents.is_empty() {
         return Ok(());
     }
-    crate::memory_api::MemoryService::with_shared_memory(project_root, |store| {
-        for document in documents {
-            store.upsert(document);
-        }
-        store.refresh_index()
-    })
+    let session_id = format!("{}:workspace-watcher", provider.as_str());
+    crate::integrations::mcp_tools::upsert_hook_documents(
+        project_root,
+        provider.as_str(),
+        &session_id,
+        documents,
+    )
 }
 
 fn workspace_file_change_id(path: &str, before: Option<&str>, after: Option<&str>) -> String {
@@ -929,15 +937,22 @@ pub fn record_event(
     let provider_name = provider.as_str();
     let session_key = safe_component(session_id);
     let session_dir = session_root.join(session_key);
+    let events_path = session_dir.join("events.jsonl");
+    let manifest_path = session_dir.join("manifest.json");
+    let lock_path = session_dir.join(".lock");
+    crate::pipeline::persistence::ensure_safe_output_path(&events_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&manifest_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&lock_path)?;
     fs::create_dir_all(&session_dir)?;
-    let lock = acquire_lock(&session_dir.join(".lock"))?;
+    crate::pipeline::persistence::ensure_safe_output_path(&events_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&manifest_path)?;
+    crate::pipeline::persistence::ensure_safe_output_path(&lock_path)?;
+    let lock = acquire_lock(&lock_path)?;
 
     if event_name.eq_ignore_ascii_case("SessionStart") {
         mark_interrupted_sessions(session_root, project_root, session_id)?;
     }
 
-    let events_path = session_dir.join("events.jsonl");
-    let manifest_path = session_dir.join("manifest.json");
     if !manifest_path.exists() {
         write_manifest(
             &manifest_path,
@@ -996,6 +1011,7 @@ pub fn record_event(
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
+        .create_new(false)
         .open(&events_path)
         .with_context(|| format!("failed to open {}", events_path.display()))?;
     restrict_file_permissions(&file)?;
@@ -1004,7 +1020,10 @@ pub fn record_event(
     file.flush()?;
 
     let terminal = event_name.eq_ignore_ascii_case("SessionEnd");
-    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    let mut manifest_file = crate::pipeline::file_access::open_regular_file(&manifest_path)?;
+    let mut manifest_bytes = Vec::new();
+    manifest_file.read_to_end(&mut manifest_bytes)?;
+    let mut manifest: Value = serde_json::from_slice(&manifest_bytes)?;
     manifest["event_count"] = Value::from(sequence);
     manifest["last_event"] = Value::String(event_name.to_string());
     manifest["last_event_at"] = Value::String(timestamp());
@@ -1036,10 +1055,18 @@ fn mark_interrupted_sessions(
             continue;
         }
         let manifest_path = path.join("manifest.json");
-        let Ok(contents) = fs::read_to_string(&manifest_path) else {
+        if crate::pipeline::persistence::ensure_safe_output_path(&manifest_path).is_err() {
+            continue;
+        }
+        let Ok(mut manifest_file) = crate::pipeline::file_access::open_regular_file(&manifest_path)
+        else {
             continue;
         };
-        let Ok(mut manifest) = serde_json::from_str::<Value>(&contents) else {
+        let mut contents = Vec::new();
+        if manifest_file.read_to_end(&mut contents).is_err() {
+            continue;
+        }
+        let Ok(mut manifest) = serde_json::from_slice::<Value>(&contents) else {
             continue;
         };
         let same_project = manifest
@@ -1326,13 +1353,18 @@ fn safe_component(value: &str) -> String {
 }
 
 fn count_complete_lines(path: &Path) -> Result<usize> {
-    if !path.exists() {
-        return Ok(0);
-    }
-    Ok(fs::read_to_string(path)?.lines().count())
+    let mut file = match crate::pipeline::file_access::open_regular_file(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut content = String::new();
+    file.read_to_string(&mut content)?;
+    Ok(content.lines().count())
 }
 
 fn write_manifest(path: &Path, value: &Value) -> Result<()> {
+    crate::pipeline::persistence::ensure_safe_output_path(path)?;
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
     restrict_path_permissions(&temporary)?;
@@ -1375,7 +1407,7 @@ fn acquire_lock(path: &Path) -> Result<RecordingLock> {
             Ok(_) => {
                 return Ok(RecordingLock {
                     path: path.to_path_buf(),
-                })
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 thread::sleep(Duration::from_millis(2));
@@ -1529,6 +1561,31 @@ mod tests {
         let manifest = fs::read_to_string(root.join("session-1/manifest.json")).unwrap();
         assert!(manifest.contains("capture-only"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn event_recording_rejects_symlinked_session_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root("session-directory-symlink");
+        let outside = temp_root("session-directory-outside");
+        symlink(&outside, root.join("session-link")).unwrap();
+        let result = record_event(
+            RecordingProvider::Codex,
+            &root,
+            Path::new("/tmp/project"),
+            "session-link",
+            "UserPromptSubmit",
+            serde_json::json!({"prompt":"private prompt"}),
+        );
+        assert!(
+            result.is_err(),
+            "recording followed a symlinked session directory"
+        );
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

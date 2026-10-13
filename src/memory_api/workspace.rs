@@ -281,9 +281,9 @@ pub fn segmented_store_options() -> PipelineOptions {
     }
 }
 
-/// The shared project corpus. It contains workspace files once; provider
-/// memories stay in their own stores and are composed into an in-memory query
-/// view for the requesting provider.
+/// The shared project corpus contains workspace files once. Captured memories
+/// live in the shared memory store. One resident owner publishes both stores
+/// into the immutable view searched by every provider.
 pub const WORKSPACE_MEMORY_NAME: &str = "workspace-memory";
 pub fn trace_event(event: &str) {
     let Some(path) = std::env::var_os("LINT_AI_MCP_TRACE_PATH") else {
@@ -330,8 +330,8 @@ pub(super) fn open_persistent_store(
     Ok(store)
 }
 
-/// Open the persistent workspace memory and compose it with one provider's
-/// private memory store. The composed store is intentionally in-memory: it
+/// Open the persistent workspace and shared captured-memory stores and return
+/// their detached read view for legacy library adapters. The composed store is intentionally in-memory: it
 /// transfers the already-published workspace and provider segments rather than
 /// reprocessing source documents, then recomputes only cross-store routing and
 /// ranking statistics.
@@ -341,15 +341,70 @@ pub(super) fn open_workspace_memory_store(
     ignore_paths: &[String],
     source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
 ) -> Result<MemoryService> {
+    open_workspace_memory_owner(root, memory_name, ignore_paths, source_documents)?
+        .published_read_view()
+}
+
+/// Open one resident owner for a workspace. It retains the persistent
+/// workspace store and the writable provider-memory store; staged
+/// publication composes their snapshots for search without reopening either
+/// store on each request.
+pub(super) fn open_workspace_memory_owner(
+    root: &Path,
+    memory_name: &str,
+    ignore_paths: &[String],
+    source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
+) -> Result<MemoryService> {
+    let workspace_root = root.join(".lint-ai").join(WORKSPACE_MEMORY_NAME);
+    open_workspace_memory_owner_at(
+        root,
+        &workspace_root,
+        memory_name,
+        ignore_paths,
+        source_documents,
+    )
+}
+
+pub(super) fn open_workspace_memory_owner_at(
+    root: &Path,
+    workspace_root: &Path,
+    memory_name: &str,
+    ignore_paths: &[String],
+    source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
+) -> Result<MemoryService> {
+    open_workspace_memory_owner_with_options_at(
+        root,
+        workspace_root,
+        memory_name,
+        ignore_paths,
+        segmented_store_options(),
+        source_documents,
+    )
+}
+
+pub(super) fn open_workspace_memory_owner_with_options_at(
+    root: &Path,
+    workspace_root: &Path,
+    memory_name: &str,
+    ignore_paths: &[String],
+    options: PipelineOptions,
+    source_documents: impl FnOnce() -> Result<Vec<SourceDocument>>,
+) -> Result<MemoryService> {
+    anyhow::ensure!(
+        matches!(
+            options.memory_index_layout,
+            MemoryIndexLayout::Segmented { .. } | MemoryIndexLayout::AdaptiveSegmented { .. }
+        ),
+        "resident workspace and provider stores require segmented indexes"
+    );
     // One-time migration: legacy per-provider silos (e.g. `claude-memory/`)
     // merge into the shared `memory/` store. New callers pass
     // `SHARED_MEMORY_DIR`; the parameter is kept for the transition.
     if memory_name == SHARED_MEMORY_DIR {
         migrate_legacy_provider_memory_dirs(root)?;
     }
-    let workspace_root = root.join(".lint-ai").join(WORKSPACE_MEMORY_NAME);
-    let _init_lock = StoreInitLock::acquire(&workspace_root)?;
-    let mut workspace = MemoryService::at_path(&workspace_root, segmented_store_options())?;
+    let _init_lock = StoreInitLock::acquire(workspace_root)?;
+    let mut workspace = MemoryService::at_path(workspace_root, options.clone())?;
     let state = workspace_state(root, ignore_paths)?;
     if workspace.is_empty() || !index_is_current(&workspace_root, &state) {
         for doc_id in workspace
@@ -364,15 +419,15 @@ pub(super) fn open_workspace_memory_store(
             workspace.upsert(document);
         }
         workspace.refresh_index()?;
-        write_index_state(&workspace_root, &state)?;
+        write_index_state(workspace_root, &state)?;
     }
 
     let memory_root = root.join(".lint-ai").join(memory_name);
-    let provider_memory = memory_root
-        .exists()
-        .then(|| MemoryService::at_path(&memory_root, segmented_store_options()))
-        .transpose()?;
-    MemoryService::compose_segmented(workspace, provider_memory)
+    let provider_memory = MemoryService::at_path(&memory_root, options)?;
+    Ok(MemoryService::retain_workspace_store(
+        provider_memory,
+        workspace,
+    ))
 }
 
 pub(super) fn sync_memory_documents(
@@ -425,7 +480,12 @@ fn workspace_state(root: &Path, ignore_paths: &[String]) -> Result<Value> {
         })
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_file())
-        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "md"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "md")
+        })
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(root).ok()?.to_path_buf();
             let metadata = entry.metadata().ok()?;
@@ -476,6 +536,16 @@ fn write_index_state(index_root: &Path, state: &Value) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn persist_workspace_index_state(
+    root: &Path,
+    index_root: &Path,
+    ignore_paths: &[String],
+) -> Result<()> {
+    let _init_lock = StoreInitLock::acquire(&index_root)?;
+    let state = workspace_state(root, ignore_paths)?;
+    write_index_state(&index_root, &state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +567,35 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&root);
         root
+    }
+
+    #[test]
+    fn resident_owner_retains_the_persistent_workspace_service() {
+        let root = board_test_root("resident-workspace-owner");
+        fs::create_dir_all(&root).unwrap();
+        let mut owner = open_workspace_memory_owner(&root, SHARED_MEMORY_DIR, &[], || {
+            Ok(vec![document(
+                "workspace-initial",
+                "docs/readme.md",
+                "initial workspace guide",
+            )])
+        })
+        .unwrap();
+        assert!(owner.has_workspace_store());
+        {
+            let workspace = owner.memory_store_mut(super::super::MemoryStore::Workspace);
+            workspace.upsert(document(
+                "workspace-updated",
+                "docs/updated.md",
+                "resident workspace update is visible",
+            ));
+            workspace.refresh_index().unwrap();
+        }
+        let published = owner.published_read_view().unwrap();
+        assert!(published
+            .source_document_by_id("workspace-updated")
+            .is_some());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

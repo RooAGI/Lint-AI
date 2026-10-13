@@ -109,18 +109,18 @@ kubectl create secret generic lint-ai-auth \
   --from-literal=SERVER_TOKEN="$token"
 ```
 
-The chart defaults to `ghcr.io/rooagi/lint-ai-server:0.3.0`; the repository
+The chart defaults to `ghcr.io/rooagi/lint-ai-server:0.4.0`; the repository
 does not currently publish this image automatically. Build and push the image
 to a registry you control, then set `image.repository` and `image.tag` during
 installation. For example:
 
 ```bash
-docker build -t registry.example.com/lint-ai-server:0.3.0 .
-docker push registry.example.com/lint-ai-server:0.3.0
+docker build -t registry.example.com/lint-ai-server:0.4.0 .
+docker push registry.example.com/lint-ai-server:0.4.0
 helm upgrade --install lint-ai ./charts/lint-ai \
   --namespace lint-ai \
   --set image.repository=registry.example.com/lint-ai-server \
-  --set image.tag=0.3.0
+  --set image.tag=0.4.0
 ```
 
 The default chart provisions a 10 GiB persistent volume claim using the

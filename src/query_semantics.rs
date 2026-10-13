@@ -1,13 +1,13 @@
 #![allow(unexpected_cfgs)]
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime, TimeDelta};
-use fuzzydate::parse as fuzzy_parse;
+use chrono::{Datelike, Months, NaiveDate, TimeDelta};
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashSet;
 
 use crate::aggregation::AggregateIntent;
 use crate::query_expansion::normalize_for_index;
+use crate::reasoning_rules::reasoning_rules;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum QueryKind {
@@ -50,6 +50,37 @@ pub enum QueryRoutingIntent {
     Sequence,
 }
 
+/// Semantic operation inferred from the user's question before any index
+/// layout chooses a retrieval strategy.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum QueryIntent {
+    Lookup,
+    Aggregate,
+    TemporalDiff,
+    TemporalOrder,
+    Choose,
+    TemporalFilter,
+    SharedRelation,
+}
+
+impl QueryIntent {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            QueryIntent::Lookup => "lookup",
+            QueryIntent::Aggregate => "aggregate",
+            QueryIntent::TemporalDiff => "temporal-diff",
+            QueryIntent::TemporalOrder => "temporal-order",
+            QueryIntent::Choose => "choose",
+            QueryIntent::TemporalFilter => "temporal-filter",
+            QueryIntent::SharedRelation => "shared-relation",
+        }
+    }
+
+    pub(crate) fn is_multi_operand(self) -> bool {
+        !matches!(self, QueryIntent::Lookup)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct QuerySpan {
     pub kind: QuerySpanKind,
@@ -62,8 +93,32 @@ pub struct QuerySpan {
 #[derive(Debug, Clone, Serialize)]
 pub struct QueryTemporal {
     pub phrase: String,
+    /// Absolute anchor only when the query carries one explicitly (currently
+    /// a seeded session anchor). Relative phrases are resolved by
+    /// `PreparedQuery` against its reference date instead of the machine clock.
     pub resolved_at: Option<String>,
     pub source: String,
+}
+
+/// Typed evidence constraints inferred from the original question. These
+/// constraints travel with the prepared query and are independent of which
+/// optional index-time enrichment produced supporting claims.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct QueryEvidenceRequirements {
+    pub relation: Option<QueryEvidenceRelation>,
+    pub minimum_distinct_objects: Option<usize>,
+    pub order: Option<QueryEvidenceOrder>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum QueryEvidenceRelation {
+    PersonalParticipation,
+    PersonalAcquisition,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub enum QueryEvidenceOrder {
+    EventDateAscending,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,7 +145,9 @@ pub struct QueryAnalysis {
     pub object_hint: Option<String>,
     pub temporal: Option<QueryTemporal>,
     pub time_hint: Option<QueryTimeHint>,
+    pub intent: QueryIntent,
     pub query_routing_intent: Option<QueryRoutingIntent>,
+    pub evidence_requirements: QueryEvidenceRequirements,
     pub raw_pos_tags: Vec<QueryPosTag>,
     pub spans: Vec<QuerySpan>,
     pub augmented_query: String,
@@ -294,8 +351,19 @@ fn build_query_analysis(
     });
 
     let temporal = extract_temporal(&original_query);
-    let query_routing_intent =
-        query_routing_intent(&original_query, aggregate_intent.as_ref(), &temporal);
+    let intent = classify_query_intent(&original_query, aggregate_intent.as_ref(), &temporal);
+    let query_routing_intent = if let Some(intent) = aggregate_intent.as_ref() {
+        Some(match intent {
+            AggregateIntent::Count => QueryRoutingIntent::Count,
+            AggregateIntent::Sum => QueryRoutingIntent::Sum,
+        })
+    } else if intent == QueryIntent::TemporalOrder {
+        Some(QueryRoutingIntent::Sequence)
+    } else {
+        None
+    };
+    let evidence_requirements =
+        infer_evidence_requirements(&original_query, intent, temporal.as_ref());
     let mut spans = Vec::new();
     if let Some(qw) = leading_question_word(&original_query) {
         spans.push(QuerySpan {
@@ -487,11 +555,155 @@ fn build_query_analysis(
         object_hint,
         temporal,
         time_hint,
+        intent,
         query_routing_intent,
+        evidence_requirements,
         raw_pos_tags,
         spans: dedup_spans(spans),
         augmented_query,
     }
+}
+
+fn infer_evidence_requirements(
+    query: &str,
+    intent: QueryIntent,
+    temporal: Option<&QueryTemporal>,
+) -> QueryEvidenceRequirements {
+    // Keep semantic cue matching on the original lexical forms. Index
+    // normalization stems words (for example, "participated") and is meant
+    // for retrieval, not phrase-level intent detection.
+    let lexical = query.to_lowercase();
+    let rules = reasoning_rules();
+    let direct_participation = rules
+        .direct_participation_phrases
+        .iter()
+        .any(|phrase| lexical.contains(phrase.as_str()));
+
+    // Questions can refer to a user's earlier statement rather than state
+    // the activity as a direct first-person clause ("I mentioned
+    // participating in ..."). Match reported activity only when the report
+    // verb is first-person and the activity is implicit or explicitly
+    // first-person after "that".
+    static REPORTED_PARTICIPATION_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let reported_participation = REPORTED_PARTICIPATION_RE
+        .get_or_init(|| {
+            Regex::new(&rules.reported_participation_regex)
+                .expect("bundled reported-participation rule must be valid")
+        })
+        .is_match(&lexical);
+
+    let asks_personal_participation = direct_participation || reported_participation;
+
+    let asks_personal_acquisition = intent == QueryIntent::Lookup
+        && temporal.is_some()
+        && !lexical.trim_start().starts_with("where ")
+        && !lexical.contains("how many")
+        && !lexical.contains("how much")
+        && !lexical.contains("which ")
+        && rules
+            .acquisition_query_phrases
+            .iter()
+            .any(|phrase| lexical.contains(phrase.as_str()));
+
+    if asks_personal_acquisition {
+        return QueryEvidenceRequirements {
+            relation: Some(QueryEvidenceRelation::PersonalAcquisition),
+            ..QueryEvidenceRequirements::default()
+        };
+    }
+
+    if !asks_personal_participation {
+        return QueryEvidenceRequirements::default();
+    }
+
+    // A temporal quantity ("two weeks ago") is not a requested count of
+    // distinct objects. Remove the analyzed temporal phrase before looking
+    // for an event-count quantity such as "three sports events".
+    let count_text = temporal
+        .map(|temporal| lexical.replace(&temporal.phrase.to_lowercase(), " "))
+        .unwrap_or_else(|| lexical.clone());
+    let minimum_distinct_objects = count_text
+        .split(|ch: char| !ch.is_alphanumeric())
+        .find_map(|token| rules.count_words.get(token).copied());
+
+    QueryEvidenceRequirements {
+        relation: Some(QueryEvidenceRelation::PersonalParticipation),
+        minimum_distinct_objects,
+        order: (intent == QueryIntent::TemporalOrder)
+            .then_some(QueryEvidenceOrder::EventDateAscending),
+    }
+}
+
+fn classify_query_intent(
+    query: &str,
+    aggregate_intent: Option<&AggregateIntent>,
+    temporal: &Option<QueryTemporal>,
+) -> QueryIntent {
+    let lower = query.to_lowercase();
+    let rules = reasoning_rules();
+    let has_and = lower.contains(" and ");
+    let has_time_unit = has_any_word(&lower, &rules.query_time_units);
+    let has_how_many = rules
+        .query_count_phrases
+        .iter()
+        .any(|phrase| lower.contains(phrase));
+    let has_options = rules
+        .query_option_connectors
+        .iter()
+        .any(|connector| lower.contains(connector))
+        && !has_how_many
+        && (rules
+            .query_option_prefixes
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+            || rules
+                .query_option_phrases
+                .iter()
+                .any(|phrase| lower.contains(phrase.as_str())));
+
+    if has_temporal_ordering_language(query) && (temporal.is_some() || has_options) {
+        return QueryIntent::TemporalOrder;
+    }
+    if lower.contains(&rules.query_temporal_diff_marker) && has_how_many && has_time_unit {
+        return QueryIntent::TemporalDiff;
+    }
+    if has_how_many
+        && rules
+            .query_temporal_filter_markers
+            .iter()
+            .any(|marker| lower.contains(marker))
+        && lower.contains(rules.query_event_marker.as_str())
+    {
+        return QueryIntent::TemporalFilter;
+    }
+    if has_options {
+        return QueryIntent::Choose;
+    }
+    if lower.contains(&rules.query_both_marker)
+        && has_and
+        && rules
+            .query_both_verbs
+            .iter()
+            .any(|verb| lower.contains(verb))
+    {
+        return QueryIntent::SharedRelation;
+    }
+    if has_and
+        && (aggregate_intent.is_some()
+            || has_how_many
+            || rules
+                .query_aggregate_phrases
+                .iter()
+                .any(|phrase| lower.contains(phrase.as_str())))
+    {
+        return QueryIntent::Aggregate;
+    }
+    QueryIntent::Lookup
+}
+
+fn has_any_word<T: AsRef<str>>(text: &str, words: &[T]) -> bool {
+    text.split(|ch: char| !ch.is_alphanumeric())
+        .any(|word| words.iter().any(|candidate| candidate.as_ref() == word))
 }
 
 #[derive(Debug, Clone)]
@@ -702,42 +914,16 @@ fn quantity_phrase(query: &str) -> Option<String> {
     None
 }
 
-fn query_routing_intent(
-    query: &str,
-    quantity_intent: Option<&AggregateIntent>,
-    temporal: &Option<QueryTemporal>,
-) -> Option<QueryRoutingIntent> {
-    if let Some(intent) = quantity_intent {
-        return Some(match intent {
-            AggregateIntent::Count => QueryRoutingIntent::Count,
-            AggregateIntent::Sum => QueryRoutingIntent::Sum,
-        });
-    }
-
+/// Shared ordering-language detector used by single-index query routing and
+/// segmented operand decomposition. Keep the lexical cue list in one place;
+/// callers still decide whether the query has enough operands to perform a
+/// multi-operand temporal-order operation.
+pub(crate) fn has_temporal_ordering_language(query: &str) -> bool {
     let lower = query.to_lowercase();
-    let sequence_markers = [
-        "consecutive",
-        "earliest",
-        "latest",
-        "first",
-        "before",
-        "after",
-        "order",
-        "ordered",
-        "sequence",
-    ];
-    if temporal.is_some() && sequence_markers.iter().any(|marker| lower.contains(marker)) {
-        return Some(QueryRoutingIntent::Sequence);
-    }
-
-    if lower.contains("consecutive days")
-        || lower.contains("from earliest to latest")
-        || lower.contains("which happened first")
-    {
-        return Some(QueryRoutingIntent::Sequence);
-    }
-
-    None
+    reasoning_rules()
+        .temporal_order_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 /// Frequent English lexical verbs (base forms). The heuristic POS tagger
@@ -1062,12 +1248,9 @@ fn extract_temporal(query: &str) -> Option<QueryTemporal> {
         _ => query,
     };
     if let Some(match_) = temporal_candidates(new_query).into_iter().next() {
-        let resolved_at = fuzzy_parse(match_.text.as_str())
-            .ok()
-            .map(|dt: NaiveDateTime| dt.to_string());
         return Some(QueryTemporal {
             phrase: match_.text,
-            resolved_at,
+            resolved_at: None,
             source: "fuzzydate".to_string(),
         });
     }
@@ -1124,6 +1307,7 @@ fn temporal_candidates(query: &str) -> Vec<PhraseMatch> {
     let mut out = Vec::new();
     let patterns = [
         r"\b(today|tomorrow|yesterday|tonight)\b",
+        r"\b(?:(?:in|during|over|for)\s+)?(?:the\s+)?past\s+(?:(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?(?:day|days|week|weeks|month|months|year|years)\b",
         r"\b(?:last|this|next)\s+(?:week|month|year|weekend)\b",
         r"\b(?:last|this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
         r"\b(?:a\s+couple\s+of|couple\s+of|a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:day|days|week|weeks|month|months|year|years)(?:\s+ago)?\b",
@@ -1169,7 +1353,18 @@ pub fn parse_reference_date(value: &str) -> Option<NaiveDate> {
 /// "this week", "consecutive days"). Bare quantities without "ago"
 /// ("10 days") are treated as past, matching the memory-question domain.
 pub fn resolve_temporal_anchor(phrase: &str, reference: NaiveDate) -> Option<NaiveDate> {
-    let p = phrase.trim().to_lowercase();
+    let p = phrase
+        .trim()
+        .to_lowercase()
+        .trim_start_matches("in the ")
+        .trim_start_matches("during the ")
+        .trim_start_matches("over the ")
+        .trim_start_matches("for the ")
+        .trim_start_matches("during ")
+        .trim_start_matches("over ")
+        .trim_start_matches("for ")
+        .trim_start_matches("the ")
+        .to_string();
     match p.as_str() {
         "today" | "tonight" => return Some(reference),
         "yesterday" => return reference.checked_add_signed(TimeDelta::days(-1)),
@@ -1182,7 +1377,36 @@ pub fn resolve_temporal_anchor(phrase: &str, reference: NaiveDate) -> Option<Nai
     if let Some(anchor) = resolve_relative_span(&p, reference) {
         return Some(anchor);
     }
+    if let Some(anchor) = resolve_past_span(&p, reference) {
+        return Some(anchor);
+    }
     resolve_ago_quantity(&p, reference)
+}
+
+/// Resolves rolling ranges such as "past month" and "past two weeks" to
+/// their inclusive start date. Month and year offsets use calendar arithmetic;
+/// day and week offsets use fixed day counts.
+fn resolve_past_span(phrase: &str, reference: NaiveDate) -> Option<NaiveDate> {
+    let rest = phrase.strip_prefix("past ")?;
+    let mut parts = rest.split_whitespace();
+    let first = parts.next()?;
+    let (quantity, unit) = if let Some(unit) = parts.next() {
+        if parts.next().is_some() {
+            return None;
+        }
+        (parse_quantity_word(first)?, unit)
+    } else {
+        (1, first)
+    };
+    let unit = unit.strip_suffix('s').unwrap_or(unit);
+    match unit {
+        "day" => reference.checked_sub_signed(TimeDelta::days(quantity)),
+        "week" => reference.checked_sub_signed(TimeDelta::days(quantity.checked_mul(7)?)),
+        "month" => reference.checked_sub_months(Months::new(u32::try_from(quantity).ok()?)),
+        "year" => reference
+            .checked_sub_months(Months::new(u32::try_from(quantity.checked_mul(12)?).ok()?)),
+        _ => None,
+    }
 }
 
 /// Whether a resolved temporal anchor denotes a *range* of time rather than a
@@ -1932,6 +2156,73 @@ mod tests {
             sequence.query_routing_intent,
             Some(QueryRoutingIntent::Sequence)
         );
+    }
+
+    #[test]
+    fn classifies_temporal_sequence_in_shared_analysis() {
+        let analysis = analyze_query(
+            "What is the order of the three sports events I participated in during the past month, from earliest to latest?",
+        );
+        assert_eq!(
+            analysis.query_routing_intent,
+            Some(QueryRoutingIntent::Sequence)
+        );
+        assert_eq!(
+            analysis.evidence_requirements.minimum_distinct_objects,
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn reveals_miss_when_participation_is_reported_as_mentioned() {
+        let analysis = analyze_query(
+            "I mentioned participating in a sports event two weeks ago. What was the event?",
+        );
+        assert_eq!(
+            analysis.evidence_requirements.relation,
+            Some(QueryEvidenceRelation::PersonalParticipation)
+        );
+        assert_eq!(
+            analysis.evidence_requirements.minimum_distinct_objects,
+            None
+        );
+    }
+
+    #[test]
+    fn temporal_quantity_is_not_a_participation_object_count() {
+        let analysis = analyze_query("I participated in an event two weeks ago. What was it?");
+        assert_eq!(
+            analysis.evidence_requirements.relation,
+            Some(QueryEvidenceRelation::PersonalParticipation)
+        );
+        assert_eq!(
+            analysis.evidence_requirements.minimum_distinct_objects,
+            None
+        );
+    }
+
+    #[test]
+    fn recognizes_first_person_purchase_evidence() {
+        let analysis = analyze_query("What kitchen appliance did I buy 10 days ago?");
+        assert_eq!(
+            analysis.evidence_requirements.relation,
+            Some(QueryEvidenceRelation::PersonalAcquisition)
+        );
+        assert_eq!(
+            analysis.evidence_requirements.minimum_distinct_objects,
+            None
+        );
+        for query in [
+            "Where did I buy my tennis racket from?",
+            "Which gift did I buy first, the necklace or the photo album?",
+            "How many pieces of furniture did I buy in the past few months?",
+        ] {
+            assert_ne!(
+                analyze_query(query).evidence_requirements.relation,
+                Some(QueryEvidenceRelation::PersonalAcquisition),
+                "purchase question should retain its normal query path: {query}"
+            );
+        }
     }
 
     #[test]

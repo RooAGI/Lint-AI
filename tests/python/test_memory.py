@@ -18,12 +18,12 @@ class MemoryBindingTests(unittest.TestCase):
         self.assertFalse(hasattr(lint_ai, "RemoteMemory"))
         self.assertFalse(hasattr(lint_ai, "IndexStore"))
 
-    def test_version_reports_0_3_0(self):
+    def test_version_reports_0_4_0(self):
         import importlib.metadata
 
-        self.assertEqual(lint_ai.version(), "0.3.0")
+        self.assertEqual(lint_ai.version(), "0.4.0")
         # Wheel metadata and the binding must agree.
-        self.assertEqual(importlib.metadata.version("lint-ai"), "0.3.0")
+        self.assertEqual(importlib.metadata.version("lint-ai"), "0.4.0")
 
     def test_constructor_rejects_bad_config(self):
         with self.assertRaises(ValueError):

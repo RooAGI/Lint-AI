@@ -1,7 +1,7 @@
 [package]
 autobins = false
 name = "lint-ai"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Persistent memory layer for AI coding agents — MCP server with current-state retrieval and supersession tracking"
 license = "Apache-2.0"
@@ -18,7 +18,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 clap = { version = "4.4.18", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tokenizers = "0.20"
 toml = "0.8"
@@ -51,7 +51,7 @@ sha2 = "0.10"
 rayon = "1.11"
 libflate = "1.4"
 pyo3 = { version = "0.29", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -68,7 +68,7 @@ muse-code = []
 openclaw = []
 hermes = []
 roo-runtime = []
-python = ["dep:pyo3", "dep:reqwest"]
+python = ["dep:pyo3"]
 experimental = []
 
 [[bin]]
@@ -136,3 +136,6 @@ path = "src/bin/launchers/query_repl.rs"
 [dev-dependencies]
 # Only the SIGKILL crash test needs raw syscalls now; the lock itself is std.
 libc = "0.2"
+
+[patch.crates-io]
+lru = { path = "vendor/lru" }

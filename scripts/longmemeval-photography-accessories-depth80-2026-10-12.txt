@@ -1,0 +1,2020 @@
+warning: unused imports: `TextFieldIndexing` and `TextOptions`
+  --> src/index/build.rs:16:39
+   |
+16 |     Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT,
+   |                                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/agy/hooks.rs:7:5
+  |
+7 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/agy/hooks.rs:8:23
+  |
+8 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/agy/hooks.rs:9:5
+  |
+9 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/claude_code/hooks/mod.rs:15:24
+   |
+15 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `HashMap`
+  --> src/integrations/codex/hooks/mod.rs:14:24
+   |
+14 | use std::collections::{HashMap, HashSet, VecDeque};
+   |                        ^^^^^^^
+
+warning: unused import: `crate::memory_api::MemoryService`
+ --> src/integrations/gemini_cli/hooks.rs:4:5
+  |
+4 | use crate::memory_api::MemoryService;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MemoryIndexLayout` and `PipelineOptions`
+ --> src/integrations/gemini_cli/hooks.rs:5:23
+  |
+5 | use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+  |                       ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::segments::SegmentRoutingStrategy`
+ --> src/integrations/gemini_cli/hooks.rs:6:5
+  |
+6 | use crate::segments::SegmentRoutingStrategy;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Serialize`
+  --> src/integrations/openclaw/hooks.rs:27:26
+   |
+27 | use serde::{Deserialize, Serialize};
+   |                          ^^^^^^^^^
+
+warning: unused import: `std::collections::HashSet`
+  --> src/integrations/openclaw/hooks.rs:29:5
+   |
+29 | use std::collections::HashSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::fs`
+  --> src/integrations/openclaw/hooks.rs:30:5
+   |
+30 | use std::fs;
+   |     ^^^^^^^
+
+warning: unused import: `SearchRequest`
+ --> src/integrations/roo_runtime.rs:5:40
+  |
+5 | use crate::memory_api::{MemoryService, SearchRequest};
+  |                                        ^^^^^^^^^^^^^
+
+warning: unused import: `Tier1NerProvider`
+ --> src/memory_api.rs:5:40
+  |
+5 | use crate::pipeline::{PipelineOptions, Tier1NerProvider};
+  |                                        ^^^^^^^^^^^^^^^^
+
+warning: unused import: `is_stopword`
+  --> src/segments/intent.rs:29:24
+   |
+29 | use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
+   |                        ^^^^^^^^^^^
+
+warning: unused import: `intent::*`
+  --> src/segments/mod.rs:19:9
+   |
+19 | pub use intent::*;
+   |         ^^^^^^^^^
+
+warning: unused import: `relations::*`
+  --> src/segments/mod.rs:23:9
+   |
+23 | pub use relations::*;
+   |         ^^^^^^^^^^^^
+
+warning: unused imports: `Decoder` and `PostProcessor`
+  --> src/bart_tokenizer.rs:15:18
+   |
+15 | use tokenizers::{Decoder, PostProcessor};
+   |                  ^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `stable_chunk_id` and `stable_doc_id_from_source`
+   --> src/lib.rs:120:29
+    |
+120 | pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
+    |                             ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `build_aggregate_output`
+   --> src/lib.rs:140:37
+    |
+140 | pub(crate) use crate::aggregation::{build_aggregate_output, AggregateOutput};
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `GlobalBm25Statistics` and `MemoryIndex`
+   --> src/lib.rs:141:31
+    |
+141 | pub(crate) use crate::index::{GlobalBm25Statistics, MemoryIndex, TemporalQueryContext};
+    |                               ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused imports: `IndexDump`, `MemoryIndexSnapshot`, `StorePaths`, `build_doc_records`, `build_query_snapshot_from_records`, and `resolve_store_paths`
+   --> src/lib.rs:143:5
+    |
+143 |     build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
+    |     ^^^^^^^^^^^^^^^^^                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+144 |     build_query_snapshot_from_source_documents, default_production_pipeline_options,
+145 |     resolve_store_paths, IndexDump, IndexStore, MemoryIndexSnapshot, StorePaths,
+    |     ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `crate::query_expansion::normalize_for_index`
+   --> src/lib.rs:148:16
+    |
+148 | pub(crate) use crate::query_expansion::normalize_for_index;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `QueryAnalysis`, `QueryTimeHint`, `resolve_anchor_window`, `resolve_temporal_anchor`, and `temporal_anchor_is_span`
+   --> src/lib.rs:150:42
+    |
+150 |     analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
+    |                                          ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^
+151 |     temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: unused imports: `SegmentManifestEntry` and `SegmentManifest`
+   --> src/lib.rs:153:34
+    |
+153 | pub(crate) use crate::segments::{SegmentManifest, SegmentManifestEntry};
+    |                                  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `DocumentSemanticState`, `SemanticClaim`, `SemanticRelationKind`, `SemanticRelationStore`, and `SemanticRelation`
+   --> src/lib.rs:155:5
+    |
+155 |     DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
+    |     ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+156 |     SemanticRelationStore,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TemporalFactStore`, `TemporalFact`, `TimelineEvent`, and `TimelinePair`
+   --> src/lib.rs:160:5
+    |
+160 |     TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
+    |     ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused imports: `RankedTerm` and `Tier1Entity`
+   --> src/lib.rs:162:31
+    |
+162 | pub(crate) use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+    |                               ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused variable: `is_synthetic_f`
+    --> src/index/build.rs:1073:9
+     |
+1073 |         is_synthetic_f: Field,
+     |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_synthetic_f`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `tag_links_f`
+    --> src/index/build.rs:1074:9
+     |
+1074 |         tag_links_f: Field,
+     |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tag_links_f`
+
+warning: unreachable pattern
+   --> src/integrations/session_recording.rs:920:13
+    |
+919 |             Self::Agy => "agy",
+    |             --------- matches all the relevant values
+920 |             Self::Agy => "agy",
+    |             ^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src/memory_api.rs:2097:13
+     |
+2097 |         let mut prepared = if session_id.is_none() {
+     |             ----^^^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:280:5
+    |
+280 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:340:5
+    |
+340 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:400:5
+    |
+400 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:477:5
+    |
+477 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: unused variable: `reference_date`
+   --> src/bin/haystack_scoped_benchmark.rs:554:5
+    |
+554 |     reference_date: Option<&str>,
+    |     ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reference_date`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:929:13
+    |
+929 |         let mut search_scored = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:958:13
+    |
+958 |         let mut search = |service: &mut MemoryService,
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:966:13
+    |
+966 |         let mut search_scored_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/bin/session_ab_benchmark.rs:995:13
+    |
+995 |         let mut search_prod = |service: &mut MemoryService,
+    |             ----^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: methods `remove_expired_file` and `evict_expired` are never used
+   --> src/conversation_state.rs:335:8
+    |
+145 | impl ConversationStateStore {
+    | --------------------------- methods in this implementation
+...
+335 |     fn remove_expired_file(&self, user_id: &str, session_id: &str, now_ms: u64) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^
+...
+437 |     pub fn evict_expired(&mut self, now_ms: u64) -> usize {
+    |            ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `lexical_bm25` is never used
+    --> src/index/build.rs:1136:19
+     |
+ 161 | impl MemoryIndex {
+     | ---------------- method in this implementation
+...
+1136 |     pub(crate) fn lexical_bm25(
+     |                   ^^^^^^^^^^^^
+
+warning: field `chunk_u32` is never read
+   --> src/index/model.rs:344:16
+    |
+341 | pub(crate) struct IntervalEntry {
+    |                   ------------- field in this struct
+...
+344 |     pub(crate) chunk_u32: u32,
+    |                ^^^^^^^^^
+    |
+    = note: `IntervalEntry` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `center`, `overlaps`, `left`, and `right` are never read
+   --> src/index/model.rs:349:5
+    |
+348 | struct IntervalNode {
+    |        ------------ fields in this struct
+349 |     center: usize,
+    |     ^^^^^^
+350 |     overlaps: Vec<IntervalEntry>,
+    |     ^^^^^^^^
+351 |     left: Option<Box<IntervalNode>>,
+    |     ^^^^
+352 |     right: Option<Box<IntervalNode>>,
+    |     ^^^^^
+    |
+    = note: `IntervalNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `root` is never read
+   --> src/index/model.rs:357:5
+    |
+356 | pub(crate) struct IntervalTree {
+    |                   ------------ field in this struct
+357 |     root: Option<Box<IntervalNode>>,
+    |     ^^^^
+    |
+    = note: `IntervalTree` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `query` is never used
+   --> src/index/model.rs:396:19
+    |
+360 | impl IntervalTree {
+    | ----------------- method in this implementation
+...
+396 |     pub(crate) fn query(&self, start: usize, end: usize) -> Vec<u32> {
+    |                   ^^^^^
+
+warning: field `doc_interval_trees` is never read
+   --> src/index/model.rs:469:16
+    |
+420 | pub struct MemoryIndex {
+    |            ----------- field in this struct
+...
+469 |     pub(crate) doc_interval_trees: Vec<IntervalTree>,
+    |                ^^^^^^^^^^^^^^^^^^
+
+warning: fields `subword_f`, `is_synthetic_f`, and `tag_links_f` are never read
+   --> src/index/model.rs:508:16
+    |
+492 | pub(crate) struct LexicalIndex {
+    |                   ------------ fields in this struct
+...
+508 |     pub(crate) subword_f: Field,
+    |                ^^^^^^^^^
+...
+511 |     pub(crate) is_synthetic_f: Field,
+    |                ^^^^^^^^^^^^^^
+...
+514 |     pub(crate) tag_links_f: Field,
+    |                ^^^^^^^^^^^
+
+warning: method `shard_count` is never used
+   --> src/index/model.rs:558:12
+    |
+533 | impl GlobalBm25Statistics {
+    | ------------------------- method in this implementation
+...
+558 |     pub fn shard_count(&self) -> usize {
+    |            ^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src/index/query.rs:50:12
+     |
+  35 | impl MemoryIndex {
+     | ---------------- methods in this implementation
+...
+  50 |     pub fn query_with_temporal_context_and_statistics(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 317 |     pub fn query_timed(
+     |            ^^^^^^^^^^^
+...
+ 384 |     pub fn query_with_lexical_hits(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 413 |     pub fn query_with_filters(
+     |            ^^^^^^^^^^^^^^^^^^
+...
+ 503 |     pub fn query_with_filters_and_lexical(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 537 |     pub fn query_with_filters_multi(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1611 |     pub fn impacted_chunks_for_line_range(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `LEXICAL_SUBWORD_BOOST` is never used
+  --> src/index/query_terms.rs:26:18
+   |
+26 | pub(crate) const LEXICAL_SUBWORD_BOOST: f32 = 0.1;
+   |                  ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/claude_code/hooks/mod.rs:435:4
+    |
+435 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/codex/hooks/mod.rs:593:4
+    |
+593 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: field `tool_input` is never read
+  --> src/integrations/gemini_cli/hooks.rs:59:9
+   |
+47 | pub struct GeminiHookInput {
+   |            --------------- field in this struct
+...
+59 |     pub tool_input: Option<Value>,
+   |         ^^^^^^^^^^
+   |
+   = note: `GeminiHookInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `transcript_path` is never read
+  --> src/integrations/muse_code/hooks/protocol.rs:18:9
+   |
+15 | pub struct MuseHookInput {
+   |            ------------- field in this struct
+...
+18 |     pub transcript_path: Option<PathBuf>,
+   |         ^^^^^^^^^^^^^^^
+   |
+   = note: `MuseHookInput` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `Checkpoint` is never constructed
+  --> src/integrations/openclaw/document.rs:20:5
+   |
+16 | pub enum OpenClawDocumentType {
+   |          -------------------- variant in this enum
+...
+20 |     Checkpoint,
+   |     ^^^^^^^^^^
+   |
+   = note: `OpenClawDocumentType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `process_http_hook` is never used
+   --> src/integrations/openclaw/hooks.rs:121:8
+    |
+121 | pub fn process_http_hook(kind: OpenClawHookKind, value: Value, fallback_root: &Path) -> Value {
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `memory_root` is never used
+   --> src/integrations/openclaw/hooks.rs:309:4
+    |
+309 | fn memory_root(root: &Path) -> PathBuf {
+    |    ^^^^^^^^^^^
+
+warning: function `open_store` is never used
+   --> src/integrations/openclaw/hooks.rs:315:4
+    |
+315 | fn open_store(root: &Path) -> Result<MemoryService> {
+    |    ^^^^^^^^^^
+
+warning: methods `published_search_view`, `observe_plain_query`, and `select_session_documents` are never used
+    --> src/memory_api.rs:2312:19
+     |
+ 869 | impl MemoryService {
+     | ------------------ methods in this implementation
+...
+2312 |     pub(crate) fn published_search_view(&self) -> anyhow::Result<Option<Arc<MemoryService>>> {
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+...
+3122 |     pub(crate) fn observe_plain_query(
+     |                   ^^^^^^^^^^^^^^^^^^^
+...
+3165 |     pub(crate) fn select_session_documents(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `open_workspace_owner` is never used
+    --> src/memory_api.rs:6661:19
+     |
+6642 | impl MemoryService {
+     | ------------------ associated function in this implementation
+...
+6661 |     pub(crate) fn open_workspace_owner(
+     |                   ^^^^^^^^^^^^^^^^^^^^
+
+warning: method `publish_staged` is never used
+   --> src/memory_api/staged.rs:369:19
+    |
+ 27 | impl MemoryService {
+    | ------------------ method in this implementation
+...
+369 |     pub(crate) fn publish_staged(&mut self) -> anyhow::Result<()> {
+    |                   ^^^^^^^^^^^^^^
+
+warning: function `record_content_text` is never used
+  --> src/pipeline/build.rs:25:4
+   |
+25 | fn record_content_text(record: &DocRecord) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: methods `single_index`, `is_segmented`, and `segment_count` are never used
+   --> src/pipeline/config.rs:220:12
+    |
+219 | impl MemoryIndexSnapshot {
+    | ------------------------ methods in this implementation
+220 |     pub fn single_index(&self) -> Option<&MemoryIndex> {
+    |            ^^^^^^^^^^^^
+...
+227 |     pub fn is_segmented(&self) -> bool {
+    |            ^^^^^^^^^^^^
+...
+231 |     pub fn segment_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+
+warning: function `is_directory_empty` is never used
+   --> src/pipeline/persistence.rs:462:15
+    |
+462 | pub(crate) fn is_directory_empty(dir: &Path) -> Result<bool> {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: struct `DocumentLifecycleMeta` is never constructed
+  --> src/pipeline/store.rs:54:19
+   |
+54 | pub(crate) struct DocumentLifecycleMeta {
+   |                   ^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+    --> src/pipeline/store.rs:711:12
+     |
+ 352 | impl IndexStore {
+     | --------------- associated items in this implementation
+...
+ 711 |     pub fn for_corpus(corpus_root: &Path, mut options: PipelineOptions) -> Result<Self> {
+     |            ^^^^^^^^^^
+...
+ 854 |     pub(crate) fn dump(&mut self) -> Result<IndexDump> {
+     |                   ^^^^
+...
+1039 |     pub fn len(&self) -> usize {
+     |            ^^^
+...
+1047 |     pub fn is_dirty(&self) -> bool {
+     |            ^^^^^^^^
+...
+1121 |     pub fn chunk_lifecycle(&self) -> Vec<&ChunkLifecycleMeta> {
+     |            ^^^^^^^^^^^^^^^
+...
+1127 |     pub(crate) fn document_lifecycle(&self) -> Vec<DocumentLifecycleMeta> {
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+1162 |     pub fn temporal_facts(&self) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^
+...
+1181 |     pub fn temporal_facts_as_of(&self, date: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+1185 |     pub fn temporal_timeline(&self, subject: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
+     |            ^^^^^^^^^^^^^^^^^
+...
+1189 |     pub fn temporal_timeline_window_around(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1199 |     pub fn temporal_events_between(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+1207 |     pub fn temporal_adjacent_pairs_between(
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1331 |     pub fn query(&mut self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
+     |            ^^^^^
+...
+1336 |     pub fn query_timed(
+     |            ^^^^^^^^^^^
+...
+1360 |     pub fn query_prepared_timed(
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+1410 |     pub fn query_filtered(
+     |            ^^^^^^^^^^^^^^
+...
+1440 |     pub fn query_filtered_multi(
+     |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MAX_PENDING_CHANGES` is never used
+  --> src/pipeline/watcher.rs:14:7
+   |
+14 | const MAX_PENDING_CHANGES: usize = 64;
+   |       ^^^^^^^^^^^^^^^^^^^
+
+warning: method `take_change` is never used
+   --> src/pipeline/watcher.rs:212:12
+    |
+ 63 | impl WorkspaceWatcher {
+    | --------------------- method in this implementation
+...
+212 |     pub fn take_change(&self) -> bool {
+    |            ^^^^^^^^^^^
+
+warning: associated items `from_analysis`, `into_analysis`, and `execute_on_index_with_semantics` are never used
+   --> src/query_plan.rs:94:19
+    |
+ 37 | impl PreparedQuery {
+    | ------------------ associated items in this implementation
+...
+ 94 |     pub(crate) fn from_analysis(analysis: QueryAnalysis) -> Self {
+    |                   ^^^^^^^^^^^^^
+...
+102 |     fn into_analysis(self) -> QueryAnalysis {
+    |        ^^^^^^^^^^^^^
+...
+288 |     pub fn execute_on_index_with_semantics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `REMOTE_QUERY_PROTOCOL_VERSION` is never used
+  --> src/remote_query.rs:11:11
+   |
+11 | pub const REMOTE_QUERY_PROTOCOL_VERSION: u32 = 1;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryRequest` is never constructed
+  --> src/remote_query.rs:14:12
+   |
+14 | pub struct RemoteQueryRequest {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteTemporalContext` is never constructed
+  --> src/remote_query.rs:31:12
+   |
+31 | pub struct RemoteTemporalContext {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsRequest` is never constructed
+  --> src/remote_query.rs:41:12
+   |
+41 | pub struct RemoteStatisticsRequest {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsResponse` is never constructed
+  --> src/remote_query.rs:48:12
+   |
+48 | pub struct RemoteStatisticsResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteFieldStatistics` is never constructed
+  --> src/remote_query.rs:60:12
+   |
+60 | pub struct RemoteFieldStatistics {
+   |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteCandidateRequest` is never constructed
+  --> src/remote_query.rs:66:12
+   |
+66 | pub struct RemoteCandidateRequest {
+   |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteStatisticsSnapshot` is never constructed
+  --> src/remote_query.rs:73:12
+   |
+73 | pub struct RemoteStatisticsSnapshot {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteCandidateResponse` is never constructed
+  --> src/remote_query.rs:79:12
+   |
+79 | pub struct RemoteCandidateResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteSearchResult` is never constructed
+  --> src/remote_query.rs:90:12
+   |
+90 | pub struct RemoteSearchResult {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryCompleteness` is never constructed
+  --> src/remote_query.rs:99:12
+   |
+99 | pub struct RemoteQueryCompleteness {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RemoteQueryFailure` is never constructed
+   --> src/remote_query.rs:106:12
+    |
+106 | pub struct RemoteQueryFailure {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:160:12
+    |
+159 | impl RemoteQueryRequest {
+    | ----------------------- method in this implementation
+160 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:184:12
+    |
+183 | impl RemoteStatisticsRequest {
+    | ---------------------------- method in this implementation
+184 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate` is never used
+   --> src/remote_query.rs:193:12
+    |
+192 | impl RemoteCandidateRequest {
+    | --------------------------- method in this implementation
+193 |     pub fn validate(&self, now_unix_ms: u64) -> Result<(), String> {
+    |            ^^^^^^^^
+
+warning: method `validate_against` is never used
+   --> src/remote_query.rs:203:12
+    |
+202 | impl RemoteStatisticsResponse {
+    | ----------------------------- method in this implementation
+203 |     pub fn validate_against(&self, request: &RemoteStatisticsRequest) -> Result<(), String> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: method `validate_against` is never used
+   --> src/remote_query.rs:219:12
+    |
+218 | impl RemoteCandidateResponse {
+    | ---------------------------- method in this implementation
+219 |     pub fn validate_against(&self, request: &RemoteCandidateRequest) -> Result<(), String> {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: associated items `validate`, `is_complete`, and `merge` are never used
+   --> src/remote_query.rs:238:12
+    |
+237 | impl RemoteQueryCompleteness {
+    | ---------------------------- associated items in this implementation
+238 |     pub fn validate(&self) -> Result<(), String> {
+    |            ^^^^^^^^
+...
+272 |     pub fn is_complete(&self) -> bool {
+    |            ^^^^^^^^^^^
+...
+280 |     fn merge<I>(responses: I) -> Self
+    |        ^^^^^
+
+warning: function `aggregate_statistics` is never used
+   --> src/remote_query.rs:310:8
+    |
+310 | pub fn aggregate_statistics(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reduce_candidates` is never used
+   --> src/remote_query.rs:366:8
+    |
+366 | pub fn reduce_candidates(
+    |        ^^^^^^^^^^^^^^^^^
+
+warning: function `canonical_result_key` is never used
+   --> src/remote_query.rs:411:4
+    |
+411 | fn canonical_result_key(result: &RemoteSearchResult) -> (String, Option<String>, String) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_response_identity` is never used
+   --> src/remote_query.rs:419:4
+    |
+419 | fn validate_response_identity(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `validate_unique_names` is never used
+   --> src/remote_query.rs:439:4
+    |
+439 | fn validate_unique_names(kind: &str, names: &[String]) -> Result<(), String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: type alias `IntentOperation` is never used
+  --> src/segments/intent.rs:39:10
+   |
+39 | pub type IntentOperation = QueryIntent;
+   |          ^^^^^^^^^^^^^^^
+
+warning: struct `OperandScope` is never constructed
+  --> src/segments/intent.rs:43:12
+   |
+43 | pub struct OperandScope {
+   |            ^^^^^^^^^^^^
+
+warning: struct `ScopeEntity` is never constructed
+  --> src/segments/intent.rs:54:12
+   |
+54 | pub struct ScopeEntity {
+   |            ^^^^^^^^^^^
+
+warning: struct `SharedRelationQuery` is never constructed
+  --> src/segments/intent.rs:63:12
+   |
+63 | pub struct SharedRelationQuery {
+   |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `RevealedQuestion` is never constructed
+  --> src/segments/intent.rs:74:12
+   |
+74 | pub struct RevealedQuestion {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: method `rendered` is never used
+  --> src/segments/intent.rs:90:12
+   |
+87 | impl RevealedQuestion {
+   | --------------------- method in this implementation
+...
+90 |     pub fn rendered(&self) -> String {
+   |            ^^^^^^^^
+
+warning: struct `IntentDiagnostics` is never constructed
+   --> src/segments/intent.rs:112:12
+    |
+112 | pub struct IntentDiagnostics {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `paren_acronyms` is never used
+   --> src/segments/intent.rs:126:4
+    |
+126 | fn paren_acronyms(text: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `is_connector` is never used
+   --> src/segments/intent.rs:152:4
+    |
+152 | fn is_connector(lower: &str) -> bool {
+    |    ^^^^^^^^^^^^
+
+warning: function `is_cap_word` is never used
+   --> src/segments/intent.rs:156:4
+    |
+156 | fn is_cap_word(w: &str) -> bool {
+    |    ^^^^^^^^^^^
+
+warning: function `name_spans` is never used
+   --> src/segments/intent.rs:163:4
+    |
+163 | fn name_spans(text: &str) -> Vec<String> {
+    |    ^^^^^^^^^^
+
+warning: function `normalize_mention` is never used
+   --> src/segments/intent.rs:202:4
+    |
+202 | fn normalize_mention(text: &str) -> String {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `is_month_token` is never used
+   --> src/segments/intent.rs:206:4
+    |
+206 | fn is_month_token(lower: &str) -> bool {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `find_ci` is never used
+   --> src/segments/intent.rs:237:4
+    |
+237 | fn find_ci(hay: &str, needle: &str) -> Option<usize> {
+    |    ^^^^^^^
+
+warning: function `rfind_ci` is never used
+   --> src/segments/intent.rs:246:4
+    |
+246 | fn rfind_ci(hay: &str, needle: &str) -> Option<usize> {
+    |    ^^^^^^^^
+
+warning: function `is_word_char` is never used
+   --> src/segments/intent.rs:257:4
+    |
+257 | fn is_word_char(c: char) -> bool {
+    |    ^^^^^^^^^^^^
+
+warning: function `find_word_ci` is never used
+   --> src/segments/intent.rs:262:4
+    |
+262 | fn find_word_ci(hay: &str, word: &str) -> Option<usize> {
+    |    ^^^^^^^^^^^^
+
+warning: function `rsplit_and` is never used
+   --> src/segments/intent.rs:278:4
+    |
+278 | fn rsplit_and(text: &str) -> Option<(String, String)> {
+    |    ^^^^^^^^^^
+
+warning: function `quoted_spans` is never used
+   --> src/segments/intent.rs:287:4
+    |
+287 | fn quoted_spans(text: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^
+
+warning: function `scope_entities` is never used
+   --> src/segments/intent.rs:318:4
+    |
+318 | fn scope_entities(scope: &str) -> Vec<ScopeEntity> {
+    |    ^^^^^^^^^^^^^^
+
+warning: enum `SplitKind` is never used
+   --> src/segments/intent.rs:374:6
+    |
+374 | enum SplitKind {
+    |      ^^^^^^^^^
+
+warning: function `split_scopes` is never used
+   --> src/segments/intent.rs:388:4
+    |
+388 | fn split_scopes(question: &str) -> (SplitKind, Vec<String>) {
+    |    ^^^^^^^^^^^^
+
+warning: function `scope_time_tokens` is never used
+   --> src/segments/intent.rs:489:4
+    |
+489 | fn scope_time_tokens(scope: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `time_constraint` is never used
+   --> src/segments/intent.rs:532:4
+    |
+532 | fn time_constraint(question: &str, operands: &[OperandScope]) -> Option<String> {
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `has_any` is never used
+   --> src/segments/intent.rs:555:4
+    |
+555 | fn has_any(hay: &str, needles: &[&str]) -> bool {
+    |    ^^^^^^^
+
+warning: function `single_scope_answer_type` is never used
+   --> src/segments/intent.rs:564:4
+    |
+564 | fn single_scope_answer_type(q_lower: &str) -> Option<&'static str> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `detect_shared_relation` is never used
+   --> src/segments/intent.rs:588:4
+    |
+588 | fn detect_shared_relation(question: &str) -> Option<SharedRelationQuery> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reveal_question` is never used
+   --> src/segments/intent.rs:646:8
+    |
+646 | pub fn reveal_question(question: &str) -> RevealedQuestion {
+    |        ^^^^^^^^^^^^^^^
+
+warning: function `reveal_question_with_analysis` is never used
+   --> src/segments/intent.rs:654:8
+    |
+654 | pub fn reveal_question_with_analysis(question: &str, analysis: &QueryAnalysis) -> RevealedQuestion {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `corpus_entity_mentions` is never used
+   --> src/segments/intent.rs:776:4
+    |
+776 | fn corpus_entity_mentions(index: &SegmentedMemoryIndex) -> HashSet<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `fan_out_operand` is never used
+   --> src/segments/intent.rs:797:4
+    |
+797 | fn fan_out_operand(
+    |    ^^^^^^^^^^^^^^^
+
+warning: method `query_with_intent` is never used
+   --> src/segments/intent.rs:867:12
+    |
+862 | impl SegmentedMemoryIndex {
+    | ------------------------- method in this implementation
+...
+867 |     pub fn query_with_intent(
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: function `build_segments_by_group_id` is never used
+   --> src/segments/model.rs:164:15
+    |
+164 | pub(crate) fn build_segments_by_group_id(records: &[DocRecord]) -> Vec<MemoryIndexSegment> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_memory_index_segment` is never used
+   --> src/segments/model.rs:184:15
+    |
+184 | pub(crate) fn build_memory_index_segment(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segment` is never used
+   --> src/segments/query.rs:114:15
+    |
+114 | pub(crate) fn query_top_segment(
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments` is never used
+   --> src/segments/query.rs:122:15
+    |
+122 | pub(crate) fn query_top_segments(
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_all_segments` is never used
+   --> src/segments/query.rs:131:4
+    |
+131 | fn query_all_segments(
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments_with_diagnostics` is never used
+   --> src/segments/query.rs:139:4
+    |
+139 | fn query_top_segments_with_diagnostics(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `query_top_segments_with_diagnostics_and_strategy` is never used
+   --> src/segments/query.rs:161:4
+    |
+161 | fn query_top_segments_with_diagnostics_and_strategy(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple variants are never constructed
+   --> src/segments/query.rs:447:5
+    |
+446 | pub(crate) enum SegmentEnrichmentKind<'a> {
+    |                 --------------------- variants in this enum
+447 |     Segment,
+    |     ^^^^^^^
+448 |     RouteAware,
+    |     ^^^^^^^^^^
+449 |     SessionAggregated,
+    |     ^^^^^^^^^^^^^^^^^
+450 |     TemporalPath,
+    |     ^^^^^^^^^^^^
+451 |     ConnectedSegment,
+    |     ^^^^^^^^^^^^^^^^
+452 |     MissingCoverageRecovery,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+...
+458 |     AdaptiveRouteAware {
+    |     ^^^^^^^^^^^^^^^^^^
+
+warning: function `query_all_segments_with_diagnostics` is never used
+    --> src/segments/query.rs:1621:4
+     |
+1621 | fn query_all_segments_with_diagnostics(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `turn_idx` is never read
+   --> src/segments/relations.rs:169:9
+    |
+162 | pub struct RawKeyPhrase {
+    |            ------------ field in this struct
+...
+169 |     pub turn_idx: usize,
+    |         ^^^^^^^^
+    |
+    = note: `RawKeyPhrase` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `coref` is never read
+   --> src/segments/relations.rs:205:9
+    |
+181 | pub struct RawRelation {
+    |            ----------- field in this struct
+...
+205 |     pub coref: Option<String>,
+    |         ^^^^^
+    |
+    = note: `RawRelation` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `EntityRelation` is never constructed
+   --> src/segments/relations.rs:220:12
+    |
+220 | pub struct EntityRelation {
+    |            ^^^^^^^^^^^^^^
+
+warning: method `as_str` is never used
+   --> src/segments/relations.rs:258:12
+    |
+257 | impl PredicateFamily {
+    | -------------------- method in this implementation
+258 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+
+warning: function `extract_key_phrases_via_spacy` is never used
+   --> src/segments/relations.rs:375:8
+    |
+375 | pub fn extract_key_phrases_via_spacy(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `extractor_model_for_turns` is never used
+   --> src/segments/relations.rs:425:15
+    |
+425 | pub(crate) fn extractor_model_for_turns(turns: &[RelationTurn]) -> &'static str {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `len`, `is_empty`, `triple_count`, and `place_keywords_for_activity` are never used
+   --> src/segments/relations.rs:710:12
+    |
+654 | impl RelationIndex {
+    | ------------------ methods in this implementation
+...
+710 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+714 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+719 |     pub fn triple_count(&self) -> usize {
+    |            ^^^^^^^^^^^^
+...
+751 |     pub fn place_keywords_for_activity(&self, person: &str, activity_verb: &str) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `route_segments` is never used
+  --> src/segments/routing.rs:22:15
+   |
+22 | pub(crate) fn route_segments(query: &str, segments: &[MemoryIndexSegment]) -> Vec<SegmentRoute> {
+   |               ^^^^^^^^^^^^^^
+
+warning: function `route_segments_with_strategy` is never used
+  --> src/segments/routing.rs:26:15
+   |
+26 | pub(crate) fn route_segments_with_strategy(
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `segment_id` is never read
+   --> src/segments/routing.rs:723:16
+    |
+721 | pub(crate) struct RouteAwareCandidate {
+    |                   ------------------- field in this struct
+722 |     pub(crate) result: SearchResult,
+723 |     pub(crate) segment_id: String,
+    |                ^^^^^^^^^^
+    |
+    = note: `RouteAwareCandidate` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: multiple associated items are never used
+   --> src/segments/segmented.rs:114:12
+    |
+ 56 | impl SegmentedMemoryIndex {
+    | ------------------------- associated items in this implementation
+...
+114 |     pub fn from_segments(segments: Vec<MemoryIndexSegment>) -> Result<Self, String> {
+    |            ^^^^^^^^^^^^^
+...
+198 |     pub fn from_records_by_group_id(records: &[DocRecord]) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+202 |     pub fn from_records_by_group_id_with_generation(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+237 |     pub fn from_records_by_manifest(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+306 |     pub fn refresh_incremental(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+321 |     pub(crate) fn refresh_incremental_with_lexical_root(
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+403 |     pub(crate) fn refresh_changed(
+    |                   ^^^^^^^^^^^^^^^
+...
+519 |     pub fn generation(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+534 |     pub fn len(&self) -> usize {
+    |            ^^^
+...
+538 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+542 |     pub fn route(&self, query: &str) -> Vec<SegmentRoute> {
+    |            ^^^^^
+...
+551 |     pub fn route_with_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+559 |     pub fn route_with_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+574 |     pub fn query(&self, query: &str, top_k: usize, segment_limit: usize) -> Vec<SearchResult> {
+    |            ^^^^^
+...
+579 |     pub fn query_with_diagnostics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+593 |     pub fn query_with_diagnostics_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+615 |     pub fn query_with_temporal_context_and_diagnostics_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+657 |     pub fn query_with_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+673 |     pub fn query_with_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+695 |     pub fn query_with_route_aware_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+717 |     pub fn query_with_session_aggregated_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+767 |     pub fn query_with_adaptive_route_aware_segment_enrichment_temporal_context_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+795 |     pub fn query_with_temporal_path_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+817 |     pub fn query_with_connected_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+839 |     pub fn query_with_missing_coverage_recovery_segment_enrichment_and_strategy(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+861 |     pub fn query_all_segments(&self, query: &str, top_k: usize) -> Vec<SearchResult> {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+866 |     pub fn query_all_segments_with_diagnostics(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: associated function `from_documents` is never used
+   --> src/semantic_relations.rs:139:12
+    |
+123 | impl SemanticRelationStore {
+    | -------------------------- associated function in this implementation
+...
+139 |     pub fn from_documents<'a, I>(documents: I, options: SupersessionOptions) -> Self
+    |            ^^^^^^^^^^^^^^
+
+warning: struct `TimelineEvent` is never constructed
+ --> src/temporal_fact.rs:9:12
+  |
+9 | pub struct TimelineEvent<'a> {
+  |            ^^^^^^^^^^^^^
+
+warning: struct `TimelinePair` is never constructed
+  --> src/temporal_fact.rs:15:12
+   |
+15 | pub struct TimelinePair<'a> {
+   |            ^^^^^^^^^^^^
+
+warning: methods `valid_to_date` and `active_at` are never used
+  --> src/temporal_fact.rs:93:8
+   |
+47 | impl TemporalFact {
+   | ----------------- methods in this implementation
+...
+93 |     fn valid_to_date(&self) -> Option<NaiveDate> {
+   |        ^^^^^^^^^^^^^
+...
+99 |     fn active_at(&self, date: NaiveDate) -> bool {
+   |        ^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/temporal_fact.rs:124:12
+    |
+123 | impl TemporalFactStore {
+    | ---------------------- associated items in this implementation
+124 |     pub fn empty() -> Self {
+    |            ^^^^^
+...
+208 |     pub fn facts(&self) -> &[TemporalFact] {
+    |            ^^^^^
+...
+305 |     pub fn as_of(&self, date: &str) -> Vec<&TemporalFact> {
+    |            ^^^^^
+...
+323 |     pub fn timeline_events_between(&self, start: &str, end: &str) -> Vec<TimelineEvent<'_>> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+...
+357 |     pub fn timeline_window_around(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+409 |     pub fn adjacent_pairs_between(
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+441 |     pub fn timeline(&self, subject: &str) -> Vec<&TemporalFact> {
+    |            ^^^^^^^^
+
+warning: function `normalize_range` is never used
+   --> src/temporal_fact.rs:468:4
+    |
+468 | fn normalize_range(start: &str, end: &str) -> Option<(NaiveDate, NaiveDate)> {
+    |    ^^^^^^^^^^^^^^^
+
+warning: trait `SourceAdapter` is never used
+  --> src/adapters.rs:17:11
+   |
+17 | pub trait SourceAdapter {
+   |           ^^^^^^^^^^^^^
+
+warning: function `default_source_adapters` is never used
+  --> src/adapters.rs:25:8
+   |
+25 | pub fn default_source_adapters() -> Vec<Box<dyn SourceAdapter>> {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `MarkdownAdapter` is never constructed
+  --> src/adapters/markdown.rs:32:12
+   |
+32 | pub struct MarkdownAdapter;
+   |            ^^^^^^^^^^^^^^^
+
+warning: field `category` is never read
+   --> src/behood_query.rs:291:5
+    |
+288 | struct FusedActivity {
+    |        ------------- field in this struct
+...
+291 |     category: String,
+    |     ^^^^^^^^
+    |
+    = note: `FusedActivity` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `activity_phrase` and `where_phrase` are never read
+   --> src/behood_query.rs:567:9
+    |
+561 | pub struct ScopeVerdict {
+    |            ------------ fields in this struct
+...
+567 |     pub activity_phrase: String,
+    |         ^^^^^^^^^^^^^^^
+...
+574 |     pub where_phrase: String,
+    |         ^^^^^^^^^^^^
+    |
+    = note: `ScopeVerdict` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `text` is never read
+   --> src/behood_query.rs:615:9
+    |
+613 | pub struct KindHit {
+    |            ------- field in this struct
+614 |     /// Entity text as it appears in the judged span.
+615 |     pub text: String,
+    |         ^^^^
+    |
+    = note: `KindHit` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `name` is never used
+  --> src/claim_extractor.rs:10:8
+   |
+ 8 | pub trait ClaimExtractor {
+   |           -------------- method in this trait
+ 9 |     fn extract(&self, record: &DocRecord) -> ExtractedClaims;
+10 |     fn name(&self) -> &'static str;
+   |        ^^^^
+
+warning: struct `CorpusGraph` is never constructed
+ --> src/corpus_graph.rs:8:12
+  |
+8 | pub struct CorpusGraph {
+  |            ^^^^^^^^^^^
+
+warning: associated items `new`, `from_bundle`, `with_ownership`, `symbol_usage_summary`, and `symbols_for_doc` are never used
+  --> src/corpus_graph.rs:15:12
+   |
+14 | impl CorpusGraph {
+   | ---------------- associated items in this implementation
+15 |     pub fn new(documents: MemoryIndex, symbols: SymbolStore, usage: UsageGraph) -> Self {
+   |            ^^^
+...
+23 |     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
+   |            ^^^^^^^^^^^
+...
+39 |     pub fn with_ownership(mut self, records: impl IntoIterator<Item = OwnershipRecord>) -> Self {
+   |            ^^^^^^^^^^^^^^
+...
+44 |     pub fn symbol_usage_summary(&self, symbol_id: &str) -> UsageSummary {
+   |            ^^^^^^^^^^^^^^^^^^^^
+...
+48 |     pub fn symbols_for_doc(&self, doc_id: &str) -> Vec<&SymbolRecord> {
+   |            ^^^^^^^^^^^^^^^
+
+warning: field `path` is never read
+  --> src/graph.rs:14:9
+   |
+12 | pub struct Page {
+   |            ---- field in this struct
+13 |     /// Absolute path to the file.
+14 |     pub path: String,
+   |         ^^^^
+   |
+   = note: `Page` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `content` is never read
+  --> src/graph.rs:42:9
+   |
+30 | pub struct ChunkNode {
+   |            --------- field in this struct
+...
+42 |     pub content: String,
+   |         ^^^^^^^
+   |
+   = note: `ChunkNode` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `chunk_index` and `doc_entities` are never read
+  --> src/graph.rs:73:9
+   |
+61 | pub struct Graph {
+   |            ----- fields in this struct
+...
+73 |     pub chunk_index: HashMap<String, NodeIndex>,
+   |         ^^^^^^^^^^^
+...
+83 |     pub doc_entities: HashMap<String, Vec<String>>,
+   |         ^^^^^^^^^^^^
+
+warning: enum `OwnershipKind` is never used
+ --> src/ownership.rs:7:10
+  |
+7 | pub enum OwnershipKind {
+  |          ^^^^^^^^^^^^^
+
+warning: enum `FlowState` is never used
+  --> src/ownership.rs:19:10
+   |
+19 | pub enum FlowState {
+   |          ^^^^^^^^^
+
+warning: enum `FlowEdgeKind` is never used
+  --> src/ownership.rs:30:10
+   |
+30 | pub enum FlowEdgeKind {
+   |          ^^^^^^^^^^^^
+
+warning: struct `FlowEdge` is never constructed
+  --> src/ownership.rs:41:12
+   |
+41 | pub struct FlowEdge {
+   |            ^^^^^^^^
+
+warning: struct `OwnershipRecord` is never constructed
+  --> src/ownership.rs:48:12
+   |
+48 | pub struct OwnershipRecord {
+   |            ^^^^^^^^^^^^^^^
+
+warning: struct `LeakFinding` is never constructed
+  --> src/ownership.rs:69:12
+   |
+69 | pub struct LeakFinding {
+   |            ^^^^^^^^^^^
+
+warning: fields `original_terms` and `unexpanded_non_english_terms` are never read
+  --> src/query_expansion.rs:11:9
+   |
+10 | pub struct ExpandedQuery {
+   |            ------------- fields in this struct
+11 |     pub original_terms: Vec<String>,
+   |         ^^^^^^^^^^^^^^
+...
+17 |     pub unexpanded_non_english_terms: Vec<String>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ExpandedQuery` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: constant `BART_VOCAB` is never used
+  --> src/bart_tokenizer.rs:18:7
+   |
+18 | const BART_VOCAB: &str = include_str!("../tokenizers/bart/vocab.json");
+   |       ^^^^^^^^^^
+
+warning: constant `BART_MERGES` is never used
+  --> src/bart_tokenizer.rs:20:7
+   |
+20 | const BART_MERGES: &str = include_str!("../tokenizers/bart/merges.txt");
+   |       ^^^^^^^^^^^
+
+warning: static `BART` is never used
+  --> src/bart_tokenizer.rs:22:8
+   |
+22 | static BART: OnceLock<Tokenizer> = OnceLock::new();
+   |        ^^^^
+
+warning: function `build_bart` is never used
+  --> src/bart_tokenizer.rs:25:4
+   |
+25 | fn build_bart() -> Tokenizer {
+   |    ^^^^^^^^^^
+
+warning: function `bart` is never used
+  --> src/bart_tokenizer.rs:50:4
+   |
+50 | fn bart() -> &'static Tokenizer {
+   |    ^^^^
+
+warning: function `bart_subwords` is never used
+  --> src/bart_tokenizer.rs:59:8
+   |
+59 | pub fn bart_subwords(text: &str) -> Vec<String> {
+   |        ^^^^^^^^^^^^^
+
+warning: function `bart_subwords_joined` is never used
+  --> src/bart_tokenizer.rs:82:8
+   |
+82 | pub fn bart_subwords_joined(text: &str) -> String {
+   |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `as_str` and `is_multi_operand` are never used
+  --> src/query_semantics.rs:66:19
+   |
+65 | impl QueryIntent {
+   | ---------------- methods in this implementation
+66 |     pub(crate) fn as_str(self) -> &'static str {
+   |                   ^^^^^^
+...
+78 |     pub(crate) fn is_multi_operand(self) -> bool {
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: enum `ReviewSeverity` is never used
+  --> src/review.rs:10:10
+   |
+10 | pub enum ReviewSeverity {
+   |          ^^^^^^^^^^^^^^
+
+warning: enum `ReviewCategory` is never used
+  --> src/review.rs:19:10
+   |
+19 | pub enum ReviewCategory {
+   |          ^^^^^^^^^^^^^^
+
+warning: struct `ReviewRepoRef` is never constructed
+  --> src/review.rs:32:12
+   |
+32 | pub struct ReviewRepoRef {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewHunk` is never constructed
+  --> src/review.rs:43:12
+   |
+43 | pub struct ReviewHunk {
+   |            ^^^^^^^^^^
+
+warning: struct `ReviewFileChange` is never constructed
+  --> src/review.rs:61:12
+   |
+61 | pub struct ReviewFileChange {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewFileSummary` is never constructed
+  --> src/review.rs:81:12
+   |
+81 | pub struct ReviewFileSummary {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewSummary` is never constructed
+  --> src/review.rs:87:12
+   |
+87 | pub struct ReviewSummary {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewDiffSummary` is never constructed
+  --> src/review.rs:97:12
+   |
+97 | pub struct ReviewDiffSummary {
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `DocumentSummary` is never constructed
+   --> src/review.rs:105:12
+    |
+105 | pub struct DocumentSummary {
+    |            ^^^^^^^^^^^^^^^
+
+warning: struct `SymbolSummary` is never constructed
+   --> src/review.rs:130:12
+    |
+130 | pub struct SymbolSummary {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `OwnershipSummary` is never constructed
+   --> src/review.rs:163:12
+    |
+163 | pub struct OwnershipSummary {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewUsageNodeSummary` is never constructed
+   --> src/review.rs:195:12
+    |
+195 | pub struct ReviewUsageNodeSummary {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewUsageSummary` is never constructed
+   --> src/review.rs:210:12
+    |
+210 | pub struct ReviewUsageSummary {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `ReviewEvidence` is never constructed
+   --> src/review.rs:238:12
+    |
+238 | pub struct ReviewEvidence {
+    |            ^^^^^^^^^^^^^^
+
+warning: struct `ReviewFinding` is never constructed
+   --> src/review.rs:253:12
+    |
+253 | pub struct ReviewFinding {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewContext` is never constructed
+   --> src/review.rs:267:12
+    |
+267 | pub struct ReviewContext {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `ReviewPacket` is never constructed
+   --> src/review.rs:281:12
+    |
+281 | pub struct ReviewPacket {
+    |            ^^^^^^^^^^^^
+
+warning: struct `ReviewDiff` is never constructed
+   --> src/review.rs:297:12
+    |
+297 | pub struct ReviewDiff {
+    |            ^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/review.rs:304:12
+    |
+303 | impl ReviewPacket {
+    | ----------------- associated function in this implementation
+304 |     pub fn new(
+    |            ^^^
+
+warning: enum `SymbolKind` is never used
+  --> src/symbols.rs:11:10
+   |
+11 | pub enum SymbolKind {
+   |          ^^^^^^^^^^
+
+warning: enum `SymbolRelationKind` is never used
+  --> src/symbols.rs:27:10
+   |
+27 | pub enum SymbolRelationKind {
+   |          ^^^^^^^^^^^^^^^^^^
+
+warning: struct `SymbolLocation` is never constructed
+  --> src/symbols.rs:39:12
+   |
+39 | pub struct SymbolLocation {
+   |            ^^^^^^^^^^^^^^
+
+warning: struct `SymbolRecord` is never constructed
+  --> src/symbols.rs:52:12
+   |
+52 | pub struct SymbolRecord {
+   |            ^^^^^^^^^^^^
+
+warning: associated items `new`, `declared`, `referenced`, and `with_attribute` are never used
+   --> src/symbols.rs:77:12
+    |
+ 76 | impl SymbolRecord {
+    | ----------------- associated items in this implementation
+ 77 |     pub fn new(
+    |            ^^^
+...
+101 |     pub fn declared(
+    |            ^^^^^^^^
+...
+116 |     pub fn referenced(
+    |            ^^^^^^^^^^
+...
+137 |     pub fn with_attribute(mut self, key: impl Into<String>, value: Value) -> Self {
+    |            ^^^^^^^^^^^^^^
+
+warning: function `symbol_id_for` is never used
+   --> src/symbols.rs:143:4
+    |
+143 | fn symbol_id_for(
+    |    ^^^^^^^^^^^^^
+
+warning: struct `SymbolStore` is never constructed
+   --> src/symbols.rs:153:12
+    |
+153 | pub struct SymbolStore {
+    |            ^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/symbols.rs:168:12
+    |
+167 | impl SymbolStore {
+    | ---------------- associated items in this implementation
+168 |     pub fn new() -> Self {
+    |            ^^^
+...
+172 |     pub fn from_records(records: impl IntoIterator<Item = SymbolRecord>) -> Self {
+    |            ^^^^^^^^^^^^
+...
+178 |     pub fn extend(&mut self, records: impl IntoIterator<Item = SymbolRecord>) {
+    |            ^^^^^^
+...
+184 |     pub fn insert(&mut self, record: SymbolRecord) {
+    |            ^^^^^^
+...
+205 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+...
+209 |     pub fn lookup_by_name<'a>(&'a self, name: &str) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^
+...
+220 |     pub fn lookup_by_doc<'a>(&'a self, doc_id: &str) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^
+...
+224 |     pub fn lookup_by_kind<'a>(&'a self, kind: &SymbolKind) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^
+...
+228 |     pub fn lookup_by_relation<'a>(
+    |            ^^^^^^^^^^^^^^^^^^
+...
+235 |     pub fn lookup_by_attribute<'a>(&'a self, key: &str, value: &Value) -> Vec<&'a SymbolRecord> {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+246 |     fn append_matches<'a>(
+    |        ^^^^^^^^^^^^^^
+...
+257 |     fn append_normalized_matches<'a>(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+268 |     fn lookup_indices<'a>(&'a self, indices: Option<&Vec<usize>>) -> Vec<&'a SymbolRecord> {
+    |        ^^^^^^^^^^^^^^
+...
+277 |     fn append_indices<'a>(
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `IngestBundle` is never constructed
+   --> src/symbols.rs:294:12
+    |
+294 | pub struct IngestBundle {
+    |            ^^^^^^^^^^^^
+
+warning: associated function `new` is never used
+   --> src/symbols.rs:300:12
+    |
+299 | impl IngestBundle {
+    | ----------------- associated function in this implementation
+300 |     pub fn new(documents: Vec<SourceDocument>, symbols: Vec<SymbolRecord>) -> Self {
+    |            ^^^
+
+warning: struct `CorpusIndex` is never constructed
+   --> src/symbols.rs:305:12
+    |
+305 | pub struct CorpusIndex {
+    |            ^^^^^^^^^^^
+
+warning: associated functions `new` and `from_bundle` are never used
+   --> src/symbols.rs:311:12
+    |
+310 | impl CorpusIndex {
+    | ---------------- associated functions in this implementation
+311 |     pub fn new(documents: MemoryIndex, symbols: SymbolStore) -> Self {
+    |            ^^^
+...
+315 |     pub fn from_bundle(bundle: IngestBundle, options: &PipelineOptions) -> Result<Self> {
+    |            ^^^^^^^^^^^
+
+warning: function `augment_query_with_temporal_context` is never used
+  --> src/temporal.rs:35:8
+   |
+35 | pub fn augment_query_with_temporal_context(query: &str, question_date: Option<&str>) -> String {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `UsageNodeKind` is never used
+ --> src/usage.rs:8:10
+  |
+8 | pub enum UsageNodeKind {
+  |          ^^^^^^^^^^^^^
+
+warning: enum `UsageEdgeKind` is never used
+  --> src/usage.rs:14:10
+   |
+14 | pub enum UsageEdgeKind {
+   |          ^^^^^^^^^^^^^
+
+warning: struct `UsageNode` is never constructed
+  --> src/usage.rs:29:12
+   |
+29 | pub struct UsageNode {
+   |            ^^^^^^^^^
+
+warning: struct `UsageEdge` is never constructed
+  --> src/usage.rs:43:12
+   |
+43 | pub struct UsageEdge {
+   |            ^^^^^^^^^
+
+warning: struct `UsageGraph` is never constructed
+  --> src/usage.rs:60:12
+   |
+60 | pub struct UsageGraph {
+   |            ^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/usage.rs:74:12
+    |
+ 73 | impl UsageGraph {
+    | --------------- associated items in this implementation
+ 74 |     pub fn new() -> Self {
+    |            ^^^
+...
+ 82 |     pub fn from_bundle(bundle: &crate::symbols::IngestBundle) -> Self {
+    |            ^^^^^^^^^^^
+...
+ 88 |     pub fn insert_node(&mut self, node: UsageNode) -> usize {
+    |            ^^^^^^^^^^^
+...
+ 94 |     pub fn insert_edge(&mut self, edge: UsageEdge) {
+    |            ^^^^^^^^^^^
+...
+113 |     pub fn lookup_by_node(&self, node_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^
+...
+117 |     pub fn lookup_by_doc(&self, doc_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^
+...
+121 |     pub fn lookup_by_symbol(&self, symbol_id: &str) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^^^
+...
+125 |     pub fn lookup_by_kind(&self, kind: UsageEdgeKind) -> Vec<&UsageEdge> {
+    |            ^^^^^^^^^^^^^^
+...
+129 |     fn lookup_indices(&self, indices: Option<&Vec<usize>>) -> Vec<&UsageEdge> {
+    |        ^^^^^^^^^^^^^^
+...
+137 |     pub fn ingest_symbols(&mut self, symbols: impl IntoIterator<Item = SymbolRecord>) {
+    |            ^^^^^^^^^^^^^^
+...
+172 |     pub fn ingest_ownership(&mut self, records: impl IntoIterator<Item = OwnershipRecord>) {
+    |            ^^^^^^^^^^^^^^^^
+...
+206 |     pub fn connected_symbols(&self, symbol_id: &str) -> Vec<String> {
+    |            ^^^^^^^^^^^^^^^^^
+...
+220 |     pub fn summary_for_symbol(&self, symbol_id: &str) -> UsageSummary {
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: struct `UsageSummary` is never constructed
+   --> src/usage.rs:251:12
+    |
+251 | pub struct UsageSummary {
+    |            ^^^^^^^^^^^^
+
+warning: `lint-ai` (lib) generated 218 warnings (run `cargo fix --lib -p lint-ai` to apply 40 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.38s
+     Running `target/release/query_repl --longmemeval benchmark/data/longmemeval_s_raw.json --question-id 06878be2 --top-k 80`
+Indexing 50 haystack sessions for '06878be2'...
+Indexed. Answer sessions: ["answer_555dfb94"]
+Original question: Can you suggest some accessories that would complement my current photography setup?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: Can you suggest some accessories that would complement my current photography setup?
+  reference date: Some("2023/05/30 (Tue) 16:40")
+  normalized query: can you suggest some accessori that would complement my current photographi setup
+  augmented/search query: Can you suggest some accessories that would complement my current photography setup? Can suggest accessories complement current photography setup would setup current
+  kind: Statement
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: None
+  temporal phrase: None
+  temporal source: None
+  resolved temporal anchor: None
+  temporal window: None..None
+  anchor date: None
+  anchor window: None
+  window days: 365
+  explicit temporal: false
+  hard temporal filter: false
+  spans:
+    Entity: "Can" => "can" (source=heuristic, score=0.550)
+    NounPhrase: "suggest" => "suggest" (source=pos, score=0.400)
+    NounPhrase: "accessories" => "accessori" (source=pos, score=0.400)
+    NounPhrase: "complement" => "complement" (source=pos, score=0.400)
+    NounPhrase: "current photography setup" => "current photographi setup" (source=pos, score=0.400)
+    VerbPhrase: "Can" => "can" (source=pos, score=0.350)
+    VerbPhrase: "would" => "would" (source=pos, score=0.350)
+    Subject: "Can" => "can" (source=heuristic, score=0.750)
+    Object: "setup" => "setup" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=75 raw index results=75 lexical_hits=48 candidates=210 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_555dfb94: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_555dfb94: candidate rank=25 score=9.801 doc_id=doc:memory:v2:62ca3a3dafb46c566986308e307fcdf70dce1cd4307a7c26fb48b63b88dfe71c
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:9dda145a6f9db6bbd7697f0a83e0d878c72d3b3659004f8b499b2efeea9ef6cd session=Some("ultrachat_319509") score=56.679 structured_evidence=[]
+    2. id=doc:memory:v2:5983424c4924d5a93e718e5301cd8c07a3a11bba74c78e89c2a51b4174f35523 session=Some("ultrachat_319509") score=14.387 structured_evidence=[]
+    3. id=doc:memory:v2:65a2f80d6bc54a1266da9714d0f26cee31024ceae0c55393d053a8ccfb029762 session=Some("ultrachat_448784") score=40.649 structured_evidence=[]
+    4. id=doc:memory:v2:257634a4174cefca138a6a1d7f63f67cb070f932adafa8eed88feb153afdc3dc session=Some("ultrachat_448784") score=12.582 structured_evidence=[]
+    5. id=doc:memory:v2:d78196645da8f9d07f4a77694e246f7ba22addd5a88d4179d675169b58d92142 session=Some("sharegpt_GSC090N_6") score=33.129 structured_evidence=[]
+    6. id=doc:memory:v2:7a2d7bce3bbb689e5ef427bf45f71fced51e366d40be3c81b368a059c080f518 session=Some("368276ab_3") score=19.675 structured_evidence=[]
+    7. id=doc:memory:v2:c7226f16a17be9b515bcbb8f1e61107610df437f50fabad4ab8bc28edd38b114 session=Some("368276ab_3") score=8.844 structured_evidence=[]
+    8. id=doc:memory:v2:1b2413c234b30e75a208c4fe5ca011870905b4a540031db12fd674cb92590c43 session=Some("8fcfbe43_2") score=17.976 structured_evidence=[]
+    9. id=doc:memory:v2:cc207f38118c3a3f0125f8cc257de2892fbe38f904aeb806802b96e9d0f2485b session=Some("8fcfbe43_2") score=6.723 structured_evidence=[]
+    10. id=doc:memory:v2:f346573f5ac9b40c0fa852093d8c4f8e2e8b144951254531425570637cad1a3e session=Some("ultrachat_506627") score=16.881 structured_evidence=[]
+    11. id=doc:memory:v2:53614cca1ef730296ee9d16803c20bafe4f64371fcda5f7dc924d930dc0a1afe session=Some("ultrachat_506627") score=16.027 structured_evidence=[]
+    12. id=doc:memory:v2:d4590ed7687eaeeebe1ef456bd1ec1bf4f3ef324c49be846d3b0145aac8623fa session=Some("a6074da9_1") score=14.188 structured_evidence=[]
+    13. id=doc:memory:v2:7662ab4ebe8142f5fd5ce3c1159add1b9aef617be228f31f79bf98b06247b363 session=Some("a6074da9_1") score=13.528 structured_evidence=[]
+    14. id=doc:memory:v2:6149e22bdf1aeee34a9e121f9c1604cdab1ef0e1c14de1f37a81ca63b390eac1 session=Some("ca929779_1") score=14.801 structured_evidence=[]
+    15. id=doc:memory:v2:d19b5409655e6c6bee9a0dbb97225b11e0345483e680528c1cb732a84f780369 session=Some("ca929779_1") score=10.052 structured_evidence=[]
+    16. id=doc:memory:v2:65245add957814cef7d27dd211c7e020f679be6bcf10fa8f29b8858cfd135d8c session=Some("42165950_2") score=14.528 structured_evidence=[]
+    17. id=doc:memory:v2:c3d0a12f78fd1de8e1c7df6e668b3f8f90bce02bb809d0bb84d5c9eeac385538 session=Some("42165950_2") score=8.461 structured_evidence=[]
+    18. id=doc:memory:v2:079473c13abaa00f7f9406354667b16ff8adfb733c5e229ccf79dc7a88460271 session=Some("63b51f8a_1") score=15.705 structured_evidence=[]
+    19. id=doc:memory:v2:9e3cea5d623cf0561231f6d7d47e2b5906b211b6902d2263d5568d11318f661f session=Some("63b51f8a_1") score=3.464 structured_evidence=[]
+    20. id=doc:memory:v2:f28149fead9665392cc3e56ec90568c8500bf0c18dc911836f7d906bd213efac session=Some("be1c6872") score=12.868 structured_evidence=[]
+    21. id=doc:memory:v2:ca8b5cbbc27dc45b52af45269af545c22612f127bd58bfd152eee7f3d7182693 session=Some("be1c6872") score=9.137 structured_evidence=[]
+    22. id=doc:memory:v2:39fef72b6fac05320cdceade6117f1b3ad132caa5243b6cb9a046d33e6d1aa44 session=Some("sharegpt_m8q9RaM_0") score=17.476 structured_evidence=[]
+    23. id=doc:memory:v2:20a961d61c74d01daf0950f8b3d321c83a22187197a76f0403f06b74404d0dfe session=Some("465e7ef9") score=13.809 structured_evidence=[]
+    24. id=doc:memory:v2:cf7d581430b83bdae61699d48861985177d11afaf51fdc59df5097bcccf8500e session=Some("465e7ef9") score=6.777 structured_evidence=[]
+    25. id=doc:memory:v2:62ca3a3dafb46c566986308e307fcdf70dce1cd4307a7c26fb48b63b88dfe71c session=Some("answer_555dfb94") score=9.801 structured_evidence=[] ANSWER
+    26. id=doc:memory:v2:4610503888a13db2d15cdc8e15085c81b27eee9d93c02fc002c7f20b83b15827 session=Some("answer_555dfb94") score=8.715 structured_evidence=[] ANSWER
+    27. id=doc:memory:v2:c4c4f16cc233e5231964ee039edd8168858ce649a8aefbbe0e12749d938287ea session=Some("3e9fce53_1") score=9.174 structured_evidence=[]
+    28. id=doc:memory:v2:23a996ca044a92c634767ad5f801703b9b706032d8cc76c4065a1e0a8617d811 session=Some("3e9fce53_1") score=6.884 structured_evidence=[]
+    29. id=doc:memory:v2:e11a3ca5ae0ae80ef6cd5ec02c2d9a33646a3c4f648b924e12662afd4e22929d session=Some("ultrachat_556731") score=8.312 structured_evidence=[]
+    30. id=doc:memory:v2:e189d41f9815764ced92ac72b6f8c489bacdf7571f958c2d151417f6f668db38 session=Some("ultrachat_556731") score=5.896 structured_evidence=[]
+    31. id=doc:memory:v2:4e561527a24931639857f77fa888674a812d5a9c7a28c7f024654bf874b28232 session=Some("a67c1862_4") score=7.800 structured_evidence=[]
+    32. id=doc:memory:v2:e652e09b0a657097644cab34f6a5eec3f4f65c02032668c1c6547ae68ab4440d session=Some("a67c1862_4") score=3.824 structured_evidence=[]
+    33. id=doc:memory:v2:8cea40b1f3e06a38cbcdca31aeaac99bace1e4cc640a62d92691070a6a66bbab session=Some("79d53fd0_2") score=8.506 structured_evidence=[]
+    34. id=doc:memory:v2:79bd58f4f1baa2621c99ea5fedbab00ddd0059c06feadb5721a9599649785794 session=Some("79d53fd0_2") score=2.152 structured_evidence=[]
+    35. id=doc:memory:v2:3d2320ed825197fe19a2780e23ea1b66d4712c9efea8582283fe42ff63dcae0d session=Some("ultrachat_31347") score=6.654 structured_evidence=[]
+    36. id=doc:memory:v2:33889dfc3073693ce7df009a0e78866868036c3b9f0be2b9516e199eb8b47a5f session=Some("ultrachat_31347") score=4.464 structured_evidence=[]
+    37. id=doc:memory:v2:acf51d39dd62607054ed8f36556a90b8c93de0c56dd93f0241d89073b85aa0cd session=Some("sharegpt_5cxEGva_147") score=9.545 structured_evidence=[]
+    38. id=doc:memory:v2:115dc347006535efaa0488f1d30025ac43334a503bad19d7f51c10415a9bc29f session=Some("ultrachat_489051") score=8.839 structured_evidence=[]
+    39. id=doc:memory:v2:093c98e9343e064bb7848754bc030acad5362e47c147799c44f0502e225a6ebb session=Some("ultrachat_489051") score=0.640 structured_evidence=[]
+    40. id=doc:memory:v2:05039ec98b240f942591045678727a9565ac760f3bcd4135639e78d86fb979ce session=Some("d75245ea") score=6.092 structured_evidence=[]
+    41. id=doc:memory:v2:0f266e4a0ed6185605a7db34587654a3b776c079b12ecffc5c22a421ee622367 session=Some("d75245ea") score=3.184 structured_evidence=[]
+    42. id=doc:memory:v2:f32dd0c039b21f66886843f09f7fcc6d72cef4ef5376ca7d1fc464aa085f85e1 session=Some("sharegpt_cn3iUbp_7") score=5.490 structured_evidence=[]
+    43. id=doc:memory:v2:21580b0dcd87baed9037d152454e253a681f7594376e9c85d7f070251027f1b3 session=Some("sharegpt_cn3iUbp_7") score=3.184 structured_evidence=[]
+    44. id=doc:memory:v2:867b08c7975c5e5dc841c06eb8ddaa28b07b133b51bcdd3a951991b4bb344f31 session=Some("sharegpt_InRLwN7_0") score=5.985 structured_evidence=[]
+    45. id=doc:memory:v2:6be9c33a2397c08494b9afa9d96a2a37360e993298941f54203e2551552b2ee4 session=Some("sharegpt_InRLwN7_0") score=5.360 structured_evidence=[]
+    46. id=doc:memory:v2:af5df275e5c61c10169b5ac44ce74f7f894b65ec6d55fd6c8da7768debf09973 session=Some("sharegpt_Lk4UN8n_181") score=7.382 structured_evidence=[]
+    47. id=doc:memory:v2:f5a44cf6f3f30833b1a1bf8466ca902f374b371e2d1cdd9ecf8183bb33ffe536 session=Some("e58109ed_1") score=4.696 structured_evidence=[]
+    48. id=doc:memory:v2:f9fff3b0f3ecd62cea6fa65ca3cc9a6c4ab90169adf202cbea17a4050a9dca79 session=Some("e58109ed_1") score=3.184 structured_evidence=[]
+    49. id=doc:memory:v2:5d8ee57c6228338091626e7323a7078e882a76663c5d4021c26f5bc82a074e1d session=Some("85b50955_1") score=3.264 structured_evidence=[]
+    50. id=doc:memory:v2:913a37d58394a0de24348864ad2cbac762005397d3a5ecb696c0075a492a9469 session=Some("85b50955_1") score=3.104 structured_evidence=[]
+    51. id=doc:memory:v2:73ee39ae09e826c690d4eb99e4d26e65ceb1ef7c14830dbef59394d91d71e92c session=Some("347bd498") score=3.824 structured_evidence=[]
+    52. id=doc:memory:v2:94fc054ed0b39123d1b276380ec25e18a2517b346ab8b62deead43b29cd31844 session=Some("347bd498") score=3.184 structured_evidence=[]
+    53. id=doc:memory:v2:5d6ce1a5b99cae2731682c188d3451208d7285592b96acdab0e1e69b7caa1784 session=Some("dc18f65b") score=3.824 structured_evidence=[]
+    54. id=doc:memory:v2:1847795c9d8a406753a05bd22ef00927812165fcabdcd3797189d6900ba4fd7d session=Some("dc18f65b") score=1.512 structured_evidence=[]
+    55. id=doc:memory:v2:1093be806f29dd043334b471a02e87dd75ddfc28771a090c88f0076a7be6c9af session=Some("ultrachat_138306") score=2.582 structured_evidence=[]
+    56. id=doc:memory:v2:ae6117b4c8b2d638dd1e45f14a327dfc23dc4075dc383abdd77857feee1222f7 session=Some("ultrachat_138306") score=2.152 structured_evidence=[]
+    57. id=doc:memory:v2:d08a34226e6508139ef8712a2ee5ce328f001f21f0c065093ed0b8071f79f9b7 session=Some("9806001e") score=2.197 structured_evidence=[]
+    58. id=doc:memory:v2:07a13e160ae1b49103767ca2d711f95d12e73240fa61033d8aa07fe973e76d9c session=Some("9806001e") score=1.917 structured_evidence=[]
+    59. id=doc:memory:v2:decda175645b1c5747ebfaac5eda08fff9898728858f6d3322c048391307c3f6 session=Some("9863a1c8_3") score=2.152 structured_evidence=[]
+    60. id=doc:memory:v2:9a01910e04610fd5b43d00ec765806fff3431cbed4a882bcc479b1d2f2f2cfcf session=Some("9863a1c8_3") score=1.640 structured_evidence=[]
+    61. id=doc:memory:v2:c013417ddcd9b38dcaceecd6b95324ecd9a4b0276948de7101948a69cbcec280 session=Some("sharegpt_IDcYeMG_0") score=3.184 structured_evidence=[]
+    62. id=doc:memory:v2:073dfd93c903f811c8c18101e9edc3b8e601c6952006e8b6f878c73be2732ab1 session=Some("ultrachat_567461") score=3.184 structured_evidence=[]
+    63. id=doc:memory:v2:109fb5570b01c5aff31afd6bf27385b9286fdddd3e678e8826eb6ba6fb0728b9 session=Some("98a893d5") score=1.512 structured_evidence=[]
+    64. id=doc:memory:v2:74cd460c0cf0cbdb69940a0d2d5b0ffd9d47d423aa824ace1909a62ccff30d40 session=Some("98a893d5") score=1.512 structured_evidence=[]
+    65. id=doc:memory:v2:573490c585572a41b5700c07d15b10de022648c347b4f873829034b1625b0ddc session=Some("ultrachat_58258") score=2.152 structured_evidence=[]
+    66. id=doc:memory:v2:2a77c9d7da91f6ae04e7be2ce9618b9e29f5374a8d7081bc01ed442d36c44549 session=Some("ultrachat_58258") score=1.512 structured_evidence=[]
+    67. id=doc:memory:v2:cfab3ca328edba1891232769cf5248ee82c700d0ca9c69e97eb5445051a9b747 session=Some("ultrachat_278209") score=1.512 structured_evidence=[]
+    68. id=doc:memory:v2:d1cb8208e9be73603366a842b3caf8f032e4839626266d6d0fb5749772202585 session=Some("ultrachat_278209") score=1.512 structured_evidence=[]
+    69. id=doc:memory:v2:45ecb03937a6c37c0f748791dc7f804f6ac07db39488d3c50b505d9ecf77c739 session=Some("sharegpt_Aoss4uB_41") score=1.512 structured_evidence=[]
+    70. id=doc:memory:v2:e3a4fcb111b7f785a926355d94f199474ac0637fa7ef82e60e60f78cd1cbaafa session=Some("sharegpt_Aoss4uB_41") score=1.512 structured_evidence=[]
+    71. id=doc:memory:v2:eeb1184d615f631fb49f9b3f5c92e6abe10a7b43df1f3a1651ad470e60573f8a session=Some("sharegpt_i7JgvKp_0") score=1.917 structured_evidence=[]
+    72. id=doc:memory:v2:1befbbe1d2734d17ee9534be15571ab34eca10b62f0dc6f2cde3b281ba81457e session=Some("ultrachat_474421") score=1.512 structured_evidence=[]
+    73. id=doc:memory:v2:668936f4d4c18e7e4b148274f3711ff5a36ed5d6e5bea63e166323b85eb48ec7 session=Some("ultrachat_474421") score=0.640 structured_evidence=[]
+    74. id=doc:memory:v2:f63f9fec053002d6f3a2b4886df26793c1813a8c7bc3a5d159368087745b6aef session=Some("ultrachat_22151") score=1.792 structured_evidence=[]
+    75. id=doc:memory:v2:be0f5bc4cbc26f3910652b65bd75e5010f12f9a6553c3913fa53d47d04a79a7f session=Some("sharegpt_NSm6RtC_49") score=1.000 structured_evidence=[]
+Index stage at MemoryService top_k=80
+Retrieval stages: MemoryService results=0 raw index results=75 lexical_hits=48 candidates=210 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_555dfb94: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_555dfb94: candidate rank=25 score=9.801 doc_id=doc:memory:v2:62ca3a3dafb46c566986308e307fcdf70dce1cd4307a7c26fb48b63b88dfe71c
+
+(96.7ms) top sessions:
+  1. ultrachat_319509 (score 56.6785)
+  2. ultrachat_448784 (score 40.6493)
+  3. sharegpt_GSC090N_6 (score 33.1293)
+  4. 368276ab_3 (score 19.6751)
+  5. 8fcfbe43_2 (score 17.9763)
+  6. ultrachat_506627 (score 16.8808)
+  7. a6074da9_1 (score 14.1878)
+  8. ca929779_1 (score 14.8013)
+  9. 42165950_2 (score 14.5280)
+  10. 63b51f8a_1 (score 15.7054)
+  11. be1c6872 (score 12.8681)
+  12. sharegpt_m8q9RaM_0 (score 17.4762)
+  13. 465e7ef9 (score 13.8088)
+  14. answer_555dfb94 (score 9.8015)  <-- ANSWER
+  15. 3e9fce53_1 (score 9.1743)
+  16. ultrachat_556731 (score 8.3124)
+  17. a67c1862_4 (score 7.7997)
+  18. 79d53fd0_2 (score 8.5062)
+  19. ultrachat_31347 (score 6.6541)
+  20. sharegpt_5cxEGva_147 (score 9.5449)
+  21. ultrachat_489051 (score 8.8392)
+  22. d75245ea (score 6.0918)
+  23. sharegpt_cn3iUbp_7 (score 5.4898)
+  24. sharegpt_InRLwN7_0 (score 5.9853)
+  25. sharegpt_Lk4UN8n_181 (score 7.3817)
+  26. e58109ed_1 (score 4.6960)
+  27. 85b50955_1 (score 3.2640)
+  28. 347bd498 (score 3.8240)
+  29. dc18f65b (score 3.8240)
+  30. ultrachat_138306 (score 2.5820)
+  31. 9806001e (score 2.1970)
+  32. 9863a1c8_3 (score 2.1520)
+  33. sharegpt_IDcYeMG_0 (score 3.1840)
+  34. ultrachat_567461 (score 3.1840)
+  35. 98a893d5 (score 1.5120)
+  36. ultrachat_58258 (score 2.1520)
+  37. ultrachat_278209 (score 1.5120)
+  38. sharegpt_Aoss4uB_41 (score 1.5120)
+  39. sharegpt_i7JgvKp_0 (score 1.9170)
+  40. ultrachat_474421 (score 1.5120)
+  41. ultrachat_22151 (score 1.7920)
+  42. sharegpt_NSm6RtC_49 (score 1.0000)
+
+query>

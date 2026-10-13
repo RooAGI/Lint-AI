@@ -69,9 +69,7 @@ pub fn bart_subwords(text: &str) -> Vec<String> {
             .collect(),
         Err(_) => {
             // Fallback: whitespace split if BPE fails.
-            text.split_whitespace()
-                .map(|s| s.to_lowercase())
-                .collect()
+            text.split_whitespace().map(|s| s.to_lowercase()).collect()
         }
     }
 }
@@ -91,10 +89,8 @@ mod tests {
 
     #[test]
     fn bart_allergies_and_allergic_share_piece() {
-        let a: std::collections::HashSet<_> =
-            bart_subwords("allergies").into_iter().collect();
-        let b: std::collections::HashSet<_> =
-            bart_subwords("allergic").into_iter().collect();
+        let a: std::collections::HashSet<_> = bart_subwords("allergies").into_iter().collect();
+        let b: std::collections::HashSet<_> = bart_subwords("allergic").into_iter().collect();
         let shared: Vec<_> = a.intersection(&b).collect();
         assert!(
             !shared.is_empty(),
@@ -104,10 +100,8 @@ mod tests {
 
     #[test]
     fn bart_weekends_and_weekend_share_piece() {
-        let a: std::collections::HashSet<_> =
-            bart_subwords("weekends").into_iter().collect();
-        let b: std::collections::HashSet<_> =
-            bart_subwords("weekend").into_iter().collect();
+        let a: std::collections::HashSet<_> = bart_subwords("weekends").into_iter().collect();
+        let b: std::collections::HashSet<_> = bart_subwords("weekend").into_iter().collect();
         assert!(!a.intersection(&b).collect::<Vec<_>>().is_empty());
     }
 }

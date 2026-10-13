@@ -27,8 +27,8 @@ cargo run --release --bin server -- \
 `--bind` defaults to `127.0.0.1:8080`. If `--index` is omitted, the server
 discovers indexes under `<project-root>/.lint-ai` and uses the shared
 `workspace-memory` store when present, falling back to a legacy Codex MCP index,
-the first discovered index, or an in-memory store. Use `--index` to select one
-store explicitly.
+another legacy MCP index, or creates persistent `workspace-memory` when no
+index exists. Use `--index` to select the workspace backing store explicitly.
 Bekind linguistic enrichment is disabled by default. Pass `--bekind` to enable
 its optional index-time tags and query-time analysis; when disabled, the server
 does not call or prewarm the Bekind daemon.
@@ -47,8 +47,10 @@ layout:
   memory/             # session memories, shared by all agents
 ```
 
-MCP search composes `workspace-memory` with the shared `memory/` store at query
-time; the provider travels on each document (`integration`, `author_agent`,
+The resident service composes `workspace-memory` with the shared `memory/`
+store when publishing a generation; searches retain that published view. This
+composition reuses published segments. It does not reopen either store or
+rebuild indexes for each query. For attribution, the provider travels on each document (`integration`, `author_agent`,
 `{provider}-session:{id}` group ids) instead of in the directory layout.
 Legacy per-provider stores (`claude-memory/`, `codex-memory/`,
 `gemini-cli-memory/`, `agy-memory/`, `muse-memory/`) are migrated into
@@ -66,7 +68,7 @@ Use `--single-index` for the non-segmented layout or `--global-index` to query
 every segmented shard. These modes are intended primarily for controlled
 comparisons instead of the default routed segmented layout.
 
-By default, each multi-segment query runs the routed arm only, using the gated
+By default, each multi-segment query runs the routed arm only, using the
 coverage-local router. Pass `--fuse-global` to also run the corpus-wide
 all-segments arm and fuse it with the routed arm via reciprocal rank fusion.
 See `docs/benchmark-results.md` for the measured trade-off.
@@ -78,16 +80,47 @@ the router comparison in `docs/benchmark-results.md`:
 |---|---|
 | `sparse` | sparse overlap |
 | `local-distinctiveness` | plain local distinctiveness |
-| `coverage-local` | coverage-weighted local distinctiveness |
+| `coverage-local` | coverage-weighted local distinctiveness (**default**) |
 | `coverage-team` | coverage team selection |
 | `team-coverage-local` | team coverage local distinctiveness |
 | `typed-evidence-additive` | typed evidence, additive |
-| `gated-coverage-local` | gated coverage-local (**default**) |
+| `gated-coverage-local` | gated coverage-local |
 | `gated-coverage-team` | gated coverage-team |
 
-The default is the measured best recall-per-latency trade-off from the
-full 500-question comparison; the other values exist for controlled
-comparisons.
+The 500-question segmented benchmark found higher recall and MRR with
+coverage-local than plain local distinctiveness, with a small latency increase
+for fixed top-5 routing. On the separate 13,974-document project profile, plain
+local distinctiveness had a 15 ms warm-search median; gated coverage-local
+took about 700 ms. That gated strategy is distinct from the coverage-local
+default. Other routing values remain selectable for controlled comparisons.
+
+Before the single-writer consolidation, on 2026-10-11 a release server
+opened the existing 13,974-document workspace
+in 5.53 s and returned the first Codex MCP search in 177 ms (5 results); total
+process start to first results was 5.71 s. This is a cold process with the
+persistent index caches already populated. The provider MCP latency harness
+then ran 20 requests per concurrency after three warm-ups. At concurrency 1,
+median/p99 was 101.85/103.89 ms (9.84 requests/s); at concurrency 10,
+median/p99 was 239.86/333.70 ms (37.16 requests/s). These measurements include
+session handling and response serialization. The resident write-visibility
+checks also passed: provider and hook writes were searchable through the
+published view after their write routes completed. Raw route results are in
+the [provider MCP latency report](../comparison/results/provider-mcp-latency-refactor-2026-10-11.json).
+
+The release query harness seeded 13,974 synthetic workspace records in 14
+session groups, then ran 100 requests after 10 warm-ups. `/search` measured
+478.63 requests/s at concurrency 1 (p50 2.054 ms, p99 2.457 ms) and 1,134.28
+requests/s at concurrency 10 (p50 8.554 ms, p99 18.182 ms). The separate
+write harness used the same seed size and two 3-second repetitions. For
+single-record `/add/batch`, median accepted/published throughput was
+126.97/71.67 records/s with 3.474 ms p50 latency. For 128-record batches,
+throughput was 10,899.67/3,351.03 records/s with 3.987 ms p50 latency. Each
+cell's final written record was searchable after flush. These synthetic
+harnesses test the workspace `/search` and `/add/batch` paths; the provider MCP
+latency harness above measures its route separately. Reports:
+[query](../comparison/results/throughput-query-refactor-2026-10-11.json),
+[writes](../comparison/results/throughput-write-only-refactor-2026-10-11.json).
+
 By default the server binds only to localhost, such as `127.0.0.1:8080` or
 `[::1]:8080`. To bind a container or another network interface, explicitly pass
 `--allow-non-loopback` and configure `SERVER_TOKEN` or `JWT_SECRET`. This option
@@ -131,18 +164,168 @@ The legacy routes are `POST /add`, `POST /add/batch`, `POST /search`,
 backward compatibility.
 
 Provider integrations use `POST /provider-memory/add/batch` and
-`POST /provider-memory/search` when they need the shared provider store
-regardless of the server's selected primary index.
+`POST /provider-memory/search` for shared captured memories. The resident
+`MemoryService` opens its workspace and captured-memory backing stores once
+per canonical project root. Both stores are private to that owner; providers
+never hold writable indexes. The batch-add endpoint has no workspace field and
+targets the primary workspace. Provider search may specify a workspace;
+requests without one use the primary `project_root`.
 
-Hermes and OpenClaw share one server process and provider memory store.
-Hermes uses `POST /provider-memory/add/batch` to write into
-`.lint-ai/memory/`, and `POST /provider-memory/search` to search that store
-composed with the workspace index. OpenClaw lifecycle callbacks use
-`/integrations/openclaw/hooks/{kind}` when the server is built with the
-`openclaw` feature; captures also land in `.lint-ai/memory/`. Both plugins use
-`LINTAI_SERVER_URL` and `LINTAI_SERVER_TOKEN` to configure their HTTP
-connection. The server uses plain HTTP. Keep it on loopback for local agent
-setups; for remote agents, use a separately secured tunnel or proxy.
+### Resident `MemoryService` ownership
+
+For each active workspace, the server has one mutable `MemoryService` owner,
+one bounded `StagedWriter` queue, and one published immutable search view. The
+service owns the captured-memory store and a boxed workspace service. Server
+state contains no separately writable workspace or provider owner. A registry
+maps canonical project roots to these resident runtimes.
+
+```mermaid
+flowchart LR
+    Clients[MCP tools, hooks, HTTP mutations] --> Queue[Per-workspace bounded write queue]
+    Watcher[Workspace watcher] --> Queue
+    Queue --> Writer[Per-workspace writer]
+    Writer --> Owner[Resident MemoryService for that workspace]
+    Owner --> Workspace[Private workspace store]
+    Owner --> Captured[Private shared captured-memory store]
+    Owner --> Builder[One frozen generation builder]
+    Builder -->|return completed generation| Owner
+    Owner -->|publish combined snapshot| Published[Published immutable search view]
+    Search[Search requests] --> Published
+```
+
+Workspace and captured-memory operations use target facades over the same
+queue. A facade does not create another writer, owner, or publication gate.
+`MemoryService` selects the backing store internally. MCP adds, hook upserts,
+board creation and posting, update/delete/supersede/expire operations,
+key-phrase backfill, and watcher reconciliation all use this queue.
+
+The writer tracks accepted, published, checkpointed, and visible revisions
+for each backing store. A workspace-wide flush captures both stores' target
+revisions and waits until both are published and checkpointed. At most one
+background generation builds at a time across the stores; the writer can
+continue admitting staged adds while that frozen generation builds. Existing
+journal recovery, receipt idempotency, and staged acknowledgement behavior
+are preserved. Synchronous lifecycle and board commands drain prior staged
+writes through the owner and publish the combined view before replying.
+Clean stores do not require another checkpoint for every board write.
+
+### Multiple project workspaces
+
+One server process can serve multiple project roots. The startup
+`--project-root` is opened immediately as the primary workspace. MCP tool
+calls, provider hook upserts, and provider-memory searches include their
+workspace root; the server canonicalizes that path and lazily opens one
+resident runtime for it. The primary root is allowed by default. Additional
+roots must be listed with repeatable `--workspace-root` options. Matching is
+exact after canonicalization, so a request for a parent directory or an
+unlisted sibling is rejected before the server opens or indexes it. For
+example:
+
+```bash
+cargo run --release --bin server -- \\
+  --project-root /Users/louis/sources/Lint-AI \\
+  --workspace-root /Users/louis/sources/roo-agent-builder \\
+  --max-active-workspaces 8
+```
+
+The active-workspace limit includes the primary root and defaults to 8. A
+request for an allowed root beyond the resident limit returns `429`; restart
+the server to release resident workspaces. Idle eviction is not implemented.
+Concurrent first-open attempts reserve capacity, and only one initialization
+is performed per canonical root. The runtime owns that project's workspace store,
+shared provider-memory store, `MemoryService`, staged writer, published search
+view, and workspace watcher. Later requests for the same canonical root reuse
+that runtime. Different roots initialize independently, so opening one project
+does not block searches against an already-open project.
+
+This lets Codex, Claude Code, or other provider processes for several folders
+point at the same local HTTP server. Keep the server bound to loopback for the
+single-user setup. The primary workspace still controls the dashboard and
+legacy requests that omit a workspace. MCP adapters send the workspace on each
+request, and writes and searches for that root reach the same resident owner.
+Each active workspace remains resident until the server exits. Do not run a
+second server process against the same workspace stores; the on-disk writer is
+single-process. See
+[Index concurrency](index-concurrency.md) for the registry, per-workspace
+writer, and publication model.
+
+`POST /provider-memory/add/batch` is a compatibility exception: its request
+does not contain a workspace and it writes to the primary workspace. Use the
+workspace-aware MCP upsert and hook routes for additional project roots.
+
+### Single-writer verification, 2026-10-11
+
+The refactor passes 39 server/writer tests, 97 `MemoryService` tests, and
+`cargo check --all-targets`. Coverage includes shared queue admission,
+acceptance while a generation is paused, a global visibility barrier covering
+both stores, recovery after a queued delete, and retained immutable views.
+A board-write regression fails on the previous implementation with
+`acknowledged board post is absent from the published search snapshot`, passes
+with the new path, and fails again after restoring and recompiling the old
+implementation.
+
+The broader library suite has five hook-test failures that also reproduce
+on the pre-consolidation source: Claude/Codex session-start directory and
+session-summary formatting assertions, plus the OpenClaw legacy bootstrap
+composition test. These are existing failures, separate from the passing
+resident owner, queue, visibility, and recovery checks.
+
+Paired release measurements use isolated workspaces with 13,974 synthetic
+records across 14 seed batches. Query cells use 100 measured requests and
+five warmups at concurrency 1 and 10. Batch-write cells use batch size 128,
+eight seconds of writes, two warmups, and three repetitions.
+
+| Measurement | Previous two writers | One resident writer |
+|---|---:|---:|
+| Warm `/search` p50, concurrency 1 | 1.853 ms | 1.894 ms |
+| Warm `/search` p50, concurrency 10 | 8.980 ms | 9.172 ms |
+| Accepted batch-write records/s, median | 5,961.83 | 6,017.54 |
+| Published batch-write records/s, median including final flush | 2,786.94 | 2,902.42 |
+| Batch-write acknowledgement p99, median | 5.018 ms | 5.011 ms |
+
+These short synthetic measurements support comparable warm-query and staged
+write performance; they are not a new cold-start measurement of the real
+workspace or a long-duration throughput guarantee. All measured final writes
+were searchable after flush. Raw results are in
+`comparison/results/query-single-writer-{control,refactor}-2026-10-11.json`
+and `comparison/results/write-only-single-writer-batch8s-{control,refactor}-2026-10-11.json`.
+The earlier three-second write trials are retained in
+`comparison/results/write-only-single-writer-{control,refactor}-2026-10-11.json`;
+their batch results varied with whether a request crossed snapshot capture
+at the end of the measurement window.
+
+Codex, Claude Code, Gemini, Agy, Muse, OpenClaw, and Hermes MCP memory tools
+use `POST /provider-memory/mcp/tools/call`. Each request supplies the
+workspace root, provider, session, and tool arguments. The server canonicalizes
+the root and routes `add_memory` through that workspace's resident writer with
+the captured-memory target, while searches read its published snapshot.
+
+Provider hooks use the same workspace owner. `POST
+/provider-memory/mcp/documents/upsert` accepts either one `document` or a
+`documents` batch with workspace, provider, session, and user context. The
+writer publishes the complete batch before acknowledging it. Roo tool-result
+replay can include `replace_group` with a
+filter key and value so removed chunks disappear in the same publication.
+Codex, Claude, Gemini-compatible, Agy, OpenClaw, and Roo Runtime hooks use the
+resident search route for retrieval. Workspace file-change captures are also
+batched through the resident writer. The backend watches the configured
+workspace, reconciles Markdown changes into its retained workspace store, and
+publishes them through the same writer before recording the new filesystem
+fingerprint.
+Configure provider processes with `LINTAI_SERVER_URL` (default
+`http://127.0.0.1:8080`) and, when server-token authentication is enabled,
+`LINTAI_SERVER_TOKEN`. Start the shared Lint-AI server before starting
+provider processes. They return a transport error if that resident backend is
+unavailable; they do not open a local fallback index.
+
+Hermes and OpenClaw can share one server process. OpenClaw hook payloads with a
+workspace directory are routed to that workspace's runtime. Hermes currently
+uses the legacy `/provider-memory/add/batch` endpoint, which writes to the
+primary workspace; its `/provider-memory/search` request can include an
+optional `workspace` field. Both plugins use `LINTAI_SERVER_URL` and
+`LINTAI_SERVER_TOKEN` to configure their HTTP connection. The server uses
+plain HTTP. Keep it on loopback for local agent setups; for remote agents, use
+a separately secured tunnel or proxy.
 
 ## Dashboard and observability
 

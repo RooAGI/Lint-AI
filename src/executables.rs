@@ -15,6 +15,8 @@ mod locomo_benchmark;
 mod locomo_benchmark_search_server;
 #[path = "bin/project_memory_recency_benchmark.rs"]
 mod project_memory_recency_benchmark;
+#[path = "bin/query_repl.rs"]
+mod query_repl;
 #[path = "bin/recency_benchmark.rs"]
 mod recency_benchmark;
 #[path = "bin/refresh_scaling_benchmark.rs"]
@@ -28,8 +30,6 @@ mod server;
 mod session_ab_benchmark;
 #[path = "bin/validate_corpus.rs"]
 mod validate_corpus;
-#[path = "bin/query_repl.rs"]
-mod query_repl;
 
 pub(crate) fn run(name: &str) -> anyhow::Result<()> {
     match name {

@@ -204,32 +204,35 @@ fn recall(root: &Path, input: &HookInvocation) -> Result<HookResult> {
     if query.trim().is_empty() {
         return Ok(HookResult::default());
     }
-    let hits = MemoryService::with_shared_memory(root, |memory| {
-        memory.search(SearchRequest {
-            query: query.clone(),
-            options: None,
-            user_id: String::new(),
-            top_k: 5,
-            session_id: None,
-            scope: None,
-            filters: None,
-            reference_date: None,
-        })
-    })?;
-    if hits.data.is_empty() {
+    let session_id = input
+        .payload
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty());
+    let hits = crate::integrations::mcp_tools::search_hook_documents(
+        root,
+        "rooagi_runtime",
+        session_id,
+        &query,
+        5,
+    )?;
+    let Some(hits) = hits.get("results").and_then(Value::as_array) else {
+        return Ok(HookResult::default());
+    };
+    if hits.is_empty() {
         return Ok(HookResult::default());
     }
     let mut context = String::from("Relevant project memory from Lint-AI:\n");
-    for hit in hits.data {
+    for hit in hits {
         if context.len() >= MAX_CONTEXT_BYTES {
             break;
         }
         let remaining = MAX_CONTEXT_BYTES.saturating_sub(context.len());
-        context.push_str(&relevant_excerpt(
-            &hit.content,
-            &query,
-            remaining.min(2_000),
-        ));
+        let content = hit
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        context.push_str(&relevant_excerpt(content, &query, remaining.min(2_000)));
         context.push_str("\n\n");
     }
     Ok(recall_context_result(&context))
@@ -369,6 +372,10 @@ fn capture(root: &Path, input: &HookInvocation, kind: &str) -> Result<()> {
         ("project_root".to_string(), project),
         ("run_id".to_string(), input.run_id.clone()),
         ("capture_type".to_string(), kind.to_string()),
+        (
+            "session_id".to_string(),
+            memory_session_id(root.to_string_lossy().as_ref(), input),
+        ),
     ]);
     if let Some(session_id) = input
         .payload
@@ -385,10 +392,17 @@ fn capture(root: &Path, input: &HookInvocation, kind: &str) -> Result<()> {
             .filters
             .insert("turn_id".to_string(), bounded(id, 256));
     }
-    MemoryService::with_shared_memory(root, |memory| {
-        memory.upsert(document);
-        memory.refresh_index()
-    })
+    let session_id = document
+        .filters
+        .get("session_id")
+        .cloned()
+        .unwrap_or_default();
+    crate::integrations::mcp_tools::upsert_hook_document(
+        root,
+        "rooagi_runtime",
+        &session_id,
+        document,
+    )
 }
 
 fn capture_tool_event(root: &Path, input: &HookInvocation, kind: &str) -> Result<()> {
@@ -451,6 +465,10 @@ fn capture_tool_event(root: &Path, input: &HookInvocation, kind: &str) -> Result
         ("capture_type".to_string(), kind.to_string()),
         ("tool_name".to_string(), tool_name),
         ("tool_use_id".to_string(), bounded(tool_use_id, 256)),
+        (
+            "session_id".to_string(),
+            memory_session_id(&root.to_string_lossy(), input),
+        ),
     ]);
     if let Some(workspace_id) = input.payload.get("workspaceId").and_then(Value::as_str) {
         document
@@ -515,9 +533,19 @@ fn capture_tool_event(root: &Path, input: &HookInvocation, kind: &str) -> Result
         offset += chunk.content.len();
         chunks.push(chunk);
     }
-    MemoryService::with_shared_memory(root, |memory| {
-        memory.replace_source_group("tool_capture_id", &capture_id, chunks)
-    })
+    let session_id = chunks
+        .first()
+        .and_then(|chunk| chunk.filters.get("session_id"))
+        .cloned()
+        .unwrap_or_else(|| memory_session_id(&root.to_string_lossy(), input));
+    crate::integrations::mcp_tools::replace_hook_documents(
+        root,
+        "rooagi_runtime",
+        &session_id,
+        "tool_capture_id",
+        &capture_id,
+        chunks,
+    )
 }
 
 // Context is useful even if the original result was too large for Roo's inline
@@ -688,7 +716,7 @@ pub fn install_hooks(config_override: Option<&Path>) -> Result<PathBuf> {
         hooks.push(serde_json::json!({
             "id": format!("lint-ai-roo-runtime-{name}"),
             "event": name,
-            "handlers": [{ "type": "process", "executable": executable, "args": ["--roo-runtime-hook", name.replace('_', "-")], "sandbox_profile": profile, "require_enforcement": false, "timeout_seconds": timeout_seconds }]
+            "handlers": [{ "type": "process", "executable": executable, "args": ["--roo-runtime-hook", name.replace('_', "-")], "sandbox_profile": profile, "inherit_environment": ["LINTAI_SERVER_URL", "LINTAI_SERVER_TOKEN", "LINTAI_USER_ID"], "require_enforcement": false, "timeout_seconds": timeout_seconds }]
         }));
     }
     let encoded = serde_json::to_vec_pretty(&config)?;
@@ -927,6 +955,10 @@ mod tests {
             "context_provider"
         );
         assert_eq!(hooks[2]["handlers"][0]["timeout_seconds"], 5);
+        assert_eq!(
+            hooks[2]["handlers"][0]["inherit_environment"],
+            serde_json::json!(["LINTAI_SERVER_URL", "LINTAI_SERVER_TOKEN", "LINTAI_USER_ID"])
+        );
         assert_eq!(
             hooks[6]["handlers"][0]["sandbox_profile"],
             "context_provider"

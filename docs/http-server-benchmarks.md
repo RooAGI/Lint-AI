@@ -5,7 +5,61 @@ server throughput for specific workloads, not retrieval quality or a universal
 capacity guarantee. The runs used a local release build, a seeded corpus of
 23,366 records, and Tantivy 0.25.0 unless noted otherwise.
 
-## Current results
+## Latest diagnostic runs (2026-10-12)
+
+These working-tree diagnostics use the release server built from revision
+`95a1d8e` on macOS 26.6.2 arm64, with 23,366 seeded records and Tantivy
+0.25.0. They were run before the workspace root allowlist and resource caps
+were added, so they do not measure those security changes. The longer 2026-10-05
+reference runs remain below for comparison.
+
+### Write-only batch sweep
+
+The server received writes for eight seconds per cell, with one writer and
+three repetitions. Publication used the default 250 ms refresh interval and
+512-document refresh batch. Every final flush succeeded, and the last written
+record was searchable in each repetition.
+
+| Batch records per request | Accepted records/s | Published records/s after flush | Ack latency p50 / p95 / p99 |
+|---:|---:|---:|---:|
+| 1 | 190.85 | 129.86 | 3.95 / 4.24 / 6.92 ms |
+| 8 | 1,481.81 | 1,030.43 | 3.94 / 4.12 / 5.46 ms |
+| 32 | 4,279.65 | 2,188.10 | 3.99 / 4.59 / 6.93 ms |
+| 128 | 4,494.46 | 1,902.33 | 0.52 / 4.95 / 6.11 ms |
+
+The 128-record cell returned many HTTP 429 responses (2,609–4,115 per
+repetition). Its accepted rate is burst admission throughput, not sustainable
+write capacity. The [write-only artifact](../comparison/results/server-throughput-write-only-2026-10-12.json)
+contains per-repetition details.
+
+### Direct single-record writes
+
+With the default publication schedule, `/add` accepted 196.27 records/s and
+published 186.97 records/s after flush across three 65-second repetitions.
+Acknowledgement p50/p95/p99 was 3.88/4.11/6.02 ms, there were no rejections,
+and the last record was searchable in every run. The
+[single-add artifact](../comparison/results/server-single-add-investigation-2026-10-12.json)
+has the full results.
+
+A separate one-repetition configuration experiment used a 10-second refresh
+interval and a 32,768-document batch. It reached 259.46 accepted and 249.34
+published records/s, with 3.60/4.08/5.00 ms acknowledgement p50/p95/p99.
+Treat this as a schedule experiment, not the default result. See the
+[low-publication-frequency artifact](../comparison/results/server-single-add-low-publication-frequency-2026-10-12.json).
+
+### Mixed search and write load
+
+This three-repetition run used ten search clients and one writer sending
+eight-record batches as quickly as possible. The reported 2,568.63–2,961.99
+search requests/s is not a useful retrieval-throughput result: 36,694–43,510
+responses per repetition were empty because queries did not match the
+workload's changing write nonce. In addition, all three final flushes timed
+out with HTTP 408, and the final written records were not searchable. Treat
+this as a saturated queue/backlog diagnostic only. The
+[mixed-load artifact](../comparison/results/server-throughput-mixed-2026-10-12.json)
+preserves the raw results.
+
+## Earlier reference results (through 2026-10-05)
 
 | Workload | HTTP request and load | Rate | Result |
 |---|---|---:|---|

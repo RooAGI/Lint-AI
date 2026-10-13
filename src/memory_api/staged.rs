@@ -25,13 +25,20 @@ pub struct StagedAddResponse {
 }
 
 impl MemoryService {
-    pub(crate) fn published_read_view(&self) -> Self {
-        self.read_view_with_store(self.store.published_read_view())
+    pub(crate) fn published_read_view(&self) -> anyhow::Result<Self> {
+        let provider_view = self.read_view_with_store(self.store.published_read_view());
+        if let Some(workspace) = &self.workspace_store {
+            return Self::compose_segmented(workspace.published_read_view()?, Some(provider_view));
+        }
+        Ok(provider_view)
     }
 
     fn read_view_with_store(&self, store: IndexStore) -> Self {
         Self {
             store,
+            // Frozen build inputs never retain a live writable workspace owner.
+            workspace_store: None,
+            published_search_view: None,
             superseded_ids: self.superseded_ids.clone(),
             request_fingerprints: HashMap::new(),
             request_receipts: HashMap::new(),
@@ -198,7 +205,7 @@ impl MemoryService {
         self.complete_publication(result?, &pending.changed)
     }
 
-    fn wait_publication(&mut self) -> anyhow::Result<()> {
+    pub(crate) fn wait_publication(&mut self) -> anyhow::Result<()> {
         let Some(pending) = self.publication.take() else {
             return Ok(());
         };

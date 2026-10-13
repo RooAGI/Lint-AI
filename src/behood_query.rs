@@ -15,7 +15,7 @@
 //! verdicts and the caller falls back to heuristics. Behood owns judgment;
 //! the caller owns knowledge.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -170,7 +170,7 @@ impl BekindDaemon {
             Ok(response) => response,
             Err(crate::daemon::QueryStatus::Busy) => {
                 return None;
-            },
+            }
             Err(crate::daemon::QueryStatus::Failed) => {
                 self.cooldown.note_failure();
                 return None;
@@ -185,11 +185,9 @@ impl BekindDaemon {
     /// isolated — one failure does not poison subsequent batches.
     /// Production rule: a single bad document must never crush the batch.
     fn judge_texts_bulk(&self, texts: &[(String, &str, bool)]) -> Option<Vec<FusedTextResult>> {
-        // Luyi 2026-10-11: no is_enabled() gate here. Index-side callers
-        // (scope/kind/activity/location tags) always run so the index carries
-        // beKIND tags. The query-side caller (analyze_query_tags) checks
-        // is_enabled() itself. If no binary is available the daemon query
-        // fails and we return None (fail-open).
+        // This low-level bulk call has no mode gate. Public index-tag and
+        // evidence entry points enforce the beKIND opt-in before reaching it.
+        // If no binary is available the daemon query fails open.
         // No cooldown gate: bulk operations are independent. A transient
         // daemon failure affects only this batch, not the entire build.
         let request = json!({
@@ -214,6 +212,45 @@ impl BekindDaemon {
     }
 }
 
+/// Extract explicit grounded evidence relations from raw texts. The returned
+/// vectors align with the input order. This is the general indexing/query
+/// entry point; callers can persist the typed signals or use them transiently.
+pub fn analyze_evidence_signals_bulk(texts: &[&str]) -> Vec<Vec<GroundedEvidenceSignal>> {
+    if texts.is_empty() {
+        return Vec::new();
+    }
+    if !is_enabled() {
+        return vec![Vec::new(); texts.len()];
+    }
+    // Keep IPC requests bounded. Large workspace refreshes can contain many
+    // hundreds of documents; sending them as one JSON line can make the
+    // daemon fail open or omit useful per-text results. Preserve positional
+    // alignment while batching independently.
+    const EVIDENCE_BATCH_SIZE: usize = 32;
+    let mut output = Vec::with_capacity(texts.len());
+    for (batch_index, batch) in texts.chunks(EVIDENCE_BATCH_SIZE).enumerate() {
+        let offset = batch_index * EVIDENCE_BATCH_SIZE;
+        let inputs: Vec<(String, &str, bool)> = batch
+            .iter()
+            .enumerate()
+            .map(|(i, text)| (format!("evidence:{}", offset + i), *text, false))
+            .collect();
+        let Some(results) = BekindDaemon::global().judge_texts_bulk(&inputs) else {
+            output.extend((0..batch.len()).map(|_| Vec::new()));
+            continue;
+        };
+        let mut by_id: HashMap<String, Vec<GroundedEvidenceSignal>> = results
+            .into_iter()
+            .map(|result| (result.id, result.evidence_signals))
+            .collect();
+        output.extend(
+            (offset..offset + batch.len())
+                .map(|i| by_id.remove(&format!("evidence:{i}")).unwrap_or_default()),
+        );
+    }
+    output
+}
+
 /// One text's fused verdicts, as returned by bekind.
 #[derive(Debug, Clone)]
 struct FusedTextResult {
@@ -224,6 +261,27 @@ struct FusedTextResult {
     /// Location tags (Luyi 2026-10-10): canonical country tags.
     location: Vec<String>,
     entities: Vec<QueryEntity>,
+    /// Explicit, source-grounded relations emitted by beKIND.
+    evidence_signals: Vec<GroundedEvidenceSignal>,
+}
+
+/// A versioned relation with its exact supporting text and byte span.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GroundedEvidenceSignal {
+    pub schema_version: u8,
+    pub kind: String,
+    pub predicate: String,
+    pub subject: String,
+    pub object: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub event_time: Option<String>,
+    pub evidence_text: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub polarity: String,
+    pub confidence: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -319,9 +377,17 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                 a.iter()
                     .filter_map(|v| {
                         Some(FusedActivity {
-                            is_activity: v.get("is_activity").and_then(|b| b.as_bool()).unwrap_or(false),
-                            category: v.get("category").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                            siblings: v.get("siblings")
+                            is_activity: v
+                                .get("is_activity")
+                                .and_then(|b| b.as_bool())
+                                .unwrap_or(false),
+                            category: v
+                                .get("category")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            siblings: v
+                                .get("siblings")
                                 .and_then(|s| s.as_array())
                                 .map(|arr| {
                                     arr.iter()
@@ -329,7 +395,11 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                                         .collect()
                                 })
                                 .unwrap_or_default(),
-                            hypernym: v.get("hypernym").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                            hypernym: v
+                                .get("hypernym")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                         })
                     })
                     .collect()
@@ -344,12 +414,44 @@ fn parse_text_results(response: &Value) -> Option<Vec<FusedTextResult>> {
                     .collect()
             })
             .unwrap_or_default();
+        let evidence_signals = item
+            .get("evidence_signals")
+            .and_then(|v| v.as_array())
+            .map(|signals| {
+                signals
+                    .iter()
+                    .filter_map(|signal| {
+                        Some(GroundedEvidenceSignal {
+                            schema_version: signal.get("schema_version")?.as_u64()? as u8,
+                            kind: signal.get("kind")?.as_str()?.to_string(),
+                            predicate: signal.get("predicate")?.as_str()?.to_string(),
+                            subject: signal.get("subject")?.as_str()?.to_string(),
+                            object: signal.get("object")?.as_str()?.to_string(),
+                            status: signal
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            event_time: signal
+                                .get("event_time")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            evidence_text: signal.get("evidence_text")?.as_str()?.to_string(),
+                            start_byte: signal.get("start_byte")?.as_u64()? as usize,
+                            end_byte: signal.get("end_byte")?.as_u64()? as usize,
+                            polarity: signal.get("polarity")?.as_str()?.to_string(),
+                            confidence: signal.get("confidence")?.as_f64()? as f32,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         out.push(FusedTextResult {
             id,
             scope,
             activity,
             location,
             entities,
+            evidence_signals,
         });
     }
     Some(out)
@@ -589,12 +691,17 @@ pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
     let mut by_index: std::collections::HashMap<usize, (Vec<String>, Vec<String>)> =
         std::collections::HashMap::new();
     for r in results {
-        if let Some(idx) = r.id.strip_prefix("q:").and_then(|s| s.parse::<usize>().ok()) {
+        if let Some(idx) =
+            r.id.strip_prefix("q:")
+                .and_then(|s| s.parse::<usize>().ok())
+        {
             let query_lower = texts[idx].to_lowercase();
             // Location: skip if query already has the most specific.
             // beKIND returns most-specific-first; if the query contains it,
             // parents ("florida", "unitedstates") only broaden the query.
-            let loc: Vec<String> = if r.location.first()
+            let loc: Vec<String> = if r
+                .location
+                .first()
                 .map(|most_specific| query_lower.contains(&most_specific.to_lowercase()))
                 .unwrap_or(false)
             {
@@ -609,7 +716,8 @@ pub fn analyze_query_tags(texts: &[&str]) -> Vec<(Vec<String>, Vec<String>)> {
             // Luyi 2026-10-11: the category chains similar activities.
             // "movie" (leisure) → ["show", "concert"]. We add the specific
             // siblings, not the generic "leisure".
-            let act: Vec<String> = r.activity
+            let act: Vec<String> = r
+                .activity
                 .into_iter()
                 .filter(|a| a.is_activity)
                 .flat_map(|a| a.siblings.into_iter())
@@ -643,10 +751,15 @@ pub fn analyze_activity_categories(texts: &[&str]) -> Vec<Vec<String>> {
         Some(results) => results,
         None => return vec![Vec::new(); texts.len()],
     };
-    let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    let mut by_index: std::collections::HashMap<usize, Vec<String>> =
+        std::collections::HashMap::new();
     for r in results {
-        if let Some(idx) = r.id.strip_prefix("a:").and_then(|s| s.parse::<usize>().ok()) {
-            let mut tags: Vec<String> = r.activity
+        if let Some(idx) =
+            r.id.strip_prefix("a:")
+                .and_then(|s| s.parse::<usize>().ok())
+        {
+            let mut tags: Vec<String> = r
+                .activity
                 .into_iter()
                 .filter(|a| a.is_activity)
                 .flat_map(|a| {
@@ -701,12 +814,17 @@ pub fn analyze_location_categories(texts: &[&str]) -> Vec<Vec<String>> {
         Some(results) => results,
         None => return vec![Vec::new(); texts.len()],
     };
-    let mut by_index: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    let mut by_index: std::collections::HashMap<usize, Vec<String>> =
+        std::collections::HashMap::new();
     for r in results {
-        if let Some(idx) = r.id.strip_prefix("l:").and_then(|s| s.parse::<usize>().ok()) {
+        if let Some(idx) =
+            r.id.strip_prefix("l:")
+                .and_then(|s| s.parse::<usize>().ok())
+        {
             // Luyi 2026-10-10: beKIND returns natural forms ("United States").
             // Normalize to Tantivy-friendly single tokens ("unitedstates") for the index.
-            let normalized: Vec<String> = r.location
+            let normalized: Vec<String> = r
+                .location
                 .into_iter()
                 .map(|loc| loc.to_lowercase().replace(' ', "").replace('-', ""))
                 .collect();
@@ -920,8 +1038,14 @@ for line in sys.stdin:
         set_enabled(false);
         let tags = analyze_query_tags(&["camping in Colorado"]);
         assert_eq!(tags.len(), 1);
-        assert!(tags[0].0.is_empty(), "location tags must be empty when disabled");
-        assert!(tags[0].1.is_empty(), "activity tags must be empty when disabled");
+        assert!(
+            tags[0].0.is_empty(),
+            "location tags must be empty when disabled"
+        );
+        assert!(
+            tags[0].1.is_empty(),
+            "activity tags must be empty when disabled"
+        );
     }
 
     #[test]

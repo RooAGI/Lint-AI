@@ -119,8 +119,20 @@ pub(crate) fn build_semantic_doc_state(
         }
     }
 
-    if claim_scoring {
-        for claim in &record.top_claims {
+    for claim in &record.top_claims {
+        // beKIND participation evidence is a dedicated candidate channel and
+        // must remain available even when general claim scoring is disabled.
+        if is_participation_claim(&claim.predicate) {
+            state
+                .claim_to_docs
+                .entry(BEKIND_PARTICIPATION_POSTING.to_string())
+                .or_default()
+                .push(TermPosting {
+                    doc_id: record.doc_id.clone(),
+                    score: claim.confidence.max(0.1),
+                });
+        }
+        if claim_scoring {
             for token in claim_tokens(claim) {
                 state
                     .claim_to_docs

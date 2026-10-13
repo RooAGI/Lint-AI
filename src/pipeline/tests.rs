@@ -885,6 +885,65 @@ fn opening_persistent_index_does_not_create_a_redundant_lexical_index() {
 }
 
 #[test]
+fn segmented_persistent_store_reuses_unchanged_lexical_cache_and_refreshes_changed_content() {
+    let index_root = unique_temp_dir("segmented-lexical-cache");
+    let options = PipelineOptions {
+        index_location: IndexLocation::Explicit(index_root.clone()),
+        memory_index_layout: MemoryIndexLayout::Segmented {
+            query_top_n: 3,
+            routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
+        },
+        ..PipelineOptions::default()
+    };
+
+    let mut first = IndexStore::at_path(&index_root, options.clone()).unwrap();
+    first.upsert(sample_doc("doc-1", "persistent lexical cache token"));
+    assert!(first
+        .query("cache", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.doc_id == "doc-1"));
+    drop(first);
+
+    let lexical_root = index_root.join("segment-lexical");
+    let cache_count = || {
+        fs::read_dir(&lexical_root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .count()
+    };
+    let initial_cache_count = cache_count();
+    assert_eq!(initial_cache_count, 1);
+
+    let mut reopened = IndexStore::at_path(&index_root, options.clone()).unwrap();
+    assert!(reopened
+        .query("cache", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.doc_id == "doc-1"));
+    assert_eq!(cache_count(), initial_cache_count);
+    reopened.upsert(sample_doc("doc-1", "updated lexical cache revision"));
+    assert!(reopened
+        .query("revision", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.doc_id == "doc-1"));
+    assert_eq!(cache_count(), initial_cache_count + 1);
+    drop(reopened);
+
+    let mut final_open = IndexStore::at_path(&index_root, options).unwrap();
+    assert!(final_open
+        .query("revision", 5)
+        .unwrap()
+        .iter()
+        .any(|hit| hit.doc_id == "doc-1"));
+    assert_eq!(cache_count(), initial_cache_count + 1);
+    drop(final_open);
+    let _ = fs::remove_dir_all(index_root);
+}
+
+#[test]
 fn resolve_store_paths_under_corpus_root() {
     let corpus_root = unique_temp_dir("corpus-root");
     let options = PipelineOptions {

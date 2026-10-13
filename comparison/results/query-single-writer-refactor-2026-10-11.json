@@ -1,0 +1,30 @@
+{
+  "mode": "segment",
+  "records": 13974,
+  "seed_sessions": 14,
+  "requests_per_cell": 100,
+  "warmup_requests_per_cell": 5,
+  "server": "/Users/louis/sources/Lint-AI/target/release/server",
+  "measurements": [
+    {
+      "concurrency": 1,
+      "requests": 100,
+      "p50_ms": 1.894,
+      "p90_ms": 2.034,
+      "p99_ms": 2.762,
+      "mean_ms": 1.92,
+      "throughput_per_s": 517.76
+    },
+    {
+      "concurrency": 10,
+      "requests": 100,
+      "p50_ms": 9.172,
+      "p90_ms": 11.102,
+      "p99_ms": 16.154,
+      "mean_ms": 8.38,
+      "throughput_per_s": 1149.74
+    }
+  ],
+  "server_binary_sha256": "eb1cdc2563672f1e71f8f0bfccc40857044a2ad861ffc6955a31aa9b03b7dd55",
+  "isolated_workspace": true
+}

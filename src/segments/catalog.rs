@@ -7,15 +7,20 @@ use crate::query_semantics::parse_reference_date;
 use crate::tier1::BEHOOD_NP_ENTITY_SOURCE;
 use crate::tokenizer::{self, TokenizerMode};
 use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use super::diagnostics::*;
 use super::model::*;
 use super::routing::*;
 
-#[derive(Debug, Clone, Default)]
+const SEGMENT_CATALOG_CACHE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SegmentRoutingSummary {
     pub terms: HashMap<String, f32>,
     pub entities: HashMap<String, f32>,
@@ -23,7 +28,7 @@ pub(crate) struct SegmentRoutingSummary {
     pub local_memory: HashMap<String, f32>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SegmentCatalog {
     pub(crate) generation: u64,
     segment_count: usize,
@@ -39,13 +44,20 @@ pub(crate) struct SegmentCatalog {
 
 pub(crate) type SegmentCorpusStats = SegmentCatalog;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct SegmentConnectionProfile {
     pub(crate) people: HashSet<String>,
     pub(crate) subjects: HashSet<String>,
     pub(crate) times: HashSet<String>,
     pub(crate) actions: HashSet<String>,
     pub(crate) objects: HashSet<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PersistedSegmentCatalog {
+    version: u32,
+    fingerprint: String,
+    catalog: SegmentCatalog,
 }
 
 #[derive(Debug, Clone)]
@@ -849,6 +861,63 @@ impl SegmentRoutingSummary {
 }
 
 impl SegmentCatalog {
+    pub(crate) fn load_or_build(
+        segments: &[MemoryIndexSegment],
+        generation: u64,
+        cache_path: Option<&Path>,
+        fingerprint: &str,
+    ) -> Self {
+        if let Some(path) = cache_path {
+            if let Ok(bytes) = fs::read(path) {
+                if let Ok((cached, _)) = oxicode::serde::decode_from_slice::<
+                    PersistedSegmentCatalog,
+                    _,
+                >(&bytes, oxicode::config::standard())
+                {
+                    let mut ids = segments
+                        .iter()
+                        .map(|segment| segment.segment_id.clone())
+                        .collect::<Vec<_>>();
+                    ids.sort();
+                    if cached.version == SEGMENT_CATALOG_CACHE_VERSION
+                        && cached.fingerprint == fingerprint
+                        && cached.catalog.ordered_segment_ids == ids
+                        && cached.catalog.summaries.len() == segments.len()
+                        && cached.catalog.connection_profiles.len() == segments.len()
+                    {
+                        let mut catalog = cached.catalog;
+                        catalog.generation = generation;
+                        return catalog;
+                    }
+                }
+            }
+        }
+
+        let catalog = Self::from_segments(segments, generation);
+        if let Some(path) = cache_path {
+            let persisted = PersistedSegmentCatalog {
+                version: SEGMENT_CATALOG_CACHE_VERSION,
+                fingerprint: fingerprint.to_string(),
+                catalog: catalog.clone(),
+            };
+            let write = (|| -> anyhow::Result<()> {
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("catalog cache path has no parent"))?;
+                fs::create_dir_all(parent)?;
+                let bytes = oxicode::serde::encode_to_vec(&persisted, oxicode::config::standard())?;
+                let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+                fs::write(&temporary, bytes)?;
+                fs::rename(temporary, path)?;
+                Ok(())
+            })();
+            if let Err(error) = write {
+                eprintln!("warning: failed to persist segment catalog cache: {error:#}");
+            }
+        }
+        catalog
+    }
+
     pub(crate) fn from_segments(segments: &[MemoryIndexSegment], generation: u64) -> Self {
         let summaries = segments
             .iter()
@@ -1001,7 +1070,7 @@ impl SegmentCatalog {
         }
     }
 
-    fn from_parts(
+    pub(crate) fn from_parts(
         segments: &[MemoryIndexSegment],
         summaries: HashMap<String, Arc<SegmentRoutingSummary>>,
         connection_profiles: HashMap<String, Arc<SegmentConnectionProfile>>,
@@ -1678,7 +1747,7 @@ pub(crate) fn is_segment_enrichment_candidate(token: &str) -> bool {
         )
 }
 
-fn gated_local_memory_profile(record: &DocRecord) -> HashMap<String, f32> {
+pub(super) fn gated_local_memory_profile(record: &DocRecord) -> HashMap<String, f32> {
     let important_terms = weighted_terms(
         record
             .important_terms
@@ -1697,36 +1766,107 @@ fn gated_local_memory_profile(record: &DocRecord) -> HashMap<String, f32> {
         .map(|topic| weighted_terms(std::iter::once((topic, 1.0))))
         .unwrap_or_default();
 
-    let mut active_memory: HashMap<String, f32> = HashMap::new();
-    let mut retained_memory: HashMap<String, f32> = HashMap::new();
+    // Routing summaries visit every token in every record. Keep active and
+    // retained weights in compact vectors, and map each token to a stable
+    // integer once. The previous HashMap loop cloned and re-hashed each
+    // active token at every position while preserving the same arithmetic.
+    let mut token_ids = HashMap::<String, usize>::new();
+    let mut terms = Vec::<String>::new();
+    let mut active_memory = Vec::<(usize, f32)>::new();
+    let mut retained_weights = Vec::<f32>::new();
     for token in ordered_tokens(&record.content) {
-        for value in active_memory.values_mut() {
+        let token_id = if let Some(id) = token_ids.get(&token) {
+            *id
+        } else {
+            let id = terms.len();
+            token_ids.insert(token.clone(), id);
+            terms.push(token);
+            retained_weights.push(0.0);
+            id
+        };
+        for (_, value) in &mut active_memory {
             *value *= LOCAL_MEMORY_DECAY;
         }
-        active_memory.retain(|_, value| *value >= LOCAL_MEMORY_PRUNE_BELOW);
+        active_memory.retain(|(_, value)| *value >= LOCAL_MEMORY_PRUNE_BELOW);
 
+        let token = &terms[token_id];
         let importance = LOCAL_MEMORY_BASE_SIGNAL
-            + important_terms.get(&token).copied().unwrap_or_default()
+            + important_terms.get(token).copied().unwrap_or_default()
                 * LOCAL_MEMORY_IMPORTANT_TERM_WEIGHT
-            + entity_terms.get(&token).copied().unwrap_or_default() * LOCAL_MEMORY_ENTITY_WEIGHT
-            + topic_terms.get(&token).copied().unwrap_or_default() * LOCAL_MEMORY_TOPIC_WEIGHT;
+            + entity_terms.get(token).copied().unwrap_or_default() * LOCAL_MEMORY_ENTITY_WEIGHT
+            + topic_terms.get(token).copied().unwrap_or_default() * LOCAL_MEMORY_TOPIC_WEIGHT;
 
         if importance > LOCAL_MEMORY_BASE_SIGNAL {
-            for value in active_memory.values_mut() {
+            for (_, value) in &mut active_memory {
                 *value += importance * LOCAL_MEMORY_NEARBY_REINFORCEMENT;
             }
         }
 
-        *active_memory.entry(token).or_default() += importance;
-        for (active_token, value) in &active_memory {
-            *retained_memory.entry(active_token.clone()).or_default() += *value;
+        if let Some((_, value)) = active_memory.iter_mut().find(|(id, _)| *id == token_id) {
+            *value += importance;
+        } else {
+            active_memory.push((token_id, importance));
+        }
+        for &(active_token_id, value) in &active_memory {
+            retained_weights[active_token_id] += value;
         }
     }
+    let mut retained_memory = terms
+        .into_iter()
+        .zip(retained_weights)
+        .collect::<HashMap<_, _>>();
 
     normalize_distribution(&mut retained_memory);
     retain_top_terms(&mut retained_memory, LOCAL_MEMORY_RECORD_TERM_LIMIT);
     normalize_distribution(&mut retained_memory);
     retained_memory
+}
+
+#[cfg(test)]
+pub(super) fn gated_local_memory_profile_reference(record: &DocRecord) -> HashMap<String, f32> {
+    let important_terms = weighted_terms(
+        record
+            .important_terms
+            .iter()
+            .map(|term| (term.term.as_str(), term.score.max(0.1))),
+    );
+    let entity_terms = weighted_terms(
+        record
+            .key_entities
+            .iter()
+            .map(|entity| (entity.text.as_str(), entity.score.unwrap_or(1.0))),
+    );
+    let topic_terms = record
+        .probable_topic
+        .as_deref()
+        .map(|topic| weighted_terms(std::iter::once((topic, 1.0))))
+        .unwrap_or_default();
+    let mut active: HashMap<String, f32> = HashMap::new();
+    let mut retained: HashMap<String, f32> = HashMap::new();
+    for token in ordered_tokens(&record.content) {
+        for value in active.values_mut() {
+            *value *= LOCAL_MEMORY_DECAY;
+        }
+        active.retain(|_, value| *value >= LOCAL_MEMORY_PRUNE_BELOW);
+        let importance = LOCAL_MEMORY_BASE_SIGNAL
+            + important_terms.get(&token).copied().unwrap_or_default()
+                * LOCAL_MEMORY_IMPORTANT_TERM_WEIGHT
+            + entity_terms.get(&token).copied().unwrap_or_default() * LOCAL_MEMORY_ENTITY_WEIGHT
+            + topic_terms.get(&token).copied().unwrap_or_default() * LOCAL_MEMORY_TOPIC_WEIGHT;
+        if importance > LOCAL_MEMORY_BASE_SIGNAL {
+            for value in active.values_mut() {
+                *value += importance * LOCAL_MEMORY_NEARBY_REINFORCEMENT;
+            }
+        }
+        *active.entry(token).or_default() += importance;
+        for (name, value) in &active {
+            *retained.entry(name.clone()).or_default() += *value;
+        }
+    }
+    normalize_distribution(&mut retained);
+    retain_top_terms(&mut retained, LOCAL_MEMORY_RECORD_TERM_LIMIT);
+    normalize_distribution(&mut retained);
+    retained
 }
 
 fn weighted_terms<'a>(terms: impl Iterator<Item = (&'a str, f32)>) -> HashMap<String, f32> {

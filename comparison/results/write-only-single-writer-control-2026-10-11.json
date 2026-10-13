@@ -1,0 +1,140 @@
+{
+  "benchmark": "write-only-http-load",
+  "write_acknowledgement": "durable-staged",
+  "created_at_utc": "2026-10-11T17:42:12.727311+00:00",
+  "server_binary": "/private/tmp/lint-ai-before-single-writer-server",
+  "server_binary_sha256": "9f331b9ebdf9a2b33f3874b20d7d40b87db1a9b3be090f83504c1c6e01413b85",
+  "git_revision": "cccd58c93b530aebe5fa041c19dfd3f53dcf0932",
+  "tantivy_version": "v0.25.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "processor": "arm",
+  "records_before_each_cell": 13974,
+  "sessions": 14,
+  "writer_session_group": null,
+  "writer_session_distribution": "round-robin",
+  "write_endpoint": "/add/batch",
+  "writer_workers": 1,
+  "readers": 0,
+  "measured_seconds_per_cell": 3,
+  "warmup_requests_per_cell": 2,
+  "batch_sizes_add_requests": [
+    1,
+    128
+  ],
+  "refresh_interval_ms": 250,
+  "refresh_batch_size_documents": 512,
+  "checkpoint_interval_seconds": 30,
+  "repetitions": 2,
+  "summary": {
+    "1": {
+      "request_throughput_median_per_s": 222.26,
+      "published_record_throughput_median_per_s": 155.83,
+      "record_throughput_median_per_s": 222.26,
+      "p50_latency_median_ms": 3.115,
+      "p95_latency_median_ms": 4.12,
+      "p99_latency_median_ms": 6.361
+    },
+    "128": {
+      "request_throughput_median_per_s": 73.17,
+      "published_record_throughput_median_per_s": 3664.79,
+      "record_throughput_median_per_s": 9366.22,
+      "p50_latency_median_ms": 0.457,
+      "p95_latency_median_ms": 4.968,
+      "p99_latency_median_ms": 5.29
+    }
+  },
+  "runs": [
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 128,
+      "seed_records": 13974,
+      "measured_seconds": 3.0,
+      "requests": 1578,
+      "successful_requests": 260,
+      "rejected_429": 1318,
+      "other_errors": 0,
+      "accepted_records": 33280,
+      "request_throughput_per_s": 86.65,
+      "record_throughput_per_s": 11091.77,
+      "latency_ms": {
+        "p50": 0.46,
+        "p95": 4.945,
+        "p99": 5.107,
+        "mean": 1.86
+      },
+      "flush_seconds": 4.941,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 4190.73,
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 1,
+      "batch_size_add_requests": 1,
+      "seed_records": 13974,
+      "measured_seconds": 3.002,
+      "requests": 670,
+      "successful_requests": 670,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 670,
+      "request_throughput_per_s": 223.21,
+      "record_throughput_per_s": 223.21,
+      "latency_ms": {
+        "p50": 3.076,
+        "p95": 4.099,
+        "p99": 7.652,
+        "mean": 4.478
+      },
+      "flush_seconds": 1.336,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 154.48,
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 128,
+      "seed_records": 13974,
+      "measured_seconds": 4.372,
+      "requests": 1406,
+      "successful_requests": 261,
+      "rejected_429": 1145,
+      "other_errors": 0,
+      "accepted_records": 33408,
+      "request_throughput_per_s": 59.69,
+      "record_throughput_per_s": 7640.66,
+      "latency_ms": {
+        "p50": 0.454,
+        "p95": 4.991,
+        "p99": 5.472,
+        "mean": 3.07
+      },
+      "flush_seconds": 6.271,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 3138.85,
+      "last_written_record_searchable": true
+    },
+    {
+      "repetition": 2,
+      "batch_size_add_requests": 1,
+      "seed_records": 13974,
+      "measured_seconds": 3.0,
+      "requests": 664,
+      "successful_requests": 664,
+      "rejected_429": 0,
+      "other_errors": 0,
+      "accepted_records": 664,
+      "request_throughput_per_s": 221.32,
+      "record_throughput_per_s": 221.32,
+      "latency_ms": {
+        "p50": 3.154,
+        "p95": 4.14,
+        "p99": 5.069,
+        "mean": 4.517
+      },
+      "flush_seconds": 1.224,
+      "flush_status": 204,
+      "published_record_throughput_per_s": 157.19,
+      "last_written_record_searchable": true
+    }
+  ]
+}

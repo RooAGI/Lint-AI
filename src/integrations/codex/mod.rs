@@ -309,10 +309,14 @@ pub fn run_server(root: &Path, options: CodexServerOptions<'_>) -> Result<()> {
         max_depth: options.max_depth,
         max_total_bytes: options.max_total_bytes,
         ignore_paths: options.ignore_paths.to_vec(),
-        workspace_watcher: Some(mcp_index::WorkspaceWatcher::new(
-            root,
-            options.ignore_paths,
-        )?),
+        workspace_watcher: if cfg!(test) {
+            Some(mcp_index::WorkspaceWatcher::new(
+                root,
+                options.ignore_paths,
+            )?)
+        } else {
+            None
+        },
         store: Mutex::new(None),
     };
     mcp.serve()
@@ -324,6 +328,10 @@ impl CodexMcp {
             .store
             .lock()
             .map_err(|_| anyhow::anyhow!("MCP index lock poisoned"))?;
+        anyhow::ensure!(
+            !mcp_tools::resident_backend_enabled(),
+            "MCP memory indexes are owned by the resident Lint-AI server"
+        );
         let file_changes = self
             .workspace_watcher
             .as_ref()
@@ -450,6 +458,26 @@ impl CodexMcp {
             .cloned()
             .unwrap_or_else(|| json!({}));
 
+        if mcp_tools::resident_backend_enabled()
+            && matches!(
+                tool_name,
+                "search"
+                    | "info"
+                    | "list_memories"
+                    | "board_open"
+                    | "board_list"
+                    | "board_info"
+                    | "board_post"
+                    | "board_read"
+                    | "board_get"
+                    | "board_search"
+                    | "add_memory"
+                    | "get_memory"
+            )
+        {
+            return mcp_tools::call_resident_tool(id, &self.root, "codex", tool_name, &arguments);
+        }
+
         match tool_name {
             "search" => {
                 if let Some(name) =
@@ -480,6 +508,7 @@ impl CodexMcp {
                 };
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // Stateful search: an explicit session id scopes follow-up
                 // resolution and temporal-anchor carry to this provider's
@@ -541,6 +570,7 @@ impl CodexMcp {
                     .clamp(1, 100) as usize;
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
                 service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 Ok(text_response(
                     id,
@@ -659,6 +689,8 @@ impl CodexMcp {
             | "board_get" | "board_search" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
+                #[cfg(test)]
+                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // Resolve the session from the composed service, which tracks
                 // hook activity, then perform board operations against the
                 // persistent shared-memory service. Do not mutate the
@@ -708,7 +740,6 @@ impl CodexMcp {
             "add_memory" | "get_memory" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
-                service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                 // `add_memory` is a write: run it against the persistent
                 // shared-memory service. The composed view is in-memory
                 // only, so a view write would vanish on process exit and stay
@@ -741,8 +772,7 @@ impl CodexMcp {
                         },
                     )
                     .map_err(|error| error.to_string());
-                    // Re-sync the view so this process observes its own
-                    // write without waiting for the next pre-dispatch sync.
+                    #[cfg(test)]
                     if write.is_ok() {
                         service.sync_shared_memory(&mcp_index::shared_memory_root(&self.root))?;
                     }
@@ -1098,7 +1128,14 @@ mod tests {
         .unwrap();
         wait_for_workspace_store(&mcp, |store| {
             let results = store
-                .search_with_filters("segmented indexes", "test", None, 5, &Default::default(), None)
+                .search_with_filters(
+                    "segmented indexes",
+                    "test",
+                    None,
+                    5,
+                    &Default::default(),
+                    None,
+                )
                 .unwrap_or_default();
             results.iter().any(|result| {
                 store

@@ -1,0 +1,87 @@
+Indexing 55 haystack sessions for '0862e8bf_abs'...
+Indexed. Answer sessions: ["answer_c6fd8ebd_abs"]
+Original question: What is the name of my hamster?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_c6fd8ebd_abs timestamp=Some("2023-05-24T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: What is the name of my hamster?
+  reference date: Some("2023/05/30 (Tue) 21:39")
+  normalized query: what is the name of my hamster
+  augmented/search query: What is the name of my hamster? name hamster is
+  kind: What
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: None, minimum_distinct_objects: None, order: None }
+  time hint: None
+  temporal phrase: None
+  temporal source: None
+  resolved temporal anchor: None
+  temporal window: None..None
+  anchor date: None
+  anchor window: None
+  window days: 30
+  explicit temporal: false
+  hard temporal filter: false
+  spans:
+    QuestionWord: "what" => "what" (source=heuristic, score=0.700)
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "name" => "name" (source=pos, score=0.400)
+    NounPhrase: "hamster" => "hamster" (source=pos, score=0.400)
+    VerbPhrase: "is" => "is" (source=pos, score=0.350)
+    Subject: "What" => "what" (source=heuristic, score=0.750)
+    Object: "hamster" => "hamster" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=80 lexical_hits=0 candidates=139 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_c6fd8ebd_abs: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_c6fd8ebd_abs: candidate rank=35 score=1.672 doc_id=doc:memory:v2:320d871ce26cf3c6d78ddd49cd5c7dc34c894657fdb7fba70a59e2ff9ac81ec3
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:6d7a6a4a51f3ca01c2c190df6bd50c176467c0940a1d85533afa13208f8276dd session=Some("sharegpt_9l7gjYP_17") score=4.251 structured_evidence=[]
+    2. id=doc:memory:v2:c8fa9034dc15abdc41c49e0be1e774a30f9cdb063aafaf507daed9904ce71824 session=Some("sharegpt_9l7gjYP_17") score=4.251 structured_evidence=[]
+    3. id=doc:memory:v2:c7a65049ed3a4978e11f0722b6acc9b2abff2bf243590e25e6246405046ab44b session=Some("baf0243b_1") score=3.291 structured_evidence=[]
+    4. id=doc:memory:v2:e41af29d012c5f552f51db908d7c7f112ec86c33b75ebd4697f674662c3faff1 session=Some("baf0243b_1") score=2.472 structured_evidence=[]
+    5. id=doc:memory:v2:5d8663509897c679af99a38fda1554c58c1fcb6285e0a6fdaa46b12974d7c806 session=Some("0e69d205_1") score=3.651 structured_evidence=[]
+    6. id=doc:memory:v2:a0f78cdfa4f65188acec46ed536bf5d7b4a9eb0578d9ebdb416a121df1706eed session=Some("0e69d205_1") score=1.832 structured_evidence=[]
+    7. id=doc:memory:v2:f330abb9e99348ba04c85dc628b7478f67dd64dedd0bdf0455eae412b9bb5aa4 session=Some("89a9f6f5") score=3.291 structured_evidence=[]
+    8. id=doc:memory:v2:4a4cb3265e06ccb1cba72c90bae83abb9c4c2dc2b83a587e6b9ddd89a091f69a session=Some("89a9f6f5") score=2.499 structured_evidence=[]
+    9. id=doc:memory:v2:d15bcb0d7ad216372351b49ceedeb57b2394fd38da4e646c63eb9e8a0a03e7de session=Some("sharegpt_8T6d65A_83") score=2.992 structured_evidence=[]
+    10. id=doc:memory:v2:5f8cb04f57afc0a561dc4f7b4d2fd79c5f91d412807d3bf0c1476d56f30244b6 session=Some("sharegpt_8T6d65A_83") score=2.339 structured_evidence=[]
+    11. id=doc:memory:v2:c12b36fee99a929e97f4e1d486bba651365d688e78a1ef60c23ff8d9f9d1b566 session=Some("1d85d4ba_2") score=3.291 structured_evidence=[]
+    12. id=doc:memory:v2:6c17a8a8cde035f6126ca5451b16ca794887a5485e88f0a3ef8e54438c3a7d81 session=Some("1d85d4ba_2") score=1.672 structured_evidence=[]
+    13. id=doc:memory:v2:87673403490ba256844bb5536c65c80614ed1dff080f8af69210ef0635daf80b session=Some("1881e7db_2") score=3.611 structured_evidence=[]
+    14. id=doc:memory:v2:507827566e4d0a8f8b62c0b2b5ab9d7b0e1c1e40f11c367d3482b657751965c5 session=Some("1881e7db_2") score=2.499 structured_evidence=[]
+    15. id=doc:memory:v2:a638883868146acd699563add6221def7bc850feb315d10ad3dd262b4e61a2e0 session=Some("8f007ec7_3") score=3.291 structured_evidence=[]
+    16. id=doc:memory:v2:95f311d88e92806ce49cb710e3998ab99423cf202ab1dd19d0a77d693866c6ce session=Some("8f007ec7_3") score=2.419 structured_evidence=[]
+    17. id=doc:memory:v2:17d746a1bb9251bd47084521ca6faa59d7eb29d689d2be21d6b370bb8e5c3f7f session=Some("c1b801e6") score=2.419 structured_evidence=[]
+    18. id=doc:memory:v2:346fc91477fffca54db7cd282395e00b556dcdd8c8a45eed3ef0c9508a028ff7 session=Some("c1b801e6") score=1.672 structured_evidence=[]
+    19. id=doc:memory:v2:0bf129a4ff055b69a619975807f190a07316bade25fb15acb6652641760085b6 session=Some("3301f749_1") score=2.419 structured_evidence=[]
+    20. id=doc:memory:v2:065f2f430a5d16b59d14f7b6033056c238e389ca1d556f0cc1e0c1eeda3c6193 session=Some("3301f749_1") score=1.672 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=0 candidates=139 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_c6fd8ebd_abs: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_c6fd8ebd_abs: absent from service-depth index results
+
+(79.2ms) top sessions:
+  1. sharegpt_9l7gjYP_17 (score 4.2507)
+  2. baf0243b_1 (score 3.2907)
+  3. 0e69d205_1 (score 3.6507)
+  4. 89a9f6f5 (score 3.2907)
+  5. sharegpt_8T6d65A_83 (score 2.9920)
+  6. 1d85d4ba_2 (score 3.2907)
+  7. 1881e7db_2 (score 3.6107)
+  8. 8f007ec7_3 (score 3.2907)
+  9. c1b801e6 (score 2.4187)
+  10. 3301f749_1 (score 2.4187)
+
+query>

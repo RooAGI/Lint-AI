@@ -66,6 +66,9 @@ TMPDIR="$PWD/.benchmark-tmp" uv run --no-project python comparison/throughput_ha
 Use `--skip-build` when the release binary is already built. Use
 `--repetitions`, `--requests`, and `--warmup-requests` to control the workload.
 The lower-level `throughput.py` remains available for testing one layout.
+Both `throughput.py` and `write_only.py` allow a longer cold server startup via
+`--startup-timeout-seconds` (default 120); this matters when the resident server
+loads a large workspace before it opens its listener.
 
 On macOS, run the Python benchmark through `uv` and provide a real temporary
 directory. Some macOS environments expose `/tmp` through a symlink, while the
@@ -393,3 +396,7 @@ The mixed runner searches the seeded `bench-user` and writes as
 `mixed-bench-user`; `empty_search_responses` detects an accidentally empty read
 workload. The October 4 mixed artifact used the wrong reader user and must not
 be used as a populated-corpus read baseline.
+
+The HTTP query and write harnesses give each server a temporary project root,
+workspace index, and shared captured-memory store. Benchmark writes and file
+watchers therefore stay isolated from the repository's installed memory.

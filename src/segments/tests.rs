@@ -66,7 +66,7 @@ fn record(doc_id: &str, group_id: &str, content: &str, terms: &[&str]) -> DocRec
             index_version: "test".to_string(),
         },
         content_hash: String::new(),
-            semantic_tags: Vec::new(),
+        semantic_tags: Vec::new(),
     }
 }
 
@@ -1304,6 +1304,29 @@ fn local_memory_router_uses_rolling_content_window() {
             && differentiator
                 .evidence_types
                 .contains(&"local_memory".to_string())));
+}
+
+#[test]
+fn compact_local_memory_profile_matches_hashmap_reference() {
+    let content = (0..30_000)
+        .map(|index| ["alpha", "connector", "system", "beta", "delta", "gamma"][index % 6])
+        .collect::<Vec<_>>()
+        .join(" ");
+    let record = record("profile", "session", &content, &["connector", "delta"]);
+    let compact = super::catalog::gated_local_memory_profile(&record);
+    let reference = super::catalog::gated_local_memory_profile_reference(&record);
+    let terms = compact
+        .keys()
+        .chain(reference.keys())
+        .collect::<HashSet<_>>();
+    for term in terms {
+        let actual = compact.get(term).copied().unwrap_or_default();
+        let expected = reference.get(term).copied().unwrap_or_default();
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "{term}: {actual} != {expected}"
+        );
+    }
 }
 
 #[test]

@@ -23,11 +23,67 @@ on commit dbf6496a.
 The canonical comparison artifact is
 [`retrieval-longmemeval-500.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-500.json).
 
+## Miss-analysis run (2026-10-12)
+
+This release-profile working-tree diagnostic evaluated all 500 questions with
+heuristic NER, structured-fact retrieval enabled, and beKIND disabled. Since
+LongMemEval scores unique sessions but `MemoryService` returns document
+memories, the harness requested four times the maximum cutoff (80 documents
+for @20), deduplicated by session ID, and scored the first 20 unique sessions.
+This changes the benchmark retrieval depth, not production search behavior.
+
+| Metric | Result |
+|---|---:|
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% |
+| MRR / NDCG@10 | 88.85% / 87.91% |
+| Search latency, mean / p50 / p95 | 3.52 / 3.32 / 5.80 ms |
+
+The three former top-20 misses ranked 19, 14, and 14. The hamster case is an
+abstention answer without a supported hamster-name fact. The segmented path was
+not rerun with this session-depth protocol. The [JSON report](../scripts/longmemeval-500-misses-session-depth4-2026-10-12.json)
+and [console log](../scripts/longmemeval-500-misses-session-depth4-2026-10-12.txt)
+are retained under `scripts/`.
+
+Reproduce it with:
+
+```bash
+cargo run --release --bin haystack_scoped_benchmark -- \
+  --longmemeval benchmark/data/longmemeval_s_raw.json \
+  --k 1 --k 3 --k 5 --k 10 --k 20 \
+  --ner-provider heuristic \
+  --structured-fact-retrieval \
+  --out scripts/longmemeval-500-misses-session-depth4-2026-10-12.json
+```
+
 For a standalone diagnostic using the current code and fractional recall (a
 different metric from the comparison headline), see
 [`retrieval-longmemeval-current.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/retrieval-longmemeval-current.json).
 The rust-bert POS/NER branch is reported separately in
 [`benchmark/README.md`](https://github.com/RooAGI/Lint-AI/blob/main/benchmark/README.md).
+
+## Native event retrieval run (2026-10-12)
+
+The latest full 500-question run uses the heuristic backend, structured claim
+retrieval, and beKIND disabled. The native extractor recognizes additional
+first-person event descriptions; structured search uses the question's
+reference date and returns events in chronological order when requested. This
+uses the normal result depth, so its scores are separate from the session-depth
+overfetch diagnostic above.
+
+| Configuration | Fractional Recall@5 / @10 / @20 | Any-hit Recall@5 / @10 / @20 | MRR | NDCG@10 | Mean search time |
+|---|---|---|---:|---:|---:|
+| Structured retrieval off | 89.00% / 94.40% / 95.69% | 96.0% / 98.0% / 98.6% | 88.76% | 87.53% | 2.80 ms |
+| Structured native events | **89.38% / 94.70% / 95.93%** | **96.4% / 98.4% / 99.0%** | 88.52% | 87.50% | 3.50 ms |
+
+The sports-events question now retrieves all three answer sessions in the top
+three; before the native event changes, none appeared in the top 20. Across the
+full set, Any-hit Recall@5 increased 0.4 percentage points. MRR changed from
+88.76% to 88.52%, and mean search time increased from 2.80 to 3.50 ms. The
+result is a working-tree diagnostic, not a tagged-release benchmark.
+
+Reports: [structured native events](../scripts/longmemeval-500-claim-contract-2026-10-12.json)
+and [structured retrieval off](../comparison/results/retrieval-longmemeval-500-nobekind-2026-10-12.json).
 
 ### Previous standalone rerun (2026-10-04)
 
@@ -109,6 +165,44 @@ with lower recall and MRR than before the upgrade.
 | Single-index control | 92.6% | 96.2% | 82.89% | 0.837 | 13.28 ms |
 
 Full report: [segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz](../comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz).
+
+### Reasoning-rules rerun (2026-10-12)
+
+The segmented benchmark was rerun after moving reasoning cues into the plain
+text `data/reasoning_rules.json` configuration. It scored all 500 questions
+with Tantivy 0.25.0, heuristic NER, fixed top-5 routing, adaptive expansion to
+12 segments, and the `coverage-local` router. This is a working-tree result.
+
+| Mode | Any-hit @5 | Any-hit @10 | Fractional @5 | MRR | Mean latency |
+|---|---:|---:|---:|---:|---:|
+| Fixed top-5 segments | 94.2% | 94.2% | 86.84% | 0.887 | 4.85 ms |
+| Fixed top-5, enriched + reranked | 94.2% | 94.2% | 86.84% | 0.882 | 6.30 ms |
+| Adaptive 5→12, enriched + reranked | 94.8% | 96.4% | 87.06% | 0.888 | 9.66 ms |
+| Intent | 94.8% | 96.4% | 86.40% | 0.869 | 1.31 ms |
+| Fused temporal + global | **96.2%** | **98.4%** | **89.73%** | **0.895** | 41.59 ms |
+| Single-index control | 95.8% | 98.0% | 88.94% | 0.885 | 13.49 ms |
+
+Fused temporal + global had the highest listed recall and MRR, with the highest
+latency. The single-index control had slightly lower retrieval scores and lower
+latency than that fused mode. The direct-index timings are not comparable to
+the standalone MemoryService timings above.
+
+Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz`](../comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz).
+
+### Default LocalDistinctiveness router comparison (2026-10-12)
+
+The same 500-question comparison was run with the server's default
+`LocalDistinctiveness` router. Relative to `coverage-local`, the fixed top-5
+route was faster but had lower recall and MRR. The global control is unchanged
+because it queries all segments.
+
+| Mode | Any-hit @5 | Any-hit @10 | Fractional @5 | MRR | Mean latency |
+|---|---:|---:|---:|---:|---:|
+| Fixed top-5 segments | 92.0% | 92.0% | 82.38% | 0.874 | 3.53 ms |
+| Adaptive 5→12, enriched + reranked | 94.0% | 95.2% | 85.35% | 0.872 | 10.26 ms |
+| Fused temporal + global | 95.0% | 98.2% | 87.25% | 0.887 | 42.50 ms |
+
+Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz`](../comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz).
 
 The earlier 133-query multi-session comparison is retained as a historical
 slice in [`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Lint-AI/blob/main/comparison/results/segment-multisession-v0.2.0.json).

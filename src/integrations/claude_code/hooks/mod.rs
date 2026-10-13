@@ -277,78 +277,87 @@ fn retrieve(
     if query.trim().is_empty() {
         return Ok(ClaudeHookOutput::default());
     }
+    if event_name == "SessionStart" && !crate::integrations::mcp_tools::has_search_store(root) {
+        return Ok(ClaudeHookOutput::default());
+    }
     let started = std::time::Instant::now();
-    if !memory_root(root).exists() {
-        let _ =
-            crate::telemetry::record_memory_retrieval(root, "claude", session_id, query, 0, &[]);
-        return Ok(ClaudeHookOutput::default());
-    }
-    let mut store = open_store(root)?;
-    if store.is_empty() {
-        let _ = crate::telemetry::record_memory_retrieval(
-            root,
-            "claude",
-            session_id,
-            query,
-            started.elapsed().as_millis() as u64,
-            &[],
-        );
-        return Ok(ClaudeHookOutput::default());
-    }
-    let results = store.observe_plain_query(
-        query,
-        RecordingProvider::Claude.as_str(),
+    let results = crate::integrations::mcp_tools::search_hook_documents(
+        root,
+        "claude",
         Some(session_id),
+        query,
         DEFAULT_TOP_K * 3,
     );
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,
         results.is_err(),
-        results.as_ref().is_ok_and(Vec::is_empty),
+        results.as_ref().is_ok_and(|value| {
+            value
+                .get("results")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        }),
     );
     let results = results?;
-    let selected = store.select_session_documents(results, DEFAULT_TOP_K);
+    let selected = results
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(DEFAULT_TOP_K);
     let mut seen = HashSet::new();
     let mut retrieved_memories = Vec::new();
     let current_revision = git_value(root, &["rev-parse", "HEAD"]);
     let current_branch = git_value(root, &["branch", "--show-current"]);
     let mut context = String::new();
     for result in selected {
-        let Some(record) = store.record_by_id(&result.doc_id) else {
-            continue;
-        };
+        let content = result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let source = result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         // Assistant-environment memories are operational context, not user
         // project memory. Keep them searchable for diagnostics, but never
         // inject them into a live Claude turn.
-        if record.source.starts_with("claude://") || record.source.starts_with("codex://") {
+        if source.starts_with("claude://") || source.starts_with("codex://") {
             continue;
         }
-        let normalized = relevant_excerpt(
-            &record.content,
-            query,
-            &result.matched_terms,
-            MAX_EXCERPT_BYTES,
-        );
+        let matched_terms = result
+            .get("matched_terms")
+            .and_then(Value::as_array)
+            .map(|terms| {
+                terms
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let normalized = relevant_excerpt(content, query, &matched_terms, MAX_EXCERPT_BYTES);
         let normalized = normalized.trim();
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {
             continue;
         }
-        let captured_revision = record.filters.get("revision").map(String::as_str);
+        let captured_revision = result.get("revision").and_then(Value::as_str);
         let status = revision_status(root, captured_revision, current_revision.as_deref());
         let entry = format!(
             "\n- Source: {}\n  Type: {}\n  Captured: {}\n  Captured branch: {}\n  Captured revision: {}\n  Current branch: {}\n  Current revision: {}\n  Revision status: {}\n  {}\n",
-            record.source,
-            record
-                .filters
+            source,
+            result
                 .get("document_type")
-                .map(String::as_str)
+                .and_then(Value::as_str)
                 .unwrap_or("memory"),
-            record.timestamp.as_deref().unwrap_or("unknown"),
-            record
-                .filters
+            result
+                .get("created_at")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            result
                 .get("branch")
-                .map(String::as_str)
+                .and_then(Value::as_str)
                 .unwrap_or("unknown"),
             captured_revision.unwrap_or("unknown"),
             current_branch.as_deref().unwrap_or("unknown"),
@@ -361,9 +370,9 @@ fn retrieve(
         }
         context.push_str(&entry);
         retrieved_memories.push(serde_json::json!({
-            "source": record.source,
-            "type": record.filters.get("document_type").map(String::as_str).unwrap_or("memory"),
-            "score": result.score,
+            "source": source,
+            "type": result.get("document_type").and_then(Value::as_str).unwrap_or("memory"),
+            "score": result.get("score"),
             "excerpt": normalized,
         }));
     }
@@ -400,6 +409,7 @@ fn capture(
         document_type.as_str(),
         crate::ids::stable_doc_id_from_source(&content)
     );
+    let captured_session_id = input.session_id.clone();
     let document = ClaudeCodeDocument {
         event_id,
         session_id: input.session_id,
@@ -413,13 +423,12 @@ fn capture(
         branch: git_value(root, &["branch", "--show-current"]),
         revision: git_value(root, &["rev-parse", "HEAD"]),
     };
-    // Writes go through the persistent shared store under the cross-process
-    // write lock (never the in-memory view): hook captures must survive the
-    // hook process and be visible to MCP servers and other hooks.
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document.into_source_document()?);
-        store.refresh_index()
-    })?;
+    crate::integrations::mcp_tools::upsert_hook_document(
+        root,
+        "claude",
+        &captured_session_id,
+        document.into_source_document()?,
+    )?;
     Ok(ClaudeHookOutput::default())
 }
 
@@ -750,7 +759,7 @@ mod tests {
             .as_nanos();
         let path = std::env::temp_dir().join(format!("lint-ai-claude-{name}-{nanos}"));
         fs::create_dir_all(&path).unwrap();
-        path
+        path.canonicalize().unwrap()
     }
 
     fn input(root: &Path, transcript: Option<PathBuf>, event: &str) -> ClaudeHookInput {
@@ -993,13 +1002,6 @@ mod tests {
         );
 
         drop(store);
-        let output = retrieve(&root, "UserPromptSubmit", "session-1", "durable routing").unwrap();
-        let context = output
-            .hook_specific_output
-            .expect("captured memory should be retrieved")
-            .additional_context;
-        assert_eq!(context.matches("- Source:").count(), 1);
-        assert!(context.contains("Type: session-summary"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -478,6 +478,7 @@ mod tests {
                 predicate: "b".to_string(),
                 object: "c".to_string(),
                 confidence: 1.0,
+                ..Default::default()
             }],
             provenance: Provenance {
                 source: "source://doc".to_string(),

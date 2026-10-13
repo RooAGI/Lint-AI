@@ -225,7 +225,16 @@ def run_once(args, repetition):
         port = args.port + repetition - 1
         bind = f"127.0.0.1:{port}"
         server = subprocess.Popen(
-            [str(args.server_bin), "--bind", bind, "--index", index_tmp], cwd=ROOT
+            [
+                str(args.server_bin),
+                "--bind",
+                bind,
+                "--index",
+                index_tmp,
+                "--project-root",
+                index_tmp,
+            ],
+            cwd=ROOT,
         )
         try:
             health = f"http://{bind}/health"

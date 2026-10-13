@@ -61,9 +61,8 @@ pub(crate) static RAW_PREPARED_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Prepa
 // All MemoryIndex lexical shards use the same fixed schema, so Tantivy's parsed
 // query object can be shared safely between shards. This avoids rebuilding the
 // QueryParser and query tree once per selected segment.
-pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<
-    Mutex<HashMap<String, Arc<dyn Query>>>,
-> = OnceLock::new();
+pub(crate) static PARSED_LEXICAL_QUERY_CACHE: OnceLock<Mutex<HashMap<String, Arc<dyn Query>>>> =
+    OnceLock::new();
 
 pub(crate) fn prepare_query_terms(query: &str) -> Option<PreparedQueryTerms> {
     const MAX_QUERY_CHARS: usize = 4096;

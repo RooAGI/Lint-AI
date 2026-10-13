@@ -1,0 +1,94 @@
+Indexing 46 haystack sessions for 'gpt4_8279ba03'...
+Indexed. Answer sessions: ["answer_56521e66_1"]
+Original question: What kitchen appliance did I buy 10 days ago?
+Bekind diagnostics: disabled (pass --bekind to inspect query tags)
+Native structured claims stored on answer sessions:
+  answer_56521e66_1 timestamp=Some("2023-03-15T00:00:00+00:00")
+    (no native event/temporal claims)
+
+Commands: !ref <date>  !quit
+
+query> Query processing:
+  input: What kitchen appliance did I buy 10 days ago?
+  reference date: Some("2023/03/25 (Sat) 18:26")
+  normalized query: what kitchen applianc did buy day ago
+  augmented/search query: What kitchen appliance did I buy 10 days ago? kitchen appliance 10 days ago buy appliance ago kitchen
+  kind: What
+  analyzed intent: Lookup
+  routing intent: None
+  evidence requirements: QueryEvidenceRequirements { relation: Some(PersonalAcquisition), minimum_distinct_objects: None, order: None }
+  time hint: Some(Past)
+  temporal phrase: Some("10 days ago")
+  temporal source: Some("fuzzydate")
+  resolved temporal anchor: Some("2023-03-15")
+  temporal window: None..None
+  anchor date: Some("2023-03-15")
+  anchor window: Some("2023-03-08..2023-03-22")
+  window days: 365
+  explicit temporal: true
+  hard temporal filter: false
+  spans:
+    QuestionWord: "what" => "what" (source=heuristic, score=0.700)
+    Entity: "What" => "what" (source=heuristic, score=0.550)
+    NounPhrase: "kitchen appliance" => "kitchen applianc" (source=pos, score=0.400)
+    NounPhrase: "10 days ago" => "day ago" (source=pos, score=0.400)
+    VerbPhrase: "did" => "did" (source=pos, score=0.350)
+    VerbPhrase: "buy" => "buy" (source=pos, score=0.350)
+    Temporal: "10 days ago" => "day ago" (source=fuzzydate, score=0.800)
+    Subject: "appliance" => "applianc" (source=heuristic, score=0.750)
+    Object: "ago" => "ago" (source=heuristic, score=0.750)
+
+Retrieval stages: MemoryService results=20 raw index results=78 lexical_hits=288 candidates=333 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_56521e66_1: absent from index evidence groups; the evidence stage had no candidates
+
+  deep index gold-session presence:
+    answer_56521e66_1: candidate rank=43 score=4.952 doc_id=doc:memory:v2:1964fceecf7c56d1a563aca4d55cc9b408d6cbe44a61fd902c2d0ea0ddbda562
+
+  MemoryService hit ranking:
+    1. id=doc:memory:v2:bf4b040c4e17fb18fed3a43e3215ffd8416f6ec8a47aabc578bafa6816e3bef7 session=Some("answer_56521e66_1") score=113.200 structured_evidence=["user acquired smoker"] ANSWER
+    2. id=doc:memory:v2:7b9e13d8d6a7cb9bd8a5ae8fe239623545bebcea669a610cc455edc71b5bb49d session=Some("89749c78_2") score=108.400 structured_evidence=["user acquired personalized photo album for my mom from Shutterfly"]
+    3. id=doc:memory:v2:92511d9f58553ef5edfac293ff17a3515df77700fd7467e36ffe84ac84c6d4e3 session=Some("d1a1b9ea_1") score=42.389 structured_evidence=[]
+    4. id=doc:memory:v2:c4ec70daea2c6eeb2207b41545ff90340c36a1a12c7d57cb241f5535d89ccec3 session=Some("518d26d3_4") score=36.561 structured_evidence=[]
+    5. id=doc:memory:v2:3944fc227d090b95fb11b5e212e87b04a0a3b1386a5ce9816aaebbc1465b020a session=Some("864a563d_5") score=36.548 structured_evidence=[]
+    6. id=doc:memory:v2:0dbf9b6755457741357dcb5f4bdfdba90ae8799b18e8ff65af7501b71d739a78 session=Some("652c0717_3") score=36.053 structured_evidence=[]
+    7. id=doc:memory:v2:1ff7f4101f48c6ad9e198b0edc2f995998bc585bb65eac75d1eb4e59bae1e86a session=Some("d1a1b9ea_1") score=35.428 structured_evidence=[]
+    8. id=doc:memory:v2:f2b6665d8896b8c6dd3461da4d73c06d3fb62b7c404783f9da81c5969edee34c session=Some("2ef55f49_3") score=33.071 structured_evidence=[]
+    9. id=doc:memory:v2:cb7dc55ccb2676a474d036794609b3fbb5d12b47eb625e088e1de978e5cc504f session=Some("652c0717_3") score=32.745 structured_evidence=[]
+    10. id=doc:memory:v2:21a6819568c9cd7c33336fd717062e15707ae38a2dd430b3ac93f04651c83139 session=Some("570fe405") score=22.252 structured_evidence=[]
+    11. id=doc:memory:v2:5752d5294fdfefe8f9f0a917b4631335c57ee324e6234794194cd6df80492de3 session=Some("50d66391_4") score=22.043 structured_evidence=[]
+    12. id=doc:memory:v2:15255ab2053fbc1499e89965627b3564d01cf8b47b7208ebc60d4cfa9e93f4f6 session=Some("50d66391_4") score=21.545 structured_evidence=[]
+    13. id=doc:memory:v2:da3e1578b37f596b489a94d709fc03060ad7d7d7acb28ff974610dc0c21b0a2e session=Some("b357fb8b_2") score=19.314 structured_evidence=[]
+    14. id=doc:memory:v2:bbe8edf2bf36cca2f8ccae0f33956257db5683f4e8a2e14b1b30ebaf84ebb24e session=Some("49b78a55_1") score=15.408 structured_evidence=[]
+    15. id=doc:memory:v2:44b45c4452b760719b470899b53675d51cc6bdadbe21c105d4295c12771b34bf session=Some("606d0c4a_2") score=13.978 structured_evidence=[]
+    16. id=doc:memory:v2:d292200ac178333218800de7f1124ff6134303f20608966a98cc823acc42976b session=Some("dea400f8_2") score=13.374 structured_evidence=[]
+    17. id=doc:memory:v2:a826cdc4bbc3bc5464588a369eed26deaf35602922b6ade61578820e2a634be6 session=Some("b357fb8b_2") score=12.503 structured_evidence=[]
+    18. id=doc:memory:v2:12107134ed555a90f5aa5335c06b472a96fd46f9cf81293111c39f8b04491fa2 session=Some("dea400f8_2") score=12.358 structured_evidence=[]
+    19. id=doc:memory:v2:0b7b5b7b25d0680387a5e2efabf4beab668ca01c9fa74603f8eb9211f2695070 session=Some("bb107057_2") score=12.080 structured_evidence=[]
+    20. id=doc:memory:v2:6dae753e5c1e80f0d4edff66af01e7beb1c3dceb26fdf311d2389ac3d39cbbfa session=Some("ba9f938b_1") score=11.753 structured_evidence=[]
+Index stage at MemoryService top_k=20
+Retrieval stages: MemoryService results=0 raw index results=20 lexical_hits=288 candidates=333 evidence_groups=0 evidence_ms=0.00
+  post-evidence group ranking (top 15 plus answer sessions):
+  ANSWER answer_56521e66_1: absent from index evidence groups; the evidence stage had no candidates
+
+  service-depth index gold-session presence:
+    answer_56521e66_1: absent from service-depth index results
+
+(6.1ms) top sessions:
+  1. answer_56521e66_1 (score 113.2000)  <-- ANSWER
+  2. 89749c78_2 (score 108.4000)
+  3. d1a1b9ea_1 (score 42.3891)
+  4. 518d26d3_4 (score 36.5612)
+  5. 864a563d_5 (score 36.5480)
+  6. 652c0717_3 (score 36.0526)
+  7. 2ef55f49_3 (score 33.0706)
+  8. 570fe405 (score 22.2520)
+  9. 50d66391_4 (score 22.0431)
+  10. b357fb8b_2 (score 19.3138)
+  11. 49b78a55_1 (score 15.4081)
+  12. 606d0c4a_2 (score 13.9776)
+  13. dea400f8_2 (score 13.3740)
+  14. bb107057_2 (score 12.0800)
+  15. ba9f938b_1 (score 11.7528)
+
+query>

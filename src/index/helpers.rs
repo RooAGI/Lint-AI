@@ -13,6 +13,12 @@ use std::sync::OnceLock;
 use super::model::*;
 use super::query_terms::*;
 
+pub(crate) const BEKIND_PARTICIPATION_POSTING: &str = "__evidence:participated_in";
+
+pub(crate) fn is_participation_claim(predicate: &str) -> bool {
+    matches!(predicate, "participated_in" | "bekind:participated_in")
+}
+
 pub(crate) fn tokenize_query_terms(input: &str) -> Vec<String> {
     tokenizer::tokenize(input, TokenizerMode::Unstemmed)
 }
@@ -456,6 +462,26 @@ pub(crate) fn has_predicate_signal(text: &str, intent: QueryRoutingIntent) -> bo
         .as_slice(),
     };
     terms.iter().any(|term| text.contains(term))
+}
+
+pub(crate) fn has_participation_language(text: &str) -> bool {
+    let normalized = text.to_lowercase();
+    [
+        "i participated in",
+        "we participated in",
+        "i took part in",
+        "we took part in",
+        "i attended",
+        "we attended",
+        "i competed in",
+        "we competed in",
+        "i joined",
+        "we joined",
+        "i played in",
+        "we played in",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase))
 }
 
 pub(crate) fn routing_distractor_penalty(text: &str, intent: QueryRoutingIntent) -> f32 {

@@ -8,6 +8,7 @@ Examples:
 """
 import argparse
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -26,11 +27,14 @@ parser.add_argument("--requests", type=int, default=100)
 parser.add_argument("--warmup-requests", type=int, default=0)
 parser.add_argument("--port", type=int, default=18080)
 parser.add_argument("--keep-index", action="store_true")
+parser.add_argument("--startup-timeout-seconds", type=float, default=120)
 args = parser.parse_args()
+if args.startup_timeout_seconds <= 0:
+    parser.error("startup timeout must be positive")
 
-index_dir = Path(tempfile.mkdtemp(prefix=f"lint-ai-throughput-{args.mode}."))
+index_dir = Path(tempfile.mkdtemp(prefix=f"lint-ai-throughput-{args.mode}.")).resolve()
 bind = f"127.0.0.1:{args.port}"
-command = [str(args.server_bin), "--bind", bind, "--index", str(index_dir)]
+command = [str(args.server_bin), "--bind", bind, "--index", str(index_dir), "--project-root", str(index_dir)]
 if args.mode == "single":
     command.append("--single-index")
 elif args.mode == "global":
@@ -38,11 +42,13 @@ elif args.mode == "global":
 server = subprocess.Popen(command, cwd=ROOT)
 try:
     health = f"http://{bind}/health"
-    for _ in range(100):
+    for _ in range(max(1, int(args.startup_timeout_seconds * 10))):
         try:
             with urllib.request.urlopen(health, timeout=1):
                 break
         except Exception:
+            if server.poll() is not None:
+                raise RuntimeError("server exited before becoming healthy")
             time.sleep(0.1)
     else:
         raise RuntimeError("server did not become healthy")
@@ -63,6 +69,7 @@ try:
         ],
         check=True,
         cwd=ROOT,
+        stdout=subprocess.DEVNULL,
     )
     payload = json.dumps(
         {
@@ -105,5 +112,8 @@ finally:
         server.wait(timeout=5)
     except subprocess.TimeoutExpired:
         server.kill()
+        server.wait()
     if args.keep_index:
         print(f"index_dir={index_dir}")
+    else:
+        shutil.rmtree(index_dir)

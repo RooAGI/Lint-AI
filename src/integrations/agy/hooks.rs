@@ -171,48 +171,49 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
     if query.trim().is_empty() {
         return Ok(AgyHookOutput::default());
     }
-    let memory = crate::integrations::mcp_index::shared_memory_root(root);
-    if !memory.exists() {
-        return Ok(AgyHookOutput::default());
-    }
-    let mut store = MemoryService::at_path(
-        &memory,
-        PipelineOptions {
-            memory_index_layout: MemoryIndexLayout::Segmented {
-                query_top_n: 3,
-                routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness,
-            },
-            ..PipelineOptions::default()
-        },
-    )?;
-    if store.is_empty() {
-        return Ok(AgyHookOutput::default());
-    }
     let started = std::time::Instant::now();
     let hook_session_id =
         (!input.conversation_id.is_empty()).then_some(input.conversation_id.as_str());
-    let results =
-        store.observe_plain_query(&query, RecordingProvider::Agy.as_str(), hook_session_id, 5);
+    let results = crate::integrations::mcp_tools::search_hook_documents(
+        root,
+        RecordingProvider::Agy.as_str(),
+        hook_session_id,
+        &query,
+        5,
+    );
     let _ = crate::telemetry::record_project_query(
         root,
         started.elapsed().as_millis() as u64,
         results.is_err(),
-        results.as_ref().is_ok_and(Vec::is_empty),
+        results.as_ref().is_ok_and(|value| {
+            value
+                .get("results")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        }),
     );
     let mut context = String::new();
-    for result in results? {
-        if let Some(record) = store.record_by_id(&result.doc_id) {
-            let content = record.content.trim();
-            if !content.is_empty() {
-                let bounded_content = truncate_utf8(content, 4_000);
-                context.push_str(&format!(
-                    "\n- Source: {}\n  {}\n",
-                    record.source, bounded_content
-                ));
-            }
-            if context.len() > 8_000 {
-                break;
-            }
+    for result in results?
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let source = result
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let content = result
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if !content.is_empty() {
+            let bounded_content = truncate_utf8(content, 4_000);
+            context.push_str(&format!("\n- Source: {}\n  {}\n", source, bounded_content));
+        }
+        if context.len() > 8_000 {
+            break;
         }
     }
     if context.is_empty() {
@@ -335,11 +336,7 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         key_phrases: Vec::new(),
         key_phrase_extraction_hash: String::new(),
     };
-    crate::memory_api::MemoryService::with_shared_memory(root, |store| {
-        store.upsert(document);
-        store.refresh_index()?;
-        Ok(())
-    })
+    crate::integrations::mcp_tools::upsert_hook_document(root, "agy", session_id, document)
 }
 
 fn current_timestamp() -> String {

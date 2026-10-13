@@ -101,6 +101,7 @@ nav:
   - Languages:
       - Korean: korean.md
   - Releases:
+      - 0.4.0: releases/0.4.0.md
       - 0.3.0: releases/0.3.0.md
       - Tantivy upgrade verification: releases/tantivy-0.26.2-verification.md
       - 0.2.1: releases/0.2.1.md

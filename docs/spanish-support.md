@@ -1,9 +1,10 @@
 # Spanish Language Support
 
-Membrick supports Spanish memories end-to-end: detection, tokenization,
-indexing, NER, question understanding, temporal expressions, stopwords,
-numbers, and aggregation. This document describes the implementation,
-the design decisions, and the known limitations.
+Membrick supports Spanish memories through Rust-based detection, tokenization,
+indexing, question understanding, temporal expressions, stopwords, numbers,
+and aggregation. These features do not require spaCy. Spanish NER is an
+optional spaCy enrichment using `es_core_news_sm`; this document describes
+that path and the language implementation's known limitations.
 
 All language-selection logic lives in Rust. The Python spaCy scripts
 (`scripts/spacy_ner.py`, `scripts/spacy_relations.py`) only receive a
@@ -55,7 +56,7 @@ emission (`niño` -> `niño` + `nino`), so the in-house postings path and
 query analysis agree with the tantivy index. Pure-ASCII text is
 byte-identical to before (single emission).
 
-## spaCy NER (`es_core_news_sm`)
+## Optional spaCy NER (`es_core_news_sm`)
 
 - `default_spacy_model_for_lang(Lang::Es)` returns `"es_core_news_sm"`.
 - Tier-1 document batches are grouped by `PipelineOptions::spacy_model_for_text`,
@@ -64,7 +65,10 @@ byte-identical to before (single emission).
   explicit `--lang` pins it, while `auto`/omitted follows the document
   turns' detected script (`extractor_model_for_turns`) — Spanish turns get
   `es_core_news_sm`.
-- Install with: `python3 -m spacy download es_core_news_sm`
+- The CLI currently defaults `--tier1-ner-provider` to `spacy`, while
+  `PipelineOptions` defaults to the heuristic, Python-free provider. Install
+  the model only if you enable the spaCy provider:
+  `python3 -m spacy download es_core_news_sm`
   (use `PIP_BREAK_SYSTEM_PACKAGES=1` on Debian-based systems if needed).
 
 ## Interrogatives and question focus

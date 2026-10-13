@@ -836,6 +836,10 @@ fn write_bytes_file_atomic_with_permissions(
         file.sync_all()?;
     }
     fs::rename(&temp_path, path)?;
+    // Unix permits opening and syncing a directory to make the rename durable.
+    // Windows does not expose directory fsync through `File::open`; doing so
+    // fails with ERROR_ACCESS_DENIED after the destination was already replaced.
+    #[cfg(unix)]
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::File::open(parent)?.sync_all()?;
     }

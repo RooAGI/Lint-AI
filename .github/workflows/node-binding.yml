@@ -30,10 +30,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            cross: false
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            cross: true
           - os: macos-15-intel
             target: x86_64-apple-darwin
             cross: false
@@ -57,14 +55,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Build native binding
         working-directory: bindings/node
-        shell: bash
-        run: |
-          if [[ "${{ matrix.cross }}" == "true" ]]; then
-            npx napi build --platform --release --target "${{ matrix.target }}" --use-napi-cross
-          else
-            npx napi build --platform --release --target "${{ matrix.target }}"
-          fi
+        run: npx napi build --platform --release --target "${{ matrix.target }}"
       - name: Run Node tests
-        if: ${{ !matrix.cross }}
         working-directory: bindings/node
         run: npm test

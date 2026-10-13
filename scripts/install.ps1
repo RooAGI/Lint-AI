@@ -11,16 +11,23 @@ $BaseUrl = "https://github.com/$Repo/releases/latest/download"
 $Asset = 'membrick-windows-x86_64.exe'
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("membrick-" + [guid]::NewGuid().ToString('N'))
 $BinaryTemp = Join-Path $TempDir $Asset
-$ChecksumTemp = "$BinaryTemp.sha256"
+$ChecksumTemp = Join-Path $TempDir 'SHA256SUMS'
 $InstalledBinary = Join-Path $InstallDir 'membrick.exe'
 
 New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 try {
     Write-Host 'Downloading official Membrick release for Windows x86_64...'
     Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset" -OutFile $BinaryTemp
-    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset.sha256" -OutFile $ChecksumTemp
-
-    $Expected = ((Get-Content -Raw $ChecksumTemp).Trim() -split '\s+')[0].ToLowerInvariant()
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/SHA256SUMS" -OutFile $ChecksumTemp
+        $ChecksumLine = Get-Content $ChecksumTemp | Where-Object { $_ -match "\s+$([regex]::Escape($Asset))$" } | Select-Object -First 1
+        if (-not $ChecksumLine) { throw "No checksum found for $Asset; refusing to install." }
+        $Expected = ($ChecksumLine.Trim() -split '\s+')[0].ToLowerInvariant()
+    } catch {
+        # Support releases published before the aggregate manifest was introduced.
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Asset.sha256" -OutFile $ChecksumTemp
+        $Expected = ((Get-Content -Raw $ChecksumTemp).Trim() -split '\s+')[0].ToLowerInvariant()
+    }
     $Actual = (Get-FileHash -Algorithm SHA256 $BinaryTemp).Hash.ToLowerInvariant()
     if ($Expected -ne $Actual) {
         throw 'Checksum verification failed; refusing to install.'
@@ -29,6 +36,7 @@ try {
     Write-Host 'Checksum verified.'
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item -Force $BinaryTemp $InstalledBinary
+    New-Item -ItemType File -Force -Path (Join-Path $InstallDir '.membrick-managed') | Out-Null
 
     $Version = & $InstalledBinary --version
     Write-Host "Installed $Version to $InstalledBinary"

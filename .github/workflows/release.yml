@@ -58,7 +58,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target\${{ matrix.target }}\release\membrick.exe dist\${{ matrix.asset_name }}
           $hash = (Get-FileHash -Algorithm SHA256 "dist\${{ matrix.asset_name }}").Hash.ToLower()
-          "$hash  ${{ matrix.asset_name }}" | Set-Content -NoNewline "dist\${{ matrix.asset_name }}.sha256"
+          "$hash  ${{ matrix.asset_name }}" | Set-Content "dist\${{ matrix.asset_name }}.sha256"
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
@@ -79,6 +79,12 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
+
+      - name: Create release checksum manifest
+        shell: bash
+        run: |
+          cat dist/*.sha256 > dist/SHA256SUMS
+          rm dist/*.sha256
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

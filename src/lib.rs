@@ -117,6 +117,7 @@ mod temporal;
 mod tier1;
 mod tier1_ner_daemon;
 mod tokenizer;
+mod updater;
 mod usage;
 
 pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
@@ -169,6 +170,9 @@ mod executables;
 /// Launch a bundled executable. This process entry point exposes no memory internals.
 #[doc(hidden)]
 pub fn run_binary(name: &str) -> anyhow::Result<()> {
+    if matches!(name, "membrick" | "lint-ai") {
+        updater::check_for_update();
+    }
     executables::run(name)
 }
 

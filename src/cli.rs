@@ -142,6 +142,9 @@ pub enum IndexInspectView {
 #[command(name = "membrick", version = env!("CARGO_PKG_VERSION"))]
 /// CLI arguments for the membrick binary.
 pub struct Args {
+    /// Skip the interactive release update check for this invocation.
+    #[arg(long)]
+    pub no_update_check: bool,
     #[arg(default_value = ".")]
     pub path: String,
     #[arg(long)]

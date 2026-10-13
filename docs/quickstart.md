@@ -24,6 +24,12 @@ official release and checks its SHA-256 checksum:
 curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/install.sh | sh
 ```
 
+Installations made by the official installer check for updates once per day
+when you run Membrick interactively. Membrick asks before downloading and
+replacing its executable. MCP and hook processes do not check for updates.
+Pass `--no-update-check` to skip the check for one invocation. Binaries
+installed with Cargo or a package manager should be updated with that tool.
+
 On Windows, download `membrick-windows-x86_64.exe` from the releases page. In
 PowerShell, run it from the download folder; in the commands below, use
 `.\membrick-windows-x86_64.exe` instead of `membrick`. You can create, edit, and

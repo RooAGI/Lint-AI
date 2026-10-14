@@ -4,9 +4,52 @@ Use this checklist for every Membrick release. Complete the preparation and
 benchmark work before opening the release PR. Merge the PR before creating its
 `vX.Y.Z` tag. Check each item or record why it does not apply.
 
+## Release files and what they control
+
+Update only the files for components included in the release. Keep package
+versions aligned with the tag, and regenerate each lockfile with its package
+manager.
+
+| Release area | Files to update | Purpose |
+|---|---|---|
+| Rust CLI and library | `Cargo.toml`, `Cargo.lock` | Crate version and locked dependency/package metadata |
+| Python package | `pyproject.toml`, `uv.lock` | Python distribution version and lockfile |
+| Node package | `bindings/node/package.json`, `bindings/node/package-lock.json`, `bindings/node/Cargo.toml`, `bindings/node/Cargo.lock` | npm package and native binding versions |
+| Node platform packages | `bindings/node/package.json` (`napi.targets` and `optionalDependencies`) and `.github/workflows/node-publish.yml` | The workflow builds and publishes the five platform packages named in the root package manifest |
+| OpenClaw plugin | `src/integrations/openclaw/plugin/package.json`, `src/integrations/openclaw/plugin/openclaw.plugin.json` | Plugin package version and discovery metadata |
+| Helm chart | `charts/membrick/Chart.yaml` | Chart version and application version |
+| Release notes | `docs/releases/X.Y.Z.md` | User-visible changes, upgrade steps, compatibility, and known issues |
+| Website content | `docs/index.md` for homepage claims; relevant `docs/*.md` pages for guides and benchmarks; `mkdocs.yml` for navigation | Published documentation site. `README.md` updates the GitHub repository page; it does not update the website homepage |
+| Benchmark evidence | `comparison/results/<run>.json` or `.json.gz`, plus `docs/benchmark-results.md` | Reproducible report artifacts and the human-readable summary |
+| Publishing workflows, when needed | `.github/workflows/release.yml`, `crate-publish.yml`, `python-publish.yml`, `node-publish.yml`, `docs.yml` | Build and publish behavior. Change these only when the workflow itself needs a fix |
+
+GitHub Actions permissions, environments, npm credentials, and registry trusted
+publisher settings are configured in GitHub or the package registries, not in
+these repository files. Verify them as separate release prerequisites.
+
+## Publish sequence
+
+1. Update the applicable version files, release notes, benchmark evidence, and
+   website pages in one release PR. Update `README.md` separately when its
+   repository overview or benchmark summary needs to change.
+2. Review the file map above, generated manifests, lockfiles, package contents,
+   and version consistency. Run the required checks and benchmarks, then merge
+   the PR to `main`.
+3. Create and push one annotated `vX.Y.Z` tag on the merged commit. The tag
+   starts the GitHub release, crates.io, PyPI, and npm publication workflows.
+4. Confirm every workflow validates the same tag version and finishes
+   successfully. Check the GitHub release assets and every registry package,
+   including platform-specific npm packages.
+5. Confirm the documentation workflow deploys the merged `docs/` changes.
+   README changes alone do not trigger or update the website homepage.
+6. Record the merged commit, tag, workflow run links, published package
+   versions, and any exceptions in the release record.
+
 ## Before opening the release PR
 
-Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Checked items below have evidence in the linked release notes, metadata, and benchmark pages. Remaining boxes are open gates.
+The v0.5.0 tag has been pushed. Use the checklist below to track publication
+and post-release verification; do not treat a pushed tag as proof that every
+package and website deployment is available.
 
 - [x] Choose the version using semantic versioning: patch for fixes, minor for
   compatible features, major for breaking changes.
@@ -36,11 +79,11 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
   integrations. The benchmark runs were started before explicit numerical
   regression limits were recorded; document that process exception and review
   results before merge.
-- [ ] Run the required benchmarks on a clean, optimized candidate build. Compare
-  with the previous tagged release using the same machine, dataset, settings,
-  query set, result depth, and harness wherever possible. Record the commit SHA,
-  build features, configuration, command, host, dataset identity, raw output,
-  and summary. Keep dated artifacts; do not replace prior results.
+- [x] Run the required benchmarks on a clean, optimized candidate build. The
+  current PR head `ac0d23d` was evaluated in release mode with locked dependencies
+  on the same host, dataset, and settings as the prior v0.4.0 comparison. The
+  command, feature set, host, dataset hash, per-question results, and summary
+  are recorded in `benchmark-results.md`; the dated raw report is preserved.
 - [x] **LongMemEval-S retrieval quality:** run all 500 questions through the
   production retrieval settings, including structured-fact retrieval enabled
   and the documented release NER backend. The v0.4.0 tag and exact v0.5.0 PR
@@ -104,6 +147,20 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
 - [ ] All required reviews are complete and the release PR is merged to `main`.
 
 ## After the release PR is merged
+
+### v0.5.0 publication status
+
+The `v0.5.0` tag points to merged commit `b204b7e`. At the latest check on
+2026-10-14, the GitHub binary release and Node publication were running, the
+Python publication was queued, and the Rust crate workflow failed at startup
+before creating a job. The failed Rust run cannot be retried in place. Do not
+mark v0.5.0 publication complete until the available workflows and registry
+versions have been checked, and the Rust publication has a documented recovery.
+
+- [GitHub release](https://github.com/RooAGI/Membrick/actions/runs/38640167122)
+- [Node publish](https://github.com/RooAGI/Membrick/actions/runs/38640167124)
+- [Python publish](https://github.com/RooAGI/Membrick/actions/runs/38640167375)
+- [Rust crate publish](https://github.com/RooAGI/Membrick/actions/runs/38640168831)
 
 - [ ] Confirm `main` contains the merged release commit and required checks pass
   on that commit.

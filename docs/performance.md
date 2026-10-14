@@ -5,27 +5,48 @@ integrations. Results are grouped by provider because token accounting,
 models, and task transcripts differ. Each comparison uses that provider's
 native memory behavior as its baseline.
 
+## Overview
+
+Membrick hooks run automatically during an agent session. They retrieve
+relevant saved project context and add it to the agent's context, so the agent
+can use it while answering. They do not require the agent to call a Membrick
+tool. “Native memory” means Claude's or Codex's own memory feature. Tool-call
+counts below refer to tools called by the agent.
+
+!!! success "Claude Code: lower token and tool use with Membrick hooks"
+
+    - **Fresh input tokens:** 128 → 32 (75.0% fewer)
+    - **Overall tokens:** 2,884,478 → 605,686 (79.0% fewer)
+    - **Overall tokens per fresh input token:** 22,535 → 18,928 (16.0% fewer)
+    - **Agent tool calls:** 65 → 14 (78.5% fewer)
+    - **Claude response turns:** 131 → 36 (72.5% fewer)
+
+    Recall was 3/3 in every run. This was one scenario repeated three times.
+    Response turns count Claude's replies across those repetitions.
+
+!!! success "Codex: lower token and tool use with Membrick hooks"
+
+    - **Fresh input tokens:** 46,035 → 36,731 (20.2% fewer)
+    - **Overall tokens:** 313,066 → 196,102 (37.4% fewer)
+    - **Overall tokens per fresh input token:** 6.80 → 5.34 (21.5% fewer)
+    - **Agent tool calls:** 7 → 4 (42.9% fewer)
+    - **Continuation time:** 27.95 s → 13.80 s (50.6% less)
+
+    Recall stayed at 3/3. Both setups used one continuation round, so this run
+    did not reduce the number of rounds. This was one run per setup.
+
 ## Claude Code token use
 
 ### Save tokens by giving Claude remembered project context
-
-!!! success "Membrick hooks: measured savings across three runs"
-
-    - **Claude response turns:** 131 → 36 (72.5% fewer)
-    - **Tool calls:** 65 → 14 (78.5% fewer)
-    - **Overall tokens:** 2,884,478 → 605,686 (79.0% fewer)
-    - **Overall tokens per fresh input token:** 22,535 → 18,928 (16.0% fewer)
-
-    Claude found all three test facts in every run.
 
 Each row below combines three runs. Parentheses show the reduction compared
 with Claude native.
 
 | Setup | Claude response turns | Tool calls | Fresh input tokens | Overall tokens | Overall tokens per fresh input token |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Claude native | 131 | 65 | 128 | 2,884,478 | 22,535 |
-| Membrick hooks | 36 (72.5% fewer) | 14 (78.5% fewer) | 32 (75.0% fewer) | 605,686 (79.0% fewer) | 18,928 (16.0% fewer) |
-| Claude + Membrick | 33 (74.8% fewer) | 13 (80.0% fewer) | 32 (75.0% fewer) | 587,723 (79.6% fewer) | 18,366 (18.5% fewer) |
+| Claude native memory only | 131 | 65 | 128 | 2,884,478 | 22,535 |
+| Membrick hooks only | 36 (72.5% fewer) | 14 (78.5% fewer) | 32 (75.0% fewer) | 605,686 (79.0% fewer) | 18,928 (16.0% fewer) |
+| Claude native memory + Membrick hooks | 33 (74.8% fewer) | 13 (80.0% fewer) | 32 (75.0% fewer) | 587,723 (79.6% fewer) | 18,366 (18.5% fewer) |
 
 **Why Claude needed fewer turns and calls:** without Membrick, Claude had to
 inspect the project to find and check the facts. Membrick supplied saved
@@ -33,7 +54,7 @@ project context automatically, so Claude needed fewer back-and-forth
 responses and tool calls. Across the three runs, hooks returned 165 document
 results and had no failures.
 
-With both Membrick and Claude's native memory enabled, Claude used 587,723
+With Claude native memory and Membrick hooks enabled, Claude used 587,723
 tokens, saving **2,296,755 tokens (79.6%)** against the native-only run. It
 made 13 tool calls and found all three facts in each run. The detailed tables
 below show how each run contributed to these totals.
@@ -81,23 +102,11 @@ paths.
 
 ### Codex used fewer tokens and tool calls with remembered project context
 
-!!! success "Membrick cut Codex's tokens and tool calls in this run"
-
-    | Measure | Codex native | Membrick hooks | Saved with Membrick |
-    | --- | ---: | ---: | ---: |
-    | Fresh input tokens | 46,035 | 36,731 | **9,304 (20.2%)** |
-    | Overall tokens | 313,066 | 196,102 | **116,964 (37.4%)** |
-    | Overall tokens per fresh input token | 6.80 | 5.34 | **1.46 (21.5%)** |
-    | Tool calls | 7 | 4 | **3 (42.9%)** |
-    | Continuation time | 27.95 s | 13.80 s | **14.15 s (50.6%)** |
-    | Expected facts recalled | 3/3 | 3/3 | Same recall |
-    | Continuation rounds | 1 | 1 | Not reduced in this run |
-
-| Setup | Fresh input tokens | Overall tokens | Overall tokens per fresh input token | Tool calls | Continuation time | Recall |
+| Setup | Fresh input tokens | Overall tokens | Overall tokens per fresh input token | Agent tool calls | Continuation time | Recall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex native memory | 46,035 | 313,066 | 6.80 | 7 | 27.95 s | 3/3 |
+| Codex native memory only | 46,035 | 313,066 | 6.80 | 7 | 27.95 s | 3/3 |
 | Membrick hooks | 36,731 (20.2% fewer) | 196,102 (37.4% fewer) | 5.34 (21.5% fewer) | 4 (3 fewer) | 13.80 s (50.6% less) | 3/3 |
-| Membrick + Codex memory | 25,624 (44.3% fewer) | 137,333 (56.1% fewer) | 5.36 (21.2% fewer) | 2 (5 fewer) | 14.94 s (46.6% less) | 3/3 |
+| Membrick hooks + Codex native memory | 25,624 (44.3% fewer) | 137,333 (56.1% fewer) | 5.36 (21.2% fewer) | 2 (5 fewer) | 14.94 s (46.6% less) | 3/3 |
 
 This was one run of `routing-decision-supersession` per setup on 2026-10-13.
 Fresh input is calculated as reported input tokens minus cached input tokens.

@@ -98,10 +98,9 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
   succeed for the Rust crate.
 - [ ] Package contents include the expected CLI, native libraries, licenses,
   and metadata for each published package.
-- [ ] Include benchmark commands, artifacts, and a concise results summary in
+- [x] Include benchmark commands, artifacts, and a concise results summary in
   the PR. Explain any waived benchmark and its reason. The repeated IPC/HTTP
-  benchmark script and raw artifact are prepared locally; include them with the
-  release PR update.
+  benchmark script and raw artifact are committed in `5d23499`.
 - [ ] All required reviews are complete and the release PR is merged to `main`.
 
 ## After the release PR is merged

@@ -11,6 +11,17 @@ Identity is an API concern: `MemoryService` translates `user_id` into a generic
 document filter, while `IndexStore` and segmented indexing remain unaware of
 users. `group_id`/`session_id` is the core segmentation key and must not be
 treated as a user identifier.
+In project mode, HTTP memory endpoints (`/add`, `/v1/memories`, and the
+memory lifecycle routes) write to the captured-memory `MemoryService`, separate
+from the refreshable workspace-file service. Workspace re-indexing therefore
+cannot remove memories written through the API. Search uses the published
+composed view and applies the API's user filter.
+Persistent `MemoryService` instances append content-free mutation records to
+`mutations.jsonl` beside `receipts.json`. Entries contain the timestamp,
+operation, owner, request ID when available, and affected memory IDs; they do
+not contain memory text. The journal covers API add, batch add, update, delete,
+supersede, expiry, and provider-hook capture publication. Capture events use an
+action such as `capture:codex`; their request ID field contains the session ID.
 it does not require Claude Code, Codex, Gemini CLI, or Antigravity.
 
 ## Run locally
@@ -18,11 +29,27 @@ it does not require Claude Code, Codex, Gemini CLI, or Antigravity.
 Use an explicit index directory for a persistent evaluation instance:
 
 ```bash
-cargo run --release --bin server -- \
-  --bind 127.0.0.1:8080 \
-  --index /var/lib/membrick/memory-index \
-  --server-token "$SERVER_TOKEN"
+cargo run --release --bin server -- --settings .membrick/server.toml
 ```
+
+The server reads `.membrick/server.toml` from its project root by default. Use
+`--settings PATH` to select another TOML file. Command-line flags override
+values from the file. For example:
+
+```toml
+bind = "127.0.0.1:8080"
+project_root = "/path/to/project"
+index = "/var/lib/membrick/memory-index"
+server_token = "replace-with-a-secret"
+# Or use a protected secret file instead of storing the value in TOML:
+# server_token_file = "/path/to/server-token"
+tenant_id = "team-a"
+adaptive_segment_max_n = 32
+jwt_secret = "replace-with-a-secret"
+```
+
+Keep secrets in a user-private settings file and restrict its filesystem
+permissions. The server does not read configuration from environment variables.
 
 `--bind` defaults to `127.0.0.1:8080`. If `--index` is omitted, the server
 discovers indexes under `<project-root>/.membrick` and uses the shared
@@ -34,7 +61,7 @@ its optional index-time tags and query-time analysis; when disabled, the server
 does not call or prewarm the Bekind daemon.
 Provider lifecycle telemetry is read from `<project-root>/.membrick/provider-telemetry`;
 the project root defaults to the server's current directory and can be set with
-`--project-root` or `MEMBRICK_PROJECT_ROOT`.
+`--project-root` or the `project_root` setting.
 See [Telemetry](telemetry.md) for the telemetry streams, retention bounds,
 provider coverage, privacy behavior, and dashboard endpoints.
 With only `--project-root`, one server can inspect the shared workspace store
@@ -61,8 +88,8 @@ longer created.
 The server publishes a segmented memory index grouped by `session_id` and routes
 each search to the five most locally distinctive candidate segments.
 Fixed top-5 routing remains the default. To opt into adaptive routing, pass
-`--adaptive-segment-max-n N` or set `ADAPTIVE_SEGMENT_MAX_N=N`, where `N` is
-greater than 5. Adaptive routing starts with the same five segments and may
+`--adaptive-segment-max-n N` or set `adaptive_segment_max_n` in the server
+settings file, where `N` is greater than 5. Adaptive routing starts with the same five segments and may
 expand up to `N` when the initial routes do not cover enough query evidence.
 Use `--single-index` for the non-segmented layout or `--global-index` to query
 every segmented shard. These modes are intended primarily for controlled
@@ -123,13 +150,14 @@ latency harness above measures its route separately. Reports:
 
 By default the server binds only to localhost, such as `127.0.0.1:8080` or
 `[::1]:8080`. To bind a container or another network interface, explicitly pass
-`--allow-non-loopback` and configure `SERVER_TOKEN` or `JWT_SECRET`. This option
+`--allow-non-loopback` and configure `server_token` or `jwt_secret` in the
+server settings file. This option
 cannot be combined with `--allow-unauthenticated`. Keep the host port private
 or place remote access behind an authenticated, encrypted proxy. See
 [Run Membrick with Docker](docker.md) for a localhost-only Compose setup.
 
-For a single-tenant deployment, also set `--tenant-id TENANT` (or
-`SERVER_TENANT_ID`). Requests whose `user_id` does not match this configured
+For a single-tenant deployment, also set `--tenant-id TENANT` or the
+`tenant_id` setting. Requests whose `user_id` does not match this configured
 tenant are rejected; this prevents a bearer token from being used to select
 another tenant by changing the request body.
 
@@ -142,10 +170,10 @@ Adds arriving during refresh wait; a full queue returns `429`. Synchronous
 lifecycle mutations also serialize through the mutable owner. Searches retain
 the published read view throughout a rebuild.
 
-For per-user authentication, set `JWT_SECRET`. The server accepts HS256 JWTs
+For per-user authentication, set `jwt_secret` in the server settings file. The server accepts HS256 JWTs
 with a non-empty `sub` claim and a valid `exp` claim; that subject is treated
-as the authenticated `user_id` and must match the request scope. `JWT_SECRET`
-takes precedence over the legacy shared `SERVER_TOKEN` mode.
+as the authenticated `user_id` and must match the request scope. The JWT secret
+takes precedence over the shared `server_token` mode.
 
 The server exposes `GET /health`, the legacy mutation/search routes, and the
 versioned memory routes:
@@ -564,8 +592,8 @@ the profile artifact above.
 
 The sampled substage profiler has since been removed from the query loop. The
 candidate-ID vector and `candidates.entry(doc_u32).or_default()` lookup are
-restored. I reran the benchmark with `MEMBRICK_QUERY_TIMINGS=1`, matching the
-setting recorded for the 1,916 req/s run. Across three runs, the median was
+restored. The historical benchmark used query timing instrumentation when
+recording the 1,916 req/s run. Across three runs, the median was
 374 req/s at C=1 and 1,922 req/s at C=10. C=10 ranged from 1,765 to 2,115
 req/s, so the rerun is consistent with 1,916 within benchmark variation. The
 earlier 371/1,850 run had timing unset and is a separate uninstrumented result.
@@ -684,8 +712,8 @@ not copied into filter metadata. Reusing a request ID with a different session
 or message payload is rejected.
 
 The server token accepts `X-Api-Key`, `Authorization: Bearer <token>`, or the
-raw token in `Authorization`. It can also be supplied through
-`SERVER_TOKEN`.
+raw token in `Authorization`. Configure the token in `server_token` or pass
+`--server-token`.
 
 Non-loopback binds require the explicit `--allow-non-loopback` option and
 configured token or JWT authentication. The option is rejected when combined
@@ -707,7 +735,7 @@ failures return `500`.
 curl -sS http://127.0.0.1:8080/health
 
 curl -sS -X POST http://127.0.0.1:8080/add \
-  -H "X-Api-Key: $SERVER_TOKEN" \
+  -H "X-Api-Key: replace-with-your-server-token" \
   -H 'Content-Type: application/json' \
   --data '{
     "request_id": "local-run:session-0:chunk-0",
@@ -717,7 +745,7 @@ curl -sS -X POST http://127.0.0.1:8080/add \
   }'
 
 curl -sS -X POST http://127.0.0.1:8080/search \
-  -H "X-Api-Key: $SERVER_TOKEN" \
+  -H "X-Api-Key: replace-with-your-server-token" \
   -H 'Content-Type: application/json' \
   --data '{
     "query": "What interface preference does the user have?",

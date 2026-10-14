@@ -12,7 +12,32 @@ claims about the Codex integration. The current Codex implementation is
 functionally complete. A latest three-arm smoke result is recorded below;
 additional repetitions are required before release claims.
 
-## Latest Validated Smoke Result
+## Latest Matched-Scenario Diagnostic: Routing Decision Supersession
+
+On 2026-10-13, Codex and Claude each ran the
+`routing-decision-supersession` task template once per arm using the
+`hooks-only` profile. Provider-specific wording and validators were used.
+Setup was excluded from continuation measurements.
+
+| Arm | Continuation | Input tokens | Output tokens | Input + output | Tool calls | Recall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Codex native memory | 27.95 s | 312,019 | 1,047 | 313,066 | 7 | 3/3 |
+| Membrick hooks | 13.80 s | 195,451 | 651 | 196,102 | 4 | 3/3 |
+| Membrick and Codex memory | 14.94 s | 136,728 | 605 | 137,333 | 2 | 3/3 |
+
+In this run, Membrick hooks used **37.4% fewer input and output tokens** and
+took **50.6% less time** than native memory. With both memory layers, tokens
+were **56.1% lower** and continuation time was **46.6% lower**. All arms
+recalled the three expected facts. These are single-run diagnostic results,
+not a release benchmark or a general performance guarantee. They cannot be
+compared directly with Claude token totals because the providers use different
+models and token accounting.
+
+Preserved report:
+
+- `scripts/provider-performance-0.4.0/results/codex/report.json`
+
+## Earlier Index-Store Smoke Result
 
 The current three-arm orchestration was run on the
 `index-store-segmented-routing` scenario with one repetition. Metrics below

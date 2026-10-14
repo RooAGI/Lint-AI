@@ -1,33 +1,29 @@
 mod protocol;
 
 use super::document::{ClaudeCodeDocument, ClaudeCodeDocumentType};
+use crate::ids::stable_doc_id_from_source;
 use crate::integrations::recall::{query_terms, relevant_excerpt, truncate_utf8};
 use crate::integrations::session_recording::{
     membrick_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
 use crate::memory_api::MemoryService;
+#[cfg(test)]
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
+#[cfg(test)]
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use protocol::{ClaudeHookInput, ClaudeHookOutput};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::collections::{HashSet, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TOP_K: usize = 5;
 const DEFAULT_CONTEXT_BYTES: usize = 8_000;
-const INITIAL_TRANSCRIPT_BYTES: u64 = 64 * 1024;
-const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_CAPTURED_MESSAGES: usize = 6;
-const MAX_MEMORY_FIELD_BYTES: usize = 1_500;
 const MAX_EXCERPT_BYTES: usize = 800;
 const MIN_TOOL_QUERY_TERMS: usize = 5;
-const DEFAULT_HOOK_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClaudeHookKind {
@@ -66,14 +62,18 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
     let input: ClaudeHookInput =
         serde_json::from_value(raw).context("failed to decode Claude hook input")?;
     let root = resolve_root(&input.cwd, fallback_root)?;
+    let session_id = input.session_id.clone();
     // The MCP search dispatch inherits this session when the agent does not
     // pass session_id explicitly. The conversation-state store opens without
     // touching the index (a full MemoryService open would load it); skipped
     // until memory exists so hooks never create store directories for
     // memory-less projects. Fail-open: the write never breaks the hook.
     if memory_root(&root).exists() {
-        crate::conversation_state::ConversationStateStore::open_under(&memory_root(&root))
-            .note_active_session(RecordingProvider::Claude.as_str(), &input.session_id);
+        MemoryService::note_active_session_at_path(
+            memory_root(&root),
+            RecordingProvider::Claude.as_str(),
+            &input.session_id,
+        );
     }
     let payload = serde_json::json!({
         "hook_event_name": input.hook_event_name,
@@ -122,24 +122,28 @@ pub fn run_hook(kind: ClaudeHookKind, fallback_root: &Path) -> Result<()> {
             ClaudeHookOutput::default()
         }
     };
+    if kind == ClaudeHookKind::SessionEnd && memory_root(&root).exists() {
+        MemoryService::deactivate_session_at_path(
+            memory_root(&root),
+            RecordingProvider::Claude.as_str(),
+            &session_id,
+        );
+    }
     if matches!(
         kind,
         ClaudeHookKind::SessionStart | ClaudeHookKind::UserPromptSubmit
     ) {
         output.system_message = crate::updater::take_update_notice();
     }
-    write_timing_record(kind, started.elapsed().as_secs_f64() * 1000.0, &output);
+    write_timing_record(
+        &root,
+        kind,
+        started.elapsed().as_secs_f64() * 1000.0,
+        &output,
+    );
     serde_json::to_writer(std::io::stdout().lock(), &output)?;
     std::io::stdout().lock().write_all(b"\n")?;
     Ok(())
-}
-
-fn hook_timeout_ms() -> u64 {
-    std::env::var("MEMBRICK_HOOK_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS)
-        .clamp(100, 30_000)
 }
 
 fn run_with_budget(
@@ -147,29 +151,28 @@ fn run_with_budget(
     input: ClaudeHookInput,
     fallback_root: &Path,
 ) -> Result<ClaudeHookOutput> {
+    let timeout_ms = crate::integrations::hook_settings::hook_timeout_ms(fallback_root);
     let fallback_root = fallback_root.to_path_buf();
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let _ = sender.send(handle_hook(kind, input, &fallback_root));
-    });
-    match receiver.recv_timeout(std::time::Duration::from_millis(hook_timeout_ms())) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => anyhow::bail!(
-            "Membrick {event} hook exceeded {timeout}ms budget",
-            event = kind.event_name(),
-            timeout = hook_timeout_ms()
-        ),
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            anyhow::bail!(
-                "Membrick {event} hook worker disconnected",
-                event = kind.event_name()
-            )
-        }
-    }
+    let completes_capture = matches!(
+        kind,
+        ClaudeHookKind::PreCompact
+            | ClaudeHookKind::Stop
+            | ClaudeHookKind::SessionEnd
+            | ClaudeHookKind::SubagentStop
+    );
+    crate::integrations::hook_settings::run_with_budget(timeout_ms, completes_capture, move || {
+        handle_hook(kind, input, &fallback_root)
+    })
+    .with_context(|| format!("Membrick {} hook", kind.event_name()))
 }
 
-fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHookOutput) {
-    let Ok(path) = std::env::var("MEMBRICK_HOOK_TIMINGS_PATH") else {
+fn write_timing_record(
+    root: &Path,
+    kind: ClaudeHookKind,
+    elapsed_ms: f64,
+    output: &ClaudeHookOutput,
+) {
+    let Some(path) = crate::integrations::hook_settings::hook_timings_path(root) else {
         return;
     };
     let operation = match kind {
@@ -198,7 +201,11 @@ fn write_timing_record(kind: ClaudeHookKind, elapsed_ms: f64, output: &ClaudeHoo
     let Ok(encoded) = serde_json::to_vec(&record) else {
         return;
     };
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = file.write_all(&encoded);
         let _ = file.write_all(b"\n");
     }
@@ -311,6 +318,9 @@ fn retrieve(
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        // A conflicted capture is a useful search hit for an agent explicitly
+        // inspecting memory, but it is unsafe as automatic prompt context.
+        .filter(|result| crate::integrations::mcp_tools::automatic_context_allowed(result))
         .take(DEFAULT_TOP_K);
     let mut seen = HashSet::new();
     let mut retrieved_memories = Vec::new();
@@ -350,8 +360,19 @@ fn retrieve(
         }
         let captured_revision = result.get("revision").and_then(Value::as_str);
         let status = revision_status(root, captured_revision, current_revision.as_deref());
+        let semantic_status = result
+            .get("semantic_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let relation_evidence = result
+            .get("relation_evidence")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
         let entry = format!(
-            "\n- Source: {}\n  Type: {}\n  Captured: {}\n  Captured branch: {}\n  Captured revision: {}\n  Current branch: {}\n  Current revision: {}\n  Revision status: {}\n  {}\n",
+            "\n- Source: {}\n  Type: {}\n  Captured: {}\n  Captured branch: {}\n  Captured revision: {}\n  Current branch: {}\n  Current revision: {}\n  Revision status: {}\n  Memory status: {}\n  Relation evidence: {}\n  {}\n",
             source,
             result
                 .get("document_type")
@@ -369,6 +390,12 @@ fn retrieve(
             current_branch.as_deref().unwrap_or("unknown"),
             current_revision.as_deref().unwrap_or("unknown"),
             status,
+            semantic_status,
+            if relation_evidence.is_empty() {
+                "none".to_string()
+            } else {
+                relation_evidence.join("; ")
+            },
             normalized,
         );
         if context.len() + entry.len() > DEFAULT_CONTEXT_BYTES {
@@ -405,39 +432,79 @@ fn capture(
         return Ok(ClaudeHookOutput::default());
     };
     let affected_paths = affected_paths(&input.extra);
+    let messages = extract_recent_messages(transcript_path)?;
     let content = extract_structured_memory(transcript_path, document_type, &affected_paths)?;
     if content.trim().is_empty() {
         return Ok(ClaudeHookOutput::default());
     }
-    let event_id = format!(
-        "{}:{}:{}",
-        input.session_id,
-        document_type.as_str(),
-        crate::ids::stable_doc_id_from_source(&content)
-    );
     let captured_session_id = input.session_id.clone();
-    let document = ClaudeCodeDocument {
-        event_id,
-        session_id: input.session_id,
-        document_type,
+    let make_document =
+        |event_id: String, document_type, content: String, timestamp| ClaudeCodeDocument {
+            event_id,
+            session_id: input.session_id.clone(),
+            document_type,
+            content,
+            cwd: root.to_path_buf(),
+            timestamp,
+            command_name: input.command_name.clone(),
+            command_args: input.command_args.clone(),
+            affected_paths: affected_paths.clone(),
+            branch: git_value(root, &["branch", "--show-current"]),
+            revision: git_value(root, &["rev-parse", "HEAD"]),
+        };
+    let mut context = make_document(
+        "whole-session".to_string(),
+        ClaudeCodeDocumentType::SessionSummary,
         content,
-        cwd: root.to_path_buf(),
-        timestamp: Some(current_timestamp()),
-        command_name: input.command_name,
-        command_args: input.command_args,
-        affected_paths,
-        branch: git_value(root, &["branch", "--show-current"]),
-        revision: git_value(root, &["rev-parse", "HEAD"]),
-    };
-    crate::integrations::mcp_tools::upsert_hook_document(
+        Some(current_timestamp()),
+    )
+    .into_source_document()?;
+    context
+        .filters
+        .insert("document_type".into(), "session-context".into());
+    context.concept = "session-context".into();
+    context.headings = vec!["session-context".into()];
+    context.links.clear();
+    let mut documents = Vec::with_capacity(messages.len() + 1);
+    for (index, message) in messages.into_iter().enumerate() {
+        let identity = message.message_id.as_deref().unwrap_or("");
+        let event_id = if identity.is_empty() {
+            format!("observation-{index}")
+        } else {
+            format!("observation-{identity}")
+        };
+        let mut observation = make_document(
+            event_id,
+            ClaudeCodeDocumentType::SessionSummary,
+            format!("{}\n{}", message.role, message.content),
+            message.timestamp,
+        )
+        .into_source_document()?;
+        observation
+            .filters
+            .insert("document_type".into(), "session-observation".into());
+        observation.filters.insert("speaker".into(), message.role);
+        observation
+            .filters
+            .insert("observation_index".into(), index.to_string());
+        observation.concept = "session-observation".into();
+        observation.headings = vec!["session-observation".into()];
+        context.links.push(observation.doc_id.clone());
+        documents.push(observation);
+    }
+    context.doc_id = stable_doc_id_from_source(&format!("{}::whole-session", context.source));
+    context.doc_length = context.content.len();
+    documents.push(context);
+    crate::integrations::mcp_tools::upsert_hook_documents(
         root,
         "claude",
         &captured_session_id,
-        document.into_source_document()?,
+        documents,
     )?;
     Ok(ClaudeHookOutput::default())
 }
 
+#[cfg(test)]
 fn open_store(root: &Path) -> Result<MemoryService> {
     let options = PipelineOptions {
         memory_index_layout: MemoryIndexLayout::Segmented {
@@ -480,6 +547,8 @@ fn resolve_root(cwd: &Path, fallback_root: &Path) -> Result<PathBuf> {
 struct ConversationMessage {
     role: String,
     content: String,
+    timestamp: Option<String>,
+    message_id: Option<String>,
 }
 
 fn extract_structured_memory(
@@ -488,56 +557,36 @@ fn extract_structured_memory(
     affected_paths: &[String],
 ) -> Result<String> {
     let messages = extract_recent_messages(path)?;
-    let request = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "user" && !is_task_notification(&message.content))
-        .map(|message| compact_memory_field(&message.content));
-    let result = messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "assistant" && !looks_like_tool_trace(&message.content))
-        .map(|message| compact_memory_field(&message.content));
-
-    let mut fields = vec![format!("Memory type: {}", document_type.as_str())];
-    if let Some(request) = request.filter(|value| !value.is_empty()) {
-        fields.push(format!("Request: {request}"));
+    let mut fields = vec![
+        format!("Memory type: {}", document_type.as_str()),
+        "All parsed transcript text observations in source order. Credentials are redacted."
+            .to_string(),
+    ];
+    for (index, message) in messages.iter().enumerate() {
+        let content = &message.content;
+        if content.trim().is_empty() {
+            continue;
+        }
+        fields.push(format!(
+            "Observation {} [{}]:\n{}",
+            index + 1,
+            message.role,
+            content
+        ));
     }
-    if let Some(result) = result.filter(|value| !value.is_empty()) {
-        fields.push(format!("Result: {result}"));
+    if fields.len() == 2 {
+        return Ok(String::new());
     }
     if !affected_paths.is_empty() {
         fields.push(format!("Affected paths: {}", affected_paths.join(", ")));
-    }
-    if fields.len() == 1 {
-        return Ok(String::new());
     }
     Ok(fields.join("\n"))
 }
 
 fn extract_recent_messages(path: &Path) -> Result<VecDeque<ConversationMessage>> {
-    let mut file = File::open(path)
-        .with_context(|| format!("failed to open Claude transcript {}", path.display()))?;
-    let len = file.metadata()?.len();
-    let mut scan_bytes = INITIAL_TRANSCRIPT_BYTES.min(len);
-    loop {
-        let start = len.saturating_sub(scan_bytes);
-        file.seek(SeekFrom::Start(start))?;
-        let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        let text = if start > 0 {
-            text.split_once('\n').map(|(_, tail)| tail).unwrap_or("")
-        } else {
-            &text
-        };
-        let messages = extract_messages(text);
-        if !messages.is_empty() || start == 0 || scan_bytes >= MAX_TRANSCRIPT_BYTES {
-            return Ok(messages);
-        }
-        scan_bytes = (scan_bytes.saturating_mul(2))
-            .min(len)
-            .min(MAX_TRANSCRIPT_BYTES);
-    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read Claude transcript {}", path.display()))?;
+    Ok(extract_messages(&text))
 }
 
 fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
@@ -558,44 +607,32 @@ fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
                     .and_then(Value::as_str)
                     .unwrap_or("message")
             });
-        let content = message.get("content").map(text_blocks).unwrap_or_default();
-        if !content.trim().is_empty() {
-            messages.push_back(ConversationMessage {
-                role: role.to_string(),
-                content: redact(&content),
-            });
-            if messages.len() > MAX_CAPTURED_MESSAGES {
-                messages.pop_front();
-            }
-        }
+        let content = message
+            .get("content")
+            .map(text_blocks)
+            .filter(|content| !content.is_empty())
+            .or_else(|| serde_json::to_string(message).ok())
+            .unwrap_or_default();
+        messages.push_back(ConversationMessage {
+            role: role.to_string(),
+            content: redact(if content.trim().is_empty() {
+                "[empty message content]"
+            } else {
+                &content
+            }),
+            timestamp: value
+                .get("timestamp")
+                .or_else(|| message.get("timestamp"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            message_id: value
+                .get("uuid")
+                .or_else(|| message.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
     }
     messages
-}
-
-fn compact_memory_field(value: &str) -> String {
-    let normalized = value
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    if normalized.len() <= MAX_MEMORY_FIELD_BYTES {
-        return normalized;
-    }
-    let mut end = MAX_MEMORY_FIELD_BYTES;
-    while !normalized.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", normalized[..end].trim_end())
-}
-
-fn is_task_notification(value: &str) -> bool {
-    value.trim_start().starts_with("<task-notification>")
-}
-
-fn looks_like_tool_trace(value: &str) -> bool {
-    let value = value.trim_start();
-    value.starts_with("**Tool:") || value.starts_with("<tool-")
 }
 
 /// Object ids are passed to `git` as positional arguments, so anything that is
@@ -630,8 +667,25 @@ fn text_blocks(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
             .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .map(|block| {
+                let kind = block
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("content");
+                match kind {
+                    "text" | "input_text" | "output_text" => block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    _ => format!(
+                        "[{kind}] {}",
+                        serde_json::to_string_pretty(block)
+                            .unwrap_or_else(|_| "[unserializable block]".to_string())
+                    ),
+                }
+            })
+            .filter(|block| !block.is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
         _ => String::new(),
@@ -853,13 +907,22 @@ mod tests {
 
         let stop_input = input(&root, Some(transcript.clone()), "Stop");
         handle_hook(ClaudeHookKind::Stop, stop_input.clone(), &root).unwrap();
-        handle_hook(ClaudeHookKind::Stop, stop_input, &root).unwrap();
-
         let mut stored = open_store(&root).unwrap();
         stored.refresh_index().unwrap();
         assert_eq!(
             stored.records().len(),
-            1,
+            3,
+            "capture should preserve two observations and one session context"
+        );
+        let records_after_first_capture = stored.records().len();
+        drop(stored);
+
+        handle_hook(ClaudeHookKind::Stop, stop_input, &root).unwrap();
+        let mut stored = open_store(&root).unwrap();
+        stored.refresh_index().unwrap();
+        assert_eq!(
+            stored.records().len(),
+            records_after_first_capture,
             "replayed hook must be idempotent"
         );
         assert_eq!(
@@ -893,13 +956,27 @@ mod tests {
     }
 
     #[test]
-    fn transcript_extraction_ignores_tool_blocks_and_redacts_secret_lines() {
+    fn parses_sanitized_runtime_transcript_fixture() {
+        let transcript =
+            include_str!("../../../../tests/fixtures/runtime_transcripts/claude.jsonl");
+        let messages = extract_messages(transcript);
+        assert!(messages.len() >= 4);
+        assert!(messages
+            .iter()
+            .any(|message| message.content.contains("tool_use")));
+        assert!(messages
+            .iter()
+            .any(|message| message.content.contains("No rule match")));
+    }
+
+    #[test]
+    fn transcript_extraction_preserves_tool_blocks_and_redacts_secret_lines() {
         let root = temp_dir("transcript");
         let transcript = root.join("transcript.jsonl");
         fs::write(
             &transcript,
             concat!(
-                r#"{"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"secret"}},{"type":"text","text":"api_key=secret\nFinished work"}]}}"#,
+                r#"{"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo safe"}},{"type":"text","text":"api_key=secret\nFinished work"}]}}"#,
                 "\n"
             ),
         )
@@ -907,12 +984,13 @@ mod tests {
 
         let content =
             extract_structured_memory(&transcript, ClaudeCodeDocumentType::Outcome, &[]).unwrap();
-        assert!(!content.contains("Bash"));
+        assert!(content.contains("Bash"));
+        assert!(content.contains("echo safe"));
         assert!(!content.contains("secret"));
         assert!(content.contains("[REDACTED]"));
         assert!(content.contains("Finished work"));
         assert!(content.contains("Memory type: outcome"));
-        assert!(content.contains("Result:"));
+        assert!(content.contains("Observation 1 [assistant]"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -931,6 +1009,7 @@ mod tests {
         let content =
             extract_structured_memory(&transcript, ClaudeCodeDocumentType::Outcome, &[]).unwrap();
         assert!(content.contains("Remember cobalt routing"));
+        assert!(content.contains(&"x".repeat(96 * 1024)));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1001,11 +1080,11 @@ mod tests {
         assert_eq!(
             document_types,
             HashSet::from([
-                "checkpoint".to_string(),
-                "outcome".to_string(),
-                "session-summary".to_string(),
+                "session-context".to_string(),
+                "session-observation".to_string(),
             ])
         );
+        assert_eq!(store.records().len(), 2);
 
         drop(store);
         fs::remove_dir_all(root).unwrap();
@@ -1040,6 +1119,8 @@ mod tests {
         assert!(output.hook_specific_output.is_some());
         let context = output.hook_specific_output.unwrap().additional_context;
         assert!(context.contains("search"));
+        assert!(context.contains("Memory status:"));
+        assert!(context.contains("Relation evidence:"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1091,19 +1172,28 @@ mod tests {
 
         let stop_input = input(&root, Some(transcript.clone()), "SubagentStop");
         handle_hook(ClaudeHookKind::SubagentStop, stop_input.clone(), &root).unwrap();
+        let records_after_first_capture = open_store(&root).unwrap().records().len();
+        assert_eq!(records_after_first_capture, 2);
         handle_hook(ClaudeHookKind::SubagentStop, stop_input, &root).unwrap();
 
         let store = open_store(&root).unwrap();
         assert_eq!(
             store.records().len(),
-            1,
+            records_after_first_capture,
             "replayed subagent-stop must be idempotent"
         );
-        let doc_type = store
+        let doc_types = store
             .records()
             .into_iter()
-            .find_map(|r| r.filters.get("document_type").cloned());
-        assert_eq!(doc_type.as_deref(), Some("outcome"));
+            .filter_map(|r| r.filters.get("document_type").cloned())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            doc_types,
+            HashSet::from([
+                "session-context".to_string(),
+                "session-observation".to_string(),
+            ])
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

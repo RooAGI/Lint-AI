@@ -95,7 +95,7 @@ and every turn's `conversation_history` is captured.
 | Hermes hook | membrick action | Details |
 |---|---|---|
 | `pre_llm_call` | **Recall + inject** | Query `POST /provider-memory/search` with `user_message` (scoped by `user_id` from config). Format top hits as a compact context block; return `{"context": block}`. Keep it fast — the turn blocks on this hook (bounded by the 30s timeout; target <1s via the local server). Cache per `(session_id, turn_id)` so double-fires don't double-query. `parent_session_id` (present on resume/branch) is recorded for resume linking. |
-| `post_tool_call` | **Structured tool-event records** | One record per tool call: `function_name`, args (truncated), `result` (truncated), `duration_ms`, `status` (+ `error_type`/`error_message` on failure). Dedupe by `tool_call_id`. Enqueued async — never blocks the agent. |
+| `post_tool_call` | **Structured tool-event records** | One record per tool call: `function_name`, complete args, complete result, `duration_ms`, `status` (+ `error_type`/`error_message` on failure). Dedupe by `tool_call_id`. Enqueued async — never blocks the agent. |
 | `post_llm_call` | **Per-turn transcript records** | One record per turn: `user_message`, `assistant_response`, plus a bounded slice of `conversation_history`. Dedupe by `(session_id, turn_id)`. Enqueued async. |
 | `on_session_start` | **Session registry entry** | `session_id`, `model`, `platform`, timestamp. |
 | `on_session_finalize` / `on_session_reset` | **Boundary markers** | Mark the session closed (`reason` recorded). Content is already captured incrementally; on reset, link old→new temporally when the new `on_session_start` arrives. |
@@ -161,11 +161,9 @@ Hermes-specific deviations called out in §3.
   the queue. On timeout/error it returns `None` (no injection) — fail-open.
 - **Fail-open everywhere:** every handler is wrapped so exceptions are swallowed and
   counted, never raised into Hermes.
-- **Config** (no new files in the repo; resolved at import):
-  `MEMBRICK_SERVER_URL` (default `http://127.0.0.1:8080`), `MEMBRICK_USER_ID` (default
-  `"hermes"`), `MEMBRICK_QUEUE_MAX` (default `1000`), `MEMBRICK_CAPTURE` (`on`/`off`,
-  default `on`), `MEMBRICK_RECALL` (`on`/`off`, default `on`), `MEMBRICK_RECALL_TOP_K`
-  (default `5`). Optionally `$HERMES_HOME/membrick.json` for the same keys (env wins).
+- **Config** is read from `$HERMES_HOME/membrick.json` (or `~/.hermes/membrick.json`)
+  and supports server URL/token, user ID, queue size, capture, recall, and recall top-k.
+  Membrick settings are not read from environment variables.
 - **Never slow in `pre_tool_call`:** not subscribed (fail-closed hook).
 
 ## 8. Document types written to the membrick store
@@ -177,16 +175,16 @@ with other providers' sessions).
 
 1. **Turn record** — `request_id = "hermes:turn:{session_id}:{turn_id}"`
    - `messages`: `[{role: "user", content: user_message}, {role: "assistant", content: assistant_response}]`
-   - A bounded tail of `conversation_history` (last N messages, N=20, each truncated
-     to 2000 chars) is appended as a second user-role message labeled
-     `[context]` so the turn stays self-contained without unbounded growth.
+   - Every supplied `conversation_history` message is appended in order as a second
+     user-role message labeled `[context]`. User, assistant, history, and tool evidence
+     fields are stored in full after credential redaction.
    - Fields carried in content headers: `model`, `platform`, `task_id`, `is_first_turn`
      (as a small `[meta]` preamble — the store is content-addressed text; structured
      fields live inline).
 2. **Tool-event record** — `request_id = "hermes:tool:{tool_call_id}"`
    - `messages`: `[{role: "user", content: "[tool_call] function_name=<name> status=<status> duration_ms=<n>"}]`
-     followed by truncated `function_args` and `result` (each ≤2000 chars) and, on
-     failure, `error_type`/`error_message`.
+     followed by the complete `function_args` and `result` fields and, on failure,
+     `error_type`/`error_message`.
    - `session_id` on the request ties it to the session; the content header carries
      `turn_id` for turn-level correlation.
    - NOTE: role must be `"user"` (or `"assistant"`) — the server rejects
@@ -214,8 +212,8 @@ Hermes session log remains the system of record.
 1. **Hooks (coexist) vs native provider (single slot, authoritative boundary
    transcript)?** This design recommends hooks. Confirm before we invest further.
 2. **Capture default-on?** Per-turn capture of every turn is the automatic-memory
-   promise, but it's the most data written. `MEMBRICK_CAPTURE` defaults `on`; flip to
-   opt-in per project?
+   promise, but it's the most data written. Capture currently defaults to on; should
+   it become opt-in per project?
 3. **Retention/redaction:** capture stores user messages and assistant responses
    verbatim. Any redaction rules (secrets, absolute paths) before this ships?
 4. **Per-turn-only session record:** acceptable, given plugin boundary hooks never

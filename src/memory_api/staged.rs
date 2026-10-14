@@ -40,6 +40,7 @@ impl MemoryService {
             workspace_store: None,
             published_search_view: None,
             superseded_ids: self.superseded_ids.clone(),
+            has_expiring_documents: self.has_expiring_documents,
             request_fingerprints: HashMap::new(),
             request_receipts: HashMap::new(),
             receipts_path: None,

@@ -101,7 +101,7 @@ def remove_membrick_mcp_server(codex_home: Path) -> None:
     retained: list[str] = []
     in_membrick_server = False
     for line in lines:
-        if line.strip() == "[mcp_servers.membrick]":
+        if line.strip().startswith("[mcp_servers.membrick"):
             in_membrick_server = True
             continue
         if in_membrick_server and line.lstrip().startswith("["):
@@ -212,6 +212,10 @@ def main() -> None:
     )
     parser.add_argument("--timeout-scale", type=float, default=1.0)
     parser.add_argument(
+        "--membrick-binary", type=Path,
+        help="Use this executable instead of building the local debug binary.",
+    )
+    parser.add_argument(
         "--results-dir",
         type=Path,
         default=None,
@@ -228,6 +232,7 @@ def main() -> None:
     host_cargo_home = host_home / ".cargo"
     host_rustup_home = host_home / ".rustup"
     temp_root = Path(tempfile.mkdtemp(prefix="membrick-codex-perf."))
+    binary = args.membrick_binary.resolve() if args.membrick_binary else repo_root / "target" / "debug" / "membrick"
     runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
     report_module = load_report_module(benchmark_root / "src" / "report.py")
     launcher_summary = results_dir / "launcher.json"
@@ -236,22 +241,27 @@ def main() -> None:
     print(f"temp_root={temp_root}", flush=True)
     arm_reports: list[dict[str, object]] = []
     try:
-        print("step: build Codex-enabled binary", flush=True)
-        build_env = os.environ.copy()
-        build_env.update(
-            {
-                "CARGO_HOME": str(host_cargo_home),
-                "RUSTUP_HOME": str(host_rustup_home),
-                "RUSTUP_TOOLCHAIN": "stable",
-            }
-        )
-        subprocess.run(
-            ["cargo", "+stable", "build", "--features", "codex", "--quiet"],
-            cwd=repo_root,
-            env=build_env,
-            check=True,
-        )
-        print("step complete: Codex-enabled binary built", flush=True)
+        if args.membrick_binary:
+            if not binary.is_file():
+                raise FileNotFoundError(f"Membrick binary not found: {binary}")
+            print(f"step: use supplied Membrick binary {binary}", flush=True)
+        else:
+            print("step: build Codex-enabled binary", flush=True)
+            build_env = os.environ.copy()
+            build_env.update(
+                {
+                    "CARGO_HOME": str(host_cargo_home),
+                    "RUSTUP_HOME": str(host_rustup_home),
+                    "RUSTUP_TOOLCHAIN": "stable",
+                }
+            )
+            subprocess.run(
+                ["cargo", "+stable", "build", "--features", "codex", "--quiet"],
+                cwd=repo_root,
+                env=build_env,
+                check=True,
+            )
+            print("step complete: Codex-enabled binary built", flush=True)
         for arm in args.arms:
             arm_root = temp_root / arm
             worktree = arm_root / "worktree"
@@ -322,7 +332,7 @@ def main() -> None:
                     "CODEX_HOME": str(codex_home),
                     "CARGO_HOME": str(host_cargo_home),
                     "RUSTUP_HOME": str(host_rustup_home),
-                    "PATH": f"{repo_root / 'target' / 'debug'}:{env.get('PATH', '')}",
+                    "PATH": f"{binary.parent}:{env.get('PATH', '')}",
                     "RUSTUP_TOOLCHAIN": "stable",
                     "MEMBRICK_CODEX_ENABLE_MCP_FEATURE": (
                         "1" if args.profile == "production" and arm != "codex-native" else "0"
@@ -333,7 +343,7 @@ def main() -> None:
             if arm != "codex-native":
                 print("step: install Codex integration into membrick worktree", flush=True)
                 subprocess.run(
-                    [str(repo_root / "target" / "debug" / "membrick"), "--codex-install", str(worktree)],
+                    [str(binary), "--codex-install", str(worktree)],
                     cwd=repo_root,
                     env=env,
                     check=True,
@@ -351,7 +361,7 @@ def main() -> None:
                 trace_path = arm_results / "mcp-trace.log"
                 configure_mcp_diagnostics(
                     codex_home,
-                    repo_root / "target" / "debug" / "membrick",
+                    binary,
                     trace_path,
                 )
             capture_codex_diagnostics(codex_home, env, arm_results / "client-diagnostics")

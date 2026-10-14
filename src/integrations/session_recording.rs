@@ -921,7 +921,6 @@ impl RecordingProvider {
             Self::Codex => "codex",
             Self::Gemini => "gemini-cli",
             Self::Agy => "agy",
-            Self::Agy => "agy",
             Self::Muse => "muse",
             Self::OpenClaw => "openclaw",
             Self::Hermes => "hermes",

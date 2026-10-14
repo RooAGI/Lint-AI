@@ -294,6 +294,13 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         .context("Codex settings 'hooks' must be an object")?;
 
     for (event_name, hook_name) in HOOK_EVENTS {
+        let timeout_seconds = match *event_name {
+            // Codex gives SessionEnd at most three seconds. Stop handles
+            // durable memory capture for completed turns.
+            "SessionEnd" => 3,
+            "PreCompact" | "PostCompact" | "Stop" | "SubagentStop" => 60,
+            _ => 45,
+        };
         let entries = hooks
             .entry((*event_name).to_string())
             .or_insert_with(|| json!([]));
@@ -306,6 +313,7 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         entries.push(json!({
             "hooks": [{
                 "type": "command",
+                "timeout": timeout_seconds,
                 "command": format!("{} {HOOK_MARKER} {hook_name}", shell_quote(&executable))
             }]
         }));
@@ -445,7 +453,30 @@ impl CodexMcp {
                     error: None,
                 })
             }
-            "tools/call" => self.handle_tool_call(id, request.params),
+            "tools/call" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let tool = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let started = std::time::Instant::now();
+                let response = self.handle_tool_call(id.clone(), Some(params));
+                mcp_tools::record_mcp_tool_response(
+                    &self.root,
+                    "codex",
+                    &tool,
+                    id,
+                    &arguments,
+                    started.elapsed().as_millis() as u64,
+                    &response,
+                );
+                response
+            }
             _ => Ok(JsonRpcResponse {
                 jsonrpc: "2.0",
                 id,
@@ -492,6 +523,7 @@ impl CodexMcp {
                     | "board_search"
                     | "add_memory"
                     | "get_memory"
+                    | "delete_memory"
             )
         {
             return mcp_tools::call_resident_tool(id, &self.root, "codex", tool_name, &arguments);
@@ -559,7 +591,7 @@ impl CodexMcp {
                     results.as_ref().is_ok_and(Vec::is_empty),
                 );
                 let results = results?;
-                let payload = service.search_results_payload(results);
+                let payload = service.search_results_payload(query, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -756,18 +788,18 @@ impl CodexMcp {
                     Err(message) => Ok(error_response(id, -32602, &message)),
                 }
             }
-            "add_memory" | "get_memory" => {
+            "add_memory" | "get_memory" | "delete_memory" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
-                // `add_memory` is a write: run it against the persistent
+                // Memory writes and deletions run against the persistent
                 // shared-memory service. The composed view is in-memory
                 // only, so a view write would vanish on process exit and stay
                 // invisible to hooks and other providers. Resolve the session
                 // from the composed service first (it tracks hook activity),
                 // mirroring the board arm above.
-                let result = if tool_name == "add_memory" {
+                let result = if matches!(tool_name, "add_memory" | "delete_memory") {
                     let mut memory_arguments = arguments.clone();
-                    if memory_arguments.get("session_id").is_none() {
+                    if tool_name == "add_memory" && memory_arguments.get("session_id").is_none() {
                         if let Some(session_id) = mcp_tools::resolve_search_session_id(
                             &memory_arguments,
                             service,
@@ -1328,6 +1360,8 @@ args = ["old"]
             .as_str()
             .unwrap()
             .contains("--codex-hook stop"));
+        assert_eq!(settings["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"], 3);
+        assert_eq!(settings["hooks"]["Stop"][1]["hooks"][0]["timeout"], 60);
         assert_eq!(
             settings["hooks"]["UserPromptExpansion"]
                 .as_array()
@@ -1375,6 +1409,7 @@ args = ["old"]
                 "board_search".to_string(),
                 "add_memory".to_string(),
                 "get_memory".to_string(),
+                "delete_memory".to_string(),
                 "update_membrick".to_string()
             ]
         );

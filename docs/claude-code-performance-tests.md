@@ -13,9 +13,73 @@ single-run, three-arm comparison of one memory-recall scenario. It demonstrates
 that the integration works, but does not establish statistically reliable
 improvements across projects or workloads.
 
-## Latest Validated Smoke Result
+## Invalidated Matched-Scenario Run: Routing Decision Supersession
 
-The current three-arm orchestration was validated on the
+On 2026-10-13, Claude Sonnet 5 (`claude-sonnet-5`) ran the
+`routing-decision-supersession` scenario once in each arm using the
+`hooks-only` profile. The Codex benchmark used the same task template with
+provider-specific wording and validators. Setup was excluded from continuation
+measurements. The scenario used a temporary worktree, and the Membrick
+skill and MCP connection were disabled.
+
+This run is invalid for comparing memory behavior. The Membrick worktrees
+contained both `.membrick` and legacy `.lint-ai` directories. Membrick hooks
+reported that they failed open because both state directories existed. The
+setup phase injected 2,339 bytes from existing project documentation, but the
+continuation injected no Membrick context and retrieved no documents. Claude
+answered by inspecting repository files, so the automatic 3/3 answer score
+does not demonstrate memory recall. The displayed token and timing values are
+not reported as a Membrick performance comparison.
+
+The hook metrics parser also failed to count the warning responses as hook
+events, which hid the setup failure in the summary. The raw logs and metrics
+remain preserved for diagnosis, but this run must not be used as benchmark
+evidence. The Codex measurements are in
+[`docs/codex-performance-tests.md`](codex-performance-tests.md).
+
+Preserved report:
+
+- `scripts/provider-performance-0.4.0/results/claude-correctness-verification/comparison.json`
+
+## Latest Diagnostic Result: Sonnet 5.5 and Membrick 0.4.0
+
+On 2026-10-13, we reran the
+`index-store-segmented-routing` scenario with Claude Sonnet 5.5 and the
+Membrick 0.4.0 release binary. This was a single repetition using the
+`hooks-only` profile, a clean synthetic fixture, separate worktrees, and
+disabled skills. Setup seeded each arm and is excluded from the continuation
+measurements below.
+
+| Arm | Continuation | Total continuation tokens | Recall | Retrieved context |
+| --- | ---: | ---: | ---: | ---: |
+| Claude native memory | 13.27 s | 71,487 | 3/3 | — |
+| Membrick hooks | 7.89 s | 14,648 | 3/3 | 10 documents, 5,475 bytes |
+| Both | 6.49 s | 15,298 | 3/3 | 10 documents, 5,397 bytes |
+
+In this run, Membrick hooks used **79.5% fewer continuation tokens** and took
+**40.5% less time** than Claude native memory. With both memory layers enabled,
+the run used **78.6% fewer tokens** and took **51.1% less time** than native
+memory alone. Token totals include fresh input, cache creation, cache reads,
+and output tokens. Each arm received an automatic answer-recall score of 3/3.
+
+The low Membrick-arm totals reflect this small fixture: both Membrick arms
+answered without continuation tool calls, using three expected facts from
+about 5.5 KB of injected context. Do not compare these raw token totals
+directly with Codex results. The providers use different models and token
+accounting, and the Codex result used a different scenario and continuation
+transcript. Each provider should be compared with its own native baseline under
+the same scenario and harness conditions.
+
+This is one scenario and one run, so treat the percentages as a diagnostic
+result rather than a general performance claim. The separate Cargo validator
+was omitted to avoid rebuilding it for every arm. An earlier attempt was
+excluded because Membrick's hooks received HTTP 403 workspace-authorization
+errors; the reported measurements are from the corrected rerun. The scenario
+file was restored unchanged after the run.
+
+## Earlier Three-Arm Smoke Result
+
+The earlier three-arm orchestration was validated on the
 `index-store-segmented-routing` scenario with one repetition. Metrics below
 cover the continuation session only; setup is the memory-seeding phase.
 

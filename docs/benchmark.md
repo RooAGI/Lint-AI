@@ -25,6 +25,11 @@ The `--ner-provider` flag selects the Tier1 NER backend (`heuristic` or `spacy`,
 default `spacy`). Pass `--ner-provider heuristic` to reproduce the numbers below,
 which were recorded with the heuristic release backend.
 
+Structured-fact retrieval is enabled by default, matching production. Use
+`--no-structured-fact-retrieval` for a lexical-only baseline. The positive
+`--structured-fact-retrieval` flag remains available to make that setting
+explicit in scripts.
+
 The raw dataset can be refreshed and verified with:
 
 ```bash
@@ -119,7 +124,6 @@ cargo run --release --bin haystack_scoped_benchmark -- \
   --longmemeval benchmark/data/longmemeval_s_raw.json \
   --k 1 --k 3 --k 5 --k 10 --k 20 \
   --ner-provider heuristic \
-  --structured-fact-retrieval \
   --out scripts/longmemeval-500-misses-session-depth4-2026-10-12.json
 ```
 

@@ -73,10 +73,10 @@ mod lang;
 ))]
 /// Agent-facing search-result shaping, shared by the MCP `search` tools and
 /// the retrieval benchmark so both present hits identically.
-pub(crate) use crate::integrations::mcp_tools::search_results;
 pub mod memory_api;
 mod pipeline;
 mod query_plan;
+#[cfg(feature = "experimental")]
 mod remote_query;
 mod segments;
 pub mod semantic_audit;
@@ -95,32 +95,37 @@ mod behood_query;
 pub use behood_query::{analyze_evidence_signals_bulk, GroundedEvidenceSignal};
 mod chunking;
 mod claim_extractor;
+#[cfg(feature = "experimental")]
 mod corpus_graph;
 mod engine;
 mod filters;
 mod graph;
+#[cfg(feature = "experimental")]
 mod ownership;
 mod query_expansion;
 pub(crate) use query_expansion::preload_lexical_store;
+#[cfg(feature = "experimental")]
 mod bart_tokenizer;
 mod porter_stemmer;
 mod query_semantics;
 mod question_focus;
 mod reasoning_rules;
 mod report;
+#[cfg(feature = "experimental")]
 mod review;
 mod rules;
 mod semantic_tags;
 mod stopwords_data;
+#[cfg(feature = "experimental")]
 mod symbols;
 mod temporal;
 mod tier1;
 mod tier1_ner_daemon;
 mod tokenizer;
 mod updater;
+#[cfg(feature = "experimental")]
 mod usage;
 
-pub(crate) use crate::ids::{stable_chunk_id, stable_doc_id_from_source};
 // Public data contracts used by MemoryService. None provides direct storage access.
 pub use crate::board::{Board, BoardPost};
 pub use crate::index::{QueryDiagnostics, QueryTimings, ScoreBreakdown, SearchResult};
@@ -138,34 +143,22 @@ pub use crate::pipeline::{
 pub use crate::segments::{SegmentRoutingStrategy, ShardQueryCompleteness, ShardQueryFailure};
 pub use crate::semantic_relations::{SemanticStatus, SupersessionOptions};
 pub use crate::source::{KeyPhrase, SourceDocument};
+pub use crate::temporal_fact::TemporalFact;
 
 // Internal aliases used by implementation modules and development tools.
-pub(crate) use crate::aggregation::{build_aggregate_output, AggregateOutput};
-pub(crate) use crate::index::{GlobalBm25Statistics, MemoryIndex, TemporalQueryContext};
+pub(crate) use crate::aggregation::AggregateOutput;
+pub(crate) use crate::index::TemporalQueryContext;
 pub(crate) use crate::pipeline::{
-    build_doc_records, build_index_store, build_query_snapshot, build_query_snapshot_from_records,
-    build_query_snapshot_from_source_documents, default_production_pipeline_options,
-    resolve_store_paths, IndexDump, IndexStore, MemoryIndexSnapshot, StorePaths,
-    DEFAULT_SEGMENT_QUERY_TOP_N,
+    build_index_store, build_query_snapshot, build_query_snapshot_from_source_documents,
+    default_production_pipeline_options, IndexStore, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
-pub(crate) use crate::query_expansion::normalize_for_index;
-pub(crate) use crate::query_semantics::{
-    analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
-    temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
-};
-pub(crate) use crate::segments::{SegmentManifest, SegmentManifestEntry};
-pub(crate) use crate::semantic_relations::{
-    DocumentSemanticState, SemanticClaim, SemanticRelation, SemanticRelationKind,
-    SemanticRelationStore,
-};
+pub(crate) use crate::query_semantics::{analyze_query, parse_reference_date};
 pub(crate) use crate::temporal::parse_temporal_date;
-pub(crate) use crate::temporal_fact::{
-    TemporalFact, TemporalFactStore, TimelineEvent, TimelinePair,
-};
-pub(crate) use crate::tier1::{RankedTerm, Tier1Entity, DEFAULT_SPACY_MODEL};
+pub(crate) use crate::tier1::DEFAULT_SPACY_MODEL;
 pub(crate) use crate::tier1_ner_daemon::NerDaemon;
 
 mod executables;
+mod local_ipc;
 
 /// Launch a bundled executable. This process entry point exposes no memory internals.
 #[doc(hidden)]

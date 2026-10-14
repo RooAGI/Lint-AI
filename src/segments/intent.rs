@@ -26,7 +26,7 @@ use serde::Serialize;
 use crate::index::{SearchResult, TemporalQueryContext};
 use crate::lang::Lang;
 use crate::query_semantics::{analyze_query, QueryAnalysis, QueryIntent};
-use crate::tokenizer::{is_stopword, is_stopword_for_lang, tokenize, TokenizerMode};
+use crate::tokenizer::{is_stopword_for_lang, tokenize, TokenizerMode};
 
 use super::catalog::query_connection_profile;
 use super::diagnostics::{SegmentQueryDiagnostics, SegmentQueryOutput};

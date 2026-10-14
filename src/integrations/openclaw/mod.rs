@@ -166,7 +166,7 @@ pub fn install_plugin(plugin_dir: Option<&Path>, force: bool) -> Result<PathBuf>
 /// (`plugins.entries.membrick.config` in `openclaw.json`), so a local
 /// `--openclaw-install` keeps working exactly as before without baked-in
 /// paths. The plugin resolves the binary at runtime
-/// (`binaryPath` → `MEMBRICK_BIN` → `membrick` on `PATH`); only the project
+/// (`binaryPath` → `membrick` on `PATH`); only the project
 /// root needs recording here, and the event `workspaceDir` still takes
 /// precedence when present. Existing entry keys (e.g. `enabled`) are
 /// preserved; only `config.projectRoot` is set.

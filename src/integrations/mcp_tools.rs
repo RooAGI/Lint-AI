@@ -19,12 +19,6 @@ pub(crate) const PROVIDER_FILTER_VALUES: &[&str] = &[
     "rooagi_runtime",
 ];
 
-fn env_compat(name: &str, legacy_name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .or_else(|| std::env::var(legacy_name).ok())
-}
-
 pub(crate) const fn resident_backend_enabled() -> bool {
     !cfg!(test)
 }
@@ -42,14 +36,12 @@ pub(crate) fn has_search_store(root: &Path) -> bool {
             .is_dir()
 }
 
-fn resident_http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("valid resident server HTTP client configuration")
-    })
+fn post_resident_json(
+    root: &Path,
+    path: &str,
+    payload: &Value,
+) -> anyhow::Result<(reqwest::StatusCode, Value)> {
+    crate::local_ipc::post_json(root, path, payload)
 }
 
 fn resident_text_response(id: Option<Value>, text: &str) -> JsonRpcResponse {
@@ -134,41 +126,27 @@ pub(crate) fn call_resident_tool(
     arguments: &Value,
 ) -> anyhow::Result<JsonRpcResponse> {
     let root = root.canonicalize()?;
-    let base_url = env_compat("MEMBRICK_SERVER_URL", "LINTAI_SERVER_URL")
-        .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
-    let url = format!(
-        "{}/provider-memory/mcp/tools/call",
-        base_url.trim_end_matches('/')
-    );
-    let mut request = resident_http_client()
-        .post(url)
-        .json(&json!({
+    let (status, mut body) = match post_resident_json(
+        &root,
+        "/provider-memory/mcp/tools/call",
+        &json!({
             "workspace": root,
             "provider": provider,
-            "user_id": env_compat("MEMBRICK_USER_ID", "LINTAI_USER_ID").unwrap_or_else(|| MCP_MEMORY_USER_ID.to_string()),
+            "user_id": MCP_MEMORY_USER_ID,
             "session_id": arguments.get("session_id"),
             "tool": tool,
             "arguments": arguments,
-        }));
-    if let Some(token) = env_compat("MEMBRICK_SERVER_TOKEN", "LINTAI_SERVER_TOKEN") {
-        if !token.trim().is_empty() {
-            request = request.bearer_auth(token.trim());
-        }
-    }
-    let response = match request.send() {
+        }),
+    ) {
         Ok(response) => response,
         Err(error) => {
             return Ok(resident_error_response(
                 id,
                 -32002,
-                &format!("resident Membrick server unavailable: {error}"),
+                &format!("resident Membrick IPC service unavailable: {error}"),
             ));
         }
     };
-    let status = response.status();
-    let body: Value = response
-        .json()
-        .unwrap_or_else(|error| json!({"detail":error.to_string()}));
     if !status.is_success() {
         return Ok(resident_error_response(
             id,
@@ -178,10 +156,49 @@ pub(crate) fn call_resident_tool(
                 .unwrap_or("resident memory tool failed"),
         ));
     }
+    if tool == "info" {
+        let endpoint = crate::local_ipc::endpoint(&root).ok();
+        let transport = json!({"transport":"ipc", "status":"connected", "endpoint":endpoint});
+        if let Some(info) = body.as_object_mut() {
+            info.insert("server".to_string(), transport);
+        }
+    }
     Ok(resident_text_response(
         id,
         &serde_json::to_string_pretty(&body)?,
     ))
+}
+
+/// Record every provider MCP `tools/call` after its provider-facing response is
+/// formed. This remains separate from optional transcript/session recording.
+pub(crate) fn record_mcp_tool_response(
+    root: &Path,
+    provider: &str,
+    tool: &str,
+    request_id: Option<Value>,
+    arguments: &Value,
+    duration_ms: u64,
+    response: &anyhow::Result<JsonRpcResponse>,
+) {
+    let (error, payload) = match response {
+        Ok(response) => (
+            response.error.is_some(),
+            json!({"result":response.result.clone(), "error":response.error.clone()}),
+        ),
+        Err(error) => (true, json!({"transport_error":format!("{error:#}")})),
+    };
+    if let Err(error) = crate::telemetry::record_mcp_call(
+        root,
+        provider,
+        tool,
+        request_id,
+        arguments,
+        duration_ms,
+        error,
+        payload,
+    ) {
+        eprintln!("Membrick could not append MCP call history: {error:#}");
+    }
 }
 
 /// Publish a hook capture through the resident workspace owner.
@@ -199,15 +216,59 @@ pub(crate) fn upsert_hook_documents(
     root: &Path,
     provider: &str,
     session_id: &str,
-    documents: Vec<crate::SourceDocument>,
+    mut documents: Vec<crate::SourceDocument>,
 ) -> anyhow::Result<()> {
+    let session_context = documents
+        .iter()
+        .find(|document| {
+            document.filters.get("document_type").map(String::as_str) == Some("session-context")
+        })
+        .cloned();
+    let capture_group = session_context.as_ref().map(|context| {
+        let provider = context
+            .filters
+            .get("provider")
+            .map(String::as_str)
+            .unwrap_or(provider);
+        let project_id = context
+            .filters
+            .get("project_id")
+            .map(String::as_str)
+            .unwrap_or("");
+        let session_id = context
+            .filters
+            .get("session_id")
+            .map(String::as_str)
+            .unwrap_or(session_id);
+        crate::ids::stable_doc_id_from_source(&format!(
+            "session-capture:{}",
+            serde_json::to_string(&(provider, project_id, session_id)).unwrap_or_default()
+        ))
+    });
+    if let Some(capture_group) = capture_group.as_ref() {
+        for document in &mut documents {
+            document
+                .filters
+                .insert("session_capture_id".into(), capture_group.clone());
+        }
+    }
     #[cfg(test)]
     {
         return MemoryService::with_shared_memory(root, |service| {
-            for document in documents {
-                service.upsert(document);
+            if let (Some(context), Some(capture_group)) = (session_context, capture_group) {
+                service.replace_session_capture(
+                    "session_capture_id",
+                    &capture_group,
+                    documents,
+                    context,
+                )?;
+                Ok(())
+            } else {
+                for document in documents {
+                    service.upsert(document);
+                }
+                service.refresh_index()
             }
-            service.refresh_index()
         });
     }
     #[cfg(not(test))]
@@ -217,31 +278,22 @@ pub(crate) fn upsert_hook_documents(
             "invalid provider"
         );
         let root = root.canonicalize()?;
-        let base_url = env_compat("MEMBRICK_SERVER_URL", "LINTAI_SERVER_URL")
-            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
-        let mut request = resident_http_client()
-            .post(format!(
-                "{}/provider-memory/mcp/documents/upsert",
-                base_url.trim_end_matches('/')
-            ))
-            .json(&json!({
+        let (status, body) = post_resident_json(
+            &root,
+            "/provider-memory/mcp/documents/upsert",
+            &json!({
                 "workspace": root,
                 "provider": provider,
                 "session_id": session_id,
-                "user_id": env_compat("MEMBRICK_USER_ID", "LINTAI_USER_ID").unwrap_or_else(|| MCP_MEMORY_USER_ID.to_string()),
+                "user_id": MCP_MEMORY_USER_ID,
                 "documents": documents,
-            }));
-        if let Some(token) = env_compat("MEMBRICK_SERVER_TOKEN", "LINTAI_SERVER_TOKEN") {
-            if !token.trim().is_empty() {
-                request = request.bearer_auth(token.trim());
-            }
-        }
-        let response = request.send()?;
+            }),
+        )?;
         anyhow::ensure!(
-            response.status().is_success(),
+            status.is_success(),
             "resident memory server rejected hook capture: {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
+            status,
+            body.get("detail").and_then(Value::as_str).unwrap_or("")
         );
         Ok(())
     }
@@ -269,32 +321,23 @@ pub(crate) fn replace_hook_documents(
             "invalid provider"
         );
         let root = root.canonicalize()?;
-        let base_url = env_compat("MEMBRICK_SERVER_URL", "LINTAI_SERVER_URL")
-            .unwrap_or_else(|| "http://127.0.0.1:8080".to_string());
-        let mut request = resident_http_client()
-            .post(format!(
-                "{}/provider-memory/mcp/documents/upsert",
-                base_url.trim_end_matches('/')
-            ))
-            .json(&json!({
+        let (status, body) = post_resident_json(
+            &root,
+            "/provider-memory/mcp/documents/upsert",
+            &json!({
                 "workspace": root,
                 "provider": provider,
                 "session_id": session_id,
-                "user_id": env_compat("MEMBRICK_USER_ID", "LINTAI_USER_ID").unwrap_or_else(|| MCP_MEMORY_USER_ID.to_string()),
+                "user_id": MCP_MEMORY_USER_ID,
                 "replace_group":{"key":key,"value":value},
                 "documents": documents,
-            }));
-        if let Some(token) = env_compat("MEMBRICK_SERVER_TOKEN", "LINTAI_SERVER_TOKEN") {
-            if !token.trim().is_empty() {
-                request = request.bearer_auth(token.trim());
-            }
-        }
-        let response = request.send()?;
+            }),
+        )?;
         anyhow::ensure!(
-            response.status().is_success(),
+            status.is_success(),
             "resident memory server rejected hook capture: {} {}",
-            response.status(),
-            response.text().unwrap_or_default()
+            status,
+            body.get("detail").and_then(Value::as_str).unwrap_or("")
         );
         Ok(())
     }
@@ -338,25 +381,10 @@ pub(crate) fn search_hook_documents(
             },
         )
         .and_then(|mut service| {
-            if provider == "rooagi_runtime" {
-                let response = service.search(crate::memory_api::SearchRequest {
-                    query: query.to_string(),
-                    options: None,
-                    user_id: String::new(),
-                    top_k,
-                    session_id: session_id.map(str::to_string),
-                    scope: None,
-                    filters: None,
-                    reference_date: None,
-                })?;
-                return Ok(
-                    json!({"results": response.data.into_iter().map(|hit| json!({
-                    "id":hit.id,"content":hit.content,"score":hit.score,"created_at":hit.created_at
-                })).collect::<Vec<_>>()}),
-                );
-            }
-            let results = service.observe_plain_query(query, provider, session_id, top_k)?;
-            Ok(search_results(&service, results))
+            let results = service.search_for_hook(query, provider, session_id, top_k)?;
+            Ok(filter_automatic_context_results(search_results_for_query(
+                &service, query, results,
+            )))
         });
     }
     #[cfg(not(test))]
@@ -375,7 +403,9 @@ pub(crate) fn search_hook_documents(
             .and_then(|result| result.pointer("/content/0/text"))
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("resident search returned no result payload"))?;
-        Ok(serde_json::from_str(encoded)?)
+        Ok(filter_automatic_context_results(serde_json::from_str(
+            encoded,
+        )?))
     }
 }
 
@@ -452,8 +482,9 @@ pub(crate) fn search_session_id(arguments: &Value) -> Result<Option<String>, Str
 /// `session_id` still gets follow-up resolution against its live
 /// conversation. A present-but-blank argument is still rejected rather than
 /// falling back, so callers cannot accidentally lose session state. The
-/// resolved id (when any) refreshes the pointer, keeping it alive while the
-/// conversation continues through MCP searches.
+/// Explicit ids route only that request and do not change lifecycle state.
+/// Only provider hooks mark sessions active, so an MCP call cannot make a
+/// completed or unrelated session appear live.
 #[cfg(any(
     feature = "claude-code",
     feature = "codex",
@@ -467,25 +498,58 @@ pub(crate) fn resolve_search_session_id(
     service: &MemoryService,
     provider: &str,
 ) -> Result<Option<String>, String> {
-    let session_id = match search_session_id(arguments)? {
-        Some(explicit) => Some(explicit),
-        None => service.current_session_id(provider),
-    };
-    if let Some(active) = session_id.as_deref() {
-        service.note_active_session(provider, active);
+    match search_session_id(arguments)? {
+        Some(explicit) => Ok(Some(explicit)),
+        None => {
+            let active = service.current_session_id(provider);
+            if let Some(session_id) = active.as_deref() {
+                service.note_active_session(provider, session_id);
+            }
+            Ok(active)
+        }
     }
-    Ok(session_id)
 }
 
 /// Format retrieval hits for an agent. Keep this separate from the internal
 /// ranking representation: diagnostics and score components are useful while
 /// tuning the index, but distract an agent from the memory itself.
 pub fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Value {
+    format_search_results(service, None, results)
+}
+
+pub(crate) fn search_results_for_query(
+    service: &MemoryService,
+    query: &str,
+    results: Vec<SearchResult>,
+) -> Value {
+    format_search_results(service, Some(query), results)
+}
+
+fn format_search_results(
+    service: &MemoryService,
+    query: Option<&str>,
+    results: Vec<SearchResult>,
+) -> Value {
     let results = results
         .into_iter()
         .filter_map(|result| {
             let document = service.source_document_by_id(&result.doc_id)?;
-            let content: String = document.content.chars().take(4_000).collect();
+            let content: String = match query {
+                Some(query) => crate::integrations::recall::relevant_excerpt(
+                    &document.content,
+                    query,
+                    &result.matched_terms,
+                    4_000,
+                ),
+                None => document.content.chars().take(4_000).collect(),
+            };
+            let content = preserve_matched_excerpt(
+                &document.content,
+                &content,
+                query,
+                &result.matched_terms,
+                4_000,
+            );
             // Anchor relative date expressions ("yesterday", "last month") to
             // an absolute date the agent can see. Fail-open: memories without
             // a timestamp keep their original text.
@@ -513,6 +577,59 @@ pub fn search_results(service: &MemoryService, results: Vec<SearchResult>) -> Va
         })
         .collect::<Vec<_>>();
     json!({"results": results})
+}
+
+fn preserve_matched_excerpt(
+    content: &str,
+    excerpt: &str,
+    query: Option<&str>,
+    matched_terms: &[String],
+    max_bytes: usize,
+) -> String {
+    let lower_content = content.to_ascii_lowercase();
+    let lower_excerpt = excerpt.to_ascii_lowercase();
+    let query_match = query
+        .map(str::trim)
+        .filter(|query| query.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .filter(|query| lower_content.contains(query) && !lower_excerpt.contains(query));
+    let term_match = matched_terms.iter().find_map(|term| {
+        let term = term.trim();
+        let folded = term.to_ascii_lowercase();
+        (folded.len() >= 3 && lower_content.contains(&folded) && !lower_excerpt.contains(&folded))
+            .then_some(folded)
+    });
+    let Some(needle) = query_match.or(term_match) else {
+        return excerpt.to_string();
+    };
+    let Some(match_start) = lower_content.find(&needle) else {
+        return excerpt.to_string();
+    };
+    let mut start = match_start.saturating_sub(max_bytes / 4);
+    while !content.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (start + max_bytes).min(content.len());
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content[start..end].to_string()
+}
+
+/// Conflicted captures remain available through explicit MCP search, where
+/// the caller can inspect their evidence. Automatic hook context must not
+/// promote their competing claims into project guidance.
+pub(crate) fn automatic_context_allowed(result: &Value) -> bool {
+    result.get("semantic_status").and_then(Value::as_str) != Some("conflicted")
+}
+
+/// Filter shared automatic-hook retrieval before any provider formats context.
+/// Explicit MCP search remains unfiltered so callers can inspect conflicts.
+fn filter_automatic_context_results(mut payload: Value) -> Value {
+    if let Some(results) = payload.get_mut("results").and_then(Value::as_array_mut) {
+        results.retain(automatic_context_allowed);
+    }
+    payload
 }
 
 /// Return a bounded, provider-neutral view of the indexed memories.
@@ -899,14 +1016,15 @@ pub(crate) fn memory_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "add_memory".to_string(),
-            description: "Record a memory: a fact, decision, or observation worth remembering. Returns the request_id. Pass a unique request_id so retries are safe (a repeated request_id with the same content returns success without duplicating).".to_string(),
+            description: "Record or correct a memory: a fact, decision, or observation worth remembering. Returns the request_id. Pass a unique request_id so retries are safe. To correct an older memory, pass its memory_id in supersedes_id.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "content": {"type": "string", "description": "The memory content, e.g. \"The API rate limit is 100 requests per minute.\""},
                     "request_id": {"type": "string", "description": "Unique ID for this write; reuse it when retrying."},
                     "session_id": {"type": "string", "description": "Conversation session ID. Defaults to the session most recently seen active in this workspace."},
-                    "role": {"type": "string", "description": "Message role: \"user\" or \"assistant\". Defaults to \"assistant\".", "enum": ["user", "assistant"]}
+                    "role": {"type": "string", "description": "Message role: \"user\" or \"assistant\". Defaults to \"assistant\".", "enum": ["user", "assistant"]},
+                    "supersedes_id": {"type": "string", "description": "Memory ID this new memory corrects or replaces."}
                 },
                 "required": ["content", "request_id"],
                 "additionalProperties": false
@@ -925,10 +1043,22 @@ pub(crate) fn memory_tool_definitions() -> Vec<ToolDefinition> {
                 "additionalProperties": false
             }),
         },
+        ToolDefinition {
+            name: "delete_memory".to_string(),
+            description: "Forget one memory you own. Use a memory_id returned by search, get_memory, or add_memory.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "Memory ID to permanently delete."}
+                },
+                "required": ["memory_id"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
-/// Dispatch an `add_memory` / `get_memory` tool call. Returns the JSON
+/// Dispatch an `add_memory`, `get_memory`, or `delete_memory` tool call. Returns the JSON
 /// result payload, or an error string for invalid arguments.
 ///
 /// These wrap the same `MemoryService::add` / `MemoryService::get` the
@@ -951,8 +1081,15 @@ pub(crate) fn dispatch_memory_tool(
     }
 
     let allowed: &[&str] = match tool {
-        "add_memory" => &["content", "request_id", "session_id", "role"],
+        "add_memory" => &[
+            "content",
+            "request_id",
+            "session_id",
+            "role",
+            "supersedes_id",
+        ],
         "get_memory" => &["memory_id", "include_inactive"],
+        "delete_memory" => &["memory_id"],
         _ => return Err(format!("unknown memory tool: {tool}")),
     };
     if let Some(obj) = arguments.as_object() {
@@ -983,6 +1120,13 @@ pub(crate) fn dispatch_memory_tool(
                 None => Err(format!("memory not found: {memory_id}")),
             }
         }
+        "delete_memory" => {
+            let memory_id = get_str(arguments, "memory_id")?;
+            let deleted = service
+                .delete(MCP_MEMORY_USER_ID, memory_id)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({"memory_id": memory_id, "deleted": deleted}))
+        }
         _ => Err(format!("unknown memory tool: {tool}")),
     }
 }
@@ -994,8 +1138,16 @@ pub(crate) fn build_add_memory_request(
 ) -> Result<crate::memory_api::AddRequest, String> {
     use crate::memory_api::{AddRequest, Message};
     if arguments.as_object().is_some_and(|args| {
-        args.keys()
-            .any(|key| !["content", "request_id", "session_id", "role"].contains(&key.as_str()))
+        args.keys().any(|key| {
+            ![
+                "content",
+                "request_id",
+                "session_id",
+                "role",
+                "supersedes_id",
+            ]
+            .contains(&key.as_str())
+        })
     }) {
         return Err("unknown add_memory argument".to_string());
     }
@@ -1029,7 +1181,12 @@ pub(crate) fn build_add_memory_request(
             timestamp: None,
             content: content.to_string(),
             expires_at_ms: None,
-            supersedes_id: None,
+            supersedes_id: arguments
+                .get("supersedes_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
         }],
         user_id: MCP_MEMORY_USER_ID.to_string(),
         session_id,
@@ -1066,7 +1223,10 @@ pub(crate) fn call_board_or_memory_tool(
     // Board owner/workspace: the workspace root scopes boards;
     // "mcp" is the stable owner for agent-posted boards.
     let workspace = root.to_string_lossy().to_string();
-    let is_write = matches!(tool_name, "board_open" | "board_post" | "add_memory");
+    let is_write = matches!(
+        tool_name,
+        "board_open" | "board_post" | "add_memory" | "delete_memory"
+    );
     let result: Result<Value, String> = if is_write {
         // Resolve the session from the composed service, which tracks hook
         // activity, then run the write against the persistent shared-memory
@@ -1099,7 +1259,7 @@ pub(crate) fn call_board_or_memory_tool(
             | "board_get" | "board_search" => {
                 dispatch_board_tool(tool_name, arguments, service, "mcp", &workspace, provider)
             }
-            "add_memory" | "get_memory" => {
+            "add_memory" | "get_memory" | "delete_memory" => {
                 dispatch_memory_tool(tool_name, arguments, service, provider)
             }
             _ => Err(format!("unknown tool: {tool_name}")),
@@ -1133,7 +1293,7 @@ pub(crate) fn call_board_or_memory_tool(
     }
 }
 
-/// Dispatch one of the write tools (`board_open`, `board_post`, `add_memory`)
+/// Dispatch one of the write tools (`board_open`, `board_post`, `add_memory`, `delete_memory`)
 /// against an explicitly passed service. Separated from
 /// [`call_board_or_memory_tool`] so the write path can target the persistent
 /// shared store while reads stay on the composed in-memory view.
@@ -1150,6 +1310,7 @@ fn dispatch_write_tool(
             dispatch_board_tool(tool_name, arguments, service, owner, workspace, provider)
         }
         "add_memory" => dispatch_memory_tool(tool_name, arguments, service, provider),
+        "delete_memory" => dispatch_memory_tool(tool_name, arguments, service, provider),
         _ => Err(format!("unknown write tool: {tool_name}")),
     }
 }
@@ -1181,6 +1342,37 @@ mod tests {
     use crate::pipeline::{IndexStore, PipelineOptions};
     use crate::source::SourceDocument;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn automatic_context_excludes_conflicted_claims_only() {
+        assert!(automatic_context_allowed(
+            &json!({"semantic_status":"current"})
+        ));
+        assert!(automatic_context_allowed(&json!({"semantic_status":null})));
+        assert!(automatic_context_allowed(
+            &json!({"document_type":"session-context","semantic_status":null})
+        ));
+        assert!(automatic_context_allowed(
+            &json!({"document_type":"session-observation","semantic_status":null})
+        ));
+        assert!(!automatic_context_allowed(
+            &json!({"semantic_status":"conflicted"})
+        ));
+    }
+
+    #[test]
+    fn automatic_hook_search_removes_conflicted_hits_and_keeps_other_results() {
+        let payload = json!({"results":[
+            {"id":"current","semantic_status":"current"},
+            {"id":"conflicted","semantic_status":"conflicted"},
+            {"id":"legacy","semantic_status":null}
+        ]});
+        let filtered = filter_automatic_context_results(payload);
+        let results = filtered["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["id"], "current");
+        assert_eq!(results[1]["id"], "legacy");
+    }
 
     fn memory_service() -> MemoryService {
         MemoryService::in_memory(PipelineOptions::default())
@@ -1232,13 +1424,14 @@ mod tests {
     fn memory_tool_definitions_expose_add_and_get() {
         let defs = memory_tool_definitions();
         let names: Vec<_> = defs.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["add_memory", "get_memory"]);
+        assert_eq!(names, vec!["add_memory", "get_memory", "delete_memory"]);
         // Schemas require only the essentials.
         assert_eq!(
             defs[0].input_schema["required"],
             json!(["content", "request_id"])
         );
         assert_eq!(defs[1].input_schema["required"], json!(["memory_id"]));
+        assert_eq!(defs[2].input_schema["required"], json!(["memory_id"]));
     }
 
     #[test]
@@ -1290,6 +1483,56 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("memory not found"), "{err}");
+
+        let deleted = dispatch_memory_tool(
+            "delete_memory",
+            &json!({"memory_id": memory_id}),
+            &mut service,
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(deleted["deleted"], json!(true));
+        let deleted_again = dispatch_memory_tool(
+            "delete_memory",
+            &json!({"memory_id": memory_id}),
+            &mut service,
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(deleted_again["deleted"], json!(false));
+    }
+
+    #[test]
+    fn add_memory_can_explicitly_correct_an_older_memory() {
+        let mut service = memory_service();
+        let first = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "The API rate limit is 100 requests per minute.",
+                    "request_id": "old-limit", "session_id": "s1"}),
+            &mut service,
+            "claude",
+        )
+        .unwrap();
+        let old_id = crate::memory_api::memory_document_id("mcp", "old-limit", 0);
+        let second = dispatch_memory_tool(
+            "add_memory",
+            &json!({"content": "The API rate limit is 200 requests per minute.",
+                    "request_id": "new-limit", "session_id": "s1",
+                    "supersedes_id": old_id}),
+            &mut service,
+            "claude",
+        )
+        .unwrap();
+        assert_eq!(first["success"], json!(true));
+        assert_eq!(second["success"], json!(true));
+        let filters = BTreeMap::from([("memory_user_id".to_string(), "mcp".to_string())]);
+        let results = service
+            .search_with_filters("API rate limit", "test", None, 10, &filters, None)
+            .unwrap();
+        assert!(results
+            .iter()
+            .all(|result| result.doc_id
+                != crate::memory_api::memory_document_id("mcp", "old-limit", 0)));
     }
 
     #[test]
@@ -1476,6 +1719,18 @@ mod tests {
     }
 
     #[test]
+    fn search_excerpt_keeps_a_late_query_match_in_a_long_capture() {
+        let content = format!("{} late-evidence-913", "prefix ".repeat(2_000));
+        let query = "late-evidence-913";
+        let initial = crate::integrations::recall::relevant_excerpt(&content, query, &[], 4_000);
+        assert!(!initial.contains(query));
+
+        let excerpt = preserve_matched_excerpt(&content, &initial, Some(query), &[], 4_000);
+        assert!(excerpt.contains(query));
+        assert!(excerpt.len() <= 4_000);
+    }
+
+    #[test]
     fn search_results_anchor_memories_to_their_session_date() {
         fn memory(doc_id: &str, timestamp: Option<&str>) -> SourceDocument {
             SourceDocument {
@@ -1567,15 +1822,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolved.as_deref(), Some("agent-session"));
-        // ...and refreshes the pointer with the explicit id.
+        // Explicit request routing does not change the lifecycle active set.
         assert_eq!(
             service.current_session_id("claude").as_deref(),
-            Some("agent-session")
+            Some("hook-session")
         );
         // Absent argument falls back to the pointer.
         let resolved =
             resolve_search_session_id(&json!({"query": "q"}), &service, "claude").unwrap();
-        assert_eq!(resolved.as_deref(), Some("agent-session"));
+        assert_eq!(resolved.as_deref(), Some("hook-session"));
         // A present-but-blank argument is still rejected, not silently
         // degraded to the pointer.
         assert!(resolve_search_session_id(

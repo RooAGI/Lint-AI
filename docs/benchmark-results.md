@@ -31,6 +31,8 @@ LongMemEval scores unique sessions but `MemoryService` returns document
 memories, the harness requested four times the maximum cutoff (80 documents
 for @20), deduplicated by session ID, and scored the first 20 unique sessions.
 This changes the benchmark retrieval depth, not production search behavior.
+Structured-fact retrieval is now the benchmark default; pass
+`--no-structured-fact-retrieval` for a lexical-only baseline.
 
 | Metric | Result |
 |---|---:|

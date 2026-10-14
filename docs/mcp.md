@@ -36,8 +36,11 @@ Codex, Gemini CLI, or AGY to use the core index, HTTP API, or MCP interface.
 | Tool | Purpose |
 |---|---|
 | `search` | Search the indexed workspace and return ranked results. Requires `query`; accepts `top_k` (1–20). Each hit carries `created_at` and `session_id`, and the hit text is prefixed with `[session date: ...]` when the memory has a timestamp, so relative date expressions ("yesterday", "last month") resolve against an absolute date. |
-| `info` | Return basic information about the indexed workspace. |
+| `info` | Return the workspace root, indexed document count, and resident IPC connection status and endpoint. |
 | `list_memories` | List bounded previews of indexed agent memories. Accepts `limit` (1–100, default 20). |
+| `add_memory` | Add an explicitly chosen memory. Accepts `content`, `request_id`, `session_id`, optional `role`, and optional `supersedes_id` to correct an older memory. |
+| `get_memory` | Read one memory by ID. Accepts `memory_id` and optional `include_inactive`. |
+| `delete_memory` | Permanently delete one MCP-owned memory by ID. Returns `deleted: false` when it is missing or belongs to another owner. |
 | `record_session` | Start, stop, or inspect capture-only session recording. Use `action: start`, `stop`, or `status`. |
 | `enable_membrick` | Enable memory retrieval and capture for future hook events; recording is enabled by default. |
 | `disable_membrick` | Disable Membrick retrieval/injection and automatic capture; recording state is unchanged. |
@@ -45,6 +48,12 @@ Codex, Gemini CLI, or AGY to use the core index, HTTP API, or MCP interface.
 
 The same tool names are available to Claude Code, Codex, Gemini CLI, and
 Antigravity CLI through their configured Membrick MCP integration.
+The MCP memory-write tools are scoped to the stable `mcp` owner within the
+workspace. Lifecycle-captured memories use a separate owner and are not deleted
+by `delete_memory`.
+The `info` transport status describes the connection that served that request.
+`connected` means the resident owner responded successfully over that IPC
+endpoint.
 
 ## Search versus hooks
 

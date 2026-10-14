@@ -59,8 +59,7 @@ The integration benchmark answers these questions:
 2. Does Membrick reduce repeated repository exploration?
 3. Does Membrick preserve the latest decision when earlier decisions are
    superseded?
-4. Does bounded transcript parsing preserve memory after oversized tool
-   results?
+4. Does complete transcript capture preserve earlier messages and tool results?
 5. Does a negative-control query avoid injecting unrelated memory?
 6. What token, tool-call, hook, setup, and continuation costs are added?
 7. Does the MCP server work independently of whether the model elects to call

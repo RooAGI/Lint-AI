@@ -121,6 +121,7 @@ def parse_run(result_path: Path, transcript_path: Path) -> dict[str, Any]:
     exact_revision_memories = 0
     hook_latency_ms = 0
     hook_events = 0
+    hook_failures = 0
     unknown_events = 0
 
     for line in transcript_path.read_text(encoding="utf-8").splitlines():
@@ -175,6 +176,30 @@ def parse_run(result_path: Path, transcript_path: Path) -> dict[str, Any]:
             delegations[tool_use_id]["resolved_model"] = tool_result.get("resolvedModel")
 
         attachment = event.get("attachment")
+        # Claude Code emits hook output as a system/hook_response event, not
+        # as an `attachment` field. Parse this stream shape so reports reflect
+        # context that the provider actually received.
+        if event.get("type") == "system" and event.get("subtype") == "hook_response":
+            hook_events += 1
+            raw_output = event.get("output")
+            if isinstance(raw_output, str):
+                try:
+                    hook_output = json.loads(raw_output)
+                except json.JSONDecodeError:
+                    hook_output = {}
+                    lowered_output = raw_output.lower()
+                    if any(name in lowered_output for name in ("membrick", "lint-ai")) and any(
+                        marker in lowered_output for marker in ("warning:", "error:", "failed")
+                    ):
+                        hook_failures += 1
+                specific = hook_output.get("hookSpecificOutput", {})
+                context = specific.get("additionalContext") if isinstance(specific, dict) else None
+                if isinstance(context, str):
+                    injected_context_bytes += len(context.encode("utf-8"))
+                    retrieved_documents += sum(
+                        line.lstrip().startswith("- Source:") for line in context.splitlines()
+                    )
+                    exact_revision_memories += context.count("Revision status: exact-match")
         if not isinstance(attachment, dict):
             continue
         attachment_type = attachment.get("type")
@@ -207,6 +232,7 @@ def parse_run(result_path: Path, transcript_path: Path) -> dict[str, Any]:
         "retrieved_documents": retrieved_documents,
         "exact_revision_memories": exact_revision_memories,
         "hook_events": hook_events,
+        "hook_failures": hook_failures,
         "hook_latency_ms": hook_latency_ms,
         "unknown_events": unknown_events,
         "selected_segments": 0,

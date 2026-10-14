@@ -1,6 +1,7 @@
 mod catalog;
 mod diagnostics;
 pub mod extractor_daemon;
+#[cfg(feature = "experimental")]
 pub mod intent;
 mod model;
 mod query;
@@ -16,10 +17,8 @@ mod tests;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use catalog::*;
 pub use diagnostics::*;
-pub use intent::*;
 pub use model::*;
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use query::*;
-pub use relations::*;
 pub use routing::*;
 pub use segmented::*;

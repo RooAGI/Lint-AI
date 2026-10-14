@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -104,21 +105,21 @@ class TurnRecordTest(unittest.TestCase):
         self.assertIn("hello", msgs[0]["content"])
         self.assertIn("hi", msgs[1]["content"])
 
-    def test_history_tail_bounded(self):
+    def test_full_history_is_preserved(self):
         hist = [{"role": "user", "content": "m%d" % i} for i in range(50)]
         msgs = self._record(conversation_history=hist)["messages"]
         ctx = [m for m in msgs if m["content"].startswith("[context]")]
         self.assertEqual(len(ctx), 1)
-        # only the last 20 messages make it in
+        self.assertIn("m0", ctx[0]["content"])
         self.assertIn("m49", ctx[0]["content"])
-        self.assertNotIn("m0\n", ctx[0]["content"].replace("m0]", ""))
 
-    def test_turn_budget(self):
+    def test_full_turn_is_preserved(self):
         big = "z" * 50000
         msgs = self._record(user_message=big, assistant_response=big,
                             conversation_history=[{"role": "u", "content": big}])["messages"]
-        total = sum(len(m["content"]) for m in msgs)
-        self.assertLessEqual(total, 24 * 1024 + 4096)
+        self.assertIn(big, msgs[0]["content"])
+        self.assertIn(big, msgs[1]["content"])
+        self.assertIn(big, msgs[2]["content"])
 
     def test_user_id_filled_by_plugin(self):
         self.assertIsNone(self._record()["user_id"])
@@ -143,10 +144,21 @@ class ToolRecordTest(unittest.TestCase):
                               error_message="killed")
         self.assertIn("Timeout", r["messages"][0]["content"])
 
-    def test_long_args_truncated(self):
+    def test_long_args_preserved_for_capture(self):
         r = build_tool_record(session_id="s", turn_id="t", tool_call_id="c",
                               function_name="f", function_args="a" * 9000)
-        self.assertLess(len(r["messages"][0]["content"]), 9000)
+        self.assertIn("a" * 9000, r["messages"][0]["content"])
+
+    def test_runtime_transcript_fixture_and_large_turn_are_preserved(self):
+        fixture = Path(__file__).resolve().parents[5] / "tests/fixtures/runtime_transcripts/hermes.json"
+        event = json.loads(fixture.read_text())
+        record = build_turn_record(**event)
+        self.assertIn(event["user_message"], record["messages"][0]["content"])
+        self.assertIn(event["assistant_response"], record["messages"][1]["content"])
+        large = "conversation evidence " * 4000
+        large_record = build_turn_record("s", "t", large, large)
+        self.assertIn(large, large_record["messages"][0]["content"])
+        self.assertIn(large, large_record["messages"][1]["content"])
 
 
 class SessionRecordTest(unittest.TestCase):
@@ -233,29 +245,32 @@ class RecallFormatTest(unittest.TestCase):
 
 class ConfigTest(unittest.TestCase):
     def test_defaults(self):
-        cfg = load_config(env={}, hermes_home="/nonexistent-dir")
+        cfg = load_config(hermes_home="/nonexistent-dir")
         self.assertEqual(cfg["server_url"], "http://127.0.0.1:8080")
         self.assertTrue(cfg["capture"] and cfg["recall"])
         self.assertEqual(cfg["recall_top_k"], 5)
 
-    def test_env_wins_over_file(self):
+    def test_profile_file_overrides_defaults(self):
         with tempfile.TemporaryDirectory() as home:
-            with open(os.path.join(home, "lintai.json"), "w") as f:
-                json.dump({"user_id": "file-user", "recall_top_k": 3}, f)
-            env = {"HERMES_HOME": home, "LINTAI_USER_ID": "env-user"}
-            cfg = load_config(env=env, hermes_home=home)
-            self.assertEqual(cfg["user_id"], "env-user")
+            with open(os.path.join(home, "membrick.json"), "w") as f:
+                json.dump({"user_id": "profile-user", "recall_top_k": 3}, f)
+            cfg = load_config(hermes_home=home)
+            self.assertEqual(cfg["user_id"], "profile-user")
             self.assertEqual(cfg["recall_top_k"], 3)
 
-    def test_bool_parsing(self):
-        cfg = load_config(env={"LINTAI_CAPTURE": "off", "LINTAI_RECALL": "0"},
-                          hermes_home="/nonexistent-dir")
+    def test_profile_file_can_disable_capture_and_recall(self):
+        with tempfile.TemporaryDirectory() as home:
+            with open(os.path.join(home, "membrick.json"), "w") as f:
+                json.dump({"capture": False, "recall": False}, f)
+            cfg = load_config(hermes_home=home)
         self.assertFalse(cfg["capture"])
         self.assertFalse(cfg["recall"])
 
-    def test_server_url_trailing_slash_stripped(self):
-        cfg = load_config(env={"LINTAI_SERVER_URL": "http://x:1/"},
-                          hermes_home="/nonexistent-dir")
+    def test_profile_server_url_trailing_slash_stripped(self):
+        with tempfile.TemporaryDirectory() as home:
+            with open(os.path.join(home, "membrick.json"), "w") as f:
+                json.dump({"server_url": "http://x:1/"}, f)
+            cfg = load_config(hermes_home=home)
         self.assertEqual(cfg["server_url"], "http://x:1")
 
 
@@ -341,7 +356,7 @@ class QueueTest(unittest.TestCase):
 
 class PluginHookTest(unittest.TestCase):
     def _plugin(self, **cfg_overrides):
-        cfg = load_config(env={}, hermes_home="/nonexistent-dir")
+        cfg = load_config(hermes_home="/nonexistent-dir")
         cfg.update(cfg_overrides)
         p = MembrickPlugin(config=cfg)
         p.client = FakeClient(hits=[{"content": "user likes tea",

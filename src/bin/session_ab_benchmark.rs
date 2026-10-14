@@ -926,10 +926,10 @@ pub(crate) fn main() -> Result<()> {
             session_nums.len()
         );
 
-        let mut search_scored = |service: &mut MemoryService,
-                                 query: &str,
-                                 session_id: Option<String>,
-                                 top_k: usize|
+        let search_scored = |service: &mut MemoryService,
+                             query: &str,
+                             session_id: Option<String>,
+                             top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
             let response = service.search(SearchRequest {
@@ -955,18 +955,18 @@ pub(crate) fn main() -> Result<()> {
             Ok((out, latency_ms))
         };
 
-        let mut search = |service: &mut MemoryService,
-                          query: &str,
-                          session_id: Option<String>|
+        let search = |service: &mut MemoryService,
+                      query: &str,
+                      session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))
         };
 
-        let mut search_scored_prod = |service: &mut MemoryService,
-                                      query: &str,
-                                      session_id: Option<String>,
-                                      top_k: usize|
+        let search_scored_prod = |service: &mut MemoryService,
+                                  query: &str,
+                                  session_id: Option<String>,
+                                  top_k: usize|
          -> Result<(Vec<(String, f32)>, f64)> {
             let start = Instant::now();
             let response = service.search(SearchRequest {
@@ -992,9 +992,9 @@ pub(crate) fn main() -> Result<()> {
             Ok((out, latency_ms))
         };
 
-        let mut search_prod = |service: &mut MemoryService,
-                               query: &str,
-                               session_id: Option<String>|
+        let search_prod = |service: &mut MemoryService,
+                           query: &str,
+                           session_id: Option<String>|
          -> Result<(Vec<String>, f64)> {
             let (scored, latency_ms) = search_scored_prod(service, query, session_id, TOP_K)?;
             Ok((scored.into_iter().map(|(k, _)| k).collect(), latency_ms))

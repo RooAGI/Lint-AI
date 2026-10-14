@@ -41,20 +41,22 @@ membrick serve   # listens on 127.0.0.1:8080
 
 ## Configuration
 
-Environment variables (win over `$HERMES_HOME/membrick.json`, which wins over defaults):
+Settings belong in `$HERMES_HOME/membrick.json` (or `~/.hermes/membrick.json`):
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `MEMBRICK_SERVER_URL` | `http://127.0.0.1:8080` | Membrick server base URL |
-| `MEMBRICK_SERVER_TOKEN` | empty | Optional server bearer token |
-| `MEMBRICK_USER_ID` | `hermes` | tenant/user id for all reads and writes |
-| `MEMBRICK_QUEUE_MAX` | `1000` | bounded async write queue; drops oldest when full |
-| `MEMBRICK_CAPTURE` | `on` | `off` disables all capture hooks |
-| `MEMBRICK_RECALL` | `on` | `off` disables recall injection |
-| `MEMBRICK_RECALL_TOP_K` | `5` | search hits injected per turn |
+```json
+{
+  "server_url": "http://127.0.0.1:8080",
+  "server_token": "",
+  "user_id": "hermes",
+  "queue_max": 1000,
+  "capture": true,
+  "recall": true,
+  "recall_top_k": 5
+}
+```
 
-The previous `LINTAI_*` environment variables and `lintai.json` file are still
-accepted for existing installations.
+The plugin reads these settings from the profile file and does not use
+environment variables for Membrick configuration.
 
 The plugin writes through `/provider-memory/add/batch` into the workspace's
 shared `.membrick/memory/` store. Recall uses `/provider-memory/search`, which

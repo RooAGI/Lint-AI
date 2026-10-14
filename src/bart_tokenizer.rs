@@ -12,7 +12,6 @@ use std::sync::OnceLock;
 use tokenizers::models::bpe::BPE;
 use tokenizers::pre_tokenizers::whitespace::Whitespace;
 use tokenizers::tokenizer::{EncodeInput, Tokenizer};
-use tokenizers::{Decoder, PostProcessor};
 
 /// BART-base vocabulary (embedded).
 const BART_VOCAB: &str = include_str!("../tokenizers/bart/vocab.json");

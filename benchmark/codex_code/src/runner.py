@@ -214,8 +214,14 @@ def dirty_diff_digest(repo_root: Path) -> str:
 
 
 def prepare_worktree(repo_root: Path, revision: str, run_root: Path) -> Path:
-    worktree_path = run_root / "worktree"
+    worktree_root = os.environ.get("MEMBRICK_BENCHMARK_WORKTREE_ROOT")
+    if worktree_root:
+        worktree_id = hashlib.sha256(str(run_root.resolve()).encode("utf-8")).hexdigest()[:16]
+        worktree_path = Path(worktree_root).resolve() / worktree_id / "worktree"
+    else:
+        worktree_path = run_root / "worktree"
     cleanup_worktree(repo_root, worktree_path)
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "-C", str(repo_root), "worktree", "add", "--detach", str(worktree_path), revision],
         check=True,
@@ -708,6 +714,7 @@ def execute_scenario(
     metrics_mode: str,
     execution_mode: str,
     metrics_root: Path | None,
+    clean_project_state: bool = False,
 ) -> list[ScenarioRunRecord]:
     repo_root = canonical_repo_root(repo_root)
     revision = resolve_revision(repo_root, str(scenario["repository"]["revision"]))
@@ -738,6 +745,21 @@ def execute_scenario(
         run_dir.mkdir(parents=True, exist_ok=True)
         log(f"scenario {scenario['id']} repetition {repetition}: preparing worktree")
         worktree_path = prepare_worktree(repo_root, revision, run_dir)
+        if clean_project_state:
+            for state_name in (".membrick", ".lint-ai"):
+                state_path = worktree_path / state_name
+                if state_path.is_symlink() or state_path.is_file():
+                    state_path.unlink()
+                elif state_path.is_dir():
+                    shutil.rmtree(state_path)
+            skill_path = worktree_path / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
+            skill_path.unlink(missing_ok=True)
+            for directory in (skill_path.parent, skill_path.parent.parent, skill_path.parent.parent.parent):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    break
+            log(f"scenario {scenario['id']} repetition {repetition}: cleared isolated project state and skill")
         skill_source = os.environ.get("MEMBRICK_BENCHMARK_SKILL_PATH")
         if skill_source:
             skill_target = worktree_path / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
@@ -833,6 +855,9 @@ def execute_scenario(
                         metrics = shared_metrics.canonical_metrics(
                             metrics, provider=metrics_mode
                         )
+                        hook_failures = metrics.get("hook_failures", 0)
+                        if metrics_mode == "claude" and isinstance(hook_failures, int) and hook_failures:
+                            invalid_reason = f"Claude hooks reported {hook_failures} failure warning(s)"
                         metrics_path = run_dir / "continuation.metrics.json"
                         write_json(metrics_path, metrics)
                         continuation = replace(continuation, metrics_path=str(metrics_path))
@@ -965,6 +990,11 @@ def main() -> None:
     parser.add_argument("--arm", default="membrick")
     parser.add_argument("--metrics", choices=("codex", "claude", "agy", "muse", "none"), default="codex")
     parser.add_argument("--execution-mode", choices=("pipe", "pty"), default="pipe")
+    parser.add_argument(
+        "--clean-project-state",
+        action="store_true",
+        help="Remove .membrick and .lint-ai from each disposable benchmark worktree before the run.",
+    )
     parser.add_argument("--metrics-root", type=Path, default=None)
     parser.add_argument("--results-dir", type=Path, default=None)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
@@ -1029,6 +1059,7 @@ def main() -> None:
                     metrics_mode=args.metrics,
                     execution_mode=args.execution_mode,
                     metrics_root=args.metrics_root,
+                    clean_project_state=args.clean_project_state,
                 )
             )
         payload["execution"] = {

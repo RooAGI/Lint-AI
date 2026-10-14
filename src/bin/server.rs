@@ -15,6 +15,7 @@ use crate::{
     default_production_pipeline_options, lang::Lang, IndexStoreInspection, MemoryIndexLayout,
     PipelineOptions, DEFAULT_SEGMENT_QUERY_TOP_N,
 };
+use anyhow::Context;
 use axum::{
     error_handling::HandleErrorLayer,
     extract::{Extension, Json, Path, Query, State},
@@ -24,8 +25,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -40,6 +42,9 @@ const DEFAULT_MAX_ACTIVE_WORKSPACES: usize = 8;
 #[derive(Debug, Parser)]
 #[command(name = "membrick-server", about = "Memory Add/Search server backed by Membrick", version = env!("CARGO_PKG_VERSION"))]
 struct Args {
+    /// Read server defaults from a TOML settings file. CLI flags override it.
+    #[arg(long)]
+    settings: Option<PathBuf>,
     #[arg(long, default_value = "127.0.0.1:8080")]
     bind: String,
     #[arg(long)]
@@ -93,12 +98,49 @@ struct Args {
     /// Project root containing provider hook telemetry under `.membrick`.
     #[arg(long)]
     project_root: Option<PathBuf>,
+    /// Serve the resident workspace API over local IPC instead of TCP.
+    #[arg(long, hide = true)]
+    resident_server: bool,
     /// Additional exact project roots this server may open. Repeat for multiple projects.
     #[arg(long = "workspace-root", value_name = "PATH")]
     workspace_roots: Vec<PathBuf>,
     /// Maximum number of resident workspace services, including the primary workspace.
     #[arg(long, default_value_t = DEFAULT_MAX_ACTIVE_WORKSPACES)]
     max_active_workspaces: usize,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ServerSettings {
+    bind: Option<String>,
+    index: Option<PathBuf>,
+    project_root: Option<PathBuf>,
+    server_token: Option<String>,
+    server_token_file: Option<PathBuf>,
+    tenant_id: Option<String>,
+    jwt_secret: Option<String>,
+    adaptive_segment_max_n: Option<usize>,
+}
+
+fn settings_path(args: &Args) -> anyhow::Result<PathBuf> {
+    if let Some(path) = &args.settings {
+        return Ok(path.clone());
+    }
+    let root = args
+        .project_root
+        .clone()
+        .unwrap_or(std::env::current_dir()?);
+    Ok(root.join(".membrick").join("server.toml"))
+}
+
+fn load_server_settings(path: &std::path::Path) -> anyhow::Result<ServerSettings> {
+    if !path.exists() {
+        return Ok(ServerSettings::default());
+    }
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read settings file {}", path.display()))?;
+    toml::from_str(&raw)
+        .with_context(|| format!("failed to parse settings file {}", path.display()))
 }
 
 /// CLI-selectable segment routing strategies. Variant names map to the router
@@ -569,27 +611,44 @@ fn open_workspace_owner_at(
 
 #[tokio::main]
 pub(crate) async fn main() -> anyhow::Result<()> {
-    let mut args = Args::parse();
+    let mut matches = Args::command().get_matches();
+    let bind_was_set = matches.value_source("bind") == Some(clap::parser::ValueSource::CommandLine);
+    let mut args = Args::from_arg_matches_mut(&mut matches)?;
+    let settings_file = settings_path(&args)?;
+    let settings = load_server_settings(&settings_file)?;
+    if !bind_was_set {
+        if let Some(bind) = settings.bind {
+            args.bind = bind;
+        }
+    }
+    if args.index.is_none() {
+        args.index = settings.index;
+    }
+    if args.project_root.is_none() {
+        args.project_root = settings.project_root;
+    }
+    if args.server_token.is_none() {
+        args.server_token = if let Some(path) = settings.server_token_file {
+            Some(
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read token file {}", path.display()))?
+                    .trim()
+                    .to_string(),
+            )
+        } else {
+            settings.server_token
+        };
+    }
+    if args.tenant_id.is_none() {
+        args.tenant_id = settings.tenant_id;
+    }
+    if args.adaptive_segment_max_n.is_none() {
+        args.adaptive_segment_max_n = settings.adaptive_segment_max_n;
+    }
     let bekind_enabled = args.bekind;
     crate::behood_query::set_enabled(bekind_enabled);
-    args.server_token = normalize_secret(
-        args.server_token
-            .or_else(|| std::env::var("SERVER_TOKEN").ok()),
-    );
-    args.tenant_id = args
-        .tenant_id
-        .or_else(|| std::env::var("SERVER_TENANT_ID").ok());
-    if args.adaptive_segment_max_n.is_none() {
-        args.adaptive_segment_max_n = std::env::var("ADAPTIVE_SEGMENT_MAX_N")
-            .ok()
-            .map(|value| {
-                value.parse::<usize>().map_err(|_| {
-                    anyhow::anyhow!("ADAPTIVE_SEGMENT_MAX_N must be a positive integer")
-                })
-            })
-            .transpose()?;
-    }
-    let jwt_secret = normalize_secret(std::env::var("JWT_SECRET").ok());
+    args.server_token = normalize_secret(args.server_token);
+    let jwt_secret = normalize_secret(settings.jwt_secret);
     ensure_bind_allowed(
         &args.bind,
         args.allow_non_loopback,
@@ -607,7 +666,6 @@ pub(crate) async fn main() -> anyhow::Result<()> {
     options.lang = args.lang;
     let project_root = args
         .project_root
-        .or_else(|| std::env::var_os("MEMBRICK_PROJECT_ROOT").map(PathBuf::from))
         .unwrap_or(std::env::current_dir()?)
         .canonicalize()?;
     anyhow::ensure!(
@@ -800,6 +858,10 @@ pub(crate) async fn main() -> anyhow::Result<()> {
         });
     }
     let app = app_router(state.clone());
+    if args.resident_server {
+        crate::local_ipc::serve(app, &state.project_root).await?;
+        return Ok(());
+    }
     let listener = tokio::net::TcpListener::bind(&args.bind).await?;
     eprintln!("Membrick server listening on {}", args.bind);
     axum::serve(listener, app)
@@ -1090,6 +1152,13 @@ async fn authorize(
     mut request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> impl IntoResponse {
+    if request
+        .extensions()
+        .get::<crate::local_ipc::LocalIpcRequest>()
+        .is_some()
+    {
+        return next.run(request).await;
+    }
     let path = request.uri().path();
     if path == "/health" || path == "/dashboard" || path.starts_with("/dashboard/") {
         return next.run(request).await;
@@ -1799,11 +1868,7 @@ async fn add(
         }
     };
     if let Some(worker) = &state.staged_writer {
-        return match worker
-            .for_workspace()
-            .add(vec![request], options.wait_for_visibility)
-            .await
-        {
+        return match worker.add(vec![request], options.wait_for_visibility).await {
             Ok(mut responses) => Json(responses.as_array_mut().unwrap().remove(0)).into_response(),
             Err(status) => (
                 status,
@@ -1838,11 +1903,7 @@ async fn add_batch(
         }
     }
     if let Some(worker) = &state.staged_writer {
-        return match worker
-            .for_workspace()
-            .add(requests, options.wait_for_visibility)
-            .await
-        {
+        return match worker.add(requests, options.wait_for_visibility).await {
             Ok(responses) => Json(responses).into_response(),
             Err(status) => (
                 status,
@@ -2042,28 +2103,116 @@ async fn provider_mcp_document_upsert(
             }
         }
     }
+    let session_context = documents
+        .iter()
+        .find(|document| {
+            document.filters.get("document_type").map(String::as_str) == Some("session-context")
+        })
+        .cloned();
     let writer = &runtime.staged_writer;
-    let result = if let Some(group) = value.get("replace_group") {
-        let key = group.get("key").and_then(Value::as_str).unwrap_or_default();
-        let group_value = group
-            .get("value")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if key.is_empty() || group_value.is_empty() {
+    let audit_ids = documents
+        .iter()
+        .map(|document| document.doc_id.clone())
+        .collect::<Vec<_>>();
+    let audit_provider = provider.to_string();
+    let audit_user_id = value
+        .get("user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("mcp")
+        .to_string();
+    let audit_session_id = value
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let result = if let Some(context) = session_context {
+        let capture_group = context
+            .filters
+            .get("session_capture_id")
+            .cloned()
+            .filter(|value| !value.is_empty());
+        let Some(capture_group) = capture_group else {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"detail":"replace_group requires key and value"})),
+                Json(json!({"detail":"session context requires session_capture_id"})),
+            )
+                .into_response();
+        };
+        if !documents
+            .iter()
+            .all(|document| document.filters.get("session_capture_id") == Some(&capture_group))
+        {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail":"session capture group does not match all documents"})),
             )
                 .into_response();
         }
         writer
-            .replace_group(key.to_string(), group_value.to_string(), documents)
+            .mutate(move |service| {
+                let receipt = service.replace_session_capture(
+                    "session_capture_id",
+                    &capture_group,
+                    documents,
+                    context,
+                )?;
+                service.record_capture_mutation(
+                    &audit_provider,
+                    &audit_user_id,
+                    &audit_session_id,
+                    &audit_ids,
+                )?;
+                Ok(serde_json::to_value(receipt).unwrap_or(Value::Null))
+            })
             .await
+            .map_err(|error| {
+                server_writer::mutation_status(&error, StatusCode::INTERNAL_SERVER_ERROR)
+            })
     } else {
-        writer.upsert_documents(documents).await
+        let result = if let Some(group) = value.get("replace_group") {
+            let key = group.get("key").and_then(Value::as_str).unwrap_or_default();
+            let group_value = group
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if key.is_empty() || group_value.is_empty() {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({"detail":"replace_group requires key and value"})),
+                )
+                    .into_response();
+            }
+            writer
+                .replace_group(key.to_string(), group_value.to_string(), documents)
+                .await
+        } else {
+            writer.upsert_documents(documents).await
+        };
+        match result {
+            Ok(()) => writer
+                .mutate(move |service| {
+                    service.record_capture_mutation(
+                        &audit_provider,
+                        &audit_user_id,
+                        &audit_session_id,
+                        &audit_ids,
+                    )?;
+                    Ok(Value::Null)
+                })
+                .await
+                .map_err(|error| {
+                    server_writer::mutation_status(&error, StatusCode::INTERNAL_SERVER_ERROR)
+                }),
+            Err(status) => Err(status),
+        }
     };
     match result {
-        Ok(()) => Json(json!({"success":true,"published":true})).into_response(),
+        Ok(adjudication) => Json(json!({
+            "success": true,
+            "published": true,
+            "adjudication": adjudication,
+        }))
+        .into_response(),
         Err(status) => (
             status,
             Json(json!({"detail":"provider memory publication failed"})),
@@ -2186,6 +2335,16 @@ async fn provider_mcp_tool_call(
                     .unwrap_or(value))
             }
             "get_memory" => {
+                let mut owner = runtime
+                    .service
+                    .write()
+                    .map_err(|_| anyhow::anyhow!("provider memory service poisoned"))?;
+                crate::integrations::mcp_tools::dispatch_memory_tool(
+                    &tool, &arguments, &mut owner, provider,
+                )
+                .map_err(anyhow::Error::msg)
+            }
+            "delete_memory" => {
                 let mut owner = runtime
                     .service
                     .write()
@@ -2323,7 +2482,7 @@ async fn search(
                 return Ok(0);
             }
             let raw = MemoryService::extract_key_phrases_for_docs(&docs, script.as_deref());
-            write_mutation(&owned_state, move |service| {
+            write_workspace_mutation(&owned_state, move |service| {
                 Ok(service.apply_key_phrase_backfill(&docs, raw))
             })
         })
@@ -2393,7 +2552,7 @@ async fn get_memory(
         return error.into_response();
     }
     let result = match state.service.read() {
-        Ok(service) => service.memory_store(MemoryStore::Workspace).get(request),
+        Ok(service) => service.memory_store(MemoryStore::Captured).get(request),
         Err(_) => Err(anyhow::anyhow!("memory reader lock poisoned")),
     };
     match result {
@@ -2420,7 +2579,7 @@ async fn list_memories(
         return error.into_response();
     }
     let result = match state.service.read() {
-        Ok(service) => service.memory_store(MemoryStore::Workspace).list(request),
+        Ok(service) => service.memory_store(MemoryStore::Captured).list(request),
         Err(_) => Err(anyhow::anyhow!("memory reader lock poisoned")),
     };
     match result {
@@ -2688,6 +2847,17 @@ fn write_mutation<T: serde::Serialize + serde::de::DeserializeOwned + 'static>(
         .staged_writer
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("resident memory writer is unavailable"))?
+        .mutate_blocking(mutation)
+}
+
+fn write_workspace_mutation<T: serde::Serialize + serde::de::DeserializeOwned + 'static>(
+    state: &AppState,
+    mutation: impl FnOnce(&mut MemoryService) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    state
+        .staged_writer
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("resident memory writer is unavailable"))?
         .for_workspace()
         .mutate_blocking(mutation)
 }
@@ -2713,7 +2883,7 @@ fn ensure_bind_allowed(
     if allow_non_loopback {
         anyhow::ensure!(
             authentication_configured && !allow_unauthenticated,
-            "--allow-non-loopback requires SERVER_TOKEN or JWT_SECRET authentication and cannot be combined with --allow-unauthenticated"
+            "--allow-non-loopback requires token or JWT authentication and cannot be combined with --allow-unauthenticated"
         );
     }
     Ok(())
@@ -3035,7 +3205,7 @@ mod tests {
                 .service
                 .read()
                 .unwrap()
-                .memory_store(MemoryStore::Workspace)
+                .memory_store(MemoryStore::Captured)
                 .inspection()
                 .source_document_count,
             1
@@ -3047,11 +3217,73 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn http_api_memory_survives_workspace_refresh() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let state = provider_memory_test_state(&root);
+        let app = app_router(state.clone());
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/add?wait_for_visibility=true")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        json!({
+                            "request_id":"api-memory-survives-refresh",
+                            "session_id":"api-memory-session",
+                            "user_id":"alice",
+                            "messages":[{"role":"user","content":"quartz keepsake memory"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let api_memory_exists = state
+            .service
+            .read()
+            .unwrap()
+            .memory_store(MemoryStore::Captured)
+            .source_documents()
+            .iter()
+            .any(|document| document.content.contains("quartz keepsake memory"));
+        assert!(
+            api_memory_exists,
+            "HTTP API memory must use the captured-memory service"
+        );
+
+        state
+            .staged_writer
+            .as_ref()
+            .unwrap()
+            .for_workspace()
+            .replace_workspace_documents(Vec::new())
+            .await
+            .unwrap();
+
+        let after_refresh = state
+            .service
+            .read()
+            .unwrap()
+            .memory_store(MemoryStore::Captured)
+            .source_documents()
+            .iter()
+            .any(|document| document.content.contains("quartz keepsake memory"));
+        assert!(after_refresh, "workspace refresh must retain API memory");
+        drop(state);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelled_http_wait_keeps_the_accepted_write() {
         use tower::ServiceExt;
         let root = security_test_root();
         let state = provider_memory_test_state(&root);
-        let writer = state.staged_writer.as_ref().unwrap().for_workspace();
+        let writer = state.staged_writer.as_ref().unwrap().clone();
         let first = AddRequest {
             request_id: "before-cancel".into(),
             user_id: "alice".into(),
@@ -3070,7 +3302,7 @@ mod tests {
             .service
             .write()
             .unwrap()
-            .memory_store_mut(MemoryStore::Workspace)
+            .memory_store_mut(MemoryStore::Captured)
             .begin_publication_paused(gate)
             .unwrap();
         let app = app_router(state.clone());
@@ -3085,7 +3317,7 @@ mod tests {
                     .service
                     .read()
                     .unwrap()
-                    .memory_store(MemoryStore::Workspace)
+                    .memory_store(MemoryStore::Captured)
                     .pending_document_count()
                     == 2
                 {
@@ -3120,7 +3352,7 @@ mod tests {
             .any(|hit| hit.content.contains("cancellation regression")));
         // Reopening verifies the cancelled request's accepted write was durable.
         let persisted = MemoryService::at_path(
-            &root,
+            &crate::memory_api::workspace::shared_memory_root(&root),
             crate::memory_api::workspace::segmented_store_options(),
         )
         .unwrap();
@@ -3696,6 +3928,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let audit_path =
+            crate::integrations::mcp_index::shared_memory_root(&root).join("mutations.jsonl");
+        let audit = std::fs::read_to_string(&audit_path).unwrap();
+        let audit_records = audit
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(audit_records.len(), 1);
+        assert_eq!(audit_records[0]["action"], "capture:codex");
+        assert_eq!(audit_records[0]["memory_ids"][0], "resident-hook-document");
 
         let search = json!({
             "workspace":root,
@@ -3759,6 +4001,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let audit = std::fs::read_to_string(&audit_path).unwrap();
+        let audit_records = audit
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(audit_records.len(), 2);
+        assert_eq!(
+            audit_records[1]["memory_ids"][0],
+            "resident-hook-document-replacement"
+        );
         let replacement_search = json!({
             "workspace":root,
             "provider":"codex",
@@ -3850,22 +4102,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn codex_resident_client_uses_workspace_backend_for_add_and_search() {
-        let root = security_test_root();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+        let root = security_test_root().canonicalize().unwrap();
+        #[cfg(unix)]
+        let endpoint = crate::local_ipc::endpoint(&root).unwrap();
         let server_root = root.clone();
         let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
+            crate::local_ipc::serve(
                 app_router(provider_memory_test_state(&server_root)),
+                &server_root,
             )
             .await
             .unwrap();
         });
-        let previous_url = std::env::var_os("MEMBRICK_SERVER_URL");
-        let previous_token = std::env::var_os("MEMBRICK_SERVER_TOKEN");
-        std::env::set_var("MEMBRICK_SERVER_URL", format!("http://{address}"));
-        std::env::remove_var("MEMBRICK_SERVER_TOKEN");
 
         let session_id = "codex:resident-client-session";
         let add_root = root.clone();
@@ -3915,13 +4163,9 @@ mod tests {
 
         server.abort();
         let _ = server.await;
-        if let Some(previous) = previous_url {
-            std::env::set_var("MEMBRICK_SERVER_URL", previous);
-        } else {
-            std::env::remove_var("MEMBRICK_SERVER_URL");
-        }
-        if let Some(previous) = previous_token {
-            std::env::set_var("MEMBRICK_SERVER_TOKEN", previous);
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(endpoint);
         }
         let _ = std::fs::remove_dir_all(root);
     }

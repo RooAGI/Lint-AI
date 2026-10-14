@@ -29,6 +29,9 @@ regex = "1"
 roaring = "0.10"
 anyhow = "1"
 axum = "0.7"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal"] }
 tower = { version = "0.5", features = ["limit", "timeout"] }
 jsonwebtoken = "9"

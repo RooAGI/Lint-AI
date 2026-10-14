@@ -43,13 +43,17 @@ def main() -> None:
     )
     parser.add_argument("--results-dir", type=Path, default=None)
     parser.add_argument("--timeout-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--membrick-binary", type=Path,
+        help="Use this executable instead of building the local debug binary.",
+    )
     args = parser.parse_args()
     repo = args.repo_root.resolve()
     benchmark_root = repo / "benchmark" / "agy"
     results = (args.results_dir or benchmark_root / "results" / "shared").resolve()
     results.mkdir(parents=True, exist_ok=True)
     temp = Path(tempfile.mkdtemp(prefix="membrick-agy-perf."))
-    binary = repo / "target" / "debug" / "membrick"
+    binary = args.membrick_binary.resolve() if args.membrick_binary else repo / "target" / "debug" / "membrick"
     host_gemini = Path.home() / ".gemini"
     host_hooks = host_gemini / "config" / "hooks.json"
     host_mcp = host_gemini / "config" / "mcp_config.json"
@@ -59,7 +63,12 @@ def main() -> None:
     }
     runner = repo / "benchmark" / "codex_code" / "src" / "runner.py"
     try:
-        subprocess.run(["cargo", "+stable", "build", "--features", "agy", "--quiet"], cwd=repo, check=True)
+        if args.membrick_binary:
+            if not binary.is_file():
+                raise FileNotFoundError(f"Membrick binary not found: {binary}")
+            print(f"step: use supplied Membrick binary {binary}", flush=True)
+        else:
+            subprocess.run(["cargo", "+stable", "build", "--features", "agy", "--quiet"], cwd=repo, check=True)
         reports = {}
         for arm in args.arms:
             # AGY does not currently provide a supported per-run config home.
@@ -77,7 +86,7 @@ def main() -> None:
                 # AGY authenticates through the host profile/keychain. Keep
                 # worktrees isolated without creating a fresh OAuth profile.
                 "HOME": str(Path.home()),
-                "PATH": f"{repo / 'target' / 'debug'}:{arm_env.get('PATH', '')}",
+                "PATH": f"{binary.parent}:{arm_env.get('PATH', '')}",
             })
             if arm != "agy-native":
                 subprocess.run([str(binary), "--agy-install", str(worktree)], cwd=repo, env=arm_env, check=True)

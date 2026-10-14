@@ -43,6 +43,20 @@ project decision, or ask the agent to remember an outcome from the current
 session. The agent uses Membrick's memory tools and lifecycle integration in
 the background.
 
+If you already installed the `membrick` executable, the same provider setup
+can be run with a shorter command:
+
+```bash
+membrick setup codex .
+membrick setup claude .
+membrick setup gemini .
+membrick setup agy .
+```
+
+Use `membrick serve <provider> [PATH]` to run its MCP server, or
+`membrick verify <provider> [PATH]` to check the connection. The existing
+provider-specific flags remain accepted for scripts and older instructions.
+
 ## Migrate from Lint-AI
 
 Existing Lint-AI users can install Membrick and update one agent connection in
@@ -54,12 +68,15 @@ curl -fsSL https://raw.githubusercontent.com/RooAGI/Membrick/main/scripts/migrat
 
 Replace `codex` with `claude`, `gemini`, or `agy` for another supported agent.
 The migration installs Membrick, updates that agent's configuration while
-preserving unrelated settings, and verifies the MCP connection. Existing
-`.lint-ai` project state is moved to `.membrick` by Membrick on startup, with
-its contents preserved. If both directories exist, migration stops so you can
-merge them deliberately. The old `lint-ai` executable is left installed; once
-you have confirmed Membrick works, remove it using the package manager that
-installed it.
+preserving unrelated settings, and verifies the MCP connection. During agent
+setup, existing `.lint-ai` project state is moved to `.membrick` with its
+contents preserved. Membrick also checks for legacy state when it first accesses
+the project. If both directories exist, migration merges non-conflicting entries
+and moves conflicting legacy entries into `.membrick/migration-archive`, without
+overwriting current state. It removes the project-root `.lint-ai` directory when
+migration completes. The old `lint-ai` executable is left installed; once you have
+confirmed Membrick works, remove it using the package manager that installed
+it.
 
 ## OpenClaw and Hermes
 

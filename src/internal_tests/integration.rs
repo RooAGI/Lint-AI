@@ -1,7 +1,7 @@
 // Public-API integration tests for the curated `membrick` surface.
 // White-box tests for crate-internal modules live in `src/` unit tests.
 use crate::index::{DocRecord, MemoryIndex, Provenance};
-use crate::{RankedTerm, Tier1Entity};
+use crate::tier1::{RankedTerm, Tier1Entity};
 
 #[test]
 fn query_baseline_still_works_without_semantic_match() {

@@ -34,6 +34,20 @@ you saved the executable elsewhere):
 
 Restart AGY and open the project so it loads the new settings.
 
+At `Stop`, Membrick stores every non-empty transcript record in source order
+as an individual `SourceDocument`, including records that are not plain text.
+A linked session context is reconciled through `MemoryService`. AGY supplies
+the transcript path in its hook payload. Project-local transcripts need no
+extra setting; for AGY's centralized transcript directory, configure it in the
+project's `.membrick/settings.toml`:
+
+```toml
+[hooks]
+agy_transcript_dir = "/path/to/.gemini/antigravity-cli/brain"
+```
+
+This replaces environment-based transcript path discovery.
+
 ## 3. Try it
 
 Ask AGY to look up a decision from earlier work, or continue work in a new

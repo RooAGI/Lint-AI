@@ -45,9 +45,13 @@ struct Args {
     #[arg(long)]
     bekind: bool,
 
-    /// Enable structured-fact retrieval, including native participation claims.
-    #[arg(long, action = ArgAction::SetTrue)]
+    /// Enable structured-fact retrieval, including native participation claims (default).
+    #[arg(long, action = ArgAction::SetTrue, default_value_t = true)]
     structured_fact_retrieval: bool,
+
+    /// Disable structured-fact retrieval for a lexical-only baseline.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_structured_fact_retrieval: bool,
 
     /// Enable CombSUM fusion: run multiple query variants and sum scores.
     #[arg(long)]
@@ -281,7 +285,7 @@ fn combsum_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -341,7 +345,7 @@ fn rrf_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -401,7 +405,7 @@ fn prf_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -478,7 +482,7 @@ fn rm3_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -555,7 +559,7 @@ fn bo1_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -703,7 +707,7 @@ pub(crate) fn main() -> Result<()> {
         args.prf,
         args.rm3,
         args.bo1,
-        args.structured_fact_retrieval,
+        args.structured_fact_retrieval && !args.no_structured_fact_retrieval,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 

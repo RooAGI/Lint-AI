@@ -7,7 +7,7 @@ implementation supports ten hooks: the original six (`SessionStart`,
 `UserPromptSubmit`, `UserPromptExpansion`, `PreCompact`, `Stop`, `SessionEnd`)
 plus four added in the second release (`PreToolUse`, `PostToolUse`,
 `SubagentStart`, `SubagentStop`). It also provides persistent segmented session
-memory, bounded transcript capture, context injection, and settings
+memory, complete transcript text capture, context injection, and settings
 installation.
 
 Structured semantic summarization, configurable budgets, stronger secret
@@ -33,12 +33,27 @@ Claude Code:
 - reduce repeated repository exploration and repeated user explanations
 - bound hook latency and the number of tokens injected into Claude's context
 
-The integration must not store complete transcripts, raw tool logs, secrets, or
-the expanded body of a skill as durable memory.
+The integration stores every parsed user and assistant transcript observation
+in source order as session memory, including tool calls, tool results, empty
+messages, and image blocks. Text blocks and serialized structured blocks are
+kept in full. Credentials are redacted before persistence.
 
-Captured hook memory is normalized locally into a compact record with
-`Request`, `Result`, and optional `Affected paths` fields. Raw dialogue, task
-notifications, and tool-use blocks are not the durable memory contract.
+Each parsed transcript observation is stored as its own stable `SourceDocument`
+with its speaker, order, provider message ID when available, timestamp when
+available, and complete text or serialized blocks. A separate
+whole-session context document links those observations in source order.
+Repeated hook captures upsert the same observation IDs and context ID, so they
+do not duplicate the full transcript. Transcript discovery uses the hook path
+or project `.membrick/settings.toml`; it does not read environment variables.
+
+The resident ingestion endpoint submits observations and context together.
+`MemoryService` first refreshes session-scoped observation claims, then calls
+`reconcile_session_context` for the linked whole-session document. This keeps
+within-session corrections auditable while allowing project-scoped comparison
+across sessions. Session documents participate in normal hook retrieval. Hooks
+inject only query-matched excerpts, and the shared policy excludes conflicted
+results. Explicit search remains available for inspecting conflicts and full
+source documents.
 
 ## Ownership Boundary
 
@@ -88,7 +103,7 @@ src/integrations/claude_code/
 - `document.rs` defines `ClaudeCodeDocument` and converts it to
   `SourceDocument`.
 - `hooks/protocol.rs` contains only Claude hook input and output schemas.
-- `hooks/mod.rs` dispatches hooks, queries `MemoryService`, extracts bounded
+- `hooks/mod.rs` dispatches hooks, queries `MemoryService`, extracts full
   transcript content, and captures durable memory.
 
 MCP and hook behavior can be split into smaller files later when those modules
@@ -277,12 +292,11 @@ Purpose: preserve resumable state before Claude compacts its context.
 
 Operation:
 
-1. Read only a bounded recent portion of the transcript identified by the hook.
-2. Extract decisions, completed work, affected paths, active failures, and
-   unresolved work.
-3. Remove raw tool output, secrets, and conversational filler.
+1. Read the complete transcript identified by the hook.
+2. Preserve each parsed message's speaker and full text in source order.
+3. Redact credentials before persistence.
 4. Create a deterministic `ClaudeCodeDocument` of type `Checkpoint`.
-5. Convert it to `SourceDocument` and call `MemoryService::upsert()`.
+5. Convert it to `SourceDocument` and upsert it through `MemoryService`.
 
 Repeated compaction for the same session uses deterministic checkpoint IDs or
 content hashes so retries do not create duplicate memory.
@@ -291,11 +305,11 @@ content hashes so retries do not create duplicate memory.
 
 Purpose: capture the durable outcome after Claude finishes a response.
 
-The adapter extracts a bounded turn outcome rather than storing the complete
-transcript. Useful content includes decisions, implemented changes, validation
-results, failed approaches that affect future work, and unresolved follow-up.
-The result becomes a `ClaudeCodeDocument` of type `Outcome` and is upserted into
-the current session segment.
+The adapter stores all parsed transcript text observations, including earlier
+decisions, corrections, tool text, and results, in source order. The complete
+snapshot becomes a `ClaudeCodeDocument` of type `Outcome` and is upserted into
+the current session segment. The stable per-session document identity replaces
+the prior snapshot on each capture, avoiding a duplicate copy for every turn.
 
 The implementation must respect Claude's stop-hook recursion indicator and must
 not cause another stop cycle.
@@ -444,13 +458,9 @@ ending or compacting a Claude session.
 
 ## Security And Retention
 
-Before creating `SourceDocument`, capture must reject or redact:
-
-- credentials, tokens, private keys, and environment secrets
-- Claude permission configuration and authentication state
-- raw command output that is not needed for a durable conclusion
-- generated dependency trees and build artifacts
-- transcript content outside the bounded capture window
+Before creating `SourceDocument`, capture redacts credentials, tokens, and
+private keys. It retains the transcript's tool input, output, and image blocks
+so session claims can be checked against the recorded evidence.
 
 Retention and deletion operate through stable `doc_id` values and
 `MemoryService::remove()`. A later retention policy can remove old session outcomes
@@ -487,7 +497,7 @@ response to stdout.
 
 1. Add benchmark coverage for retrieval quality, hook latency, and injected
    token usage, including the three new hooks added in this release.
-2. Replace deterministic bounded transcript extraction with optional structured
+2. Replace deterministic transcript extraction with optional structured
    summarization after its quality and cost are measured.
 3. Add configurable context budgets, routing thresholds, and retention.
 4. Define cross-process locking and snapshot reload semantics before sharing the

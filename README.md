@@ -178,6 +178,16 @@ Membrick is evaluated on **LongMemEval-S**, a public benchmark for long-context 
 
 ### How to read the benchmark numbers
 
+Separate integration smoke runs use a matched
+`routing-decision-supersession` task template. The one-run Codex result showed
+37.4% fewer reported continuation tokens with Membrick hooks. The Claude run
+is invalid: both legacy `.lint-ai` and current `.membrick` directories were
+present, so its hooks failed open and continuation retrieved no memory. See
+the [Codex](docs/codex-performance-tests.md) and
+[Claude Code](docs/claude-code-performance-tests.md) reports. These are
+diagnostics, not release benchmarks; compare each provider only with its own
+native baseline.
+
 Every result has three independent labels:
 
 1. **Scope:** the 500-question aggregate evaluates the full scoped dataset;

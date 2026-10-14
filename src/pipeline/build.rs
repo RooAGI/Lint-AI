@@ -194,11 +194,10 @@ pub(crate) fn doc_record_content_hash_with_version(
     };
     let mut hasher = Sha256::new();
     // Domain separator: bump if the hashed field set ever changes, so old
-    // hashes never compare equal to new ones.
-    //
-    // v3: the optional Bekind evidence extraction mode changes the derived
-    // top_claims. Toggling --bekind must rebuild records in either direction.
-    hash_len_prefixed(&mut hasher, b"membrick-doc-record-content-hash/v4");
+    // hashes never compare equal to new ones. v5 excludes generated
+    // `membrick_recorded_at` metadata because it records ingestion time and
+    // does not affect derived DocRecord contents.
+    hash_len_prefixed(&mut hasher, b"membrick-doc-record-content-hash/v5");
     hash_len_prefixed(&mut hasher, &[u8::from(crate::behood_query::is_enabled())]);
     // Build version pins the implementation behind the option identities;
     // any bump invalidates every stored hash (mismatch -> rebuild).
@@ -219,8 +218,20 @@ pub(crate) fn doc_record_content_hash_with_version(
     hasher.update((source_doc.doc_length as u64).to_le_bytes());
     hash_opt_str(&mut hasher, &source_doc.author_agent);
     hash_opt_str(&mut hasher, &source_doc.group_id);
-    hasher.update((source_doc.filters.len() as u64).to_le_bytes());
-    for (key, value) in &source_doc.filters {
+    const RECORDED_AT_FILTER: &str = "membrick_recorded_at";
+    let hashed_filters = source_doc
+        .filters
+        .iter()
+        .filter(|(key, _)| key.as_str() != RECORDED_AT_FILTER);
+    hasher.update(
+        (source_doc
+            .filters
+            .keys()
+            .filter(|key| key.as_str() != RECORDED_AT_FILTER)
+            .count() as u64)
+            .to_le_bytes(),
+    );
+    for (key, value) in hashed_filters {
         hash_len_prefixed(&mut hasher, key.as_bytes());
         hash_len_prefixed(&mut hasher, value.as_bytes());
     }

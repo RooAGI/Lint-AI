@@ -13,15 +13,12 @@ instance, bind Membrick to localhost:
 
 ```bash
 cargo run --release --bin server -- \
-  --project-root /path/to/project \
-  --bind 127.0.0.1:8080 \
-  --server-token "$MEMBRICK_SERVER_TOKEN"
+  --settings /path/to/project/.membrick/server.toml
 ```
 
-Replace `/path/to/project` with your project directory. Set
-`MEMBRICK_SERVER_TOKEN` to a secret value before starting the server. For a
-single-user local setup, you can instead use `--allow-unauthenticated`; keep
-the server bound to localhost.
+Replace `/path/to/project` with your project directory. Put the token in the
+`server_token` setting. For a single-user local setup, you can instead use
+`--allow-unauthenticated`; keep the server bound to localhost.
 
 ## Configure Prometheus
 
@@ -45,7 +42,7 @@ the Prometheus UI. The `membrick` target should show as **UP**.
 You can also inspect the endpoint directly:
 
 ```bash
-curl -H "Authorization: Bearer $MEMBRICK_SERVER_TOKEN" \
+curl -H "Authorization: Bearer replace-with-your-server-token" \
   http://127.0.0.1:8080/metrics
 ```
 

@@ -76,8 +76,8 @@ export default {
   name: "Membrick memory",
   register(api) {
     const config = api?.pluginConfig ?? {};
-    const serverUrl = (config.serverUrl ?? process.env.MEMBRICK_SERVER_URL ?? process.env.LINTAI_SERVER_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
-    const serverToken = config.serverToken ?? process.env.MEMBRICK_SERVER_TOKEN ?? process.env.LINTAI_SERVER_TOKEN ?? "";
+    const serverUrl = (config.serverUrl ?? "http://127.0.0.1:8080").replace(/\/$/, "");
+    const serverToken = config.serverToken ?? "";
     const capture = (kind) => (event, ctx) =>
       fire(serverUrl, serverToken, kind, rootOf(config, ctx, event), event, ctx);
     api.on("agent_end", capture("agent-end"));

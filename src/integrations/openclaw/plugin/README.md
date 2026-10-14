@@ -47,7 +47,7 @@ Optional keys under `plugins.entries.membrick.config` in `openclaw.json`:
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `projectRoot` | Project root membrick captures for | The event's `workspaceDir` |
-| `binaryPath` | Absolute path to the `membrick` binary | `MEMBRICK_BIN`, then `membrick` on `PATH` |
+| `binaryPath` | Absolute path to the `membrick` binary | `membrick` on `PATH` |
 
 `--openclaw-install` writes `projectRoot` for you. If your Gateway runs
 multiple workspaces and events don't carry `workspaceDir`, set `projectRoot`
@@ -55,8 +55,8 @@ in the plugin configuration.
 
 ## Binary resolution
 
-In order: plugin config `binaryPath` → `MEMBRICK_BIN` environment variable →
-`membrick` found on `PATH` (no shell). If none resolves, the plugin logs one
+In order: plugin config `binaryPath` → `membrick` found on `PATH` (no shell).
+If none resolves, the plugin logs one
 line to stderr and every event is skipped — it never throws into the host.
 
 ## Fail-open behavior

@@ -210,3 +210,27 @@ fn production_code_does_not_bypass_memory_service() {
         violations.join("\n")
     );
 }
+
+#[test]
+fn integrations_do_not_access_conversation_state_store_directly() {
+    let integrations = manifest_dir().join("src/integrations");
+    let mut files = Vec::new();
+    collect_rs_files(&integrations, &mut files);
+    let violations: Vec<_> = files
+        .into_iter()
+        .filter_map(|path| {
+            let content = std::fs::read_to_string(&path).ok()?;
+            content
+                .contains("conversation_state::ConversationStateStore")
+                .then(|| {
+                    path.strip_prefix(manifest_dir().join("src"))
+                        .unwrap()
+                        .to_owned()
+                })
+        })
+        .collect();
+    assert!(
+        violations.is_empty(),
+        "integration code must route conversation-state access through MemoryService: {violations:?}"
+    );
+}

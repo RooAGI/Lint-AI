@@ -2,7 +2,7 @@
 //! shared workspace memory store, so MCP and hook callers see one index.
 use crate::cli::RooRuntimeHook;
 use crate::integrations::session_recording::{membrick_enabled, RecordingProvider};
-use crate::memory_api::{MemoryService, SearchRequest};
+use crate::memory_api::MemoryService;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_CONTEXT_BYTES: usize = 8_000;
-const MAX_CAPTURE_FIELD_BYTES: usize = 8_000;
-const MAX_TOOL_CAPTURE_BYTES: usize = 6 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,22 +301,16 @@ fn memory_session_id(project: &str, input: &HookInvocation) -> String {
 
 fn capture(root: &Path, input: &HookInvocation, kind: &str) -> Result<()> {
     let content = if kind == "turn" {
-        let user = bounded(
-            input
-                .payload
-                .get("userMessage")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            MAX_CAPTURE_FIELD_BYTES,
-        );
-        let assistant = bounded(
-            input
-                .payload
-                .get("assistantResponse")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            MAX_CAPTURE_FIELD_BYTES,
-        );
+        let user = input
+            .payload
+            .get("userMessage")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let assistant = input
+            .payload
+            .get("assistantResponse")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if user.trim().is_empty() && assistant.trim().is_empty() {
             return Ok(());
         }
@@ -426,7 +418,7 @@ fn capture_tool_event(root: &Path, input: &HookInvocation, kind: &str) -> Result
     let tool_input = input
         .payload
         .get("toolInput")
-        .map(|value| bounded(&sanitize_tool_value(value, 0), MAX_TOOL_CAPTURE_BYTES))
+        .map(|value| sanitize_tool_value(value, 0))
         .unwrap_or_else(|| "null".to_string());
     let result = input
         .payload
@@ -475,23 +467,9 @@ fn capture_tool_event(root: &Path, input: &HookInvocation, kind: &str) -> Result
             .filters
             .insert("workspace_id".into(), bounded(workspace_id, 256));
     }
-    let truncated = ["toolInput", "toolResponse", "toolError"]
-        .iter()
-        .any(|key| {
-            input.payload.get(*key).is_some_and(|value| {
-                tool_capture_is_truncated(value, 0)
-                    || (*key == "toolInput"
-                        && sanitize_tool_value(value, 0).len() > MAX_TOOL_CAPTURE_BYTES)
-            })
-        });
     document.filters.insert(
         "capture_completeness".to_string(),
-        if truncated {
-            "truncated"
-        } else {
-            "complete_sanitized"
-        }
-        .to_string(),
+        "complete_sanitized".to_string(),
     );
     if let Some(session_id) = input
         .payload
@@ -575,27 +553,8 @@ fn tool_result_context(input: &HookInvocation) -> HookResult {
     }
 }
 
-fn tool_capture_is_truncated(value: &Value, depth: usize) -> bool {
-    if depth >= 16 {
-        return true;
-    }
-    match value {
-        Value::Object(fields) => fields
-            .values()
-            .any(|value| tool_capture_is_truncated(value, depth + 1)),
-        Value::Array(items) => items
-            .iter()
-            .any(|value| tool_capture_is_truncated(value, depth + 1)),
-        Value::String(_) => false,
-        _ => false,
-    }
-}
-
 fn sanitize_tool_value(value: &Value, depth: usize) -> String {
     fn sanitize(value: &Value, depth: usize) -> Value {
-        if depth >= 16 {
-            return Value::String("[maximum nesting depth reached]".to_string());
-        }
         match value {
             Value::Object(object) => Value::Object(
                 object
@@ -716,7 +675,7 @@ pub fn install_hooks(config_override: Option<&Path>) -> Result<PathBuf> {
         hooks.push(serde_json::json!({
             "id": format!("membrick-roo-runtime-{name}"),
             "event": name,
-            "handlers": [{ "type": "process", "executable": executable, "args": ["--roo-runtime-hook", name.replace('_', "-")], "sandbox_profile": profile, "inherit_environment": ["MEMBRICK_SERVER_URL", "MEMBRICK_SERVER_TOKEN", "MEMBRICK_USER_ID", "LINTAI_SERVER_URL", "LINTAI_SERVER_TOKEN", "LINTAI_USER_ID"], "require_enforcement": false, "timeout_seconds": timeout_seconds }]
+            "handlers": [{ "type": "process", "executable": executable, "args": ["--roo-runtime-hook", name.replace('_', "-")], "sandbox_profile": profile, "inherit_environment": [], "require_enforcement": false, "timeout_seconds": timeout_seconds }]
         }));
     }
     let encoded = serde_json::to_vec_pretty(&config)?;
@@ -725,9 +684,8 @@ pub fn install_hooks(config_override: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn default_config_path() -> PathBuf {
-    std::env::var_os("ROO_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rooagi")))
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".rooagi"))
         .unwrap_or_else(|| PathBuf::from(".rooagi"))
         .join("hooks.json")
 }
@@ -747,6 +705,25 @@ mod tests {
             serde_json::json!({})
         );
     }
+
+    #[test]
+    fn parses_sanitized_runtime_hook_fixture() {
+        let invocation: HookInvocation = serde_json::from_str(include_str!(
+            "../../tests/fixtures/runtime_transcripts/roo_runtime.json"
+        ))
+        .unwrap();
+        assert_eq!(invocation.schema_version, 1);
+        assert_eq!(invocation.event, "agent_turn_end");
+        assert_eq!(invocation.run_id, "fixture-roo-run");
+        assert!(invocation.payload["userMessage"]
+            .as_str()
+            .unwrap()
+            .contains("routing"));
+        assert!(invocation.payload["assistantResponse"]
+            .as_str()
+            .unwrap()
+            .contains("default route"));
+    }
     #[test]
     fn tool_capture_preserves_items_beyond_256_and_redacts_secrets() {
         let value = serde_json::json!({
@@ -757,7 +734,15 @@ mod tests {
         assert_eq!(sanitized["items"].as_array().unwrap().len(), 300);
         assert_eq!(sanitized["items"][299], 299);
         assert_eq!(sanitized["password"], "[REDACTED]");
-        assert!(!tool_capture_is_truncated(&value, 0));
+        assert_eq!(
+            sanitize_tool_value(&value, 0).len(),
+            serde_json::to_string(&serde_json::json!({
+                "items": (0..300).collect::<Vec<_>>(),
+                "password": "[REDACTED]",
+            }))
+            .unwrap()
+            .len()
+        );
     }
 
     #[test]
@@ -774,10 +759,11 @@ mod tests {
         assert!(context.contains("evidence"));
         assert!(!context.contains("must-not-appear"));
         assert!(context.len() <= MAX_CONTEXT_BYTES);
-        assert!(!tool_capture_is_truncated(
-            &Value::String("a".repeat(MAX_TOOL_CAPTURE_BYTES + 1)),
-            0
-        ));
+        let oversized = Value::String("a".repeat(7 * 1024 * 1024));
+        assert_eq!(
+            sanitize_tool_value(&oversized, 0).len(),
+            7 * 1024 * 1024 + 2
+        );
     }
 
     #[test]
@@ -957,14 +943,7 @@ mod tests {
         assert_eq!(hooks[2]["handlers"][0]["timeout_seconds"], 5);
         assert_eq!(
             hooks[2]["handlers"][0]["inherit_environment"],
-            serde_json::json!([
-                "MEMBRICK_SERVER_URL",
-                "MEMBRICK_SERVER_TOKEN",
-                "MEMBRICK_USER_ID",
-                "LINTAI_SERVER_URL",
-                "LINTAI_SERVER_TOKEN",
-                "LINTAI_USER_ID"
-            ])
+            serde_json::json!([])
         );
         assert_eq!(
             hooks[6]["handlers"][0]["sandbox_profile"],

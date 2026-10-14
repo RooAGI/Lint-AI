@@ -10,12 +10,18 @@ in a persistent volume, and publishes the API on localhost.
 
 ## Start the server
 
-Set a private API token in your shell, then build and start the container:
+Create a private token file, then build and start the container:
 
 ```bash
-export SERVER_TOKEN="$(openssl rand -hex 32)"
+mkdir -p secrets
+openssl rand -hex 32 > secrets/server-token
+chmod 700 secrets
+chmod 644 secrets/server-token
 docker compose up --build -d
 ```
+
+Compose mounts this file as a container secret. Server options live in
+[`deploy/docker/server.toml`](https://github.com/RooAGI/Membrick/blob/main/deploy/docker/server.toml).
 
 The first start builds the release server image. Compose stores the index in
 the `membrick-data` volume, so memories remain available when the container is
@@ -24,7 +30,7 @@ restarted or upgraded.
 The server is available at `http://127.0.0.1:8080`. The Compose port mapping
 binds the host side to localhost. The container listens on its own network
 interface with `--allow-non-loopback`; that option requires authentication
-through `SERVER_TOKEN` or `JWT_SECRET` and cannot be combined with
+through the mounted token file or a configured JWT secret and cannot be combined with
 `--allow-unauthenticated`.
 
 The dashboard is included and served by default. Open
@@ -43,7 +49,7 @@ Add and search a memory:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/add \
-  -H "X-Api-Key: $SERVER_TOKEN" \
+  -H "X-Api-Key: $(cat secrets/server-token)" \
   -H 'Content-Type: application/json' \
   --data '{
     "request_id": "docker-demo:session-1:chunk-1",
@@ -53,7 +59,7 @@ curl -X POST http://127.0.0.1:8080/add \
   }'
 
 curl -X POST http://127.0.0.1:8080/search \
-  -H "X-Api-Key: $SERVER_TOKEN" \
+  -H "X-Api-Key: $(cat secrets/server-token)" \
   -H 'Content-Type: application/json' \
   --data '{
     "query": "How should I format answers?",
@@ -89,7 +95,7 @@ helm uninstall membrick --namespace membrick
 kubectl delete pvc membrick --namespace membrick
 ```
 
-Keep `SERVER_TOKEN` private. The supplied Compose file publishes the port only
+Keep the token file private. The supplied Compose file publishes the port only
 on the local machine. If you change that port binding to expose the service on
 another interface, put it behind an authenticated, encrypted access layer.
 
@@ -103,10 +109,13 @@ Create a namespace and token Secret:
 
 ```bash
 kubectl create namespace membrick
-token="$(openssl rand -hex 32)"
+mkdir -p secrets
+openssl rand -hex 32 > secrets/server-token
+chmod 700 secrets
+chmod 644 secrets/server-token
 kubectl create secret generic membrick-auth \
   --namespace membrick \
-  --from-literal=SERVER_TOKEN="$token"
+  --from-file=SERVER_TOKEN=secrets/server-token
 ```
 
 The chart defaults to `ghcr.io/rooagi/membrick-server:0.5.0`; the repository

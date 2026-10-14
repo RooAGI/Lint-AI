@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "claude-cross-session-routing-memory",
+  "category": "decision-recall",
+  "description": "Recall a corrected routing decision across sessions from memory alone.",
+  "negative_control": false,
+  "repository": {
+    "path": ".",
+    "revision": "HEAD"
+  },
+  "setup_messages": [
+    {
+      "prompt": "Initial proposal for the routing policy in our memory service: use SparseOverlap. Please remember this proposal.",
+      "establishes_fact_ids": [
+        "old-sparse-proposal"
+      ]
+    },
+    {
+      "prompt": "We changed the decision. The current routing policy is LocalDistinctiveness, and query_top_n is 3. This supersedes the SparseOverlap proposal. Please remember the current values and that the older value is superseded.",
+      "establishes_fact_ids": [
+        "current-local-routing",
+        "query-top-three"
+      ]
+    }
+  ],
+  "continuation_prompt": "What is the current routing policy and query_top_n? What was the previous proposal, and is it still current?",
+  "expected_facts": [
+    {
+      "id": "current-local-routing",
+      "description": "The current policy is LocalDistinctiveness.",
+      "match_any": [
+        "LocalDistinctiveness",
+        "local distinctiveness"
+      ]
+    },
+    {
+      "id": "query-top-three",
+      "description": "The current query_top_n is 3.",
+      "match_any": [
+        "query_top_n is 3",
+        "query_top_n = 3",
+        "top 3",
+        "query_top_n:** 3"
+      ]
+    },
+    {
+      "id": "old-sparse-superseded",
+      "description": "SparseOverlap is the superseded prior proposal.",
+      "match_any": [
+        "SparseOverlap",
+        "superseded"
+      ]
+    }
+  ],
+  "forbidden_facts": [
+    {
+      "id": "sparse-is-current",
+      "description": "SparseOverlap must not be stated as the current policy.",
+      "match_any": [
+        "current policy is SparseOverlap",
+        "SparseOverlap is current"
+      ]
+    }
+  ],
+  "validators": [],
+  "limits": {
+    "timeout_seconds": 240,
+    "max_turns": 3,
+    "max_budget_usd": 0.75,
+    "max_injected_context_bytes": 8000
+  }
+}

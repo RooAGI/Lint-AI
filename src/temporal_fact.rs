@@ -35,6 +35,10 @@ pub struct TemporalFact {
     pub valid_from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_to: Option<String>,
+    /// Time this fact entered the persistent store. Distinct from valid time:
+    /// imported documents may describe facts that became true much earlier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<String>,
     pub source_doc_id: String,
     pub source_chunk_id: String,
     pub source_chunk_version: u32,
@@ -118,6 +122,11 @@ pub struct TemporalFactStore {
     latest_by_key: HashMap<String, usize>,
     #[serde(skip)]
     last_record_order: Option<(Option<NaiveDate>, String)>,
+    /// Fact IDs whose `valid_to` was inferred from a later fact during
+    /// ingestion. As-known queries rebuild those boundaries from only the
+    /// facts that had been recorded by their cutoff.
+    #[serde(skip)]
+    inferred_valid_to: std::collections::HashSet<String>,
 }
 
 impl TemporalFactStore {
@@ -236,6 +245,7 @@ impl TemporalFactStore {
                 .map(str::to_string)
                 .or_else(|| record.timestamp.clone()),
             valid_to: None,
+            recorded_at: record.filters.get("membrick_recorded_at").cloned(),
             source_doc_id: record.doc_id.clone(),
             source_chunk_id: source_chunk_id.unwrap_or(&record.doc_id).to_string(),
             source_chunk_version,
@@ -288,13 +298,20 @@ impl TemporalFactStore {
                 return;
             }
 
+            let mut inferred_id = None;
             if current.valid_to.is_none() {
                 current.valid_to = fact
                     .valid_from
                     .clone()
                     .or_else(|| fact.chunk_timestamp.clone());
+                if current.valid_to.is_some() {
+                    inferred_id = Some(current.fact_id.clone());
+                }
             }
             current.is_latest = false;
+            if let Some(fact_id) = inferred_id {
+                self.inferred_valid_to.insert(fact_id);
+            }
         }
 
         let idx = self.facts.len();
@@ -318,6 +335,44 @@ impl TemporalFactStore {
                 .then_with(|| a.source_doc_id.cmp(&b.source_doc_id))
         });
         facts
+    }
+
+    /// Return facts that were valid on `valid_date` using only information
+    /// recorded by `recorded_at`. The record-time cutoff must be RFC 3339 (a
+    /// date-only value is also accepted and means midnight UTC). Facts without
+    /// a known record time are excluded because their historical availability
+    /// cannot be established.
+    pub fn as_known_at(&self, valid_date: &str, recorded_at: &str) -> Vec<TemporalFact> {
+        let Some(cutoff) = parse_recorded_at(recorded_at) else {
+            return Vec::new();
+        };
+        let mut known = self
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.recorded_at
+                    .as_deref()
+                    .and_then(parse_recorded_at)
+                    .is_some_and(|recorded| recorded <= cutoff)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        known.sort_by(|a, b| {
+            a.recorded_at
+                .as_deref()
+                .and_then(parse_recorded_at)
+                .cmp(&b.recorded_at.as_deref().and_then(parse_recorded_at))
+                .then_with(|| a.fact_id.cmp(&b.fact_id))
+        });
+
+        let mut rebuilt = Self::default();
+        for mut fact in known {
+            if self.inferred_valid_to.contains(&fact.fact_id) {
+                fact.valid_to = None;
+            }
+            rebuilt.ingest_fact(fact);
+        }
+        rebuilt.as_of(valid_date).into_iter().cloned().collect()
     }
 
     pub fn timeline_events_between(&self, start: &str, end: &str) -> Vec<TimelineEvent<'_>> {
@@ -453,6 +508,17 @@ impl TemporalFactStore {
         });
         facts
     }
+}
+
+fn parse_recorded_at(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(value) {
+        return Some(timestamp.with_timezone(&chrono::Utc));
+    }
+    let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()?;
+    Some(chrono::DateTime::from_naive_utc_and_offset(
+        date.and_hms_opt(0, 0, 0)?,
+        chrono::Utc,
+    ))
 }
 
 fn record_order_key(record: &DocRecord) -> (Option<NaiveDate>, String) {
@@ -742,6 +808,32 @@ mod tests {
     }
 
     #[test]
+    fn temporal_fact_keeps_record_time_separate_from_valid_time() {
+        let mut record = sample_record(
+            "imported-fact",
+            Some("2020-01-02"),
+            vec![Claim {
+                subject: "Alice".into(),
+                predicate: "works_at".into(),
+                object: "Acme".into(),
+                confidence: 0.95,
+                ..Default::default()
+            }],
+        );
+        record.filters.insert(
+            "membrick_recorded_at".into(),
+            "2026-10-13T20:00:00.000Z".into(),
+        );
+        let store = TemporalFactStore::from_records([&record], &HashMap::new());
+        let fact = &store.facts()[0];
+        assert_eq!(fact.valid_from.as_deref(), Some("2020-01-02"));
+        assert_eq!(
+            fact.recorded_at.as_deref(),
+            Some("2026-10-13T20:00:00.000Z")
+        );
+    }
+
+    #[test]
     fn as_of_filters_by_validity_window() {
         let record1 = sample_record(
             "doc-1",
@@ -772,6 +864,41 @@ mod tests {
         let mar = store.as_of("2024-03-15");
         assert_eq!(mar.len(), 1);
         assert_eq!(mar[0].object.as_deref(), Some("Portland"));
+    }
+
+    #[test]
+    fn known_at_rebuilds_validity_from_facts_known_by_record_time() {
+        let mut store = TemporalFactStore::default();
+        let make_fact = |fact_id: &str, object: &str, recorded_at: &str| TemporalFact {
+            fact_id: fact_id.to_string(),
+            subject: "Alice".to_string(),
+            predicate: "lives_in".to_string(),
+            object: Some(object.to_string()),
+            value: None,
+            unit: None,
+            scope: None,
+            valid_from: Some("2024-01-01".to_string()),
+            valid_to: None,
+            recorded_at: Some(recorded_at.to_string()),
+            source_doc_id: fact_id.to_string(),
+            source_chunk_id: fact_id.to_string(),
+            source_chunk_version: 1,
+            chunk_timestamp: Some("2024-01-01".to_string()),
+            confidence: 0.9,
+            is_latest: true,
+        };
+        store.ingest_fact(make_fact("first", "Seattle", "2024-01-02T00:00:00Z"));
+        // A later correction says the new value was already true in January.
+        // Queries about what was known before March must still return Seattle.
+        store.ingest_fact(make_fact("correction", "Portland", "2024-03-02T00:00:00Z"));
+
+        let before_correction = store.as_known_at("2024-06-01", "2024-02-01T00:00:00Z");
+        assert_eq!(before_correction.len(), 1);
+        assert_eq!(before_correction[0].object.as_deref(), Some("Seattle"));
+
+        let after_correction = store.as_known_at("2024-06-01", "2024-04-01T00:00:00Z");
+        assert_eq!(after_correction.len(), 1);
+        assert_eq!(after_correction[0].object.as_deref(), Some("Portland"));
     }
 
     #[test]

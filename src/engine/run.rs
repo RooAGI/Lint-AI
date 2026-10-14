@@ -83,6 +83,12 @@ use std::time::Instant;
 ///
 /// This is the main entry point used by the CLI wrapper in `main.rs`.
 pub fn run(args: crate::cli::Args) -> Result<()> {
+    if args.resident_server {
+        #[cfg(feature = "agent-integrations")]
+        return crate::executables::run("server");
+        #[cfg(not(feature = "agent-integrations"))]
+        anyhow::bail!("resident server requires agent integrations");
+    }
     if let Some(index_path) = args.inspect_index.as_deref() {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
     }
@@ -413,7 +419,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "claude-code")]
     if args.claude_code_install {
-        let written = install_memory_skill(Path::new(&args.path), args.claude_code_force_skill)?;
+        crate::state_paths::migrate_legacy_state_dir(Path::new(&args.path))?;
+        let written = install_memory_skill(Path::new(&args.path))?;
         println!("Wrote Claude Code memory skill to {}", written.display());
         let config_path = args.claude_code_config.as_deref().map(Path::new);
         let written = install_user_config(Path::new(&args.path), config_path)?;
@@ -426,6 +433,7 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "codex")]
     if args.codex_install {
+        crate::state_paths::migrate_legacy_state_dir(Path::new(&args.path))?;
         let config_path = args.codex_config.as_deref().map(Path::new);
         let written = install_codex_user_config(Path::new(&args.path), config_path)?;
         println!("Wrote Codex config to {}", written.display());
@@ -1104,10 +1112,8 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return Ok(());
     }
 
-    // The default invocation and --review share the same project review flow.
-    // The graph above remains the source of truth for the existing lint rules;
-    // preparing the query index here makes the same corpus immediately
-    // available to review consumers without changing the report semantics.
+    // Explicit review requests run the project lint checks with the search
+    // index prepared for review consumers.
     let cache_settings = CacheSettings {
         root_path: &args.path,
         ner_provider: &args.tier1_ner_provider,

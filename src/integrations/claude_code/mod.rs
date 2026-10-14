@@ -105,7 +105,7 @@ pub fn install_user_config(root: &Path, config_path: Option<&Path>) -> Result<Pa
     Ok(config_path)
 }
 
-pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
+pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
     // Canonicalized, and used below: the skill must land at the real path, not
     // through a symlink.
     let root = root
@@ -122,18 +122,6 @@ pub fn install_memory_skill(root: &Path, force: bool) -> Result<PathBuf> {
     if skill_path.exists() {
         let existing = fs::read_to_string(&skill_path)
             .with_context(|| format!("failed to read existing skill {}", skill_path.display()))?;
-        let known_generated = existing == include_str!("skill.md")
-            || // Recognize the pre-marker skill shipped by earlier Membrick versions
-               // so normal upgrades do not require a replacement flag.
-               (existing.starts_with("---\nname: membrick-memory\n")
-                   && existing.contains("mcp__membrick__search")
-                   && existing.contains("## Membrick Memory"));
-        if !force && !known_generated {
-            anyhow::bail!(
-                "refusing to overwrite existing Claude skill {}; it appears user-modified; use --claude-code-force-skill to replace it",
-                skill_path.display()
-            );
-        }
         if existing == include_str!("skill.md") {
             return Ok(skill_path);
         }
@@ -164,6 +152,10 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         .context("Claude settings 'hooks' must be an object")?;
 
     for (event_name, hook_name) in HOOK_EVENTS {
+        let timeout_seconds = match *event_name {
+            "PreCompact" | "Stop" | "SessionEnd" | "SubagentStop" => 60,
+            _ => 45,
+        };
         let entries = hooks
             .entry((*event_name).to_string())
             .or_insert_with(|| json!([]));
@@ -180,26 +172,56 @@ pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Resul
         entries.push(json!({
             "hooks": [{
                 "type": "command",
+                "timeout": timeout_seconds,
                 "command": format!("{} {HOOK_MARKER} {hook_name}", shell_quote(&executable))
             }]
         }));
     }
 
-    // Claude supports a custom persistent status line. Preserve an existing
-    // user status line and only install ours when no status line is configured.
+    // Preserve user-defined status lines, but migrate the status command
+    // installed by the old Lint-AI executable so Claude stops displaying its
+    // legacy branding after Membrick is installed.
+    let status_command = format!("{} --claude-code-statusline", shell_quote(&executable));
     if !settings.contains_key("statusLine") {
         settings.insert(
             "statusLine".to_string(),
             json!({
                 "type": "command",
-                "command": format!("{} --claude-code-statusline", shell_quote(&executable)),
+                "command": status_command,
                 "refreshInterval": 2
             }),
         );
+    } else if let Some(status_line) = settings
+        .get_mut("statusLine")
+        .and_then(Value::as_object_mut)
+    {
+        let is_legacy = status_line
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(is_legacy_lint_ai_status_line);
+        if is_legacy {
+            status_line.insert("command".to_string(), Value::String(status_command));
+        }
     }
 
     write_json_object(&settings_path, &settings)?;
     Ok(settings_path)
+}
+
+fn is_legacy_lint_ai_status_line(command: &str) -> bool {
+    if !command.contains("--claude-code-statusline") {
+        return false;
+    }
+    let executable = command
+        .split("--claude-code-statusline")
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_matches(|character| character == '\'' || character == '"');
+    Path::new(executable)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("lint-ai"))
 }
 
 fn ensure_update_permission_prompt(settings: &mut serde_json::Map<String, Value>) -> Result<()> {
@@ -234,7 +256,16 @@ pub fn run_status_line() -> Result<()> {
         .or_else(|| payload.get("cwd").and_then(Value::as_str))
         .unwrap_or(".");
     let root = Path::new(cwd);
-    let memory_on = membrick_enabled(RecordingProvider::Claude, root)?;
+    let memory_on = match membrick_enabled(RecordingProvider::Claude, root) {
+        Ok(enabled) => enabled,
+        Err(_) => {
+            // Keep Claude's status line useful when a legacy/current state
+            // conflict blocks normal startup; the hook's stderr explains the
+            // migration issue in detail.
+            println!("Membrick:CHECK | Record:CHECK");
+            return Ok(());
+        }
+    };
     let recording_on = recording_state(RecordingProvider::Claude, root)
         .ok()
         .and_then(|state| state.get("enabled").and_then(Value::as_bool))
@@ -377,7 +408,30 @@ impl ClaudeMcp {
                     error: None,
                 })
             }
-            "tools/call" => self.handle_tool_call(id, request.params),
+            "tools/call" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let tool = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let started = std::time::Instant::now();
+                let response = self.handle_tool_call(id.clone(), Some(params));
+                mcp_tools::record_mcp_tool_response(
+                    &self.root,
+                    "claude",
+                    &tool,
+                    id,
+                    &arguments,
+                    started.elapsed().as_millis() as u64,
+                    &response,
+                );
+                response
+            }
             _ => Ok(JsonRpcResponse {
                 jsonrpc: "2.0",
                 id,
@@ -424,6 +478,7 @@ impl ClaudeMcp {
                     | "board_search"
                     | "add_memory"
                     | "get_memory"
+                    | "delete_memory"
             )
         {
             return crate::integrations::mcp_tools::call_resident_tool(
@@ -493,7 +548,7 @@ impl ClaudeMcp {
                     results.as_ref().is_ok_and(Vec::is_empty),
                 );
                 let results = results?;
-                let payload = service.search_results_payload(results);
+                let payload = service.search_results_payload(query, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,
@@ -691,18 +746,18 @@ impl ClaudeMcp {
                     Err(message) => Ok(error_response(id, -32602, &message)),
                 }
             }
-            "add_memory" | "get_memory" => {
+            "add_memory" | "get_memory" | "delete_memory" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("MCP store initialized");
-                // `add_memory` is a write: run it against the persistent
+                // Memory writes and deletions run against the persistent
                 // shared-memory service. The composed view is in-memory
                 // only, so a view write would vanish on process exit and stay
                 // invisible to hooks and other providers. Resolve the session
                 // from the composed service first (it tracks hook activity),
                 // mirroring the board arm above.
-                let result = if tool_name == "add_memory" {
+                let result = if matches!(tool_name, "add_memory" | "delete_memory") {
                     let mut memory_arguments = arguments.clone();
-                    if memory_arguments.get("session_id").is_none() {
+                    if tool_name == "add_memory" && memory_arguments.get("session_id").is_none() {
                         if let Some(session_id) = mcp_tools::resolve_search_session_id(
                             &memory_arguments,
                             service,
@@ -961,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn install_memory_skill_preserves_user_edits_without_force() {
+    fn install_memory_skill_replaces_user_edits() {
         let root = temp_dir("claude-skill-preserve");
         let skill_path = root.join(".claude/skills/membrick-memory/SKILL.md");
         fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
@@ -971,27 +1026,11 @@ mod tests {
         )
         .unwrap();
 
-        let error = install_memory_skill(&root, false).unwrap_err().to_string();
-        assert!(error.contains("--claude-code-force-skill"));
-        assert_eq!(
-            fs::read_to_string(&skill_path).unwrap(),
-            "---\nname: membrick-memory\n---\n\nMy custom instructions\n"
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn install_memory_skill_force_replaces_user_edits() {
-        let root = temp_dir("claude-skill-force");
-        let skill_path = root.join(".claude/skills/membrick-memory/SKILL.md");
-        fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
-        fs::write(&skill_path, "custom").unwrap();
-
-        install_memory_skill(&root, true).unwrap();
+        install_memory_skill(&root).unwrap();
 
         let installed = fs::read_to_string(&skill_path).unwrap();
         assert!(installed.contains("<!-- membrick-managed-skill -->"));
-        assert!(!installed.contains("custom"));
+        assert!(!installed.contains("My custom instructions"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1105,6 +1144,7 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("--claude-code-hook stop"));
+        assert_eq!(stop[1]["hooks"][0]["timeout"], 60);
         assert_eq!(settings["statusLine"]["type"], "command");
         assert!(settings["statusLine"]["command"]
             .as_str()
@@ -1183,6 +1223,7 @@ mod tests {
                 "board_search".to_string(),
                 "add_memory".to_string(),
                 "get_memory".to_string(),
+                "delete_memory".to_string(),
                 "update_membrick".to_string()
             ]
         );

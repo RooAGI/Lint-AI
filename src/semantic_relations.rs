@@ -579,8 +579,19 @@ impl SemanticRelationStore {
 /// Canonical claim order: (effective date, doc id, claim id). Shared by the
 /// full rebuild and incremental updates so both produce identical chains.
 fn canonical_claim_cmp(a: &SemanticClaim, b: &SemanticClaim) -> Ordering {
-    claim_date(a)
-        .cmp(&claim_date(b))
+    let temporal_order = match (
+        a.effective_at
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()),
+        b.effective_at
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()),
+    ) {
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        _ => None,
+    };
+    temporal_order
+        .unwrap_or_else(|| claim_date(a).cmp(&claim_date(b)))
         .then_with(|| a.source_doc_id.cmp(&b.source_doc_id))
         .then_with(|| a.claim_id.cmp(&b.claim_id))
 }
@@ -1323,15 +1334,47 @@ fn dedupe_claims(claims: &mut Vec<SemanticClaim>) {
 }
 
 fn semantic_scope(doc: &SourceDocument) -> String {
-    doc.filters
-        .get("semantic_scope")
-        .map(|scope| format!("scope:{scope}"))
-        .or_else(|| {
-            doc.filters
-                .get("memory_user_id")
-                .map(|user| format!("user:{user}"))
-        })
-        .unwrap_or_else(|| "store".to_string())
+    if let Some(scope) = doc.filters.get("semantic_scope") {
+        return format!("scope:{scope}");
+    }
+    let session_context = doc
+        .filters
+        .get("document_type")
+        .is_some_and(|kind| kind == "session-context");
+    if session_context {
+        if let Some(project) = doc.filters.get("project_id") {
+            if !project.trim().is_empty() {
+                let user = doc
+                    .filters
+                    .get("memory_user_id")
+                    .map(String::as_str)
+                    .unwrap_or("shared");
+                return format!("session-context:{project}:{user}");
+            }
+        }
+    }
+    if let Some(user) = doc.filters.get("memory_user_id") {
+        return format!("user:{user}");
+    }
+    // Provider captures are grouped by conversation. Some adapters only
+    // persist `provider` and `group_id`, so requiring the newer
+    // `document_type`/`session_id` filter pair would put those captures in
+    // the global `store` scope and allow unrelated sessions to interact.
+    let Some(provider) = doc.filters.get("provider") else {
+        return "store".to_string();
+    };
+    let Some(session_id) = doc.filters.get("session_id").or(doc.group_id.as_ref()) else {
+        return "store".to_string();
+    };
+    if provider.trim().is_empty() || session_id.trim().is_empty() {
+        return "store".to_string();
+    }
+    let project = doc
+        .filters
+        .get("project_id")
+        .map(String::as_str)
+        .unwrap_or("unknown");
+    format!("capture:{provider}:{project}:{session_id}")
 }
 
 fn scalar_configuration_scope(doc: &SourceDocument) -> String {
@@ -1550,6 +1593,10 @@ fn claim_date(claim: &SemanticClaim) -> Option<chrono::NaiveDate> {
 
 pub fn is_historical_query(query: &str) -> bool {
     let lower = query.to_lowercase();
+    let words = lower
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
     [
         "history",
         "historical",
@@ -1567,7 +1614,12 @@ pub fn is_historical_query(query: &str) -> bool {
         "timeline",
     ]
     .iter()
-    .any(|marker| lower.contains(marker))
+    .any(|marker| {
+        let marker_words = marker.split_whitespace().collect::<Vec<_>>();
+        words
+            .windows(marker_words.len())
+            .any(|window| window == marker_words.as_slice())
+    })
 }
 
 #[cfg(test)]
@@ -1841,6 +1893,92 @@ mod tests {
     }
 
     #[test]
+    fn captured_session_claims_do_not_chain_across_sessions() {
+        let mut first = doc(
+            "session-one",
+            "Claude Code outcome\nThe Controls POD owns valve control.",
+            Some("2026-01-01"),
+            "claude-code://project/session-one/outcome",
+        );
+        first.group_id = Some("claude-session:project:session-one".into());
+        first.filters.insert("provider".into(), "claude".into());
+        first
+            .filters
+            .insert("session_id".into(), "session-one".into());
+        first
+            .filters
+            .insert("document_type".into(), "outcome".into());
+
+        let mut second = doc(
+            "session-two",
+            "Claude Code outcome\nThe National Park POD owns valve control.",
+            Some("2026-06-01"),
+            "claude-code://project/session-two/outcome",
+        );
+        second.group_id = Some("claude-session:project:session-two".into());
+        second.filters.insert("provider".into(), "claude".into());
+        second
+            .filters
+            .insert("session_id".into(), "session-two".into());
+        second
+            .filters
+            .insert("document_type".into(), "outcome".into());
+
+        let store = SemanticRelationStore::from_documents(
+            [&first, &second],
+            SupersessionOptions::default(),
+        );
+
+        assert!(store.relations().is_empty());
+        assert_eq!(
+            store.document_state("session-one").status,
+            Some(SemanticStatus::Current)
+        );
+        assert_eq!(
+            store.document_state("session-two").status,
+            Some(SemanticStatus::Current)
+        );
+    }
+
+    #[test]
+    fn provider_captures_without_session_filters_still_scope_by_group() {
+        let mut first = doc(
+            "capture-one",
+            "The Controls POD owns valve control.",
+            Some("2026-01-01"),
+            "gemini-cli://project/session-one/outcome",
+        );
+        first.group_id = Some("gemini-session:project:session-one".into());
+        first.filters.insert("provider".into(), "gemini-cli".into());
+
+        let mut second = doc(
+            "capture-two",
+            "The National Park POD owns valve control.",
+            Some("2026-06-01"),
+            "gemini-cli://project/session-two/outcome",
+        );
+        second.group_id = Some("gemini-session:project:session-two".into());
+        second
+            .filters
+            .insert("provider".into(), "gemini-cli".into());
+
+        let store = SemanticRelationStore::from_documents(
+            [&first, &second],
+            SupersessionOptions::default(),
+        );
+
+        assert!(store.relations().is_empty());
+        assert_eq!(
+            store.document_state("capture-one").status,
+            Some(SemanticStatus::Current)
+        );
+        assert_eq!(
+            store.document_state("capture-two").status,
+            Some(SemanticStatus::Current)
+        );
+    }
+
+    #[test]
     fn disabled_supersession_produces_no_claims_relations_or_states() {
         let old = doc(
             "old",
@@ -1947,6 +2085,15 @@ mod tests {
                 "expected current-state query: {query}"
             );
         }
+    }
+
+    #[test]
+    fn historical_query_detection_does_not_match_marker_substrings() {
+        assert!(is_historical_query("show the deployment history"));
+        assert!(!is_historical_query(
+            "how does the historykeeper service work"
+        ));
+        assert!(!is_historical_query("what is the nonhistorical mode"));
     }
 }
 

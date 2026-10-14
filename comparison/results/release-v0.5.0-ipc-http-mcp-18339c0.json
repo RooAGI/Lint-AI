@@ -1,0 +1,175 @@
+{
+  "benchmark": "matched-mcp-http-vs-ipc-read-write",
+  "commit": "18339c0a675cb57a196a5677cd0b7a681ec8aadb",
+  "binary": "/Users/louis/sources/Membrick/target/release/server",
+  "binary_sha256": "b6e06529b15724677457ce0831ff41b237b11d9eebfcf97a13c1639520c1d2e6",
+  "python": "3.9.6",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "configuration": {
+    "iterations_per_transport": 3,
+    "seconds_per_run": 10.0,
+    "search_readers": 4,
+    "writer_interval_s": 0.5,
+    "connections": "fresh connection per request",
+    "search_query": "relay valve amber quartz sequence",
+    "seeded_markdown_documents": 100
+  },
+  "runs": [
+    {
+      "transport": "http",
+      "repetition": 1,
+      "duration_s": 10.0,
+      "startup_to_ready_ms": 597.6887909999999,
+      "readers": 4,
+      "search_requests": 19816,
+      "search_requests_per_s": 1981.6,
+      "search_latency": {
+        "p50_ms": 1.7694795000000596,
+        "p95_ms": 3.5202602499999625,
+        "p99_ms": 3.997515149999941,
+        "mean_ms": 1.9879534545316915
+      },
+      "write_requests": 18,
+      "write_requests_per_s": 1.8,
+      "write_latency": {
+        "p50_ms": 59.58895850000046,
+        "p95_ms": 63.61359999999998,
+        "p99_ms": 65.24831999999988,
+        "mean_ms": 59.89193977777783
+      },
+      "errors": [],
+      "last_acknowledged_write": "write-18",
+      "last_write_visible_after_ack": true
+    },
+    {
+      "transport": "ipc",
+      "repetition": 1,
+      "duration_s": 10.0,
+      "startup_to_ready_ms": 605.1537910000011,
+      "readers": 4,
+      "search_requests": 18085,
+      "search_requests_per_s": 1808.5,
+      "search_latency": {
+        "p50_ms": 1.595666000000051,
+        "p95_ms": 3.830983200001014,
+        "p99_ms": 4.183096440000895,
+        "mean_ms": 2.186338112358324
+      },
+      "write_requests": 18,
+      "write_requests_per_s": 1.8,
+      "write_latency": {
+        "p50_ms": 59.866187499999945,
+        "p95_ms": 66.84397060000151,
+        "p99_ms": 66.87292772000092,
+        "mean_ms": 60.478073999999914
+      },
+      "errors": [],
+      "last_acknowledged_write": "write-18",
+      "last_write_visible_after_ack": true
+    },
+    {
+      "transport": "ipc",
+      "repetition": 2,
+      "duration_s": 10.0,
+      "startup_to_ready_ms": 638.7153330000003,
+      "readers": 4,
+      "search_requests": 25574,
+      "search_requests_per_s": 2557.4,
+      "search_latency": {
+        "p50_ms": 1.4754579999998185,
+        "p95_ms": 1.9704977999987594,
+        "p99_ms": 2.7221319100017993,
+        "mean_ms": 1.5377055278798817
+      },
+      "write_requests": 18,
+      "write_requests_per_s": 1.8,
+      "write_latency": {
+        "p50_ms": 59.367665999999986,
+        "p95_ms": 60.971383099999876,
+        "p99_ms": 62.24491022000006,
+        "mean_ms": 59.23416877777774
+      },
+      "errors": [],
+      "last_acknowledged_write": "write-18",
+      "last_write_visible_after_ack": true
+    },
+    {
+      "transport": "http",
+      "repetition": 2,
+      "duration_s": 10.0,
+      "startup_to_ready_ms": 650.4928330000013,
+      "readers": 4,
+      "search_requests": 21424,
+      "search_requests_per_s": 2142.4,
+      "search_latency": {
+        "p50_ms": 1.6049375000015687,
+        "p95_ms": 3.474645599998993,
+        "p99_ms": 3.837410729998894,
+        "mean_ms": 1.8406895016336988
+      },
+      "write_requests": 18,
+      "write_requests_per_s": 1.8,
+      "write_latency": {
+        "p50_ms": 59.96672900000277,
+        "p95_ms": 61.742406250005644,
+        "p99_ms": 63.39608125000509,
+        "mean_ms": 59.669877222223676
+      },
+      "errors": [],
+      "last_acknowledged_write": "write-18",
+      "last_write_visible_after_ack": true
+    },
+    {
+      "transport": "http",
+      "repetition": 3,
+      "duration_s": 10.0,
+      "startup_to_ready_ms": 652.7160829999943,
+      "readers": 4,
+      "search_requests": 20086,
+      "search_requests_per_s": 2008.6,
+      "search_latency": {
+        "p50_ms": 1.659853999999683,
+        "p95_ms": 3.6535937499984072,
+        "p99_ms": 4.210145600003659,
+        "mean_ms": 1.9639440816488936
+      },
+      "write_requests": 18,
+      "write_requests_per_s": 1.8,
+      "write_latency": {
+        "p50_ms": 56.364999999999554,
+        "p95_ms": 62.17736874999886,
+        "p99_ms": 62.382473750002845,
+        "mean_ms": 56.97555544444476
+      },
+      "errors": [],
+      "last_acknowledged_write": "write-18",
+      "last_write_visible_after_ack": true
+    },
+    {
+      "transport": "ipc",
+      "repetition": 3,
+      "duration_s": 10.0,
+      "startup_to_ready_ms": 595.3022079999996,
+      "readers": 4,
+      "search_requests": 13331,
+      "search_requests_per_s": 1333.1,
+      "search_latency": {
+        "p50_ms": 3.5011249999996608,
+        "p95_ms": 4.275291500000833,
+        "p99_ms": 5.437346300000461,
+        "mean_ms": 2.9708026408372086
+      },
+      "write_requests": 18,
+      "write_requests_per_s": 1.8,
+      "write_latency": {
+        "p50_ms": 56.83983299999795,
+        "p95_ms": 67.3014705499998,
+        "p99_ms": 76.50589411000372,
+        "mean_ms": 58.962039277777166
+      },
+      "errors": [],
+      "last_acknowledged_write": "write-18",
+      "last_write_visible_after_ack": true
+    }
+  ]
+}

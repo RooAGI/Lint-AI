@@ -58,10 +58,14 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
   recall matched at every size. Build and p50/p95 query timing are recorded in
   `benchmark-results.md`. Memory use was unavailable. The v0.4.0 tag lacks a
   Cargo.lock, so its dependency resolution and timing are diagnostic.
-- [ ] **Transport performance:** when the server, IPC, or HTTP path changes,
+- [x] **Transport performance:** when the server, IPC, or HTTP path changes,
   compare IPC and HTTP with the same read, write, and mixed read/write workload.
-  Use release binaries, repeated runs, and report throughput plus p50/p95/p99,
-  errors, and write visibility after acknowledgement.
+  Three 10-second runs per transport used the same optimized release binary,
+  four search callers, and one writer. Throughput, p50/p95/p99, startup time,
+  errors, and post-ack write visibility are recorded in
+  `comparison/results/release-v0.5.0-ipc-http-mcp-18339c0.json` and summarized
+  in `http-server-benchmarks.md`. Run-to-run spread was substantial; no speedup
+  claim is made.
 - [ ] **Cold-start and lifecycle:** when resident startup or agent hooks change,
   measure first MCP call/startup separately from warm calls and confirm that
   concurrent clients share one owner without losing writes.
@@ -95,7 +99,9 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
 - [ ] Package contents include the expected CLI, native libraries, licenses,
   and metadata for each published package.
 - [ ] Include benchmark commands, artifacts, and a concise results summary in
-  the PR. Explain any waived benchmark and its reason.
+  the PR. Explain any waived benchmark and its reason. The repeated IPC/HTTP
+  benchmark script and raw artifact are prepared locally; include them with the
+  release PR update.
 - [ ] All required reviews are complete and the release PR is merged to `main`.
 
 ## After the release PR is merged

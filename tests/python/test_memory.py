@@ -18,12 +18,11 @@ class MemoryBindingTests(unittest.TestCase):
         self.assertFalse(hasattr(membrick, "RemoteMemory"))
         self.assertFalse(hasattr(membrick, "IndexStore"))
 
-    def test_version_reports_0_4_0(self):
+    def test_version_matches_package_metadata(self):
         import importlib.metadata
 
-        self.assertEqual(membrick.version(), "0.4.0")
+        self.assertEqual(membrick.version(), importlib.metadata.version("membrick"))
         # Wheel metadata and the binding must agree.
-        self.assertEqual(importlib.metadata.version("membrick"), "0.4.0")
 
     def test_constructor_rejects_bad_config(self):
         with self.assertRaises(ValueError):

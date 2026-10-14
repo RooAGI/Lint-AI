@@ -1473,7 +1473,18 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        fs::remove_dir_all(root).unwrap();
+        for attempt in 0..20 {
+            match fs::remove_dir_all(&root) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::DirectoryNotEmpty && attempt < 19 =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("failed to remove test workspace: {error}"),
+            }
+        }
     }
 
     #[test]

@@ -7,13 +7,13 @@ native memory behavior as its baseline.
 
 ## Overview
 
-Membrick hooks run automatically during an agent session. They retrieve
-relevant saved project context and add it to the agent's context, so the agent
-can use it while answering. They do not require the agent to call a Membrick
-tool. “Native memory” means Claude's or Codex's own memory feature. Tool-call
+Membrick automatically retrieves saved project context during an agent
+session and adds it to the agent's context. The agent can use that context
+without calling a Membrick tool. This automatic context feature uses agent
+hooks. “Native memory” means Claude's or Codex's own memory feature. Tool-call
 counts below refer to tools called by the agent.
 
-!!! success "Claude Code: lower token and tool use with Membrick hooks"
+!!! success "Claude Code: lower token and tool use with automatic Membrick context"
 
     - **Fresh input tokens:** 128 → 32 (75.0% fewer)
     - **Overall tokens:** 2,884,478 → 605,686 (79.0% fewer)
@@ -24,7 +24,7 @@ counts below refer to tools called by the agent.
     Recall was 3/3 in every run. This was one scenario repeated three times.
     Response turns count Claude's replies across those repetitions.
 
-!!! success "Codex: lower token and tool use with Membrick hooks"
+!!! success "Codex: lower token and tool use with automatic Membrick context"
 
     - **Fresh input tokens:** 46,035 → 36,731 (20.2% fewer)
     - **Overall tokens:** 313,066 → 196,102 (37.4% fewer)

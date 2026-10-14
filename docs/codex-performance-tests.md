@@ -12,6 +12,32 @@ claims about the Codex integration. The current Codex implementation is
 functionally complete. A latest three-arm smoke result is recorded below;
 additional repetitions are required before release claims.
 
+## Latest result: automatic Membrick context reduced token and tool use
+
+In the `routing-decision-supersession` run, Codex recalled all three expected
+facts with both native memory and Membrick. With Membrick hooks providing
+saved project context automatically, Codex processed fewer tokens, made fewer
+tool calls, and finished the continuation sooner.
+
+!!! success "Codex native memory compared with automatic Membrick context"
+
+    - **Fresh input tokens:** 46,035 → 36,731 (20.2% fewer)
+    - **Overall tokens:** 313,066 → 196,102 (37.4% fewer)
+    - **Overall tokens per fresh input token:** 6.80 → 5.34 (21.5% fewer)
+    - **Agent tool calls:** 7 → 4 (42.9% fewer)
+    - **Continuation time:** 27.95 s → 13.80 s (50.6% less)
+
+    Recall was 3/3 in both setups. Each setup used one continuation round, so
+    this run did not reduce the number of rounds. This was one run per setup.
+
+Membrick retrieved the saved project context through Codex lifecycle hooks
+and added it automatically. Codex did not need to call a Membrick tool. In
+this scenario, the native-memory setup used more repository exploration and
+tool calls; the Membrick setup supplied the relevant context directly. These
+figures describe this single scenario and run, not general performance across
+projects or tasks. See the [Performance overview](performance.md#overview)
+for the provider comparison.
+
 ## Latest Matched-Scenario Diagnostic: Routing Decision Supersession
 
 On 2026-10-13, Codex and Claude each ran the

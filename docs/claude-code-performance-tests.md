@@ -7,12 +7,39 @@ useful outcomes from one session and retrieves relevant memories when a later
 session needs them. The expected benefit is less repeated repository
 exploration without reducing answer quality.
 
-This document reports the evidence collected so far and defines the benchmark
-required before making general performance claims. The latest result is a
-three-repetition, three-arm comparison of one memory-recall scenario. It
-reports fresh input, complete input, overall token use, and overall tokens per
-fresh input token. It is a diagnostic result, not evidence of general gains
-across projects or workloads.
+This page reports a three-run comparison of one Claude memory-recall scenario.
+Treat it as a result for this task and setup, not as a guarantee across
+projects or workloads.
+
+## Latest result: automatic Membrick context reduced token use
+
+Claude recalled all three expected facts in every run. With Membrick providing
+saved project context automatically, Claude used fewer tokens and made fewer
+tool calls than with Claude's native memory alone.
+
+!!! success "Claude native memory compared with automatic Membrick context"
+
+    - **Fresh input tokens:** 128 → 32 (75.0% fewer)
+    - **Overall tokens:** 2,884,478 → 605,686 (79.0% fewer)
+    - **Overall tokens per fresh input token:** 22,535 → 18,928 (16.0% fewer)
+    - **Agent tool calls:** 65 → 14 (78.5% fewer)
+    - **Claude response turns:** 131 → 36 (72.5% fewer)
+
+    Claude found 9/9 expected facts across the three runs in both setups. The
+    response-turn count is the total number of Claude replies across those
+    runs. It is not the number of benchmark repetitions.
+
+Membrick retrieves relevant saved project context during the session and
+adds it automatically. Claude can use that context while answering; it does
+not need to call a Membrick tool. The benchmark's hooks are the mechanism that
+triggers this automatic context. “Claude native memory only” uses Claude's
+built-in memory, while “automatic Membrick context only” uses Membrick for
+retrieval.
+
+Overall tokens include fresh input, cache creation, cached input reads, and
+output. Cached input reads count each time Claude processes them. “Overall
+tokens per fresh input token” is overall tokens divided by fresh input tokens.
+This was one scenario repeated three times in each setup.
 
 ## Invalidated Matched-Scenario Run: Routing Decision Supersession
 
@@ -42,11 +69,12 @@ Preserved report:
 
 - `scripts/provider-performance-0.4.0/results/claude-correctness-verification/comparison.json`
 
-## Latest Three-Arm Token Efficiency Result
+## Raw reports for the three setups
 
-The latest three-arm Claude result is summarized on the dedicated
-[Performance page](performance.md#claude-code-token-use). This report retains
-the run details and raw report paths below.
+The third setup enabled both Claude's native memory and automatic Membrick
+context. It used 587,723 overall tokens, 13 agent tool calls, and found all
+three facts in all three runs. The comparison with the native-only setup is
+shown on the [Performance overview](performance.md#overview).
 
 - Native: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-provider-2026-10-14/claude-native/report.json)
 - Membrick hooks only: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-claude-hooks-only-rerun-2026-10-14/claude-membrick/report.json)

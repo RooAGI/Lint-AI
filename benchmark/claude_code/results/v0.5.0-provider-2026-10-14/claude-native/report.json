@@ -1,0 +1,220 @@
+{
+  "benchmark_root": "benchmark/claude_code",
+  "repo_root": "synthetic-fixture",
+  "scenario_count": 1,
+  "repetitions": 3,
+  "summary": {
+    "result_count": 3,
+    "success_count": 3,
+    "invalid_count": 0,
+    "scenarios": {
+      "routing-decision-supersession": {
+        "claude-native": 3
+      }
+    },
+    "scores": [
+      {
+        "scenario_id": "routing-decision-supersession",
+        "arm": "claude-native",
+        "repetition": 1,
+        "success": true,
+        "expected_fact_ids_found": [
+          "current-local-routing",
+          "query-top-three",
+          "old-sparse-superseded"
+        ],
+        "forbidden_fact_ids_found": [],
+        "invalid_reason": null,
+        "validator_count": 1
+      },
+      {
+        "scenario_id": "routing-decision-supersession",
+        "arm": "claude-native",
+        "repetition": 2,
+        "success": true,
+        "expected_fact_ids_found": [
+          "current-local-routing",
+          "query-top-three",
+          "old-sparse-superseded"
+        ],
+        "forbidden_fact_ids_found": [],
+        "invalid_reason": null,
+        "validator_count": 1
+      },
+      {
+        "scenario_id": "routing-decision-supersession",
+        "arm": "claude-native",
+        "repetition": 3,
+        "success": true,
+        "expected_fact_ids_found": [
+          "current-local-routing",
+          "query-top-three",
+          "old-sparse-superseded"
+        ],
+        "forbidden_fact_ids_found": [],
+        "invalid_reason": null,
+        "validator_count": 1
+      }
+    ],
+    "final_results": {
+      "status": "passed",
+      "total_runs": 3,
+      "successful_runs": 3,
+      "invalid_runs": 0,
+      "success_rate": 1.0,
+      "average_setup_elapsed_ms": 23525.550972333334,
+      "average_continuation_elapsed_ms": 135490.65283366668,
+      "average_interaction_round_latency_ms": 135490.65283366668,
+      "average_validator_elapsed_ms": 47.61756933334027,
+      "average_input_tokens": 697521.3333333334,
+      "average_cached_input_tokens": 697491.3333333334,
+      "average_output_tokens": 7137.333333333333,
+      "average_tool_calls": 21.666666666666668,
+      "average_repeated_tool_calls": 0.0,
+      "comparison_note": "A native reference arm has not been run, so percentage comparisons are not valid.",
+      "arm_summaries": {
+        "claude-native": {
+          "runs": 3,
+          "successful_runs": 3,
+          "recall": {
+            "found": 9,
+            "expected": 9,
+            "rate": 1.0
+          },
+          "average_input_tokens": 697521.3333333334,
+          "average_cached_input_tokens": 697491.3333333334,
+          "average_output_tokens": 7137.333333333333,
+          "average_tool_calls": 21.666666666666668,
+          "average_repeated_tool_calls": 0.0,
+          "average_setup_hook_elapsed_ms": 0.0,
+          "average_continuation_hook_elapsed_ms": 0.0,
+          "average_continuation_elapsed_ms": 135490.65283366668,
+          "average_interaction_round_latency_ms": 135490.65283366668
+        }
+      },
+      "scenarios": [
+        {
+          "scenario_id": "routing-decision-supersession",
+          "arm": "claude-native",
+          "repetition": 1,
+          "success": true,
+          "invalid_reason": null,
+          "setup_elapsed_ms": 21661.410917,
+          "continuation_elapsed_ms": 144419.054792,
+          "interaction_round_latency_ms": 144419.054792,
+          "setup_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "continuation_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "validator_elapsed_ms": 47.86445799999228,
+          "expected_fact_ids_found": [
+            "current-local-routing",
+            "query-top-three",
+            "old-sparse-superseded"
+          ],
+          "forbidden_fact_ids_found": [],
+          "input_tokens": 1251829,
+          "cached_input_tokens": 1251777,
+          "output_tokens": 9877,
+          "reasoning_output_tokens": null,
+          "tool_calls": 25,
+          "repeated_tool_calls": 0,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          }
+        },
+        {
+          "scenario_id": "routing-decision-supersession",
+          "arm": "claude-native",
+          "repetition": 2,
+          "success": true,
+          "invalid_reason": null,
+          "setup_elapsed_ms": 24794.09262499999,
+          "continuation_elapsed_ms": 91013.36479200001,
+          "interaction_round_latency_ms": 91013.36479200001,
+          "setup_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "continuation_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "validator_elapsed_ms": 48.80024999999932,
+          "expected_fact_ids_found": [
+            "current-local-routing",
+            "query-top-three",
+            "old-sparse-superseded"
+          ],
+          "forbidden_fact_ids_found": [],
+          "input_tokens": 803565,
+          "cached_input_tokens": 803529,
+          "output_tokens": 7844,
+          "reasoning_output_tokens": null,
+          "tool_calls": 17,
+          "repeated_tool_calls": 0,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          }
+        },
+        {
+          "scenario_id": "routing-decision-supersession",
+          "arm": "claude-native",
+          "repetition": 3,
+          "success": true,
+          "invalid_reason": null,
+          "setup_elapsed_ms": 24121.149375000015,
+          "continuation_elapsed_ms": 171039.53891700003,
+          "interaction_round_latency_ms": 171039.53891700003,
+          "setup_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "continuation_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "validator_elapsed_ms": 46.188000000029206,
+          "expected_fact_ids_found": [
+            "current-local-routing",
+            "query-top-three",
+            "old-sparse-superseded"
+          ],
+          "forbidden_fact_ids_found": [],
+          "input_tokens": 37170,
+          "cached_input_tokens": 37168,
+          "output_tokens": 3691,
+          "reasoning_output_tokens": null,
+          "tool_calls": 23,
+          "repeated_tool_calls": 0,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          }
+        }
+      ],
+      "comparison": []
+    }
+  }
+}

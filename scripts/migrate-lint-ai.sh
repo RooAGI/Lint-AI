@@ -14,8 +14,11 @@ Usage:
   migrate-lint-ai.sh --agent codex|claude|gemini|agy [--project PATH] [--install-dir DIR]
 
 This installs Membrick and updates the selected agent configuration. Existing
-.lint-ai project data is preserved and moved to .membrick by Membrick when the
-new integration starts. The old lint-ai executable is left in place.
+.lint-ai project data is moved into .membrick during installation. If both
+directories exist, non-conflicting entries are merged and conflicting legacy
+entries are preserved under .membrick/migration-archive. The project-root
+.lint-ai directory is removed after migration. The old lint-ai executable is
+left in place.
 EOF
 }
 
@@ -56,12 +59,6 @@ esac
 [ -d "$PROJECT" ] || { echo "project directory does not exist: $PROJECT" >&2; exit 2; }
 PROJECT="$(cd "$PROJECT" && pwd -P)"
 
-if [ -e "$PROJECT/.lint-ai" ] && [ -e "$PROJECT/.membrick" ]; then
-  echo "Migration stopped: both $PROJECT/.lint-ai and $PROJECT/.membrick exist." >&2
-  echo "Back up and merge the state directories before migrating." >&2
-  exit 1
-fi
-
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 SCRIPT="$TMP_DIR/install.sh"
@@ -84,7 +81,9 @@ cat <<EOF
 
 Lint-AI migration finished for $AGENT.
 The Membrick installer updated that agent's connection. Existing project data
-is preserved under .membrick after the legacy state directory is migrated.
+is preserved under .membrick, and the project-root .lint-ai directory has been
+removed. Any conflicting legacy state is preserved under
+.membrick/migration-archive.
 The old lint-ai executable was not removed; remove it after confirming Membrick
 works in your projects.
 EOF

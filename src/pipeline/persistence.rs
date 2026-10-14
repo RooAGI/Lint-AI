@@ -26,6 +26,7 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
     prepared: &PreparedQuery,
     top_k: usize,
     filters: &std::collections::BTreeMap<String, String>,
+    additional_allowed_doc_ids: Option<&HashSet<String>>,
 ) -> Result<(Vec<SearchResult>, QueryTimings, QueryDiagnostics)> {
     let profile = std::env::var_os("MEMBRICK_QUERY_TIMINGS").is_some();
     let query_started = std::time::Instant::now();
@@ -39,7 +40,8 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
     let filter_started = std::time::Instant::now();
     let needs_semantic_visibility =
         prepared.semantic_visibility_requires_doc_ids(semantic_relations);
-    let filter_bitmap = if filters.is_empty()
+    let filter_bitmap = if additional_allowed_doc_ids.is_some()
+        || filters.is_empty()
         || (filters.len() == 1
             && needs_semantic_visibility
             && matches!(snapshot, MemoryIndexSnapshot::Single(_)))
@@ -54,37 +56,59 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
     // For a one-filter, one-segment query, apply semantic supersession as a
     // bitmap subtraction. This avoids scanning every source document and
     // materializing an allow-list containing nearly the whole corpus.
-    let effective_filter_bitmap = match snapshot {
-        MemoryIndexSnapshot::Single(index) if filters.len() == 1 && needs_semantic_visibility => {
-            let (key, value) = filters.first_key_value().expect("one filter");
-            index
-                .doc_bitmap_for_single_filter(key, value)
-                .map(|posting| {
-                    let mut allowed = posting.clone();
-                    allowed -=
-                        index.doc_bitmap_for_id_iter(semantic_relations.superseded_document_ids());
-                    allowed
-                })
+    let effective_filter_bitmap = if additional_allowed_doc_ids.is_some() {
+        None
+    } else {
+        match snapshot {
+            MemoryIndexSnapshot::Single(index)
+                if filters.len() == 1 && needs_semantic_visibility =>
+            {
+                let (key, value) = filters.first_key_value().expect("one filter");
+                index
+                    .doc_bitmap_for_single_filter(key, value)
+                    .map(|posting| {
+                        let mut allowed = posting.clone();
+                        allowed -= index
+                            .doc_bitmap_for_id_iter(semantic_relations.superseded_document_ids());
+                        allowed
+                    })
+            }
+            MemoryIndexSnapshot::Segmented(segmented)
+                if filters.len() == 1
+                    && segmented.segment_count() == 1
+                    && needs_semantic_visibility =>
+            {
+                let (key, value) = filters.first_key_value().expect("one filter");
+                let index = &segmented.segments[0].index;
+                index
+                    .doc_bitmap_for_single_filter(key, value)
+                    .map(|posting| {
+                        let mut allowed = posting.clone();
+                        allowed -= index
+                            .doc_bitmap_for_id_iter(semantic_relations.superseded_document_ids());
+                        allowed
+                    })
+            }
+            _ => None,
         }
-        MemoryIndexSnapshot::Segmented(segmented)
-            if filters.len() == 1
-                && segmented.segment_count() == 1
-                && needs_semantic_visibility =>
-        {
-            let (key, value) = filters.first_key_value().expect("one filter");
-            let index = &segmented.segments[0].index;
-            index
-                .doc_bitmap_for_single_filter(key, value)
-                .map(|posting| {
-                    let mut allowed = posting.clone();
-                    allowed -=
-                        index.doc_bitmap_for_id_iter(semantic_relations.superseded_document_ids());
-                    allowed
-                })
-        }
-        _ => None,
     };
-    let filter_allowed = if filters.is_empty() || effective_filter_bitmap.is_some() {
+    let filter_allowed = if let Some(additional_allowed) = additional_allowed_doc_ids {
+        Some(
+            source_docs
+                .iter()
+                .filter(|(doc_id, document)| {
+                    additional_allowed.contains(*doc_id)
+                        && filters.iter().all(|(key, value)| {
+                            document
+                                .filters
+                                .get(key)
+                                .is_some_and(|actual| actual == value)
+                        })
+                })
+                .map(|(doc_id, _)| doc_id.clone())
+                .collect::<HashSet<_>>(),
+        )
+    } else if filters.is_empty() || effective_filter_bitmap.is_some() {
         None
     } else if let MemoryIndexSnapshot::Segmented(segmented) = snapshot {
         // Build the routing scope from the per-segment bitmap postings. This
@@ -125,20 +149,25 @@ pub(crate) fn execute_prepared_on_snapshot_parts(
     // The common HTTP path scopes by one user filter. With a one-segment
     // snapshot, borrow that immutable posting directly instead of cloning the
     // bitmap into a temporary HashMap for every request.
-    let single_segment_filter_bitmap = match snapshot {
-        MemoryIndexSnapshot::Segmented(segmented)
-            if filters.len() == 1
-                && segmented.segment_count() == 1
-                && !needs_semantic_visibility =>
-        {
-            let (key, value) = filters.first_key_value().expect("one filter");
-            segmented.segments[0]
-                .index
-                .doc_bitmap_for_single_filter(key, value)
+    let single_segment_filter_bitmap = if additional_allowed_doc_ids.is_some() {
+        None
+    } else {
+        match snapshot {
+            MemoryIndexSnapshot::Segmented(segmented)
+                if filters.len() == 1
+                    && segmented.segment_count() == 1
+                    && !needs_semantic_visibility =>
+            {
+                let (key, value) = filters.first_key_value().expect("one filter");
+                segmented.segments[0]
+                    .index
+                    .doc_bitmap_for_single_filter(key, value)
+            }
+            _ => None,
         }
-        _ => None,
     };
-    let filter_segment_bitmaps = if filters.is_empty()
+    let filter_segment_bitmaps = if additional_allowed_doc_ids.is_some()
+        || filters.is_empty()
         || single_segment_filter_bitmap.is_some()
         || effective_filter_bitmap.is_some()
     {

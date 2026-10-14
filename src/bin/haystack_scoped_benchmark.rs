@@ -45,9 +45,13 @@ struct Args {
     #[arg(long)]
     bekind: bool,
 
-    /// Enable structured-fact retrieval, including native participation claims.
-    #[arg(long, action = ArgAction::SetTrue)]
+    /// Enable structured-fact retrieval, including native participation claims (default).
+    #[arg(long, action = ArgAction::SetTrue, default_value_t = true)]
     structured_fact_retrieval: bool,
+
+    /// Disable structured-fact retrieval for a lexical-only baseline.
+    #[arg(long, action = ArgAction::SetTrue)]
+    no_structured_fact_retrieval: bool,
 
     /// Enable CombSUM fusion: run multiple query variants and sum scores.
     #[arg(long)]
@@ -111,7 +115,8 @@ struct Args {
     index_mode: IndexModeArg,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum IndexModeArg {
     Single,
     Segmented,
@@ -268,6 +273,15 @@ struct TypeMetrics {
 #[derive(Debug, Clone, Serialize)]
 struct BenchmarkReport {
     ner_provider: Tier1NerProvider,
+    index_mode: IndexModeArg,
+    structured_fact_retrieval: bool,
+    combsum: bool,
+    rrf: bool,
+    prf: bool,
+    rm3: bool,
+    bo1: bool,
+    text_rerank_ngram: bool,
+    text_rerank_lcs: bool,
     aggregate: AggregateMetrics,
     by_question_type: HashMap<String, TypeMetrics>,
     per_query: Vec<QueryMetrics>,
@@ -281,7 +295,7 @@ fn combsum_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -341,7 +355,7 @@ fn rrf_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -401,7 +415,7 @@ fn prf_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -478,7 +492,7 @@ fn rm3_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -555,7 +569,7 @@ fn bo1_search(
     question: &str,
     top_k: usize,
     question_id: &str,
-    reference_date: Option<&str>,
+    _reference_date: Option<&str>,
 ) -> anyhow::Result<crate::SearchResponse> {
     use std::collections::HashMap;
 
@@ -703,7 +717,7 @@ pub(crate) fn main() -> Result<()> {
         args.prf,
         args.rm3,
         args.bo1,
-        args.structured_fact_retrieval,
+        args.structured_fact_retrieval && !args.no_structured_fact_retrieval,
     )?;
     let json = serde_json::to_string_pretty(&report)?;
 
@@ -772,9 +786,9 @@ fn run_scoped_benchmark(
     // MemoryService applies them on both the add() and search() paths.
     // ner_provider is the master Python-free switch: Heuristic (the
     // default) skips all spaCy subprocesses via PipelineOptions::python_free().
-    // Structured-fact retrieval is opt-in for benchmark compatibility. When
-    // enabled, native participation claims are queried directly; other fact
-    // questions may use the configured structured extractor.
+    // Structured-fact retrieval is enabled by default to match production.
+    // Native participation claims are queried directly; other fact questions
+    // may use the configured structured extractor.
     //
     // Indexing uses add_batch() (one refresh per question) instead of
     // add() in a loop (one refresh per session) — same semantics, ~50x
@@ -1004,6 +1018,15 @@ fn run_scoped_benchmark(
 
     Ok(BenchmarkReport {
         ner_provider,
+        index_mode,
+        structured_fact_retrieval,
+        combsum,
+        rrf,
+        prf,
+        rm3,
+        bo1,
+        text_rerank_ngram,
+        text_rerank_lcs,
         aggregate: aggregate_metrics(&per_query, ks),
         by_question_type: aggregate_by_question_type(&per_query, ks),
         per_query,
@@ -1235,4 +1258,29 @@ fn aggregate_by_question_type(
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+
+    #[test]
+    fn structured_fact_retrieval_defaults_on_and_can_be_disabled() {
+        let defaults =
+            Args::try_parse_from(["haystack-scoped-benchmark", "--longmemeval", "data.json"])
+                .unwrap();
+        assert!(defaults.structured_fact_retrieval);
+        assert!(!defaults.no_structured_fact_retrieval);
+
+        let disabled = Args::try_parse_from([
+            "haystack-scoped-benchmark",
+            "--longmemeval",
+            "data.json",
+            "--no-structured-fact-retrieval",
+        ])
+        .unwrap();
+        assert!(disabled.structured_fact_retrieval);
+        assert!(disabled.no_structured_fact_retrieval);
+    }
 }

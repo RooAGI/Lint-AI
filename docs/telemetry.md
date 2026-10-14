@@ -2,23 +2,27 @@
 
 Membrick telemetry is local operational data used to understand query behavior
 and provider activity. It is separate from indexed memory and session archives.
-Telemetry is bounded, and provider payloads are not copied wholesale into its
-ledgers.
+Aggregate telemetry is bounded. Detailed MCP tool history retains complete
+arguments and responses.
 
 ## Telemetry streams
 
-Membrick currently has three related streams:
+Membrick currently has four related streams:
 
 | Stream | What it records | Storage |
 | --- | --- | --- |
 | HTTP query telemetry | Request count, errors, empty results, and latency distribution | In-memory in the running HTTP server |
 | MCP query telemetry | The same project-level query aggregates for provider MCP processes | `.membrick/query-telemetry.json` |
+| MCP tool history | Detailed MCP tool inputs and the response returned to the provider | `.membrick/mcp-call-history.jsonl` |
 | Provider lifecycle telemetry | Provider hook events and available token usage | `.membrick/provider-telemetry/{provider}.json` |
 
 HTTP query telemetry is process-local. Provider MCP processes persist their
 query aggregates so the dashboard can observe queries handled outside the HTTP
 server process. The query aggregates are project-wide and do not attribute a
-request to a provider.
+request to a provider. Detailed history is recorded after every provider
+`tools/call`, including search, memory reads and writes, memory controls, and
+update actions. The Claude, Codex, Gemini CLI, AGY, Muse, OpenClaw, Hermes, and
+Roo runtime adapters all use the same recorder.
 
 ## Query aggregates
 
@@ -26,7 +30,17 @@ Queries are grouped into five-second buckets. The most recent 120 buckets are
 kept, giving a rolling ten-minute window. Each bucket tracks request count,
 error count, empty-result count, and a latency histogram. The dashboard derives
 request rate and latency summaries from these aggregates. Query strings,
-session IDs, and document contents are not stored in this stream.
+session IDs, and document contents are not stored in this aggregate stream.
+
+The detailed MCP tool history is an append-only JSON Lines file with no
+retention, entry-count, or payload-size limit. Each entry includes provider,
+tool name, complete arguments, timestamp, elapsed time, success or error
+status, and the complete response returned by the resident handler. Session
+IDs and content are retained as supplied. On Unix, the file is created with
+owner-only permissions. Entries can contain private project information and
+will grow until manually removed, so treat this file as sensitive and account
+for its disk usage. It is an operational archive, not a semantic memory
+document, and is not included in normal memory search results.
 
 ## Provider lifecycle events
 
@@ -110,7 +124,7 @@ invalidation and inline hook payloads continue to work there.
 ## Implementation references
 
 - `src/telemetry.rs` implements query aggregates, provider event ledgers, and
-  dashboard snapshots.
+  MCP call history.
 - `src/integrations/session_recording.rs` normalizes provider events and token
   usage, and separates operational telemetry from full session recording.
 - `src/pipeline/watcher.rs` captures bounded workspace file snapshots for

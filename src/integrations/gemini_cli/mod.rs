@@ -291,7 +291,30 @@ impl GeminiMcp {
                 result: Some(json!({"tools": tool_definitions(self.provider_display_name)})),
                 error: None,
             }),
-            "tools/call" => self.call_tool(id, request.params.unwrap_or_else(|| json!({}))),
+            "tools/call" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let tool = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let started = std::time::Instant::now();
+                let response = self.call_tool(id.clone(), params);
+                mcp_tools::record_mcp_tool_response(
+                    &self.root,
+                    self.provider.as_str(),
+                    &tool,
+                    id,
+                    &arguments,
+                    started.elapsed().as_millis() as u64,
+                    &response,
+                );
+                response
+            }
             _ => Ok(error_response(id, -32601, "method not found")),
         }
     }
@@ -325,6 +348,7 @@ impl GeminiMcp {
                     | "board_search"
                     | "add_memory"
                     | "get_memory"
+                    | "delete_memory"
             )
         {
             return mcp_tools::call_resident_tool(
@@ -463,7 +487,7 @@ impl GeminiMcp {
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
             "board_open" | "board_list" | "board_info" | "board_post" | "board_read"
-            | "board_get" | "board_search" | "add_memory" | "get_memory" => {
+            | "board_get" | "board_search" | "add_memory" | "get_memory" | "delete_memory" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("initialized");
                 mcp_tools::call_board_or_memory_tool(
@@ -1023,8 +1047,8 @@ mod tests {
             serde_json::to_string_pretty(&follow_up["results"]).unwrap()
         );
 
-        // Session-pointer wiring: an explicit session id is noted under the
-        // adapter's own provider, not gemini's.
+        // Explicit ids route the request but do not mark the MCP adapter's
+        // session as lifecycle-active. Only its provider hooks may do that.
         call_tool(
             &hermes_mcp,
             "search",
@@ -1033,11 +1057,7 @@ mod tests {
         {
             let mut guard = hermes_mcp.store().unwrap();
             let service = guard.as_mut().expect("initialized");
-            assert_eq!(
-                service.current_session_id("hermes").as_deref(),
-                Some("s2"),
-                "hermes adapter must note the session under its own provider"
-            );
+            assert_eq!(service.current_session_id("hermes"), None);
         }
         drop(hermes_mcp);
         fs::remove_dir_all(root).unwrap();

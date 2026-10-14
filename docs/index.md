@@ -15,9 +15,10 @@ hide:
 
 <div class="admonition info">
 <p class="admonition-title">A new name: Membrick</p>
-<p>Previously known as Lint-AI, the project is now Membrick. Version 0.4.0
-updates the product and package names. The legacy <code>lint-ai</code> command
-and existing configuration are supported during the transition.</p>
+<p>Previously known as Lint-AI, the project is now Membrick. Version 0.5.0
+moves bundled provider integrations to a resident local IPC service. The
+standalone HTTP API remains available, and the legacy <code>lint-ai</code>
+command remains supported.</p>
 </div>
 
 ## From one conversation to a lasting relationship {.landing-heading}
@@ -97,7 +98,9 @@ Membrick keeps memory in a persistent store and provides a shared service for
 agents and applications. It supports user and session scoping, durable writes,
 and retrieval that can account for newer corrections while preserving history.
 Run it locally or connect through its HTTP and MCP servers. A dashboard helps
-you inspect memory and agent activity.
+you inspect memory and agent activity. Bundled Rust integrations communicate
+with their resident memory owner over local IPC; see the
+[transport architecture](local-ipc-architecture.md).
 
 <h3>Benchmark highlights</h3>
 
@@ -111,6 +114,8 @@ you inspect memory and agent activity.
 </section>
 
 <p class="benchmark-note">Retrieval scores use 500 LongMemEval-S questions with Tantivy 0.25.0. In an experimental route comparison, fused temporal + global reached 96.0% any-hit Recall@5; routed top-5 reached 94.2%. Mean single-index search time was 2.58 ms. Read throughput is a separate C=10 read-only run on 23,366 records from October 4. Published write rates include final flush: <code>/add</code> completed 212.36 records/s; batches of 128 completed 1,977.12 records/s. The batch run was saturated and rejected about 25,500–26,700 requests per repetition, so its rate is a burst result. In the October 5 sparse mixed-load check, ten readers sustained 1,248.69 searches/s with one single-record write per second, versus 1,209.01 searches/s without writes. See the <a href="benchmark-results/">retrieval results</a> and <a href="http-server-benchmarks/">HTTP server benchmarks</a> for methods and reports.</p>
+
+<p class="benchmark-note">Agent integration results and their limits are listed on the <a href="performance/">Performance page</a>. The latest Claude comparison covers three repetitions of one scenario in each of three arms; it reports a 75% drop in fresh input tokens, a 79.0% to 79.6% drop in overall tokens, and a 16.0% to 18.5% drop in overall tokens per fresh input token. This is diagnostic evidence for that fixture and scenario, not a general performance claim.</p>
 
 <section class="final-cta">
   <p>Context that persists.</p>

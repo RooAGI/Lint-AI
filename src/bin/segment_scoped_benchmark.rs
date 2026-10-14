@@ -1,13 +1,18 @@
+use crate::aggregation::{build_aggregate_output, AggregateOutput};
 use crate::index::{DocRecord, TemporalQueryHint};
+use crate::pipeline::{build_doc_records, build_query_snapshot_from_records};
+use crate::query_expansion::normalize_for_index;
+use crate::query_semantics::{
+    analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
+    QueryTimeHint,
+};
 use crate::{
-    analyze_query, build_aggregate_output, build_doc_records, build_query_snapshot_from_records,
-    normalize_for_index, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
     segments::{
         reciprocal_rank_fusion, SegmentQueryDiagnostics, SegmentRoute, SegmentRoutingStrategy,
         SegmentSpecificEnrichmentDiagnostics, SegmentedMemoryIndex,
     },
-    AggregateOutput, ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimeHint, QueryTimings,
-    SearchResult, SourceDocument, TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
+    ChunkStrategy, PipelineOptions, QueryDiagnostics, QueryTimings, SearchResult, SourceDocument,
+    TemporalQueryContext, Tier1NerProvider, Tier1TermRankerKind,
 };
 use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};

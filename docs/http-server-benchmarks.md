@@ -59,6 +59,34 @@ this as a saturated queue/backlog diagnostic only. The
 [mixed-load artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/server-throughput-mixed-2026-10-12.json)
 preserves the raw results.
 
+## Repeated matched HTTP and IPC benchmark (2026-10-14)
+
+This benchmark sent the same `/provider-memory/mcp/tools/call` requests through
+loopback HTTP and the resident Unix socket. It used three 10-second runs per
+transport, four search callers, and one writer adding one memory every 500 ms.
+Each isolated workspace started with 100 matching Markdown documents. Every
+request opened a fresh connection. All six runs had zero errors, and every
+acknowledged write was searchable immediately afterward.
+
+The table reports the median of the three per-run measurements. Latency values
+are the median of the corresponding per-run percentiles.
+
+| Transport | Search requests/s | Search p50 / p95 / p99 | Writes/s | Write p50 / p95 / p99 | Startup to ready |
+|---|---:|---:|---:|---:|---:|
+| HTTP over loopback TCP | 2,008.6 | 1.660 / 3.520 / 3.998 ms | 1.8 | 59.59 / 62.18 / 63.40 ms | 650.5 ms |
+| Local IPC over Unix socket | 1,808.5 | 1.596 / 3.831 / 4.183 ms | 1.8 | 59.37 / 66.84 / 66.87 ms | 605.2 ms |
+
+Search throughput varied substantially between repetitions: HTTP ranged from
+1,981.6 to 2,142.4 requests/s, while IPC ranged from 1,333.1 to 2,557.4.
+These results do not establish a throughput advantage for either transport.
+They cover a local MCP workload, not Windows named pipes or large production
+corpora. The candidate was commit `18339c0a675cb57a196a5677cd0b7a681ec8aadb`
+on macOS 26.6.2 arm64, using Python 3.9.6 and the optimized
+`agent-integrations` server binary. The benchmark script and complete raw
+measurements are in [`comparison/ipc_http_mcp_benchmark.py`](https://github.com/RooAGI/Membrick/blob/main/comparison/ipc_http_mcp_benchmark.py)
+and [`comparison/results/release-v0.5.0-ipc-http-mcp-18339c0.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/release-v0.5.0-ipc-http-mcp-18339c0.json).
+See the [local IPC architecture](local-ipc-architecture.md) for design details.
+
 ## Earlier reference results (through 2026-10-05)
 
 | Workload | HTTP request and load | Rate | Result |

@@ -47,7 +47,6 @@ lint-ai-graph.html
 lint-ai-chunk-graph.html
 
 # Optional for library-style workflows
-Cargo.lock
 !bindings/node/Cargo.lock
 
 # Local Python environments and caches
@@ -55,6 +54,7 @@ Cargo.lock
 
 # Local secrets
 .env
+/secrets/
 __pycache__/
 *.py[cod]
 

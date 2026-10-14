@@ -422,7 +422,30 @@ impl MuseMcp {
                     error: None,
                 })
             }
-            "tools/call" => self.handle_tool_call(id, request.params),
+            "tools/call" => {
+                let params = request.params.unwrap_or_else(|| json!({}));
+                let tool = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arguments = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let started = std::time::Instant::now();
+                let response = self.handle_tool_call(id.clone(), Some(params));
+                mcp_tools::record_mcp_tool_response(
+                    &self.root,
+                    "muse",
+                    &tool,
+                    id,
+                    &arguments,
+                    started.elapsed().as_millis() as u64,
+                    &response,
+                );
+                response
+            }
             _ => Ok(JsonRpcResponse {
                 jsonrpc: "2.0",
                 id,
@@ -469,6 +492,7 @@ impl MuseMcp {
                     | "board_search"
                     | "add_memory"
                     | "get_memory"
+                    | "delete_memory"
             )
         {
             return crate::integrations::mcp_tools::call_resident_tool(
@@ -538,7 +562,7 @@ impl MuseMcp {
                     results.as_ref().is_ok_and(Vec::is_empty),
                 );
                 let results = results?;
-                let payload = service.search_results_payload(results);
+                let payload = service.search_results_payload(query, results);
                 Ok(JsonRpcResponse {
                     jsonrpc: "2.0",
                     id,

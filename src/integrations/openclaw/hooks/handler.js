@@ -8,9 +8,9 @@
 // observed on a live host sometimes omit workspaceDir entirely).
 const INSTALL_ROOT = "__MEMBRICK_ROOT__";
 // How long the recall query may block a turn before we give up (fail-open).
-const TIMEOUT_MS = Number(process.env.MEMBRICK_OPENCLAW_HOOK_TIMEOUT_MS ?? 8000);
-const SERVER_URL = (process.env.MEMBRICK_SERVER_URL ?? process.env.LINTAI_SERVER_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
-const SERVER_TOKEN = process.env.MEMBRICK_SERVER_TOKEN ?? process.env.LINTAI_SERVER_TOKEN ?? "";
+const TIMEOUT_MS = 8000;
+const SERVER_URL = "http://127.0.0.1:8080";
+const SERVER_TOKEN = "";
 // Last user text per session, correlated from `message:received` (the
 // `agent:bootstrap` event itself usually carries no user message).
 const lastUserText = new Map();

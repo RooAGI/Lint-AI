@@ -979,7 +979,22 @@ impl IndexStore {
     }
 
     pub fn upsert(&mut self, doc: SourceDocument) {
+        let mut doc = doc;
+        const RECORDED_AT_FILTER: &str = "membrick_recorded_at";
         let doc_id = doc.doc_id.clone();
+        let recorded_at = self.source_docs.get(&doc_id).and_then(|previous| {
+            let unchanged = previous.content == doc.content
+                && previous.source == doc.source
+                && previous.timestamp == doc.timestamp;
+            unchanged
+                .then(|| previous.filters.get(RECORDED_AT_FILTER).cloned())
+                .flatten()
+        });
+        let recorded_at = recorded_at.unwrap_or_else(|| {
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        });
+        doc.filters
+            .insert(RECORDED_AT_FILTER.to_string(), recorded_at);
         self.tombstones.remove(&doc_id);
         Arc::make_mut(&mut self.source_docs).insert(doc_id.clone(), doc);
         self.dirty_docs.insert(doc_id);
@@ -1180,6 +1195,14 @@ impl IndexStore {
 
     pub fn temporal_facts_as_of(&self, date: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
         self.temporal_facts.as_of(date)
+    }
+
+    pub fn temporal_facts_as_known_at(
+        &self,
+        valid_date: &str,
+        recorded_at: &str,
+    ) -> Vec<crate::temporal_fact::TemporalFact> {
+        self.temporal_facts.as_known_at(valid_date, recorded_at)
     }
 
     pub fn temporal_timeline(&self, subject: &str) -> Vec<&crate::temporal_fact::TemporalFact> {
@@ -1389,6 +1412,30 @@ impl IndexStore {
             .map(|(results, _, _)| results)
     }
 
+    pub(crate) fn query_prepared_cached_with_allowed_doc_ids(
+        &self,
+        prepared: &PreparedQuery,
+        top_k: usize,
+        filters: &std::collections::BTreeMap<String, String>,
+        allowed_doc_ids: &HashSet<String>,
+    ) -> Result<Vec<SearchResult>> {
+        if self.snapshot.is_none() {
+            return Ok(Vec::new());
+        }
+        execute_prepared_on_snapshot_parts(
+            &self.options,
+            &self.source_docs,
+            &self.records,
+            &self.semantic_relations,
+            self.snapshot.as_deref(),
+            prepared,
+            top_k,
+            filters,
+            Some(allowed_doc_ids),
+        )
+        .map(|(results, _, _)| results)
+    }
+
     /// Query the current immutable snapshot and retain internal diagnostics.
     /// This is intended for the single-question investigation harness.
     pub(crate) fn query_prepared_cached_with_diagnostics(
@@ -1432,6 +1479,7 @@ impl IndexStore {
             prepared,
             top_k,
             filters,
+            None,
         )
     }
 

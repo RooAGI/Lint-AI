@@ -1,7 +1,7 @@
 [package]
 autobins = false
 name = "membrick"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Persistent memory layer for AI coding agents — MCP server with current-state retrieval and supersession tracking"
 license = "Apache-2.0"
@@ -10,6 +10,24 @@ homepage = "https://www.rooagi.com"
 readme = "README.md"
 keywords = ["agent-memory", "mcp", "knowledge-base", "AI", "agents"]
 categories = ["text-processing", "command-line-utilities"]
+exclude = [
+    "lint-AI",
+    "benchmark/**",
+    "bindings/**",
+    "charts/**",
+    "comparison/**",
+    "deploy/**",
+    "docs/**",
+    ".github/**",
+    "metrics/**",
+    "scripts/**",
+    "site/**",
+    "vendor/**",
+    "docker-compose.yml",
+    "mkdocs.yml",
+    "package-lock.json",
+    "requirements-docs.txt",
+]
 
 [lib]
 name = "membrick"
@@ -29,6 +47,9 @@ regex = "1"
 roaring = "0.10"
 anyhow = "1"
 axum = "0.7"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal"] }
 tower = { version = "0.5", features = ["limit", "timeout"] }
 jsonwebtoken = "9"

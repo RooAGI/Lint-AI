@@ -165,11 +165,7 @@ impl ConversationStateStore {
             .unwrap_or(0)
     }
 
-    /// Path of the per-provider "current session" pointer inside the store
-    /// directory, e.g. `current_session.claude.json`. The pointer names the
-    /// session most recently seen active in this workspace; the MCP search
-    /// dispatch reads it back as the default session when the caller did not
-    /// pass `session_id` explicitly.
+    /// Path of the per-provider active-session set inside the store directory.
     fn current_session_pointer_path(&self, provider: &str) -> Option<PathBuf> {
         if provider.is_empty()
             || !provider
@@ -183,11 +179,77 @@ impl ConversationStateStore {
             .map(|dir| dir.join(format!("current_session.{provider}.json")))
     }
 
-    /// Record the session most recently seen active for `provider`.
+    fn current_session_pointer_lock(&self, path: &Path) -> Option<std::fs::File> {
+        let lock_path = path.with_extension("lock");
+        crate::pipeline::persistence::ensure_safe_output_path(path).ok()?;
+        crate::pipeline::persistence::ensure_safe_output_path(&lock_path).ok()?;
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+        }
+        let file = options.open(lock_path).ok()?;
+        file.lock().ok()?;
+        Some(file)
+    }
+
+    fn read_active_sessions(path: &Path) -> HashMap<String, u64> {
+        let Ok(mut file) = crate::pipeline::file_access::open_regular_file(path) else {
+            return HashMap::new();
+        };
+        let mut bytes = Vec::new();
+        if std::io::Read::read_to_end(&mut file, &mut bytes).is_err() {
+            return HashMap::new();
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return HashMap::new();
+        };
+        let mut sessions = HashMap::new();
+        if let Some(active) = value
+            .get("active_sessions")
+            .and_then(serde_json::Value::as_object)
+        {
+            for (session_id, updated_at) in active {
+                if let Some(updated_at_ms) = updated_at.as_u64() {
+                    sessions.insert(session_id.clone(), updated_at_ms);
+                }
+            }
+        } else if let (Some(session_id), Some(updated_at_ms)) = (
+            value.get("session_id").and_then(serde_json::Value::as_str),
+            value
+                .get("updated_at_ms")
+                .and_then(serde_json::Value::as_u64),
+        ) {
+            // Read old single-pointer files as a one-session set.
+            sessions.insert(session_id.to_string(), updated_at_ms);
+        }
+        sessions
+    }
+
+    fn write_active_sessions(path: &Path, sessions: &HashMap<String, u64>) {
+        let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+            "active_sessions": sessions,
+            "updated_at_ms": Self::unix_time_ms(),
+        })) else {
+            return;
+        };
+        let _ = crate::pipeline::persistence::write_private_text_file_atomic(
+            path,
+            &String::from_utf8_lossy(&bytes),
+        );
+    }
+
+    fn session_is_live(updated_at_ms: u64, now_ms: u64) -> bool {
+        updated_at_ms <= now_ms && now_ms - updated_at_ms <= SESSION_TTL_MS
+    }
+
+    /// Record an active session for `provider`.
     ///
-    /// Fail-open and best-effort: blank ids are ignored, the write is atomic
-    /// (temp file + rename), and every I/O failure is swallowed, so a
-    /// read-only or full disk never breaks a hook or a search.
+    /// Concurrent sessions are retained independently. A later implicit
+    /// lookup only resolves when exactly one session remains active.
     pub fn note_active_session(&self, provider: &str, session_id: &str) {
         let session_id = session_id.trim();
         if session_id.is_empty() {
@@ -196,50 +258,49 @@ impl ConversationStateStore {
         let Some(path) = self.current_session_pointer_path(provider) else {
             return;
         };
-        if crate::pipeline::persistence::ensure_safe_output_path(&path).is_err() {
-            return;
-        }
-        if let Some(parent) = path.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
-                return;
-            }
-        }
-        let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
-            "session_id": session_id,
-            "updated_at_ms": Self::unix_time_ms(),
-        })) else {
+        let Some(_lock) = self.current_session_pointer_lock(&path) else {
             return;
         };
-        let _ = crate::pipeline::persistence::write_private_text_file_atomic(
-            &path,
-            &String::from_utf8_lossy(&bytes),
-        );
+        let now_ms = Self::unix_time_ms();
+        let mut sessions = Self::read_active_sessions(&path);
+        sessions.retain(|_, updated_at_ms| Self::session_is_live(*updated_at_ms, now_ms));
+        sessions.insert(session_id.to_string(), now_ms);
+        Self::write_active_sessions(&path, &sessions);
     }
 
-    /// Read back the session most recently marked active for `provider`, or
-    /// `None` when there is no pointer, it is unreadable or malformed, or it
-    /// is older than the session TTL. Never fails: every problem degrades to
-    /// stateless search.
-    pub fn current_session_id(&self, provider: &str) -> Option<String> {
-        let mut file = crate::pipeline::file_access::open_regular_file(
-            &self.current_session_pointer_path(provider)?,
-        )
-        .ok()?;
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut file, &mut bytes).ok()?;
-        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-        let session_id = value.get("session_id")?.as_str()?.trim();
+    /// Remove a session from the provider's active set after its host emits
+    /// its terminal lifecycle event. Fail-open like `note_active_session`.
+    pub fn deactivate_session(&self, provider: &str, session_id: &str) {
+        let session_id = session_id.trim();
         if session_id.is_empty() {
-            return None;
+            return;
         }
-        let updated_at_ms = value.get("updated_at_ms")?.as_u64()?;
+        let Some(path) = self.current_session_pointer_path(provider) else {
+            return;
+        };
+        let Some(_lock) = self.current_session_pointer_lock(&path) else {
+            return;
+        };
         let now_ms = Self::unix_time_ms();
-        // Reject pointers from the future (clock skew) and stale ones; the
-        // conversation state they name expires on the same TTL.
-        if updated_at_ms > now_ms || now_ms - updated_at_ms > SESSION_TTL_MS {
-            return None;
-        }
-        Some(session_id.to_string())
+        let mut sessions = Self::read_active_sessions(&path);
+        sessions.retain(|_, updated_at_ms| Self::session_is_live(*updated_at_ms, now_ms));
+        sessions.remove(session_id);
+        Self::write_active_sessions(&path, &sessions);
+    }
+
+    /// Return the only live session for `provider`. Ambiguous session sets,
+    /// missing state, and stale or malformed files degrade to stateless
+    /// search rather than routing a follow-up into another conversation.
+    pub fn current_session_id(&self, provider: &str) -> Option<String> {
+        let now_ms = Self::unix_time_ms();
+        let path = self.current_session_pointer_path(provider)?;
+        let sessions = Self::read_active_sessions(&path);
+        let mut live = sessions
+            .into_iter()
+            .filter(|(_, updated_at_ms)| Self::session_is_live(*updated_at_ms, now_ms))
+            .map(|(session_id, _)| session_id);
+        let only = live.next()?;
+        live.next().is_none().then_some(only)
     }
 
     fn session_path(&self, user_id: &str, session_id: &str) -> Option<PathBuf> {
@@ -806,6 +867,53 @@ mod tests {
         assert_eq!(
             reopened.current_session_id("claude").as_deref(),
             Some("session-123")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_session_pointer_is_ambiguous_until_only_one_session_remains() {
+        let dir = pointer_test_dir("ambiguous");
+        let store = ConversationStateStore::open_under(&dir);
+        store.note_active_session("claude", "session-a");
+        assert_eq!(
+            store.current_session_id("claude").as_deref(),
+            Some("session-a")
+        );
+
+        store.note_active_session("claude", "session-b");
+        assert_eq!(store.current_session_id("claude"), None);
+
+        store.deactivate_session("claude", "session-a");
+        assert_eq!(
+            store.current_session_id("claude").as_deref(),
+            Some("session-b")
+        );
+        store.deactivate_session("claude", "session-b");
+        assert_eq!(store.current_session_id("claude"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_active_session_updates_are_preserved() {
+        let dir = pointer_test_dir("concurrent-active");
+        let workers: Vec<_> = ["session-a", "session-b"]
+            .into_iter()
+            .map(|session_id| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    ConversationStateStore::open_under(&dir)
+                        .note_active_session("claude", session_id);
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(
+            ConversationStateStore::open_under(&dir).current_session_id("claude"),
+            None,
+            "both concurrent sessions must survive, making the implicit session ambiguous"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

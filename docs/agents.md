@@ -34,7 +34,10 @@ the legacy directory untouched, so no memory is lost.
 1. A lifecycle hook receives the agent event and transcript context.
 2. Retrieval hooks query the existing `MemoryService` and return relevant context
    to the agent.
-3. Capture hooks extract a bounded checkpoint, outcome, or session summary.
+3. Claude Code and Codex capture hooks preserve every parsed transcript
+   observation with its speaker and source order, including structured tool
+   and image blocks serialized from the transcript. Other adapters capture the
+   observations available in their provider payloads.
 4. The adapter upserts the document and refreshes the index snapshot.
 5. The next prompt can query the newly refreshed snapshot.
 
@@ -67,7 +70,7 @@ sequenceDiagram
     H-->>A: Inject context for next decision
     A-->>U: Complete response
     A->>H: Stop / AfterAgent
-    H->>H: Extract bounded outcome from transcript
+    H->>H: Preserve available session observations
     H->>I: Upsert outcome + refresh snapshot
 ```
 
@@ -174,13 +177,19 @@ not update the searchable `MemoryService`:
 | Gemini CLI | `AfterAgent`, `PreCompress`, `SessionEnd` | `.membrick/memory` |
 | Antigravity CLI | `Stop` (transcript capture) | `.membrick/memory` |
 
-At a capture event, the adapter reads the transcript, extracts structured
-memory, calls `MemoryService::upsert`, and then calls `refresh`. This makes the
+At a capture event, Claude Code and Codex read the complete transcript and
+preserve every parsed message and structured block in source order,
+after credential redaction. Their stable session document is upserted on each
+capture instead of storing another full copy for every turn. Other adapters
+capture the session data exposed in their hook payloads. Claude and Codex
+replace the session capture group and reconcile it in one `MemoryService`
+mutation, removing observations that disappeared from a changed transcript.
+This makes the
 document available in the index when the hook completes successfully, but it
 does not inject the new document back into the conversation that just ended.
 The document is returned on a later retrieval event, typically the next prompt
-or next session. If the transcript is missing or produces no meaningful
-content, the event completes without adding a document.
+or next session. If the transcript is missing or has no parsed messages, the
+event completes without adding a document.
 
 ### Two kinds of persistence
 

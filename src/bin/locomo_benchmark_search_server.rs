@@ -29,7 +29,7 @@ use crate::question_focus::identify_focus;
 use crate::segments::relations::{
     analyze_fact_question, extract_relations_via_spacy, RelationTurn,
 };
-use crate::{default_production_pipeline_options, search_results, SourceDocument};
+use crate::{default_production_pipeline_options, SourceDocument};
 use anyhow::{Context, Result};
 use axum::{
     extract::{Query, State},
@@ -285,7 +285,7 @@ fn run_search(index: &ConvIndex, conv: &str, query: &str, k: usize) -> Result<Ve
             .expect("benchmark searcher lock poisoned");
         let results =
             searcher.search_with_filters(query, BENCHMARK_SCOPE, Some(conv), k, &filters, None)?;
-        search_results(&searcher, results)
+        crate::integrations::mcp_tools::search_results_for_query(&searcher, query, results)
     };
     let mut out = Vec::new();
     for hit in shaped

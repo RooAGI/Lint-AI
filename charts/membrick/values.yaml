@@ -11,7 +11,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 auth:
-  # Create this Secret before installing the chart. It must contain SERVER_TOKEN.
+  # Create this Secret before installing the chart. It must contain a SERVER_TOKEN key.
   existingSecret: membrick-auth
 
 service:

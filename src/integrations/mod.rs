@@ -54,3 +54,6 @@ pub mod mcp_tools;
 pub mod mcp_transport;
 pub mod recall;
 pub mod session_recording;
+
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+mod hook_settings;

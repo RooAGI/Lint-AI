@@ -70,6 +70,7 @@ nav:
       - Prometheus: prometheus.md
       - Telemetry details: telemetry.md
   - Architecture:
+      - Local IPC transport: local-ipc-architecture.md
       - Ingestion architecture: ingestion-architecture.md
       - How indexing works: tier0-ingestion.md
       - Search and retrieval: tier1-indexing-and-search.md
@@ -78,6 +79,9 @@ nav:
       - Filtered search: filtered-search.md
       - Artifact indexing: artifact-indexing.md
       - Semantic supersession: semantic-supersession.md
+      - Claim contract: claim-contract.md
+      - MemoryService API: memory-service-api.md
+      - Temporal query resolution: temporal-query-resolution.md
       - Corpus graph: build-corpus-graph.md
       - Integration glossary: integration-glossary.md
       - Chunk strategy: chunk-strategy.md
@@ -91,18 +95,25 @@ nav:
       - Claude Code hooks design: claude-code-hooks-design.md
       - C++ code adapter design: cpp-code-adapter-design.md
       - Integration testing: integration-test-strategy.md
+  - Performance:
+      - Overview: performance.md
+      - Codex: codex-performance-tests.md
+      - Claude Code: claude-code-performance-tests.md
+      - Antigravity (AGY): agy-performance-tests.md
   - Benchmarks:
       - Overview: benchmark.md
+      - Detailed benchmark results: benchmark-results.md
       - HTTP server benchmarks: http-server-benchmarks.md
       - LongMemEval strategies: longmemeval-strategies.md
       - Comparison: comparison.md
       - Integration benchmark README: benchmark-integration.md
-      - Codex performance: codex-performance-tests.md
-      - Claude Code performance: claude-code-performance-tests.md
-      - Antigravity (AGY) performance: agy-performance-tests.md
   - Languages:
       - Korean: korean.md
+      - Spanish support: spanish-support.md
+      - Python migration: python-migration-0.3.0.md
   - Releases:
+      - Release checklist: release-checklist.md
+      - 0.5.0: releases/0.5.0.md
       - 0.4.0: releases/0.4.0.md
       - 0.3.0: releases/0.3.0.md
       - Tantivy upgrade verification: releases/tantivy-0.26.2-verification.md
@@ -119,7 +130,7 @@ nav:
   - Contact: contact.md
 
 exclude_docs: |
-  benchmark-results.md
+  security-review-2026-10-11.md
   show-concepts.md
   show-headings.md
 

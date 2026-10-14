@@ -38,21 +38,13 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --bind
-            - 0.0.0.0:8080
+            - --settings
+            - /etc/membrick/server.toml
             - --allow-non-loopback
-            - --index
-            - /data/index
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
-          env:
-            - name: SERVER_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.existingSecret | quote }}
-                  key: SERVER_TOKEN
           startupProbe:
             httpGet:
               path: /health
@@ -79,7 +71,24 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: settings
+              mountPath: /etc/membrick/server.toml
+              subPath: server.toml
+              readOnly: true
+            - name: auth
+              mountPath: /run/secrets/server-token
+              subPath: SERVER_TOKEN
+              readOnly: true
       volumes:
+        - name: settings
+          configMap:
+            name: {{ include "membrick.fullname" . }}-server-settings
+        - name: auth
+          secret:
+            secretName: {{ .Values.auth.existingSecret | quote }}
+            items:
+              - key: SERVER_TOKEN
+                path: SERVER_TOKEN
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:

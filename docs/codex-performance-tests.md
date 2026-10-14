@@ -12,52 +12,31 @@ claims about the Codex integration. The current Codex implementation is
 functionally complete. A latest three-arm smoke result is recorded below;
 additional repetitions are required before release claims.
 
-## Latest Validated Smoke Result
+## Latest result: automatic Membrick context reduced token and tool use
 
-The current three-arm orchestration was run on the
-`index-store-segmented-routing` scenario with one repetition. Metrics below
-cover the continuation session only; setup is the memory-seeding phase.
+In the `routing-decision-supersession` run, Codex recalled all three expected
+facts with both native memory and Membrick. With Membrick hooks providing
+saved project context automatically, Codex processed fewer tokens, made fewer
+tool calls, and finished the continuation sooner.
 
-| Arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex native memory | 38.13 s | 151,000 | 99,840 | 1,505 | 5 | 2/3 | 0 ms |
-| Membrick only | 18.53 s | 62,478 | 43,264 | 604 | 2 | 2/3 | 1.33 s |
-| Both layers | 13.98 s | 31,684 | 25,088 | 454 | 1 | 2/3 | 1.39 s |
+!!! success "Codex native memory compared with automatic Membrick context"
 
-Compared with native memory, Membrick-only was `51%` faster and the combined
-arm was `63%` faster in this run. Recall was equal across all three arms.
-Membrick hook execution added approximately `1.3-1.4 s` to continuation time.
+    - **Fresh input tokens:** 46,035 → 36,731 (20.2% fewer)
+    - **Overall tokens:** 313,066 → 196,102 (37.4% fewer)
+    - **Overall tokens per fresh input token:** 6.80 → 5.34 (21.5% fewer)
+    - **Agent tool calls:** 7 → 4 (42.9% fewer)
+    - **Continuation time:** 27.95 s → 13.80 s (50.6% less)
 
-The setup phase must not be used as a latency comparison. Codex native and
-combined setup consumed approximately `342k` and `347k` input tokens, while
-Membrick-only consumed `921k`; the model performed more repository exploration
-when Codex native memory was disabled. The native Codex memory file contained
-no relevant consolidated rollout memory, while Membrick injected the captured
-architecture decision during continuation.
+    Recall was 3/3 in both setups. Each setup used one continuation round, so
+    this run did not reduce the number of rounds. This was one run per setup.
 
-This is one repetition and is diagnostic evidence, not a release benchmark.
-Preserved report:
-
-- `benchmark/codex_code/results/index-store-three-arms/report.json`
-
-## MCP Validation Run
-
-The Codex MCP path was validated separately with the same
-`index-store-segmented-routing` scenario and one `membrick` arm:
-
-| Arm | MCP status | Continuation | Input tokens | Cached input | Output tokens | Reported tool calls | Recall | Hook time |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex + Membrick MCP | Connected | 9.38 s | 13,246 | 12,032 | 77 | 0 | 2/3 | 1.35 s |
-
-The MCP server completed initialization and `tools/list`. The scenario used
-Codex lifecycle hooks for memory retrieval and did not invoke an MCP
-`tools/call`, so the reported zero tool calls is expected. This is a separate
-MCP production-path validation, not a direct replacement for the three-arm
-hooks-only comparison above.
-
-Preserved report:
-
-- `benchmark/codex_code/results/mcp-production-fixed/report.json`
+Membrick retrieved the saved project context through Codex lifecycle hooks
+and added it automatically. Codex did not need to call a Membrick tool. In
+this scenario, the native-memory setup used more repository exploration and
+tool calls; the Membrick setup supplied the relevant context directly. These
+figures describe this single scenario and run, not general performance across
+projects or tasks. See the [Performance overview](performance.md#overview)
+for the provider comparison.
 
 ## Benchmark Goals
 

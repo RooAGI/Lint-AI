@@ -1,9 +1,6 @@
 use crate::integrations::session_recording::{
     membrick_enabled, record_event_if_enabled, RecordingProvider,
 };
-use crate::memory_api::MemoryService;
-use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
-use crate::segments::SegmentRoutingStrategy;
 use crate::source::SourceDocument;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -105,6 +102,16 @@ pub fn run_hook_for(
             eprintln!("warning: Membrick {provider_label} hook failed open: {error:#}");
             GeminiHookOutput::default()
         });
+    if kind == GeminiHookKind::SessionEnd {
+        let memory = crate::integrations::mcp_index::shared_memory_root(&root);
+        if memory.exists() {
+            crate::memory_api::MemoryService::deactivate_session_at_path(
+                &memory,
+                provider.as_str(),
+                &input.session_id,
+            );
+        }
+    }
     if kind == GeminiHookKind::SessionStart {
         output.system_message = crate::updater::take_update_notice();
     }
@@ -132,8 +139,11 @@ fn handle_hook(
     {
         let memory = crate::integrations::mcp_index::shared_memory_root(_root);
         if memory.exists() {
-            crate::conversation_state::ConversationStateStore::open_under(&memory)
-                .note_active_session(provider.as_str(), &input.session_id);
+            crate::memory_api::MemoryService::note_active_session_at_path(
+                &memory,
+                provider.as_str(),
+                &input.session_id,
+            );
         }
     }
     if kind == GeminiHookKind::SessionStart {

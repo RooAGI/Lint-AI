@@ -2,7 +2,9 @@
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
 use crate::index::ClaimStatus;
-use crate::pipeline::{PipelineOptions, Tier1NerProvider};
+use crate::pipeline::PipelineOptions;
+#[cfg(test)]
+use crate::pipeline::Tier1NerProvider;
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::{QueryEvidenceOrder, QueryEvidenceRelation};
 use crate::segments::relations::{
@@ -296,6 +298,7 @@ pub struct MemoryService {
     /// need to reopen or recompose either backing store.
     published_search_view: Option<Arc<std::sync::RwLock<Arc<MemoryService>>>>,
     superseded_ids: HashSet<(String, String)>,
+    has_expiring_documents: bool,
     request_fingerprints: HashMap<(String, String), String>,
     /// Cached write-adjudication receipts by (user_id, request_id), so an
     /// idempotent retry returns the identical response including the receipt.
@@ -314,6 +317,15 @@ pub struct MemoryService {
     /// Agent bulletin-board state: per-board sequence counters and
     /// request-id dedup, all assigned under one lock by the single writer.
     board_state: Mutex<BoardState>,
+}
+
+#[derive(Debug, Serialize)]
+struct MutationAuditRecord<'a> {
+    recorded_at_ms: u64,
+    action: &'a str,
+    user_id: &'a str,
+    request_id: Option<&'a str>,
+    memory_ids: &'a [String],
 }
 
 /// Mutable bulletin-board state owned by the single writer process.
@@ -417,6 +429,45 @@ fn run_key_phrase_extraction_bounded(
 }
 
 impl MemoryService {
+    /// Record the provider session associated with the next implicit MCP
+    /// search. Hook adapters call this service entry point rather than writing
+    /// the conversation-state sidecar directly. The caller decides whether a
+    /// memory store already exists, so lifecycle hooks do not create one just
+    /// to record a session pointer.
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "roo-runtime"
+    ))]
+    pub(crate) fn note_active_session_at_path(
+        index_root: impl AsRef<Path>,
+        provider: &str,
+        session_id: &str,
+    ) {
+        crate::conversation_state::ConversationStateStore::open_under(index_root.as_ref())
+            .note_active_session(provider, session_id);
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "roo-runtime"
+    ))]
+    pub(crate) fn deactivate_session_at_path(
+        index_root: impl AsRef<Path>,
+        provider: &str,
+        session_id: &str,
+    ) {
+        crate::conversation_state::ConversationStateStore::open_under(index_root.as_ref())
+            .deactivate_session(provider, session_id);
+    }
+
     /// Extract key phrases for the given documents. Associated function
     /// (not a method) so the server can run it with no service lock held:
     /// it is slow (subprocess with its own timeout) and holding the lock
@@ -487,8 +538,13 @@ fn relations_fingerprint(docs: &[&SourceDocument]) -> u64 {
         doc.timestamp.hash(&mut hasher);
         // BTreeMap iteration is sorted, so the filter map hashes
         // deterministically; visibility-relevant metadata is part of the
-        // fingerprint.
+        // fingerprint. The store-generated recorded-at field is deliberately
+        // excluded: it does not affect relation extraction or visibility and
+        // differs across equivalent store rebuilds.
         for (key, value) in &doc.filters {
+            if key == "membrick_recorded_at" {
+                continue;
+            }
             key.hash(&mut hasher);
             value.hash(&mut hasher);
         }
@@ -593,7 +649,9 @@ fn structured_fact_results(
     // Personal relationships are served from native claims written with each
     // DocRecord. This keeps retrieval in the normal write/query lifecycle.
     if let Some(results) = native_relationship_results(store, superseded_ids, request) {
-        return results;
+        if !results.is_empty() {
+            return results;
+        }
     }
     // Classify before building: only structured fact questions pay for the
     // extractor subprocess. (query_structured re-analyzes; the classifier
@@ -994,14 +1052,76 @@ impl MemoryService {
         }
     }
 
+    /// Append a content-free durable event for a memory API mutation. This
+    /// journal records identifiers and operation metadata, never memory text.
+    fn append_mutation_audit(
+        &self,
+        action: &str,
+        user_id: &str,
+        request_id: Option<&str>,
+        memory_ids: &[String],
+    ) -> anyhow::Result<()> {
+        let Some(receipts_path) = self.receipts_path.as_ref() else {
+            return Ok(());
+        };
+        let record = MutationAuditRecord {
+            recorded_at_ms: unix_time_ms(),
+            action,
+            user_id,
+            request_id,
+            memory_ids,
+        };
+        let result = (|| -> std::io::Result<()> {
+            use std::io::Write;
+            let path = receipts_path.with_file_name("mutations.jsonl");
+            let mut line = serde_json::to_vec(&record).map_err(std::io::Error::other)?;
+            line.push(b'\n');
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).append(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(path)?;
+            file.write_all(&line)?;
+            file.sync_all()
+        })();
+        result.map_err(|error| {
+            anyhow::anyhow!("failed to append durable memory mutation audit: {error}")
+        })
+    }
+
+    /// Record a provider-hook capture after its documents have been published.
+    /// Kept on `MemoryService` so integrations never write the journal directly.
+    pub(crate) fn record_capture_mutation(
+        &self,
+        provider: &str,
+        user_id: &str,
+        session_id: &str,
+        memory_ids: &[String],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !memory_ids.is_empty(),
+            "capture audit requires document IDs"
+        );
+        let action = format!("capture:{provider}");
+        self.append_mutation_audit(&action, user_id, Some(session_id), memory_ids)?;
+        Ok(())
+    }
+
     pub(crate) fn new(store: IndexStore) -> Self {
         // Eagerly load the WordNet/ConceptNet lexical expansion store at
         // service creation, not on the first query. The store is a
         // process-wide OnceLock; lazy init costs ~2s (decompress + parse
         // 2.3MB gzipped JSON) on the first query's hot path.
         crate::preload_lexical_store();
-        let superseded_ids = store
-            .source_documents()
+        let source_documents = store.source_documents();
+        let has_expiring_documents = source_documents
+            .iter()
+            .any(|doc| doc.filters.contains_key("expires_at_ms"));
+        let superseded_ids = source_documents
+            .iter()
             .into_iter()
             .filter_map(|doc| {
                 Some((
@@ -1010,8 +1130,7 @@ impl MemoryService {
                 ))
             })
             .collect();
-        let request_fingerprints = store
-            .source_documents()
+        let request_fingerprints = source_documents
             .into_iter()
             .filter_map(|doc| {
                 let persisted = doc.filters.get("request_fingerprint")?;
@@ -1035,6 +1154,7 @@ impl MemoryService {
             workspace_store: None,
             published_search_view: None,
             superseded_ids,
+            has_expiring_documents,
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -1372,6 +1492,12 @@ impl MemoryService {
         self.attach_receipt(&mut response, request_key, &doc_ids);
         if !doc_ids.is_empty() {
             self.persist_receipts(&[(response.user_id.clone(), response.request_id.clone())]);
+            self.append_mutation_audit(
+                "add",
+                &response.user_id,
+                Some(&response.request_id),
+                &doc_ids,
+            )?;
         }
         Ok(response)
     }
@@ -1400,12 +1526,23 @@ impl MemoryService {
             .filter(|(_, doc_ids)| !doc_ids.is_empty())
             .map(|(request_key, _)| request_key.clone())
             .collect();
+        let audit_inputs = receipt_inputs.clone();
         for (response, (request_key, doc_ids)) in
             responses.iter_mut().zip(receipt_inputs.into_iter())
         {
             self.attach_receipt(response, request_key, &doc_ids);
         }
         self.persist_receipts(&new_receipt_keys);
+        for (response, (_, doc_ids)) in responses.iter().zip(audit_inputs.iter()) {
+            if !doc_ids.is_empty() {
+                self.append_mutation_audit(
+                    "add",
+                    &response.user_id,
+                    Some(&response.request_id),
+                    doc_ids,
+                )?;
+            }
+        }
         Ok(responses)
     }
 
@@ -1446,6 +1583,90 @@ impl MemoryService {
         doc_id: &str,
     ) -> crate::semantic_relations::DocumentSemanticState {
         self.store.semantic_document_state(doc_id)
+    }
+
+    /// Return temporal facts whose validity interval includes `date`.
+    /// `recorded_at` on each fact records when Membrick learned it, while
+    /// `valid_from` and `valid_to` describe when it was true in the world.
+    pub fn temporal_facts_as_of(&self, date: &str) -> Vec<crate::TemporalFact> {
+        self.store
+            .temporal_facts_as_of(date)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Return the facts Membrick would have considered true on `valid_date`,
+    /// using only evidence recorded by `recorded_at`. The latter accepts an
+    /// RFC 3339 timestamp or a date in `YYYY-MM-DD` form.
+    pub fn temporal_facts_as_known_at(
+        &self,
+        valid_date: &str,
+        recorded_at: &str,
+    ) -> Vec<crate::TemporalFact> {
+        self.store
+            .temporal_facts_as_known_at(valid_date, recorded_at)
+    }
+
+    /// Return the temporal history for a subject, ordered by valid time.
+    pub fn temporal_timeline(&self, subject: &str) -> Vec<crate::TemporalFact> {
+        self.store
+            .temporal_timeline(subject)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Return facts in the half-open temporal range `[start, end)`.
+    pub fn temporal_events_between(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Vec<(crate::TemporalFact, chrono::NaiveDate)> {
+        self.store
+            .temporal_events_between(start, end)
+            .into_iter()
+            .map(|event| (event.fact.clone(), event.date))
+            .collect()
+    }
+
+    /// Return temporal facts around an anchor date, with their resolved dates.
+    pub fn temporal_timeline_window_around(
+        &self,
+        anchor: &str,
+        before: usize,
+        after: usize,
+    ) -> Vec<(crate::TemporalFact, chrono::NaiveDate)> {
+        self.store
+            .temporal_timeline_window_around(anchor, before, after)
+            .into_iter()
+            .map(|event| (event.fact.clone(), event.date))
+            .collect()
+    }
+
+    /// Return adjacent fact pairs in `[start, end)`, optionally limited by
+    /// the maximum gap in days.
+    pub fn temporal_adjacent_pairs_between(
+        &self,
+        start: &str,
+        end: &str,
+        max_gap_days: Option<i64>,
+    ) -> Vec<(
+        (crate::TemporalFact, chrono::NaiveDate),
+        (crate::TemporalFact, chrono::NaiveDate),
+        i64,
+    )> {
+        self.store
+            .temporal_adjacent_pairs_between(start, end, max_gap_days)
+            .into_iter()
+            .map(|pair| {
+                (
+                    (pair.first.fact.clone(), pair.first.date),
+                    (pair.second.fact.clone(), pair.second.date),
+                    pair.gap_days,
+                )
+            })
+            .collect()
     }
 
     /// Rebuilds a write-adjudication receipt for a request whose documents
@@ -1492,7 +1713,7 @@ impl MemoryService {
                 predicate: c.predicate.clone(),
                 object: c.object.clone(),
                 scope: c.scope.clone(),
-                evidence: c.evidence.clone(),
+                evidence: self.linked_turn_evidence(c),
             })
             .collect();
         let mut decisions = Vec::new();
@@ -1549,6 +1770,30 @@ impl MemoryService {
             decisions,
             retired_doc_ids,
         }
+    }
+
+    /// Keep the context document's claim text while pointing to the exact
+    /// stored turn span when that evidence appears verbatim in a linked turn.
+    /// The existing receipt string carries the citation, so no parallel
+    /// evidence DTO is needed.
+    fn linked_turn_evidence(&self, claim: &crate::semantic_relations::SemanticClaim) -> String {
+        let Some(context) = self.store.source_document_by_id(&claim.source_doc_id) else {
+            return claim.evidence.clone();
+        };
+        for turn_id in &context.links {
+            let Some(turn) = self.store.source_document_by_id(turn_id) else {
+                continue;
+            };
+            let Some(start) = turn.content.find(&claim.evidence) else {
+                continue;
+            };
+            let end = start + claim.evidence.len();
+            return format!(
+                "{} [turn evidence: {} bytes {}..{}]",
+                claim.evidence, turn.doc_id, start, end
+            );
+        }
+        claim.evidence.clone()
     }
 
     fn prepare_add(&self, request: &AddRequest) -> anyhow::Result<(String, Vec<SourceDocument>)> {
@@ -1709,14 +1954,27 @@ impl MemoryService {
                 }
             }
         }
-        let results = self.search_with_filters(
-            &request.query,
-            &scope,
-            request.session_id.as_deref(),
-            request.top_k,
-            &filters,
-            request.reference_date.as_deref(),
-        )?;
+        let results = if self.requires_visibility_allow_list() {
+            let allowed_doc_ids = self.visible_doc_ids_matching(&filters);
+            self.search_with_filters_restricted(
+                &request.query,
+                &scope,
+                request.session_id.as_deref(),
+                request.top_k,
+                &filters,
+                request.reference_date.as_deref(),
+                &allowed_doc_ids,
+            )?
+        } else {
+            self.search_with_filters(
+                &request.query,
+                &scope,
+                request.session_id.as_deref(),
+                request.top_k,
+                &filters,
+                request.reference_date.as_deref(),
+            )?
+        };
         Ok(self.format_search_response(results))
     }
 
@@ -1746,14 +2004,27 @@ impl MemoryService {
                 }
             }
         }
-        let results = self.search_with_filters_cached(
-            &request.query,
-            &scope,
-            request.session_id.as_deref(),
-            request.top_k,
-            &filters,
-            request.reference_date.as_deref(),
-        )?;
+        let results = if self.requires_visibility_allow_list() {
+            let allowed_doc_ids = self.visible_doc_ids_matching(&filters);
+            self.search_with_filters_cached_and_allowed_doc_ids(
+                &request.query,
+                &scope,
+                request.session_id.as_deref(),
+                request.top_k,
+                &filters,
+                request.reference_date.as_deref(),
+                Some(&allowed_doc_ids),
+            )?
+        } else {
+            self.search_with_filters_cached(
+                &request.query,
+                &scope,
+                request.session_id.as_deref(),
+                request.top_k,
+                &filters,
+                request.reference_date.as_deref(),
+            )?
+        };
         Ok(self.format_search_response(results))
     }
 
@@ -1858,6 +2129,12 @@ impl MemoryService {
         document.key_phrase_extraction_hash = String::new();
         self.upsert(document);
         self.flush()?;
+        self.append_mutation_audit(
+            "update",
+            &request.user_id,
+            None,
+            &[request.memory_id.clone()],
+        )?;
         Ok(self
             .store
             .source_document_by_id(&request.memory_id)
@@ -1876,6 +2153,30 @@ impl MemoryService {
             .and_then(|value| value.parse::<u64>().ok())
             .is_none_or(|expires_at| expires_at > unix_time_ms());
         not_superseded && not_expired
+    }
+
+    fn requires_visibility_allow_list(&self) -> bool {
+        // Keep expired and API-superseded documents out before ranking when
+        // either lifecycle feature is present. Ordinary stores can use the
+        // index's exact-filter bitmap without materializing every visible ID.
+        self.has_expiring_documents || !self.superseded_ids.is_empty()
+    }
+
+    fn visible_doc_ids_matching(&self, filters: &BTreeMap<String, String>) -> HashSet<String> {
+        self.store
+            .source_documents()
+            .into_iter()
+            .filter(|document| {
+                self.is_visible(document)
+                    && filters.iter().all(|(key, value)| {
+                        document
+                            .filters
+                            .get(key)
+                            .is_some_and(|actual| actual == value)
+                    })
+            })
+            .map(|document| document.doc_id.clone())
+            .collect()
     }
 
     /// The single search implementation. ALL retrieval goes through this
@@ -1909,6 +2210,29 @@ impl MemoryService {
         self.backfill_key_phrases();
         self.flush()?;
         self.search_with_filters_cached(query, scope, session_id, top_k, filters, reference_date)
+    }
+
+    fn search_with_filters_restricted(
+        &mut self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+        filters: &BTreeMap<String, String>,
+        reference_date: Option<&str>,
+        allowed_doc_ids: &HashSet<String>,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        self.backfill_key_phrases();
+        self.flush()?;
+        self.search_with_filters_cached_and_allowed_doc_ids(
+            query,
+            scope,
+            session_id,
+            top_k,
+            filters,
+            reference_date,
+            Some(allowed_doc_ids),
+        )
     }
 
     /// Session tag link expansion (Luyi 2026-10-07).
@@ -2091,10 +2415,31 @@ impl MemoryService {
         filters: &BTreeMap<String, String>,
         reference_date: Option<&str>,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
+        self.search_with_filters_cached_and_allowed_doc_ids(
+            query,
+            scope,
+            session_id,
+            top_k,
+            filters,
+            reference_date,
+            None,
+        )
+    }
+
+    fn search_with_filters_cached_and_allowed_doc_ids(
+        &self,
+        query: &str,
+        scope: &str,
+        session_id: Option<&str>,
+        top_k: usize,
+        filters: &BTreeMap<String, String>,
+        reference_date: Option<&str>,
+        additional_allowed_doc_ids: Option<&HashSet<String>>,
+    ) -> anyhow::Result<Vec<crate::SearchResult>> {
         // Prepare the question once. Session follow-ups must be resolved from
         // the raw question before PreparedQuery derives its analysis and
         // augmented lexical search text.
-        let mut prepared = if session_id.is_none() {
+        let prepared = if session_id.is_none() {
             // Reference date (Luyi 2026-10-09): when supplied, relative
             // temporal language resolves against it instead of the clock.
             match reference_date {
@@ -2133,9 +2478,17 @@ impl MemoryService {
         } else {
             top_k
         };
-        let mut lexical = self
-            .store
-            .query_prepared_cached(&prepared, depth, filters)?;
+        let mut lexical = match additional_allowed_doc_ids {
+            Some(allowed_doc_ids) => self.store.query_prepared_cached_with_allowed_doc_ids(
+                &prepared,
+                depth,
+                filters,
+                allowed_doc_ids,
+            )?,
+            None => self
+                .store
+                .query_prepared_cached(&prepared, depth, filters)?,
+        };
         if do_rerank {
             let entities = session_resolved_entities(
                 &self.conversation_states,
@@ -2240,6 +2593,10 @@ impl MemoryService {
             .unwrap_or_else(|| Arc::clone(&workspace.conversation_states));
         let mut superseded_ids = workspace.superseded_ids.clone();
         let mut request_fingerprints = workspace.request_fingerprints.clone();
+        let has_expiring_documents = workspace.has_expiring_documents
+            || provider_memory
+                .as_ref()
+                .is_some_and(|service| service.has_expiring_documents);
         if let Some(provider) = &provider_memory {
             superseded_ids.extend(provider.superseded_ids.iter().cloned());
             request_fingerprints.extend(
@@ -2261,6 +2618,7 @@ impl MemoryService {
             workspace_store: None,
             published_search_view: None,
             superseded_ids,
+            has_expiring_documents,
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -2349,14 +2707,123 @@ impl MemoryService {
     /// such as `supersede` use the store directly: the content is
     /// unchanged, so re-queuing would only redo identical extraction.
     pub fn upsert(&mut self, document: crate::SourceDocument) {
+        self.has_expiring_documents |= document.filters.contains_key("expires_at_ms");
         self.queue_key_phrase_enrichment(std::slice::from_ref(&document));
         self.store.upsert(document)
+    }
+
+    /// Reconcile a whole-session context document against earlier session
+    /// contexts from the same provider and project. Existing documents from
+    /// this session are attached as turn evidence through `SourceDocument::links`;
+    /// claims and cross-session decisions continue to use the normal semantic
+    /// relation refresh and its existing adjudication receipt.
+    pub fn reconcile_session_context(
+        &mut self,
+        mut context: crate::SourceDocument,
+    ) -> anyhow::Result<WriteAdjudicationReceipt> {
+        let provider = context
+            .filters
+            .get("provider")
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("session context requires a provider"))?;
+        let project_id = context
+            .filters
+            .get("project_id")
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("session context requires a project_id"))?;
+        let session_id = context
+            .filters
+            .get("session_id")
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("session context requires a session_id"))?;
+        anyhow::ensure!(
+            context.filters.get("document_type").map(String::as_str) == Some("session-context"),
+            "document_type must be session-context"
+        );
+        anyhow::ensure!(
+            !context.content.trim().is_empty(),
+            "session context is empty"
+        );
+
+        let mut turn_docs = self
+            .store
+            .source_documents()
+            .into_iter()
+            .filter(|document| {
+                document.doc_id != context.doc_id
+                    && document.filters.get("provider") == Some(&provider)
+                    && document.filters.get("project_id") == Some(&project_id)
+                    && document.filters.get("session_id") == Some(&session_id)
+            })
+            .collect::<Vec<_>>();
+        turn_docs.sort_by(|left, right| {
+            let left_order = left
+                .filters
+                .get("observation_index")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            let right_order = right
+                .filters
+                .get("observation_index")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
+            left_order
+                .cmp(&right_order)
+                .then_with(|| left.timestamp.cmp(&right.timestamp))
+                .then_with(|| left.doc_id.cmp(&right.doc_id))
+        });
+        anyhow::ensure!(
+            !turn_docs.is_empty(),
+            "session context has no matching turn evidence documents"
+        );
+        let mut reconciled_doc_ids = Vec::with_capacity(turn_docs.len() + 1);
+        for turn in turn_docs {
+            if !context.links.iter().any(|link| link == &turn.doc_id) {
+                context.links.push(turn.doc_id.clone());
+            }
+            reconciled_doc_ids.push(turn.doc_id.clone());
+        }
+
+        let context_id = context.doc_id.clone();
+        self.upsert(context);
+        self.refresh_index()?;
+        reconciled_doc_ids.push(context_id.clone());
+        Ok(self.build_adjudication_receipt(
+            format!("session:{provider}:{project_id}:{session_id}"),
+            &reconciled_doc_ids,
+        ))
     }
 
     /// Replace a host-owned capture group, removing obsolete chunks on replay.
     /// Call under the workspace write lock. The replacement filter must match
     /// every new document; an empty filter is never a whole-store delete.
     pub fn replace_source_group(
+        &mut self,
+        key: &str,
+        value: &str,
+        documents: Vec<crate::SourceDocument>,
+    ) -> anyhow::Result<()> {
+        self.replace_source_group_unpublished(key, value, documents)?;
+        self.refresh_index()
+    }
+
+    /// Replace capture documents and reconcile their linked session context in
+    /// one service mutation, publishing only after the final graph is rebuilt.
+    pub(crate) fn replace_session_capture(
+        &mut self,
+        key: &str,
+        value: &str,
+        documents: Vec<crate::SourceDocument>,
+        context: crate::SourceDocument,
+    ) -> anyhow::Result<WriteAdjudicationReceipt> {
+        self.replace_source_group_unpublished(key, value, documents)?;
+        self.reconcile_session_context(context)
+    }
+
+    fn replace_source_group_unpublished(
         &mut self,
         key: &str,
         value: &str,
@@ -2393,7 +2860,7 @@ impl MemoryService {
         for document in documents {
             self.upsert(document);
         }
-        self.refresh_index()
+        Ok(())
     }
 
     /// Reconcile the workspace-file corpus after the resident server watcher
@@ -3038,11 +3505,9 @@ impl MemoryService {
         self.store.source_documents()
     }
 
-    /// Stateless plain query for integration read paths (recall).
-    /// Runs the service query pipeline with no session: identical to the raw
-    /// store's `query`, with no conversation state read or recorded. Hook
-    /// retrieval uses [`MemoryService::observe_plain_query`] instead so hook
-    /// turns contribute session state.
+    /// Stateless query for integration read paths (recall).
+    /// Runs the shared service query pipeline with no session state read or
+    /// recorded.
     #[cfg(any(
         feature = "claude-code",
         feature = "codex",
@@ -3078,6 +3543,20 @@ impl MemoryService {
         }
     }
 
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "roo-runtime"
+    ))]
+    pub(crate) fn deactivate_session(&self, provider: &str, session_id: &str) {
+        if let Ok(store) = self.conversation_states.lock() {
+            store.deactivate_session(provider, session_id);
+        }
+    }
+
     /// The session most recently marked active for `provider`, or `None`
     /// when there is none, it is unreadable, or it is stale. Never fails:
     /// every problem degrades to stateless search.
@@ -3096,13 +3575,11 @@ impl MemoryService {
             .current_session_id(provider)
     }
 
-    /// Plain query that records the turn into the session's conversation
-    /// state without rewriting it. Hook retrieval uses this: hooks inject
-    /// background context rather than answering a conversational turn, so
-    /// they contribute state (what was asked, what was returned, entity
-    /// mentions) for later follow-up resolution without consuming it.
-    /// A blank session id degrades to stateless; hooks fail open and never
-    /// reject.
+    /// Search for hook context through the shared retrieval pipeline and
+    /// record the turn into its session state. Hooks inject background
+    /// context rather than answering a conversational turn, but still use
+    /// the same query preparation, reranking, facts, and semantic policy as
+    /// MCP search. A blank session id degrades to stateless.
     #[cfg(any(
         feature = "claude-code",
         feature = "codex",
@@ -3111,27 +3588,21 @@ impl MemoryService {
         feature = "muse-code",
         feature = "roo-runtime"
     ))]
-    pub(crate) fn observe_plain_query(
+    pub(crate) fn search_for_hook(
         &mut self,
         query: &str,
         scope: &str,
         session_id: Option<&str>,
         top_k: usize,
     ) -> anyhow::Result<Vec<crate::SearchResult>> {
-        let session_id = session_id.filter(|id| !id.trim().is_empty());
-        let prepared = PreparedQuery::new(query);
-        let results = self
-            .store
-            .query_prepared(&prepared, top_k, &BTreeMap::new())?;
-        observe_session_search(
-            &self.conversation_states,
-            scope,
-            session_id,
+        self.search_with_filters(
             query,
-            &prepared,
-            &results,
-        );
-        Ok(results)
+            scope,
+            session_id.filter(|id| !id.trim().is_empty()),
+            top_k,
+            &BTreeMap::new(),
+            None,
+        )
     }
 
     /// Raw record access for tests asserting on capture idempotency and
@@ -3145,77 +3616,6 @@ impl MemoryService {
     #[cfg(test)]
     pub(crate) fn memory_index_snapshot(&self) -> Option<&crate::pipeline::MemoryIndexSnapshot> {
         self.store.memory_index_snapshot()
-    }
-
-    /// Preferred-document selection for hook retrieval: one document per
-    /// `session_id`, preferring `session-summary` over `outcome` over
-    /// `checkpoint`, ties broken by timestamp. Ranked hits are deduplicated
-    /// by session and rewritten to the preferred record's identity.
-    /// This is the shared implementation of the logic previously duplicated
-    /// in the Claude Code and Codex hook modules.
-    #[cfg(any(feature = "claude-code", feature = "codex"))]
-    pub(crate) fn select_session_documents(
-        &self,
-        results: Vec<crate::SearchResult>,
-        limit: usize,
-    ) -> Vec<crate::SearchResult> {
-        use std::collections::{HashMap, HashSet};
-        fn document_type_priority(document_type: &str) -> u8 {
-            match document_type {
-                "session-summary" => 3,
-                "outcome" => 2,
-                "checkpoint" => 1,
-                _ => 0,
-            }
-        }
-        let mut preferred = HashMap::<String, (u8, &crate::index::DocRecord)>::new();
-        for record in self.store.records() {
-            let Some(session) = record.filters.get("session_id") else {
-                continue;
-            };
-            let priority = document_type_priority(
-                record
-                    .filters
-                    .get("document_type")
-                    .map(String::as_str)
-                    .unwrap_or_default(),
-            );
-            match preferred.get(session) {
-                Some((current_priority, current))
-                    if (*current_priority, current.timestamp.as_deref())
-                        >= (priority, record.timestamp.as_deref()) => {}
-                _ => {
-                    preferred.insert(session.clone(), (priority, record));
-                }
-            }
-        }
-
-        let mut seen_sessions = HashSet::new();
-        let mut selected = Vec::new();
-        for mut result in results {
-            let Some(record) = self.store.record_by_id(&result.doc_id) else {
-                continue;
-            };
-            let session = record
-                .filters
-                .get("session_id")
-                .cloned()
-                .or_else(|| result.group_id.clone())
-                .unwrap_or_else(|| result.doc_id.clone());
-            if !seen_sessions.insert(session.clone()) {
-                continue;
-            }
-            if let Some((_, preferred_record)) = preferred.get(&session) {
-                result.doc_id = preferred_record.doc_id.clone();
-                result.source = preferred_record.source.clone();
-                result.group_id = preferred_record.group_id.clone();
-            }
-            selected.push(result);
-            if selected.len() == limit {
-                break;
-            }
-        }
-        selected
     }
 
     /// Number of source documents in the index, for the MCP info tool.
@@ -3234,9 +3634,10 @@ impl MemoryService {
     ))]
     pub(crate) fn search_results_payload(
         &self,
+        query: &str,
         results: Vec<crate::SearchResult>,
     ) -> serde_json::Value {
-        crate::integrations::mcp_tools::search_results(self, results)
+        crate::integrations::mcp_tools::search_results_for_query(self, query, results)
     }
 
     #[cfg(any(
@@ -3257,8 +3658,8 @@ impl MemoryService {
     ) -> anyhow::Result<serde_json::Value> {
         let results =
             self.search_with_filters_cached(query, scope, session_id, top_k, filters, None)?;
-        Ok(crate::integrations::mcp_tools::search_results(
-            self, results,
+        Ok(crate::integrations::mcp_tools::search_results_for_query(
+            self, query, results,
         ))
     }
 
@@ -3319,8 +3720,27 @@ impl MemoryService {
         self.drain_enrichment_inbox();
         self.drop_enrichment_for_doc(doc_id);
         self.store.remove(doc_id);
+        self.rebuild_superseded_ids();
         self.flush()?;
+        self.append_mutation_audit("delete", user_id, None, &[doc_id.to_string()])?;
         Ok(true)
+    }
+
+    /// Rebuild API supersession state from surviving replacement records.
+    /// This keeps deletion and expiration behavior consistent with reopening
+    /// the store, where this same state is reconstructed from persisted rows.
+    fn rebuild_superseded_ids(&mut self) {
+        self.superseded_ids = self
+            .store
+            .source_documents()
+            .into_iter()
+            .filter_map(|document| {
+                Some((
+                    document.filters.get(USER_FILTER)?.clone(),
+                    document.filters.get("supersedes_id")?.clone(),
+                ))
+            })
+            .collect();
     }
 
     /// Mark an existing memory as replacing another memory in the same user scope.
@@ -3349,6 +3769,12 @@ impl MemoryService {
         // written directly without re-queuing key-phrase enrichment.
         self.store.upsert(replacement);
         self.flush()?;
+        self.append_mutation_audit(
+            "supersede",
+            user_id,
+            None,
+            &[replacement_id.to_string(), old_id.to_string()],
+        )?;
         Ok(true)
     }
 
@@ -3374,7 +3800,9 @@ impl MemoryService {
             self.store.remove(id);
         }
         if !ids.is_empty() {
+            self.rebuild_superseded_ids();
             self.flush()?;
+            self.append_mutation_audit("expire", user_id, None, &ids)?;
         }
         Ok(ids.len())
     }
@@ -3594,6 +4022,57 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_memories_do_not_need_a_visibility_allow_list() {
+        let mut service = service();
+        assert!(!service.requires_visibility_allow_list());
+        service
+            .add(AddRequest {
+                request_id: "expiring-memory".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "temporary deployment decision".into(),
+                    expires_at_ms: Some(u64::MAX),
+                    supersedes_id: None,
+                }],
+                user_id: "user-a".into(),
+                session_id: "session-a".into(),
+            })
+            .unwrap();
+        assert!(service.requires_visibility_allow_list());
+    }
+
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "roo-runtime"
+    ))]
+    #[test]
+    fn hook_session_pointer_is_written_through_memory_service() {
+        let root = canonical_temp_dir("hook-session-service");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        MemoryService::note_active_session_at_path(&root, "claude", "session-service-test");
+
+        let service = MemoryService::at_path(&root, PipelineOptions::default()).unwrap();
+        assert_eq!(
+            service.current_session_id("claude").as_deref(),
+            Some("session-service-test")
+        );
+        MemoryService::note_active_session_at_path(&root, "claude", "parallel-session");
+        assert_eq!(service.current_session_id("claude"), None);
+        MemoryService::deactivate_session_at_path(&root, "claude", "session-service-test");
+        assert_eq!(
+            service.current_session_id("claude").as_deref(),
+            Some("parallel-session")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn add_preserves_memories_with_colliding_legacy_identifiers() {
         for ((owner_a, request_a), (owner_b, request_b)) in [
             (("alice", "team:r1"), ("alice:team", "r1")),
@@ -3716,7 +4195,7 @@ mod tests {
                 supersedes_id: None,
             }],
         };
-        let legacy_id = crate::stable_doc_id_from_source("alice:team:r1:0");
+        let legacy_id = crate::ids::stable_doc_id_from_source("alice:team:r1:0");
         {
             let mut service = MemoryService::at_path(&dir, PipelineOptions::default()).unwrap();
             let mut legacy = direct_doc(&legacy_id, "user: original memory");
@@ -3751,6 +4230,61 @@ mod tests {
             service.add(request).unwrap();
             assert_eq!(service.store.source_documents().len(), 2);
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn persistent_api_mutations_write_content_free_audit_entries() {
+        let dir = canonical_temp_dir("memory-mutation-audit");
+        let mut service = MemoryService::at_path(&dir, PipelineOptions::default()).unwrap();
+        let request_id = "audit-request";
+        let content = "private decision text";
+        service
+            .add(AddRequest {
+                request_id: request_id.into(),
+                user_id: "alice".into(),
+                session_id: "audit-session".into(),
+                messages: vec![Message {
+                    role: "assistant".into(),
+                    timestamp: None,
+                    content: content.into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+            })
+            .unwrap();
+        let memory_id = memory_document_id("alice", request_id, 0);
+        service
+            .update(UpdateRequest {
+                user_id: "alice".into(),
+                memory_id: memory_id.clone(),
+                content: "updated private decision text".into(),
+                role: None,
+                timestamp: None,
+                expires_at_ms: None,
+            })
+            .unwrap();
+        assert!(service.delete("alice", &memory_id).unwrap());
+        service
+            .record_capture_mutation("claude", "mcp", "capture-session", &["capture-doc".into()])
+            .unwrap();
+
+        let journal = std::fs::read_to_string(dir.join("mutations.jsonl")).unwrap();
+        let records: Vec<serde_json::Value> = journal
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0]["action"], "add");
+        assert_eq!(records[0]["request_id"], request_id);
+        assert_eq!(records[1]["action"], "update");
+        assert_eq!(records[1]["memory_ids"][0], memory_id);
+        assert_eq!(records[2]["action"], "delete");
+        assert!(records[2]["memory_ids"][0] == memory_id);
+        assert_eq!(records[3]["action"], "capture:claude");
+        assert_eq!(records[3]["request_id"], "capture-session");
+        assert_eq!(records[3]["memory_ids"][0], "capture-doc");
+        assert!(!journal.contains(content));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -3849,6 +4383,7 @@ mod tests {
                 reference_date: None,
             })
             .unwrap();
+        assert!(!response.data.is_empty(), "the positive control must match");
         assert!(response
             .data
             .iter()
@@ -4055,6 +4590,52 @@ mod tests {
             .unwrap();
         assert!(response.data.is_empty());
         assert!(!service.delete("user-a", "missing").unwrap());
+    }
+
+    #[test]
+    fn expired_high_ranked_memory_does_not_consume_top_k_slot() {
+        let mut service = service();
+        for (request_id, content, expires_at_ms) in [
+            (
+                "live",
+                "phoenix deployment uses a stable canary rollout",
+                None,
+            ),
+            (
+                "expired",
+                "phoenix deployment uses a stable canary rollout with stale archive marker",
+                Some(1),
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: content.into(),
+                        expires_at_ms,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: "session-a".into(),
+                })
+                .unwrap();
+        }
+        let response = service
+            .search(SearchRequest {
+                query: "phoenix deployment stable canary rollout stale archive marker".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 1,
+                session_id: None,
+                scope: None,
+                filters: None,
+                reference_date: None,
+            })
+            .unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id, memory_document_id("user-a", "live", 0));
     }
 
     #[test]
@@ -4548,7 +5129,7 @@ mod tests {
     #[test]
     fn supersession_is_scoped_to_the_requesting_user() {
         let mut service = service();
-        let old_id = crate::stable_doc_id_from_source("old:0");
+        let old_id = memory_document_id("user-a", "old", 0);
         service
             .add(AddRequest {
                 request_id: "old".into(),
@@ -4592,6 +5173,63 @@ mod tests {
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("shared deployment"));
+    }
+
+    #[test]
+    fn deleting_replacement_restores_predecessor_visibility_immediately() {
+        let dir = canonical_temp_dir("delete-replacement-restores-predecessor");
+        let mut service = MemoryService::at_path(&dir, PipelineOptions::default()).unwrap();
+        let old_id = memory_document_id("alice", "old", 0);
+        service
+            .add(AddRequest {
+                request_id: "old".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "the deployment uses blue-green releases".into(),
+                    expires_at_ms: None,
+                    supersedes_id: None,
+                }],
+                user_id: "alice".into(),
+                session_id: "session".into(),
+            })
+            .unwrap();
+        let replacement_id = memory_document_id("alice", "replacement", 0);
+        service
+            .add(AddRequest {
+                request_id: "replacement".into(),
+                messages: vec![Message {
+                    role: "user".into(),
+                    timestamp: None,
+                    content: "the deployment uses canary releases".into(),
+                    expires_at_ms: None,
+                    supersedes_id: Some(old_id.clone()),
+                }],
+                user_id: "alice".into(),
+                session_id: "session".into(),
+            })
+            .unwrap();
+
+        assert!(service
+            .get(GetRequest {
+                user_id: "alice".into(),
+                memory_id: old_id.clone(),
+                include_inactive: false,
+            })
+            .unwrap()
+            .is_none());
+        assert!(service.delete("alice", &replacement_id).unwrap());
+        assert!(service
+            .get(GetRequest {
+                user_id: "alice".into(),
+                memory_id: old_id,
+                include_inactive: false,
+            })
+            .unwrap()
+            .is_some());
+
+        drop(service);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -4987,7 +5625,7 @@ mod tests {
         feature = "roo-runtime"
     ))]
     #[test]
-    fn observe_plain_query_contributes_session_state_for_follow_ups() {
+    fn hook_query_uses_shared_search_and_contributes_follow_up_state() {
         // Enrichment disabled: this test exercises session state, and the
         // query-time backfill must not shell out to the real extractor here.
         let mut service = MemoryService::in_memory(PipelineOptions {
@@ -4999,7 +5637,7 @@ mod tests {
         // Hook-style retrieval: the query is not rewritten, but the turn is
         // recorded into the session state.
         let results = service
-            .observe_plain_query(
+            .search_for_hook(
                 "Tell me about the Quartz database",
                 "claude",
                 Some("hook-session"),
@@ -5007,6 +5645,19 @@ mod tests {
             )
             .unwrap();
         assert!(results.iter().any(|r| r.doc_id == "quartz-doc"));
+
+        let hook_follow_up = service
+            .search_for_hook(
+                "what are its limitations?",
+                "claude",
+                Some("hook-session"),
+                10,
+            )
+            .unwrap();
+        assert!(
+            hook_follow_up.iter().any(|r| r.doc_id == "quartz-doc"),
+            "hook retrieval should resolve follow-ups through the shared search pipeline"
+        );
 
         // A later MCP-style search in the same scope/session resolves the
         // follow-up against what the hook observed.
@@ -5029,7 +5680,7 @@ mod tests {
 
         // A blank hook session id degrades to stateless instead of failing.
         let blank = service
-            .observe_plain_query(
+            .search_for_hook(
                 "Tell me about the Quartz database",
                 "claude",
                 Some("  "),
@@ -5061,7 +5712,7 @@ mod tests {
             let mut service = MemoryService::at_path(&dir, options.clone()).unwrap();
             add_quartz_fixture(&mut service);
             service
-                .observe_plain_query(
+                .search_for_hook(
                     "Tell me about the Quartz database",
                     "claude",
                     Some("persist-s1"),
@@ -5213,6 +5864,14 @@ mod tests {
         );
         assert!(ordered_events[0].contains("Spring Sprint Triathlon"));
         assert!(ordered_events[1].contains("Midsummer 5K Run"));
+
+        let before_capture = service.temporal_facts_as_known_at("2023-06-10", "2000-01-01");
+        assert!(before_capture.is_empty());
+        let after_capture = service.temporal_facts_as_known_at("2023-06-10", "9999-01-01");
+        assert!(
+            !after_capture.is_empty(),
+            "temporal facts should be queryable through MemoryService after their record time"
+        );
     }
 
     use crate::segments::relations::{RawRelation, RelationIndex, RelationTurn};

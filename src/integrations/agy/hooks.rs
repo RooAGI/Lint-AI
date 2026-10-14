@@ -4,9 +4,6 @@ use crate::integrations::session_recording::{
     membrick_enabled, record_event_if_enabled, record_transcript_usage_if_available,
     RecordingProvider,
 };
-use crate::memory_api::MemoryService;
-use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
-use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -77,8 +74,11 @@ pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
     if !input.conversation_id.is_empty() {
         let memory = crate::integrations::mcp_index::shared_memory_root(&root);
         if memory.exists() {
-            crate::conversation_state::ConversationStateStore::open_under(&memory)
-                .note_active_session(RecordingProvider::Agy.as_str(), session_id);
+            crate::memory_api::MemoryService::note_active_session_at_path(
+                &memory,
+                RecordingProvider::Agy.as_str(),
+                session_id,
+            );
         }
     }
     if let Err(error) = record_event_if_enabled(
@@ -94,6 +94,16 @@ pub fn run_hook(kind: AgyHookKind, fallback_root: &Path) -> Result<()> {
         eprintln!("warning: Membrick AGY hook failed open: {error:#}");
         AgyHookOutput::default()
     });
+    if kind == AgyHookKind::Stop && !input.conversation_id.is_empty() {
+        let memory = crate::integrations::mcp_index::shared_memory_root(&root);
+        if memory.exists() {
+            crate::memory_api::MemoryService::deactivate_session_at_path(
+                &memory,
+                RecordingProvider::Agy.as_str(),
+                &input.conversation_id,
+            );
+        }
+    }
     if kind == AgyHookKind::PreToolUse {
         // AGY's PreToolUse schema accepts the decision field but does not
         // accept injectSteps. Memory injection belongs to PreInvocation.
@@ -289,46 +299,79 @@ fn extract_latest_user_prompt(transcript_path: &Path) -> Option<String> {
 
 fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> Result<()> {
     let content = std::fs::read_to_string(transcript_path)?;
-    let mut messages = Vec::new();
-    for line in content.lines() {
-        if line.trim().is_empty() {
+    let project_id = crate::ids::stable_doc_id_from_source(&root.to_string_lossy())
+        .trim_start_matches("doc:")
+        .to_string();
+    let mut observations = Vec::new();
+    let mut links = Vec::new();
+    let mut summary = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.is_empty() {
             continue;
         }
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            let step_type = value.get("type").and_then(Value::as_str).unwrap_or("");
-            if step_type == "USER_INPUT" {
-                if let Some(text) = value.get("content").and_then(Value::as_str) {
-                    let cleaned = clean_user_prompt(text);
-                    if !cleaned.is_empty() {
-                        messages.push(format!("User: {cleaned}"));
-                    }
-                }
-            } else if let Some(resp) = value.get("content").and_then(Value::as_str) {
-                if !resp.trim().is_empty() && step_type != "CHECKPOINT" {
-                    messages.push(format!("Assistant: {}", resp.trim()));
-                }
-            }
-        }
+        let value = serde_json::from_str::<Value>(line).ok();
+        let event_type = value
+            .as_ref()
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("raw-record");
+        let timestamp = value
+            .as_ref()
+            .and_then(|value| value.get("timestamp"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let record = format!("AGY transcript record {index} [{event_type}]\n{line}");
+        let source = format!("agy://{session_id}/observation/{index}");
+        let filters = std::collections::BTreeMap::from([
+            ("provider".to_string(), "agy".to_string()),
+            ("project_id".to_string(), project_id.clone()),
+            ("session_id".to_string(), session_id.to_string()),
+            (
+                "document_type".to_string(),
+                "session-observation".to_string(),
+            ),
+            ("observation_index".to_string(), index.to_string()),
+            ("speaker".to_string(), event_type.to_string()),
+        ]);
+        let document = crate::source::SourceDocument {
+            doc_id: crate::ids::stable_doc_id_from_source(&source),
+            source,
+            content: record.clone(),
+            concept: "session-observation".to_string(),
+            group_id: Some(format!("agy-session:{project_id}:{session_id}")),
+            headings: vec!["session-observation".to_string()],
+            links: vec![],
+            timestamp,
+            doc_length: record.len(),
+            author_agent: Some("agy".to_string()),
+            filters,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        };
+        links.push(document.doc_id.clone());
+        summary.push(record);
+        observations.push(document);
     }
-    if messages.is_empty() {
+    if observations.is_empty() {
         return Ok(());
     }
-    let body = messages.join("\n\n");
-    let source = format!("agy://{session_id}/session-summary");
+    let body = summary.join("\n\n");
+    let source = format!("agy://{project_id}/{session_id}/session-context");
     let mut filters = std::collections::BTreeMap::new();
     filters.insert("provider".to_string(), "agy".to_string());
+    filters.insert("project_id".to_string(), project_id.clone());
     filters.insert("session_id".to_string(), session_id.to_string());
-    filters.insert("document_type".to_string(), "session-summary".to_string());
+    filters.insert("document_type".to_string(), "session-context".to_string());
     filters.insert("source_type".to_string(), "session-memory".to_string());
 
-    let document = crate::source::SourceDocument {
+    let context = crate::source::SourceDocument {
         doc_id: crate::ids::stable_doc_id_from_source(&source),
         source,
-        content: format!("agy session-summary\n{body}"),
-        concept: "session-summary".to_string(),
-        group_id: Some(format!("agy-session:{session_id}")),
-        headings: vec!["session-summary".to_string()],
-        links: vec![],
+        content: format!("AGY session context\n{body}"),
+        concept: "session-context".to_string(),
+        group_id: Some(format!("agy-session:{project_id}:{session_id}")),
+        headings: vec!["session-context".to_string()],
+        links,
         timestamp: Some(current_timestamp()),
         doc_length: body.len(),
         author_agent: Some("agy".to_string()),
@@ -336,7 +379,8 @@ fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> 
         key_phrases: Vec::new(),
         key_phrase_extraction_hash: String::new(),
     };
-    crate::integrations::mcp_tools::upsert_hook_document(root, "agy", session_id, document)
+    observations.push(context);
+    crate::integrations::mcp_tools::upsert_hook_documents(root, "agy", session_id, observations)
 }
 
 fn current_timestamp() -> String {
@@ -366,12 +410,32 @@ fn resolve_root(input: &AgyHookInput, fallback: &Path) -> Result<PathBuf> {
 }
 
 fn resolve_transcript_path(root: &Path, transcript_path: &Path) -> Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .context("HOME or USERPROFILE is not set; refusing AGY transcript access")?;
-    let agy_transcript_root = home.join(".gemini/antigravity-cli/brain");
-    resolve_transcript_path_with_root(root, transcript_path, &agy_transcript_root)
+    let root = root.canonicalize()?;
+    let transcript_path = transcript_path.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve AGY transcript path {}",
+            transcript_path.display()
+        )
+    })?;
+    if transcript_path.starts_with(&root) {
+        return Ok(transcript_path);
+    }
+    let settings_path = root.join(".membrick/settings.toml");
+    let settings = std::fs::read_to_string(&settings_path)
+        .with_context(|| format!("cannot read {}", settings_path.display()))?;
+    let settings: toml::Value = toml::from_str(&settings)?;
+    let transcript_root = settings
+        .get("hooks")
+        .and_then(|hooks| hooks.get("agy_transcript_dir"))
+        .and_then(toml::Value::as_str)
+        .context("set hooks.agy_transcript_dir in .membrick/settings.toml to capture AGY transcripts outside the project")?;
+    let transcript_root = PathBuf::from(transcript_root);
+    let agy_transcript_root = if transcript_root.is_absolute() {
+        transcript_root
+    } else {
+        root.join(transcript_root)
+    };
+    resolve_transcript_path_with_root(&root, &transcript_path, &agy_transcript_root)
 }
 
 fn resolve_transcript_path_with_root(
@@ -422,6 +486,22 @@ mod tests {
     fn uses_current_agy_event_names() {
         assert_eq!(AgyHookKind::PreToolUse.event_name(), "PreToolUse");
         assert_eq!(AgyHookKind::Stop.event_name(), "Stop");
+    }
+
+    #[test]
+    fn parses_sanitized_runtime_transcript_fixture() {
+        let transcript = include_str!("../../../tests/fixtures/runtime_transcripts/agy.jsonl");
+        let events = transcript
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0]["type"], "USER_INPUT");
+        assert!(events.iter().any(|event| event["type"] == "CHECKPOINT"));
+        assert!(events.iter().any(|event| event["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("default route")));
     }
 
     #[test]

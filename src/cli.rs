@@ -1,6 +1,6 @@
 use crate::lang::Lang;
 use crate::pipeline::{ChunkStrategy, Tier1NerProvider, Tier1TermRankerKind};
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum LlmChunkStrategy {
@@ -139,7 +139,11 @@ pub enum IndexInspectView {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "membrick", version = env!("CARGO_PKG_VERSION"))]
+#[command(
+    name = "membrick",
+    version = env!("CARGO_PKG_VERSION"),
+    after_help = "Quick provider commands:\n  membrick setup <provider> [PATH]\n  membrick serve <provider> [PATH]\n  membrick verify <provider> [PATH]\n\nProviders: claude, codex, gemini, agy, muse, openclaw, hermes, roo-runtime."
+)]
 /// CLI arguments for the membrick binary.
 pub struct Args {
     /// Skip the interactive release update check for this invocation.
@@ -213,8 +217,7 @@ pub struct Args {
     pub config: Option<String>,
     #[arg(long)]
     pub analyze: bool,
-    /// Run the default lint checks with the project search index prepared.
-    /// The no-option invocation uses this same review flow by default.
+    /// Run the lint checks with the project search index prepared.
     #[arg(long)]
     pub review: bool,
     #[arg(long, default_value_t = 5_000_000)]
@@ -227,59 +230,55 @@ pub struct Args {
     pub strict_config: bool,
     #[arg(long)]
     pub mcp_timeout_ms: Option<u64>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_install: bool,
-    /// Replace a user-modified Membrick Claude skill explicitly.
-    #[arg(long)]
-    #[cfg(feature = "claude-code")]
-    pub claude_code_force_skill: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_serve: bool,
     #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_statusline: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_verify_mcp: bool,
     #[arg(long, value_enum)]
     #[cfg(feature = "claude-code")]
     pub claude_code_hook: Option<ClaudeCodeHook>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_config: Option<String>,
     #[arg(long)]
     #[cfg(feature = "claude-code")]
     pub claude_code_settings: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_install: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_serve: bool,
     #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_statusline: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_verify_mcp: bool,
     #[arg(long, value_enum)]
     #[cfg(feature = "codex")]
     pub codex_hook: Option<CodexHook>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_config: Option<String>,
     #[arg(long)]
     #[cfg(feature = "codex")]
     pub codex_settings: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "muse-code")]
     pub muse_install: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "muse-code")]
     pub muse_serve: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "muse-code")]
     pub muse_verify_mcp: bool,
     #[arg(long)]
@@ -288,13 +287,13 @@ pub struct Args {
     #[arg(long, value_enum, hide = true)]
     #[cfg(feature = "muse-code")]
     pub muse_hook: Option<MuseHook>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_install: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_serve: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_verify_mcp: bool,
     #[arg(long)]
@@ -310,16 +309,16 @@ pub struct Args {
     #[arg(long)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_config: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_install: bool,
     #[arg(long)]
     #[cfg(feature = "agy")]
     pub agy_force_skill: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_serve: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_verify_mcp: bool,
     #[arg(long, value_enum)]
@@ -332,19 +331,19 @@ pub struct Args {
     #[cfg(feature = "agy")]
     pub agy_config: Option<String>,
     /// Install the membrick MCP server and memory skill for OpenClaw.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_install: bool,
     /// Replace an existing user-modified OpenClaw membrick skill.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_force_skill: bool,
     /// Run the membrick MCP server over stdio for OpenClaw.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_serve: bool,
     /// Spawn `--openclaw-serve` and verify the MCP handshake.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_verify_mcp: bool,
     /// Override the OpenClaw config path (default `~/.openclaw/openclaw.json`).
@@ -372,19 +371,19 @@ pub struct Args {
     #[cfg(feature = "openclaw")]
     pub openclaw_plugin_dir: Option<String>,
     /// Install the membrick MCP server and memory skill for Hermes.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "hermes")]
     pub hermes_install: bool,
     /// Replace an existing user-modified Hermes membrick skill.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "hermes")]
     pub hermes_force_skill: bool,
     /// Run the membrick MCP server over stdio for Hermes.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "hermes")]
     pub hermes_serve: bool,
     /// Spawn `--hermes-serve` and verify the MCP handshake.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "hermes")]
     pub hermes_verify_mcp: bool,
     /// Override the Hermes config path (default `~/.hermes/config.yaml`).
@@ -418,6 +417,9 @@ pub struct Args {
     /// Keep the project recall indexes open and answer newline-delimited JSON requests.
     #[arg(long)]
     pub recall_server: Option<String>,
+    /// Internal mode used by the provider clients to start the local resident memory owner.
+    #[arg(long, hide = true)]
+    pub resident_server: bool,
     #[arg(long)]
     pub inspect_index: Option<String>,
     #[arg(long)]
@@ -442,11 +444,59 @@ pub struct Args {
 
 /// Parse CLI arguments from the environment.
 pub fn parse() -> Args {
-    Args::parse()
+    Args::parse_from(normalize_provider_command(std::env::args()))
+}
+
+fn normalize_provider_command(args: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut args: Vec<String> = args.into_iter().collect();
+    if args.len() < 3 {
+        return args;
+    }
+    let action = match args[1].as_str() {
+        "setup" => "install",
+        "serve" => "serve",
+        "verify" => "verify-mcp",
+        _ => return args,
+    };
+    let provider = args[2].as_str();
+    let option = match (provider, action) {
+        ("claude", "install") => "--claude-code-install",
+        ("claude", "serve") => "--claude-code-serve",
+        ("claude", "verify-mcp") => "--claude-code-verify-mcp",
+        ("codex", "install") => "--codex-install",
+        ("codex", "serve") => "--codex-serve",
+        ("codex", "verify-mcp") => "--codex-verify-mcp",
+        ("gemini", "install") => "--gemini-cli-install",
+        ("gemini", "serve") => "--gemini-cli-serve",
+        ("gemini", "verify-mcp") => "--gemini-cli-verify-mcp",
+        ("agy", "install") => "--agy-install",
+        ("agy", "serve") => "--agy-serve",
+        ("agy", "verify-mcp") => "--agy-verify-mcp",
+        ("muse", "install") => "--muse-install",
+        ("muse", "serve") => "--muse-serve",
+        ("muse", "verify-mcp") => "--muse-verify-mcp",
+        ("openclaw", "install") => "--openclaw-install",
+        ("openclaw", "serve") => "--openclaw-serve",
+        ("openclaw", "verify-mcp") => "--openclaw-verify-mcp",
+        ("hermes", "install") => "--hermes-install",
+        ("hermes", "serve") => "--hermes-serve",
+        ("hermes", "verify-mcp") => "--hermes-verify-mcp",
+        ("roo-runtime", "install") => "--roo-runtime-install",
+        ("roo-runtime", "serve") => "--roo-runtime-serve",
+        _ => return args,
+    };
+    args.drain(1..3);
+    args.insert(1, option.to_string());
+    args
 }
 
 /// Run the CLI: parse args from the environment and execute.
 pub fn run() -> anyhow::Result<()> {
+    if std::env::args_os().nth(1).is_none() {
+        Args::command().print_help()?;
+        println!();
+        return Ok(());
+    }
     let args = parse();
     crate::engine::run(args)
 }
@@ -514,8 +564,9 @@ mod tests {
     #[test]
     fn claude_code_help_exposes_feature_flags_when_enabled() {
         let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("--claude-code-install"));
-        assert!(help.contains("--claude-code-verify-mcp"));
+        assert!(help.contains("membrick setup <provider> [PATH]"));
+        assert!(help.contains("Providers: claude,"));
+        assert!(!help.contains("--claude-code-install"));
     }
 
     #[cfg(not(feature = "codex"))]
@@ -535,8 +586,9 @@ mod tests {
     #[test]
     fn codex_help_exposes_feature_flags_when_enabled() {
         let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("--codex-install"));
-        assert!(help.contains("--codex-verify-mcp"));
+        assert!(help.contains("membrick setup <provider> [PATH]"));
+        assert!(help.contains("Providers: claude, codex,"));
+        assert!(!help.contains("--codex-install"));
     }
 
     #[cfg(not(feature = "muse-code"))]
@@ -556,7 +608,8 @@ mod tests {
     #[test]
     fn muse_code_help_exposes_feature_flags_when_enabled() {
         let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("--muse-install"));
-        assert!(help.contains("--muse-verify-mcp"));
+        assert!(help.contains("membrick setup <provider> [PATH]"));
+        assert!(help.contains("Providers: claude, codex, gemini, agy, muse,"));
+        assert!(!help.contains("--muse-install"));
     }
 }

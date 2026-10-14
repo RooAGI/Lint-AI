@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "membrick"
-version = "0.4.0"
+version = "0.5.0"
 description = "Persistent agent memory API and CLI, backed by Membrick's Rust MemoryService"
 readme = "README.md"
 requires-python = ">=3.8"

@@ -24,17 +24,14 @@ use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
 use crate::segments::SegmentRoutingStrategy;
 use anyhow::{Context, Result};
 use chrono::DateTime;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use std::collections::HashSet;
-use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_TOP_K: usize = 5;
 const MAX_EXCERPT_BYTES: usize = 800;
-const MAX_CAPTURE_BYTES: usize = 32 * 1024;
 const INJECTED_FILE_NAME: &str = "MEMBRICK.md";
 /// Fallback recall query when the shim has no user text to correlate
 /// (e.g. a fresh session whose first turn has no `message:received` yet).
@@ -442,7 +439,7 @@ fn message_texts(messages: &[Value]) -> Vec<(String, String)> {
             if text.trim().is_empty() {
                 return None;
             }
-            Some((role.to_string(), truncate_utf8(&text, MAX_CAPTURE_BYTES)))
+            Some((role.to_string(), text))
         })
         .collect()
 }
@@ -479,11 +476,18 @@ fn content_text(content: &Value) -> Option<String> {
         Value::Array(blocks) => {
             let mut out = String::new();
             for block in blocks {
-                if block.get("type").and_then(Value::as_str) == Some("text") {
+                if matches!(
+                    block.get("type").and_then(Value::as_str),
+                    Some("text" | "input_text" | "output_text")
+                ) {
                     if let Some(text) = block.get("text").and_then(Value::as_str) {
                         out.push_str(text);
-                        out.push('\n');
                     }
+                } else {
+                    out.push_str(&serde_json::to_string(block).unwrap_or_default());
+                }
+                if !out.is_empty() {
+                    out.push('\n');
                 }
             }
             Some(out)
@@ -599,10 +603,7 @@ fn handle_before_reset(
         .map(|(role, text)| format!("{role}: {text}"))
         .collect::<Vec<_>>()
         .join("\n\n");
-    let content = format!(
-        "Session closed (reason: {reason}).\n\n{}",
-        truncate_utf8(&transcript, MAX_CAPTURE_BYTES)
-    );
+    let content = format!("Session closed (reason: {reason}).\n\n{}", transcript);
     let event_id = format!(
         "{session_id}:session-summary:{}",
         stable_doc_id_from_source(&content)
@@ -657,6 +658,7 @@ fn handle_shutdown() -> Result<Value> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -915,7 +917,7 @@ mod tests {
 
         let mut store = open_store(&root).unwrap();
         let results = store
-            .observe_plain_query("deployment steps", "openclaw", None, 10)
+            .search_for_hook("deployment steps", "openclaw", None, 10)
             .unwrap();
         let outcomes: Vec<_> = results
             .iter()
@@ -947,6 +949,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_sanitized_runtime_transcript_fixture() {
+        let input: OpenClawHookInput = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/runtime_transcripts/openclaw.json"
+        ))
+        .unwrap();
+        let messages = input
+            .event
+            .get("messages")
+            .and_then(Value::as_array)
+            .unwrap();
+        let texts = message_texts(messages);
+        assert_eq!(texts.len(), 2);
+        assert!(texts.iter().any(|(_, text)| text.contains("default route")));
+        assert!(texts.iter().any(|(_, text)| text.contains("toolCall")));
+    }
+
+    #[test]
     fn before_reset_captures_session_summary_from_full_transcript() {
         let root = test_root();
         let input = OpenClawHookInput {
@@ -966,7 +985,7 @@ mod tests {
 
         let mut store = open_store(&root).unwrap();
         let results = store
-            .observe_plain_query("reset the gateway", "openclaw", None, 10)
+            .search_for_hook("reset the gateway", "openclaw", None, 10)
             .unwrap();
         let summaries: Vec<_> = results
             .iter()

@@ -7,182 +7,50 @@ useful outcomes from one session and retrieves relevant memories when a later
 session needs them. The expected benefit is less repeated repository
 exploration without reducing answer quality.
 
-This document reports the evidence collected so far and defines the benchmark
-required before making general performance claims. The latest result is a
-single-run, three-arm comparison of one memory-recall scenario. It demonstrates
-that the integration works, but does not establish statistically reliable
-improvements across projects or workloads.
+This page reports a three-run comparison of one Claude memory-recall scenario.
+Treat it as a result for this task and setup, not as a guarantee across
+projects or workloads.
 
-## Latest Validated Smoke Result
+## Latest result: automatic Membrick context reduced token use
 
-The current three-arm orchestration was validated on the
-`index-store-segmented-routing` scenario with one repetition. Metrics below
-cover the continuation session only; setup is the memory-seeding phase.
+Claude recalled all three expected facts in every run. With Membrick providing
+saved project context automatically, Claude used fewer tokens and made fewer
+tool calls than with Claude's native memory alone.
 
-| Arm | Continuation | Input tokens | Cached input | Output tokens | Tool calls | Recall | Hook time |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Claude native memory | 22.47 s | 123,536 | 123,526 | 1,239 | 4 | 2/3 | 0 ms |
-| Membrick only | 7.05 s | 15,914 | 15,912 | 376 | 0 | 3/3 | 1.40 s |
-| Both layers | 7.17 s | 15,914 | 15,912 | 271 | 0 | 3/3 | 1.36 s |
+!!! success "Claude native memory compared with automatic Membrick context"
 
-The native-versus-combined comparison was `15.30 s` lower for the combined
-arm in this run. The Membrick-only arm disabled Claude auto-memory with
-`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; the native arm used an isolated
-auto-memory directory; and both Membrick arms excluded the MCP code-index
-server. These are smoke results, not statistically reliable product claims.
+    - **Fresh input tokens:** 128 → 32 (75.0% fewer)
+    - **Overall tokens:** 2,884,478 → 605,686 (79.0% fewer)
+    - **Overall tokens per fresh input token:** 22,535 → 18,928 (16.0% fewer)
+    - **Agent tool calls:** 65 → 14 (78.5% fewer)
+    - **Claude response turns:** 131 → 36 (72.5% fewer)
 
-Preserved reports:
+    Claude found 9/9 expected facts across the three runs in both setups. The
+    response-turn count is the total number of Claude replies across those
+    runs. It is not the number of benchmark repetitions.
 
-- `benchmark/claude_code/results/native-vs-both-fixed/comparison.json`
-- `benchmark/claude_code/results/membrick-only-fixed/comparison.json`
+Membrick retrieves relevant saved project context during the session and
+adds it automatically. Claude can use that context while answering; it does
+not need to call a Membrick tool. The benchmark's hooks are the mechanism that
+triggers this automatic context. “Claude native memory only” uses Claude's
+built-in memory, while “automatic Membrick context only” uses Membrick for
+retrieval.
 
-## MCP-Only Validation Run
+Overall tokens include fresh input, cache creation, cached input reads, and
+output. Cached input reads count each time Claude processes them. “Overall
+tokens per fresh input token” is overall tokens divided by fresh input tokens.
+This was one scenario repeated three times in each setup.
 
-The Claude MCP-only path was validated with the same
-`index-store-segmented-routing` scenario and one `claude-membrick` arm. Membrick
-lifecycle hooks were disabled; the MCP server remained enabled:
+## Raw reports for the three setups
 
-| Arm | MCP status | Continuation | Input tokens | Cached input | Output tokens | All tool calls | Membrick MCP calls | Recall | Hook time |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Claude MCP-only | Connected | 47.09 s | 189,022 | 189,006 | 3,678 | 10 | 1 (`info`) | 3/3 | 0 ms |
+The third setup enabled both Claude's native memory and automatic Membrick
+context. It used 587,723 overall tokens, 13 agent tool calls, and found all
+three facts in all three runs. The comparison with the native-only setup is
+shown on the [Performance overview](performance.md#overview).
 
-The MCP server completed initialization and Claude called the Membrick
-`info` tool. It did not call `search`; Claude selected local repository tools
-for the architecture question. The installed `membrick-memory` skill guides
-Claude to prefer `mcp__membrick__search`, but skills are model-invoked guidance
-and do not force a tool call. This validates MCP availability with hooks
-disabled, but is not a measurement of MCP search/retrieval performance.
-The run also reported the `bare-memory-index` forbidden-fact match, despite
-scoring all three expected facts; this should be treated as a scenario-quality
-issue rather than a successful clean recall result.
-
-A direct MCP-client check against the same server separately confirmed that
-the `search` implementation is functional: initialization and `tools/list`
-completed, `search` returned three results from 29 indexed documents, and the
-query completed in approximately 220 ms. Therefore, the missing search call in
-the Claude run is a model tool-selection outcome, not an MCP server failure.
-
-Preserved report:
-
-- `benchmark/claude_code/results/mcp-only/claude-membrick/report.json`
-
-## Current Findings
-
-The most representative comparison left Claude Code's normal repository tools
-and Agent delegation available. Both runs received the same prompt against the
-same Membrick repository revision. The only intended difference was whether
-Membrick's hooks, MCP server, and stored memory were enabled.
-
-Both configurations produced a correct answer. Claude alone rediscovered the
-architectural decision by inspecting the repository. With Membrick enabled,
-Claude received three memories from the exact repository revision and required
-less exploration.
-
-| Metric | Claude only | Claude + Membrick | Difference |
-| --- | ---: | ---: | ---: |
-| Answer accuracy | 3/3 | 3/3 | Equal |
-| End-to-end wall time | 25.570 s | 21.272 s | 16.8% lower |
-| Model turns | 7 | 4 | 42.9% fewer |
-| Tool calls | 6 | 3 | 50.0% fewer |
-| Parent tokens | 164,156 | 108,974 | 33.6% lower |
-| All-model tokens | 164,727 | 108,974 | 33.8% lower |
-| Output tokens | 1,891 | 1,061 | 43.9% lower |
-| Reported cost | USD 0.1262 | USD 0.1218 | 3.4% lower |
-| Retrieved memories | 0 | 3 | +3 |
-| Exact-revision memories | 0 | 3 | +3 |
-| Injected context | 0 | 3,465 bytes | +3,465 bytes |
-| Hook latency | 0 | 189 ms | +189 ms |
-| Subagents | 0 | 0 | Equal |
-
-In this run, Membrick preserved answer accuracy while reducing tool use, model
-turns, elapsed time, and total token consumption. Its hooks accounted for less
-than 1% of the Membrick run's elapsed time.
-
-### What Was Remembered
-
-The scenario asked Claude to recall an earlier architectural decision without
-the user repeating it. The expected facts were:
-
-- Claude integration code should use `IndexStore` instead of constructing a
-  `MemoryIndex` directly.
-- Segmented memory should use `SegmentRoutingStrategy::LocalDistinctiveness`.
-- A global index remains available as a fallback when segment routing does not
-  select enough relevant content.
-
-Membrick retrieved all three facts from memories associated with the exact Git
-revision under test. Claude still verified the retrieved information against
-the repository before answering.
-
-### Test Conditions
-
-- Date: 2026-07-14
-- Claude Code: `2.1.209`
-- Model: `sonnet`, medium effort
-- Repository revision: `9d4b751`
-- Permission mode: `dontAsk`
-- Claude tools and Agent delegation: available in both configurations
-- Continuation sessions: fresh and isolated
-- Maximum budget: USD 1 per invocation
-
-## Controlled Smoke Test
-
-An earlier diagnostic run denied repository file and shell tools in both
-configurations. This tested whether Membrick could recover the decision when
-Claude could not rediscover it directly. Claude Code was version `2.1.143`; all
-other major model and repository settings matched the realistic comparison.
-
-| Metric | Claude only | Claude + Membrick | Difference |
-| --- | ---: | ---: | ---: |
-| Expected facts answered correctly | 0/3 | 3/3 | +3 facts |
-| End-to-end time | 38.550 s | 37.811 s | 1.9% lower |
-| Model turns | 3 | 2 | 33.3% fewer |
-| Tool calls | 3 | 5 | 66.7% more |
-| Parent-session tokens | 81,504 | 47,651 | 41.5% lower |
-| Total model tokens | 184,353 | 211,982 | 15.0% higher |
-| Reported cost | USD 0.2868 | USD 0.2545 | 11.3% lower |
-| Memories supplied by Membrick | 0 | 7 | +7 |
-| Membrick context added | 0 bytes | 5,568 bytes | +5,568 bytes |
-| Membrick hook time | 0 ms | 207 ms | +207 ms |
-| Subagents launched | 1 | 1 | Equal |
-
-Claude alone declined to state the decision because it had neither memory nor
-repository access. Membrick recovered the facts, but its Explore agent consumed
-enough additional tokens that total model usage increased. This controlled run
-shows the value of memory for otherwise unavailable facts; it does not show a
-token-efficiency improvement.
-
-Revision-provenance labels had not yet been implemented, so exact-revision
-retrieval cannot be reconstructed for this historical run.
-
-## Reading the Results
-
-**Total model tokens** include the parent Claude session and any delegated
-agent work. This is the primary token measure because delegated work still
-contributes to usage and cost. Parent-session tokens are reported separately
-when they help explain delegation behavior.
-
-**End-to-end time** covers the complete continuation transcript, including
-tool calls, hooks, and asynchronous agents. Claude's top-level `duration_ms`
-can cover only the final resumed portion of an asynchronous session, so it is
-not used as the benchmark wall-clock value.
-
-**Exact-revision memory** means the memory was captured from the same Git
-revision being queried. This gives Claude evidence that the retrieved context
-matches the checked-out code, although Claude may still choose to verify it.
-
-## Limitations
-
-- Each table represents one run of one scenario.
-- Claude output and tool-use choices are nondeterministic.
-- The two tables used different Claude Code versions and different tool
-  policies, so they are separate experiments and must not be combined.
-- The fixture contained the committed `IndexStore` change while the Claude
-  adapter and benchmark code came from the working integration build.
-- No confidence interval or variance estimate is available yet.
-
-These results are directional engineering evidence, not a general product
-benchmark. Release or README claims require the repeated randomized suite and
-release gates defined below.
+- Native: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-provider-2026-10-14/claude-native/report.json)
+- Membrick hooks only: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-claude-hooks-only-rerun-2026-10-14/claude-membrick/report.json)
+- Claude + Membrick: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-claude-both-hooks-only-three-rounds-2026-10-14/claude-both/report.json)
 
 ## Benchmark Methodology
 

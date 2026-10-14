@@ -24,7 +24,5 @@ WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 8080
 
-ENV RUST_LOG=info
-
 ENTRYPOINT ["/usr/local/bin/membrick-server"]
-CMD ["--bind", "0.0.0.0:8080", "--allow-non-loopback", "--index", "/data/index"]
+CMD ["--bind", "127.0.0.1:8080", "--index", "/data/index"]

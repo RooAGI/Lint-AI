@@ -25,6 +25,21 @@ membrick --codex-install .
 
 This enables Codex to use Membrick in the project. It configures the MCP connection and hooks, adds the project memory instructions, and preserves your other Codex settings.
 
+Codex hooks use the transcript path supplied in the hook payload. If Codex
+doesn't supply a usable path, Membrick can locate the session transcript using
+the project setting below. Set `codex_transcript_dir` to the Codex sessions
+directory; relative paths are resolved from the project root.
+
+```toml
+[hooks]
+codex_transcript_dir = "/path/to/codex/sessions"
+# Optional hook timing log; relative paths resolve from the project root.
+timings_path = ".membrick/hook-timings.jsonl"
+```
+
+Transcript discovery does not read `CODEX_HOME` or `HOME` environment
+variables.
+
 On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 

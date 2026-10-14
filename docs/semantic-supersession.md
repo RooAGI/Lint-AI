@@ -56,9 +56,37 @@ project semantic scope using canonical subjects and predicates.
   because they are older.
 
 Normal searches suppress only high-confidence superseded evidence. Conflicts
-remain visible and carry status, confidence, and evidence in search results.
+remain visible in explicit search results and carry status, confidence, and
+evidence. Automatic provider-hook context omits conflicted records so competing
+claims are not injected as current project guidance.
 The core searches project-wide, while `semantic_scope` and `memory_user_id`
 prevent unrelated users or scenarios from affecting one another.
+
+Whole-session context documents with `document_type=session-context` and a
+`project_id` use a shared project-and-user semantic scope. Claude and Codex
+can therefore confirm, conflict with, or explicitly correct facts from earlier
+sessions in the same project. Ordinary captures and provider summaries retain
+their per-session scope.
+
+`MemoryService::reconcile_session_context` accepts the full-session
+`SourceDocument`, attaches the already stored documents for that same provider,
+project, and session through the existing `links` field, then publishes through
+the normal service refresh. Its result uses the existing
+`WriteAdjudicationReceipt`; claims retain evidence text from the context and
+relations use the core semantic detector. When claim evidence appears verbatim
+inside a linked turn document, the receipt adds that turn's document ID and byte
+span to the evidence text.
+
+Claude Code and Codex hook ingestion now sends one ordered `session-observation`
+document per parsed message and one linked `session-context` document. The
+observation documents stay scoped to their originating session, so claims in
+different turns can be compared without mixing sessions. The context documents
+use the existing shared project-and-user scope for cross-session comparisons,
+including sessions captured by different providers.
+Both document types are searchable by automatic hooks. Hooks select bounded,
+query-matched excerpts rather than returning complete source documents, and
+exclude conflicted search results. Explicit search remains available for
+inspecting conflicts and complete source documents.
 
 For normal queries, the core computes the eligible current document IDs before
 ranking and intersects them with user, project, temporal, and segment filters.

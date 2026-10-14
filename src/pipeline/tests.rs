@@ -647,9 +647,9 @@ fn incremental_refresh_matches_full_rebuild() {
         }
     }
     fn segment_records(store: &IndexStore) -> Vec<(String, serde_json::Value)> {
-        // Record-level comparison: the stored records are exactly
-        // deterministic, and scores are a pure function of these records plus
-        // the global statistics, which are rebuilt from the same segment
+        // Record-level comparison: generated capture timestamps are removed
+        // below; the remaining records are deterministic, and scores are a
+        // pure function of those records plus the global statistics, which are rebuilt from the same segment
         // searchers on both paths. Query results are compared separately
         // below — the query path is deterministic (float sums run in
         // sorted-key order and top-k ties break on doc_id).
@@ -659,8 +659,18 @@ fn incremental_refresh_matches_full_rebuild() {
                     .segments
                     .iter()
                     .map(|segment| {
-                        let records = serde_json::to_value(&segment.index.docs)
+                        let mut records = serde_json::to_value(&segment.index.docs)
                             .expect("records should serialize");
+                        if let Some(documents) = records.as_object_mut() {
+                            for document in documents.values_mut() {
+                                if let Some(filters) = document
+                                    .get_mut("filters")
+                                    .and_then(serde_json::Value::as_object_mut)
+                                {
+                                    filters.remove("membrick_recorded_at");
+                                }
+                            }
+                        }
                         (segment.segment_id.clone(), records)
                     })
                     .collect();
@@ -1577,6 +1587,26 @@ fn doc_record_content_hash_is_stable_and_sensitive() {
         baseline,
         doc_record_content_hash(&doc, &claim_options),
         "extraction options must invalidate the hash"
+    );
+}
+
+#[test]
+fn doc_record_hash_ignores_internal_recorded_at() {
+    let options = PipelineOptions::default();
+    let doc = sample_doc("doc-1", "imported fact content");
+    let mut first_seen = doc.clone();
+    first_seen
+        .filters
+        .insert("membrick_recorded_at".into(), "2026-10-01T00:00:00Z".into());
+    let mut reimported = first_seen.clone();
+    reimported
+        .filters
+        .insert("membrick_recorded_at".into(), "2026-10-13T00:00:00Z".into());
+
+    assert_eq!(
+        doc_record_content_hash(&first_seen, &options),
+        doc_record_content_hash(&reimported, &options),
+        "record time metadata must not invalidate derived search records"
     );
 }
 

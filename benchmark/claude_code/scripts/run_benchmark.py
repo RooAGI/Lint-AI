@@ -78,26 +78,41 @@ def main() -> None:
         help="Claude model used by both benchmark arms",
     )
     parser.add_argument("--results-dir", type=Path, default=None)
+    parser.add_argument(
+        "--clean-fixture",
+        action="store_true",
+        help="Remove the Membrick skill just installed into a synthetic benchmark fixture.",
+    )
+    parser.add_argument(
+        "--membrick-binary", type=Path,
+        help="Use this executable instead of building the local debug binary.",
+    )
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
+    source_root = Path(__file__).resolve().parents[3]
     benchmark_root = Path(__file__).resolve().parents[1]
     results_dir = (args.results_dir or benchmark_root / "results").resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
     temp_root = Path(tempfile.mkdtemp(prefix="membrick-claude-perf."))
-    binary = repo_root / "target" / "debug" / "membrick"
-    runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
+    binary = args.membrick_binary.resolve() if args.membrick_binary else repo_root / "target" / "debug" / "membrick"
+    runner = source_root / "benchmark" / "codex_code" / "src" / "runner.py"
     cargo_bin = Path.home() / ".cargo" / "bin"
     base_path = f"{cargo_bin}:{os.environ.get('PATH', '')}"
     reports: dict[str, dict[str, object]] = {}
     try:
-        print("step: build Claude-enabled binary", flush=True)
-        subprocess.run(
-            ["cargo", "+stable", "build", "--features", "claude-code", "--quiet"],
-            cwd=repo_root,
-            env={**os.environ, "PATH": base_path},
-            check=True,
-        )
+        if args.membrick_binary:
+            if not binary.is_file():
+                raise FileNotFoundError(f"Membrick binary not found: {binary}")
+            print(f"step: use supplied Membrick binary {binary}", flush=True)
+        else:
+            print("step: build Claude-enabled binary", flush=True)
+            subprocess.run(
+                ["cargo", "+stable", "build", "--features", "claude-code", "--quiet"],
+                cwd=repo_root,
+                env={**os.environ, "PATH": base_path},
+                check=True,
+            )
         # Read auth fields from the user's global settings so isolated arms can authenticate.
         user_settings_path = Path.home() / ".claude" / "settings.json"
         user_settings: dict = {}
@@ -137,15 +152,10 @@ def main() -> None:
             mcp_config_path = arm_root / "mcp.json"
             auto_memory_dir = arm_root / "auto-memory"
             claude_config_dir.mkdir(parents=True, exist_ok=True)
-            # CLAUDE_CONFIG_DIR below isolates each arm from the user's real
-            # config dir, which also isolates it from the OAuth credentials
-            # that live there. Copy the local session's credentials in so
-            # isolated arms can still authenticate.
-            user_credentials_path = Path.home() / ".claude" / ".credentials.json"
-            if user_credentials_path.exists():
-                arm_credentials_path = claude_config_dir / ".credentials.json"
-                shutil.copy2(user_credentials_path, arm_credentials_path)
-                arm_credentials_path.chmod(0o600)
+            # Claude Code may keep OAuth credentials in the host Keychain rather
+            # than ~/.claude/.credentials.json. Leave CLAUDE_CONFIG_DIR unset so
+            # the CLI uses its authenticated default profile. The wrapper limits
+            # setting sources and loads this arm's settings/MCP config explicitly.
             write_json(claude_config, {})
             arm_settings = {
                 **(
@@ -164,18 +174,24 @@ def main() -> None:
                     env[key] = user_env[key]
             env.update({
                 "HOME": str(claude_home),
-                "CLAUDE_CONFIG_DIR": str(claude_config_dir),
+                # Keep benchmark worktrees outside the Membrick checkout. Claude
+                # discovers ancestor AGENTS.md files from the physical path,
+                # even when the worktree's git tree contains only a synthetic
+                # fixture. A nested worktree inherited the checkout's memory
+                # policy and triggered unrelated ToolSearch calls during setup.
+                "MEMBRICK_BENCHMARK_WORKTREE_ROOT": str(temp_root / "worktrees"),
                 "MEMBRICK_CLAUDE_SETTINGS": str(settings_path),
                 "MEMBRICK_CLAUDE_MODEL": args.model,
                 "MEMBRICK_CLAUDE_MCP_CONFIG": str(mcp_config_path),
-                "PATH": f"{repo_root / 'target' / 'debug'}:{base_path}",
+                "PATH": f"{binary.parent}:{base_path}",
             })
+            env.pop("CLAUDE_CONFIG_DIR", None)
             # The skill instructs the model to call mcp__membrick__search, which only
             # exists when MCP is wired in; hooks-only strips MCP out of claude.json, so
             # installing the skill there just confuses the model with a tool that isn't there.
             if args.profile != "hooks-only":
                 env["MEMBRICK_BENCHMARK_SKILL_PATH"] = str(
-                    repo_root / "src" / "integrations" / "claude_code" / "skill.md"
+                    repo_root / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
                 )
             else:
                 env.pop("MEMBRICK_BENCHMARK_SKILL_PATH", None)
@@ -184,6 +200,14 @@ def main() -> None:
             if arm == "claude-membrick":
                 env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
             if arm != "claude-native":
+                if args.clean_fixture and args.profile == "hooks-only":
+                    # Remove any pre-existing (possibly customized) skill before
+                    # the installer runs. Hooks-only arms must not load a skill
+                    # that advertises MCP tools unavailable in this profile.
+                    installed_skill = (
+                        repo_root / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
+                    )
+                    installed_skill.unlink(missing_ok=True)
                 subprocess.run(
                     [
                         str(binary),
@@ -198,6 +222,16 @@ def main() -> None:
                     env=env,
                     check=True,
                 )
+                if args.clean_fixture and args.profile == "hooks-only":
+                    installed_skill = (
+                        repo_root / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
+                    )
+                    installed_skill.unlink(missing_ok=True)
+                    for directory in (installed_skill.parent, installed_skill.parent.parent, installed_skill.parent.parent.parent):
+                        try:
+                            directory.rmdir()
+                        except OSError:
+                            break
                 if args.profile == "mcp-only":
                     remove_membrick_hooks(settings_path)
                 config = json.loads(claude_config.read_text(encoding="utf-8"))
@@ -216,6 +250,9 @@ def main() -> None:
             )
 
             wrapper = arm_root / "claude-wrapper.sh"
+            disable_slash_commands = (
+                "--disable-slash-commands " if args.profile == "hooks-only" else ""
+            )
             wrapper.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
@@ -232,6 +269,9 @@ def main() -> None:
                 "--model \"$MEMBRICK_CLAUDE_MODEL\" "
                 "--dangerously-skip-permissions "
                 "--permission-mode bypassPermissions "
+                f"{disable_slash_commands}"
+                "--setting-sources project,local "
+                "--settings \"$MEMBRICK_CLAUDE_SETTINGS\" "
                 f"--strict-mcp-config --mcp-config {shlex.quote(str(mcp_config_path))}\n"
                 "if [ \"$multiturn\" = \"1\" ]; then\n"
                 "  set -- \"$@\" --input-format stream-json\n"
@@ -266,6 +306,8 @@ def main() -> None:
             ]
             for scenario in args.scenario:
                 command.extend(["--scenario", scenario])
+            if args.clean_fixture and args.profile == "hooks-only":
+                command.append("--clean-project-state")
             print(f"step: run {arm}", flush=True)
             subprocess.run(command, cwd=repo_root, env=env, check=True)
             reports[arm] = json.loads((arm_results / "report.json").read_text(encoding="utf-8"))

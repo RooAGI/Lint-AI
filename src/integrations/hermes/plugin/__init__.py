@@ -28,13 +28,7 @@ tool events on ``tool_call_id`` — the membrick ``request_id`` is the idempoten
 Fail-open: every handler swallows exceptions; a dead server degrades to "no
 automatic memory", never to a broken agent.
 
-Config (env wins over $HERMES_HOME/membrick.json wins over defaults):
-  MEMBRICK_SERVER_URL   default http://127.0.0.1:8080
-  MEMBRICK_USER_ID      default "hermes"
-  MEMBRICK_QUEUE_MAX    default 1000 (bounded write queue; drops oldest when full)
-  MEMBRICK_CAPTURE      on/off, default on
-  MEMBRICK_RECALL       on/off, default on
-  MEMBRICK_RECALL_TOP_K default 5
+Config: ``$HERMES_HOME/membrick.json`` overrides the built-in defaults.
 """
 
 import http.client
@@ -60,40 +54,10 @@ _DEFAULTS = {
     "recall_top_k": 5,
 }
 
-_ENV_MAP = {
-    # Legacy names are read first so Membrick names take precedence if both
-    # are present in an inherited environment.
-    "LINTAI_SERVER_URL": "server_url",
-    "LINTAI_SERVER_TOKEN": "server_token",
-    "LINTAI_USER_ID": "user_id",
-    "LINTAI_QUEUE_MAX": "queue_max",
-    "LINTAI_CAPTURE": "capture",
-    "LINTAI_RECALL": "recall",
-    "LINTAI_RECALL_TOP_K": "recall_top_k",
-    "MEMBRICK_SERVER_URL": "server_url",
-    "MEMBRICK_SERVER_TOKEN": "server_token",
-    "MEMBRICK_USER_ID": "user_id",
-    "MEMBRICK_QUEUE_MAX": "queue_max",
-    "MEMBRICK_CAPTURE": "capture",
-    "MEMBRICK_RECALL": "recall",
-    "MEMBRICK_RECALL_TOP_K": "recall_top_k",
-}
-
-_INT_KEYS = {"queue_max", "recall_top_k"}
-_BOOL_KEYS = {"capture", "recall"}
-
-
-def _to_bool(value):
-    if isinstance(value, bool):
-        return value
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
-
-
-def load_config(env=None, hermes_home=None):
-    """Resolve plugin config: defaults < config file < environment."""
-    env = os.environ if env is None else env
+def load_config(hermes_home=None):
+    """Resolve plugin config: defaults < Hermes profile config."""
     cfg = dict(_DEFAULTS)
-    home = hermes_home or env.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    home = hermes_home or os.path.expanduser("~/.hermes")
     for filename in ("membrick.json", "lintai.json"):
         try:
             with open(os.path.join(home, filename), "r", encoding="utf-8") as f:
@@ -105,18 +69,6 @@ def load_config(env=None, hermes_home=None):
             break
         except (OSError, ValueError):
             continue
-    for env_name, key in _ENV_MAP.items():
-        if env_name in env:
-            raw = env[env_name]
-            if key in _INT_KEYS:
-                try:
-                    cfg[key] = int(raw)
-                except (TypeError, ValueError):
-                    pass
-            elif key in _BOOL_KEYS:
-                cfg[key] = _to_bool(raw)
-            else:
-                cfg[key] = raw
     cfg["server_url"] = cfg["server_url"].rstrip("/")
     return cfg
 
@@ -126,8 +78,6 @@ def load_config(env=None, hermes_home=None):
 # --------------------------------------------------------------------------
 
 MAX_FIELD_CHARS = 2000
-MAX_TURN_BYTES = 24 * 1024
-HISTORY_TAIL = 20
 
 
 def truncate(text, limit=MAX_FIELD_CHARS):
@@ -166,15 +116,14 @@ def build_turn_record(session_id, turn_id, user_message, assistant_response,
          "content": _meta_preamble(model=model, platform=platform,
                                    task_id=task_id,
                                    is_first_turn=is_first_turn)
-                    + "\n" + truncate(user_message)},
+                    + "\n" + ("" if user_message is None else str(user_message))},
         {"role": "assistant", "timestamp": None,
-         "content": truncate(assistant_response)},
+         "content": "" if assistant_response is None else str(assistant_response)},
     ]
-    tail = _history_tail(conversation_history)
+    tail = _history_text(conversation_history)
     if tail:
         messages.append({"role": "user", "timestamp": None,
                          "content": "[context] recent conversation:\n" + tail})
-    _enforce_turn_budget(messages)
     return {
         "request_id": request_id,
         "user_id": None,  # filled in by the plugin from config
@@ -183,10 +132,10 @@ def build_turn_record(session_id, turn_id, user_message, assistant_response,
     }
 
 
-def _history_tail(conversation_history):
+def _history_text(conversation_history):
     if not conversation_history:
         return ""
-    items = list(conversation_history)[-HISTORY_TAIL:]
+    items = list(conversation_history)
     lines = []
     for item in items:
         if isinstance(item, dict):
@@ -198,23 +147,9 @@ def _history_tail(conversation_history):
             content = " ".join(
                 str(p.get("text", "")) if isinstance(p, dict) else str(p)
                 for p in content)
-        lines.append("[%s] %s" % (role, truncate(content, 500)))
+        lines.append("[%s] %s" % (role, "" if content is None else str(content)))
     return "\n".join(lines)
 
-
-def _enforce_turn_budget(messages):
-    total = sum(len(m.get("content", "")) for m in messages)
-    if total <= MAX_TURN_BYTES:
-        return
-    # Shrink the context tail first; never drop the user/assistant pair.
-    for m in messages:
-        if m.get("content", "").startswith("[context]"):
-            m["content"] = truncate(m["content"], MAX_TURN_BYTES // 4)
-    total = sum(len(m.get("content", "")) for m in messages)
-    if total > MAX_TURN_BYTES:
-        for m in messages:
-            if not m.get("content", "").startswith("[meta]"):
-                m["content"] = truncate(m["content"], MAX_TURN_BYTES // 4)
 
 
 def build_tool_record(session_id, turn_id, tool_call_id, function_name,
@@ -226,8 +161,8 @@ def build_tool_record(session_id, turn_id, tool_call_id, function_name,
     header += ("tool_call function_name=%s status=%s duration_ms=%s"
                % (function_name, status, duration_ms))
     parts = [header,
-             "args:\n" + truncate(function_args),
-             "result:\n" + truncate(result)]
+             "args:\n" + ("" if function_args is None else str(function_args)),
+             "result:\n" + ("" if result is None else str(result))]
     if error_type or error_message:
         parts.append("error: %s %s" % (truncate(error_type, 200),
                                        truncate(error_message)))
@@ -283,7 +218,7 @@ def build_subagent_start_record(parent_session_id, parent_turn_id,
         "goal:\n%s"
     ) % (parent_session_id or "", parent_turn_id or "",
          parent_subagent_id or "", child_id, child_role or "unknown",
-         truncate(child_goal, MAX_TURN_BYTES))
+         "" if child_goal is None else str(child_goal))
     return {
         "request_id": "hermes:subagent:start:%s" % child_id,
         "user_id": None,
@@ -306,7 +241,7 @@ def build_subagent_stop_record(parent_session_id, parent_turn_id,
     if not child_id:
         return None
     history = []
-    for call in (tool_call_history or [])[:20]:
+    for call in (tool_call_history or []):
         if not isinstance(call, dict):
             continue
         history.append("%s status=%s input_bytes=%s output_bytes=%s" % (
@@ -322,10 +257,9 @@ def build_subagent_stop_record(parent_session_id, parent_turn_id,
     ) % (parent_session_id or "", parent_turn_id or "",
          child_session_id or "", child_subagent_id or "",
          child_role or "unknown", child_status or "unknown", duration_ms,
-         truncate(child_summary, MAX_TURN_BYTES // 2))
+         "" if child_summary is None else str(child_summary))
     if history:
         content += "\ntool_history_metadata:\n" + "\n".join(history)
-    content = truncate(content, MAX_TURN_BYTES)
     return {
         "request_id": "hermes:subagent:stop:%s" % child_id,
         "user_id": None,

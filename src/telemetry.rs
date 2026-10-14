@@ -1,8 +1,8 @@
 //! Bounded operational telemetry for long-running server processes.
 //!
-//! This module stores bounded query aggregates and sanitized provider lifecycle
-//! metadata. Query text, prompts, tool payloads, user IDs, document IDs, and
-//! memory content are either omitted or stored only as bounded redacted previews.
+//! This module stores bounded query aggregates, detailed MCP tool history,
+//! and provider lifecycle metadata. Detailed MCP entries retain full request
+//! arguments and responses in a local append-only ledger.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,62 @@ const LATENCY_BOUNDARIES_MS: [u64; 12] = [1, 2, 5, 10, 20, 50, 100, 250, 500, 1_
 const PROVIDER_TELEMETRY_DIR: &str = "provider-telemetry";
 const MAX_PROVIDER_TELEMETRY_EVENTS: usize = 500;
 const QUERY_TELEMETRY_FILE: &str = "query-telemetry.json";
+const MCP_CALL_HISTORY_FILE: &str = "mcp-call-history.jsonl";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpCallRecord {
+    pub timestamp_ms: u64,
+    pub provider: String,
+    pub tool: String,
+    #[serde(default)]
+    pub request_id: Option<serde_json::Value>,
+    pub arguments: serde_json::Value,
+    pub duration_ms: u64,
+    pub error: bool,
+    pub response: serde_json::Value,
+}
+
+/// Persist the detailed request and response for an MCP memory tool call.
+/// The ledger is local to the workspace. Every call and response is appended
+/// without a retention or payload-size limit.
+pub fn record_mcp_call(
+    project_root: &Path,
+    provider: &str,
+    tool: &str,
+    request_id: Option<serde_json::Value>,
+    arguments: &serde_json::Value,
+    duration_ms: u64,
+    error: bool,
+    response: serde_json::Value,
+) -> Result<()> {
+    let root = project_root.join(".membrick");
+    fs::create_dir_all(&root)?;
+    let lock = acquire_telemetry_lock(&root.join("mcp-call-history.lock"))?;
+    let path = root.join(MCP_CALL_HISTORY_FILE);
+    let record = McpCallRecord {
+        timestamp_ms: now_ms(),
+        provider: provider.to_string(),
+        tool: tool.to_string(),
+        request_id,
+        arguments: arguments.clone(),
+        duration_ms,
+        error,
+        response,
+    };
+    let mut line = serde_json::to_vec(&record)?;
+    line.push(b'\n');
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    use std::io::Write;
+    options.open(path)?.write_all(&line)?;
+    drop(lock);
+    Ok(())
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderLifecycleStatus {

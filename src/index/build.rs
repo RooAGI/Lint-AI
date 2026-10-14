@@ -12,9 +12,7 @@ use tantivy::query::{
     Bm25StatisticsProvider, BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermSetQuery,
 };
 use tantivy::schema::document::TantivyDocument;
-use tantivy::schema::{
-    Field, IndexRecordOption, Schema, TextFieldIndexing, TextOptions, STORED, STRING, TEXT,
-};
+use tantivy::schema::{Field, IndexRecordOption, Schema, STORED, STRING, TEXT};
 use tantivy::Term;
 use tantivy::{doc, Index};
 
@@ -1070,8 +1068,8 @@ impl MemoryIndex {
         temporal_f: Field,
         tags_f: Field,
         subword_f: Field,
-        is_synthetic_f: Field,
-        tag_links_f: Field,
+        _is_synthetic_f: Field,
+        _tag_links_f: Field,
     ) -> Result<()> {
         let mut index = index.clone();
         with_guarded_index_writer(

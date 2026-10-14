@@ -81,15 +81,17 @@ paths.
 
 ### Codex used fewer tokens and tool calls with remembered project context
 
-!!! success "Codex: same recall, fewer tokens and tool calls"
+!!! success "Membrick cut Codex's tokens and tool calls in this run"
 
-    - **Fresh input:** 46,035 → 36,731 tokens (9,304 fewer; 20.2% less)
-    - **Total processed:** 313,066 → 196,102 tokens (116,964 fewer; 37.4% less)
-    - **Tokens per fresh input token:** 6.80 → 5.34 (21.5% less)
-    - **Codex tool calls:** 7 → 4 (3 fewer; 42.9% less)
-    - **Continuation time:** 27.95 s → 13.80 s (50.6% less)
-    - **Rounds:** one continuation run per setup in both arms; no round reduction measured
-    - **Recall:** 3/3 expected facts in each setup
+    | Measure | Codex native | Membrick hooks | Saved with Membrick |
+    | --- | ---: | ---: | ---: |
+    | Fresh input tokens | 46,035 | 36,731 | **9,304 (20.2%)** |
+    | Overall tokens | 313,066 | 196,102 | **116,964 (37.4%)** |
+    | Overall tokens per fresh input token | 6.80 | 5.34 | **1.46 (21.5%)** |
+    | Tool calls | 7 | 4 | **3 (42.9%)** |
+    | Continuation time | 27.95 s | 13.80 s | **14.15 s (50.6%)** |
+    | Expected facts recalled | 3/3 | 3/3 | Same recall |
+    | Continuation rounds | 1 | 1 | Not reduced in this run |
 
 | Setup | Fresh input tokens | Overall tokens | Overall tokens per fresh input token | Tool calls | Continuation time | Recall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

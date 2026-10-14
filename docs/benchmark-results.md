@@ -128,6 +128,27 @@ the same dataset, query set, top-k cutoffs, heuristic NER, single-index mode,
 and structured-fact retrieval. The baseline's complete per-question report is
 available as a [compressed JSON artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-14-v0.4.0.json.gz).
 
+### Corpus-scale retrieval
+
+The candidate's corpus-scale run used the LongMemEval-S session corpus, no
+embeddings, and 100 eligible questions per size where available. The corpus
+contains 19,829 unique sessions, so the requested 25,000 size uses all 19,829.
+The executable reports index build time, query p50/p95, and any-hit recall@10.
+
+| Sessions | Queries | v0.4.0 build | v0.5.0 build | v0.4.0 query p50 / p95 | v0.5.0 query p50 / p95 | Any-hit recall@10 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 | 20 | 1.36 s | 1.40 s | 1.16 / 1.62 ms | 1.18 / 1.64 ms | 100.00% both |
+| 5,000 | 100 | 7.00 s | 7.15 s | 2.52 / 3.96 ms | 2.61 / 4.04 ms | 99.00% both |
+| 10,000 | 100 | 14.36 s | 15.39 s | 3.36 / 5.19 ms | 3.02 / 4.25 ms | 100.00% both |
+| 19,829 | 100 | 29.66 s | 30.23 s | 4.22 / 6.77 ms | 4.26 / 6.47 ms | 99.00% both |
+
+This in-process benchmark does not measure resident-service startup, memory
+consumption, or transport overhead. The v0.4.0 tag baseline (`b46291b2`) was
+built offline because it has no committed lockfile, so its dependency versions
+may differ from v0.5.0. Treat small timing changes as diagnostic. Raw reports:
+[v0.4.0 baseline](https://github.com/RooAGI/Membrick/blob/main/comparison/results/release-v0.4.0-corpus-scale-c8fef3d7.csv),
+[v0.5.0 candidate](https://github.com/RooAGI/Membrick/blob/main/comparison/results/release-v0.5.0-corpus-scale-c8fef3d7.csv).
+
 ## Native event retrieval run (2026-10-12)
 
 The latest full 500-question run uses the heuristic backend, structured claim

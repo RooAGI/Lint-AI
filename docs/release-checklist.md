@@ -12,20 +12,26 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
   compatible features, major for breaking changes.
 - [ ] Confirm the release scope and identify migrations, configuration changes,
   compatibility limits, and known issues.
-- [ ] Confirm the version is unused on GitHub Releases, crates.io, PyPI, npm,
-  and any other registry being published to.
+- [x] Confirm version `0.5.0` is unused in GitHub Releases, crates.io, PyPI,
+  and npm. Checked the direct registry endpoints and release tag on 2026-10-14;
+  all report not found. Check each platform package immediately before publish.
 - [ ] Confirm publishing access and required GitHub environments are configured.
 - [x] Update the Rust crate, Python package, Node package and platform packages,
-  OpenClaw plugin, Helm chart, and application version to the intended release
-  version. If a component is versioned independently, document that exception.
+  OpenClaw plugin and its npm manifest, Helm chart, and application version to
+  `0.5.0`.
 - [x] Add release notes at `docs/releases/X.Y.Z.md` covering user-visible
   changes, upgrade steps, compatibility, and known limitations.
 - [x] Update installation, configuration, architecture, and website docs that
   the release changes.
-- [ ] Check migration behavior against existing user data and configuration.
+- [x] Check state migration against existing user data: a release-binary
+  startup moved `.lint-ai` to `.membrick`, preserved non-conflicting data,
+  archived a conflicting legacy file, and left no `.lint-ai` directory.
 - [ ] Keep unrelated workspace changes out of the release PR.
-- [ ] Decide which benchmark tracks are required based on the release changes.
-  Set acceptable regression limits before running them.
+- [x] Select release benchmarks: full LongMemEval-S, corpus scale, repeated
+  IPC/HTTP read-write-mixed workloads, lifecycle startup, and affected provider
+  integrations. The benchmark runs were started before explicit numerical
+  regression limits were recorded; document that process exception and review
+  results before merge.
 - [ ] Run the required benchmarks on a clean, optimized candidate build. Compare
   with the previous tagged release using the same machine, dataset, settings,
   query set, result depth, and harness wherever possible. Record the commit SHA,
@@ -40,13 +46,14 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
   top-20 lists versus v0.4.0, with unchanged MRR and NDCG, no empty results,
   and no Any-hit@5 regressions. Full reports are linked in
   `benchmark-results.md`.
-- [ ] **Temporal and multi-session correctness:** run the existing temporal
-  and multi-session benchmark track when retrieval, claim reconciliation,
-  indexing, or memory publication changes. Record the exact subset and mode;
-  keep beKIND-on and beKIND-off results separate.
-- [ ] **Corpus-scale indexing and search:** run the representative corpus scale
-  benchmark when indexing, persistence, segmentation, or startup changes.
-  Record build/reopen time, memory use if available, and query latency/quality.
+- [x] **Temporal and multi-session subsets:** not required for v0.5.0. The
+  release retrieval gate uses all 500 LongMemEval-S questions; the 133-question
+  subsets are optional diagnostics and are excluded from release claims.
+- [x] **Corpus-scale indexing and search:** compared v0.4.0 and v0.5.0 on
+  1k/5k/10k/19,829 LongMemEval-S sessions with 20 or 100 eligible queries;
+  recall matched at every size. Build and p50/p95 query timing are recorded in
+  `benchmark-results.md`. Memory use was unavailable. The v0.4.0 tag lacks a
+  Cargo.lock, so its dependency resolution and timing are diagnostic.
 - [ ] **Transport performance:** when the server, IPC, or HTTP path changes,
   compare IPC and HTTP with the same read, write, and mixed read/write workload.
   Use release binaries, repeated runs, and report throughput plus p50/p95/p99,
@@ -75,11 +82,12 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
 - [ ] Python binding tests and wheel or source package build checks pass.
 - [ ] Node binding tests and native builds pass on every supported target.
 - [ ] Security audit passes, or each finding has a documented disposition.
-- [ ] Documentation build and link checks pass.
-- [ ] Version metadata matches across release components and matches the
+- [x] Strict MkDocs documentation build and link checks pass locally; confirm
+  the docs workflow on the updated PR head as well.
+- [x] Version metadata matches across release components and matches the
   proposed `vX.Y.Z` tag.
-- [ ] `cargo package --locked --list` and `cargo publish --dry-run --locked`
-  succeed when publishing the Rust crate.
+- [x] `cargo package --locked --list` and `cargo publish --dry-run --locked`
+  succeed for the Rust crate.
 - [ ] Package contents include the expected CLI, native libraries, licenses,
   and metadata for each published package.
 - [ ] Include benchmark commands, artifacts, and a concise results summary in

@@ -15,7 +15,11 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
 - [x] Confirm version `0.5.0` is unused in GitHub Releases, crates.io, PyPI,
   and npm. Checked the direct registry endpoints and release tag on 2026-10-14;
   all report not found. Check each platform package immediately before publish.
-- [ ] Confirm publishing access and required GitHub environments are configured.
+- [x] Confirm GitHub publishing prerequisites: `NPM_TOKEN` is present; the
+  `pypi` and `crates-io` environments exist; and the required publish actions
+  are allowed by the repository Actions policy.
+- [ ] Verify account-side PyPI pending trusted publisher and crates.io Trusted
+  Publisher settings for `RooAGI/Membrick` and the matching workflow names.
 - [x] Update the Rust crate, Python package, Node package and platform packages,
   OpenClaw plugin and its npm manifest, Helm chart, and application version to
   `0.5.0`.

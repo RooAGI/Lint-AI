@@ -96,10 +96,18 @@ cargo run --release --locked --bin haystack_scoped_benchmark -- \
 
 The complete per-question report is available as a
 [compressed JSON artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-14-v0.5.0.json.gz).
-It was measured on an Apple Silicon macOS host from candidate revision
-`52675e5` with local release-preparation changes in the working tree. This is
-a candidate diagnostic; the v0.4.0 tag baseline is being measured separately
-because its committed benchmark does not default structured retrieval on.
+The initial run was measured on an Apple Silicon macOS host from candidate
+revision `52675e5` with local release-preparation changes in the working tree.
+The same 500-question run was repeated on the pushed PR head `5d650067` with
+the command above. Recall, MRR, and NDCG matched exactly. Four top-20 result
+lists differed from the initial candidate report, with no MRR or NDCG change,
+no empty result lists, and no Any-hit@5 regressions. Mean search time was
+3.52 ms on this run. The complete exact-head report is available as a
+[compressed JSON artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-14-v0.5.0-5d650067.json.gz).
+
+This remains a candidate diagnostic. The v0.4.0 tag baseline is being measured
+separately because its committed benchmark does not default structured
+retrieval on.
 
 ## Native event retrieval run (2026-10-12)
 

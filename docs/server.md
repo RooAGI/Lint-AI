@@ -238,16 +238,17 @@ view, and workspace watcher. Later requests for the same canonical root reuse
 that runtime. Different roots initialize independently, so opening one project
 does not block searches against an already-open project.
 
-This lets Codex, Claude Code, or other provider processes for several folders
-point at the same local HTTP server. Keep the server bound to loopback for the
-single-user setup. The primary workspace still controls the dashboard and
-legacy requests that omit a workspace. MCP adapters send the workspace on each
-request, and writes and searches for that root reach the same resident owner.
-Each active workspace remains resident until the server exits. Do not run a
-second server process against the same workspace stores; the on-disk writer is
-single-process. See
+For HTTP clients, this lets several project workspaces use the same server.
+Keep it bound to loopback for a single-user setup. The primary workspace still
+controls the dashboard and legacy requests that omit a workspace. HTTP MCP
+clients send the workspace on each request, and writes and searches for that
+root reach the same resident owner. Bundled Rust MCP adapters and hooks use the
+per-workspace local IPC endpoint instead. Each active workspace remains
+resident until the server exits. Do not run a second server process against the
+same workspace stores; the on-disk writer is single-process. See
 [Index concurrency](index-concurrency.md) for the registry, per-workspace
-writer, and publication model.
+writer, and publication model, and [Local IPC server architecture](local-ipc-architecture.md)
+for the local request path.
 
 `POST /provider-memory/add/batch` is a compatibility exception: its request
 does not contain a workspace and it writes to the primary workspace. Use the
@@ -312,21 +313,24 @@ batched through the resident writer. The backend watches the configured
 workspace, reconciles Markdown changes into its retained workspace store, and
 publishes them through the same writer before recording the new filesystem
 fingerprint.
-Configure provider processes with `MEMBRICK_SERVER_URL` (default
-`http://127.0.0.1:8080`) and, when server-token authentication is enabled,
-`MEMBRICK_SERVER_TOKEN`. The legacy `LINTAI_SERVER_URL` and
-`LINTAI_SERVER_TOKEN` names remain accepted. Start the shared Membrick server
-before starting provider processes. They return a transport error if that
-resident backend is unavailable; they do not open a local fallback index.
+Bundled Rust provider hooks and MCP adapters always use a per-user local socket
+(Unix domain socket on macOS/Linux, named pipe on Windows) and start the
+resident owner on the first request. They do not read environment variables to
+select a transport or server. This avoids local TCP firewall rules and keeps
+one `MemoryService` per workspace. The standalone HTTP API remains available
+to external clients and is configured through its command-line options.
+The local resident service writes startup and listener diagnostics to
+`~/.membrick/runtime/resident.log` (or `%USERPROFILE%\.membrick\runtime\resident.log`
+on Windows); startup rotates it to one backup when it exceeds 1 MiB.
 
-Hermes and OpenClaw can share one server process. OpenClaw hook payloads with a
+Hermes and OpenClaw plugins can share one HTTP server process. OpenClaw hook payloads with a
 workspace directory are routed to that workspace's runtime. Hermes currently
 uses the legacy `/provider-memory/add/batch` endpoint, which writes to the
 primary workspace; its `/provider-memory/search` request can include an
-optional `workspace` field. Both plugins use `MEMBRICK_SERVER_URL` and
-`MEMBRICK_SERVER_TOKEN` to configure their HTTP connection. The server uses
-plain HTTP. Keep it on loopback for local agent setups; for remote agents, use
-a separately secured tunnel or proxy.
+optional `workspace` field. Configure their HTTP connection in each provider's
+plugin configuration file. The server uses plain HTTP. Keep it on loopback for
+local agent setups; for remote agents, use a separately secured tunnel or
+proxy.
 
 ## Dashboard and observability
 
@@ -345,7 +349,7 @@ extend visibility delay beyond the scheduling interval.
 Use `?wait_for_visibility=true` for an add response with immediate visibility
 and final adjudication. `POST /flush` or `POST /v1/memories/refresh` publishes and
 checkpoints previously accepted writes. See [the write flow and recovery
-contract](index-concurrency.md#staged-http-writes) for settings, queue bounds,
+contract](index-concurrency.md#staged-writes-through-http-or-ipc) for settings, queue bounds,
 shutdown, recovery and the single-process ownership requirement.
 
 ## Performance

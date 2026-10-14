@@ -23,11 +23,14 @@ the snapshot's Tantivy lexical index. It is not the right object to mutate
 incrementally in place.
 
 `IndexStore::refresh()` builds and publishes a complete immutable generation.
-One HTTP server can serve several explicitly configured project workspaces. For
-each open workspace, the server has one mutable `MemoryService` owner and a
-detached published `MemoryService` read view. The indexes are shared through
-`Arc`; visibility and reranking metadata are captured with the same generation.
-Each search retains that view independently of the mutable owner's lock. The
+Membrick accepts requests through its resident local IPC listener or its
+standalone HTTP listener. Both listeners use the same API router and workspace
+registry. Bundled Rust MCP adapters and lifecycle hooks use local IPC; custom
+clients and separately configured integrations can use HTTP. For each open
+workspace, the server has one mutable `MemoryService` owner and a detached
+published `MemoryService` read view. The indexes are shared through `Arc`;
+visibility and reranking metadata are captured with the same generation. Each
+search retains that view independently of the mutable owner's lock. The
 workspace registry keeps these owners isolated by canonical project root.
 
 The resident workspace owner contains two private backing stores: workspace
@@ -63,7 +66,10 @@ implemented. Restarting the server releases the resident workspace slots.
 
 ```mermaid
 flowchart LR
-    Clients[Provider MCP clients and hooks] --> Backend[One HTTP server]
+    Agent[Provider MCP client] --> Adapter[Bundled Rust adapter]
+    Adapter -->|local IPC| Backend[Resident Membrick owner]
+    Hooks[Provider hooks] -->|local IPC| Backend
+    Http[Custom HTTP clients] -->|TCP HTTP| Backend
     Backend --> Registry[Canonical-root allowlist and capacity cap]
     Registry --> A[Workspace A runtime]
     Registry --> B[Workspace B runtime]
@@ -75,17 +81,26 @@ flowchart LR
     MB --> SB[Published search view B]
 ```
 
+On macOS and Linux, the local endpoint is a user-private Unix domain socket;
+Windows uses a named pipe. The resident owner starts on the first provider
+request. The standalone HTTP server is a separate listener mode. Do not run
+both modes as writers for the same workspace stores. See
+[Local IPC server architecture](local-ipc-architecture.md) for startup,
+endpoint security, and the transport comparison.
+
 The compatibility endpoint `POST /provider-memory/add/batch` has no workspace
 field and continues to write to the primary workspace. Workspace-aware MCP
-upserts and hook routes resolve the requested project through the registry.
+upserts and hook routes resolve the requested project through the registry,
+regardless of whether the request arrived over local IPC or standalone HTTP.
 Provider search uses the requested workspace when supplied and otherwise
 searches the primary workspace.
 
-## Staged HTTP writes
+## Staged writes through HTTP or IPC
 
 ```mermaid
 flowchart LR
-    A[Add requests] --> Q[Bounded queue]
+    Http[HTTP add requests] --> Q[Bounded queue]
+    Ipc[IPC add requests] --> Q
     Q --> W[Single writer]
     W --> J[Append and sync journal]
     J --> M[Mutable IndexStore]
@@ -98,9 +113,9 @@ flowchart LR
     D --> T[Reclaim journal]
 ```
 
-With a disk-backed `--index`, the primary HTTP `/add` and `/add/batch` endpoints acknowledge after validating
-and syncing their transaction to `pending-adds.jsonl`, then applying it to the
-mutable store. They do not refresh for each add. The default response includes
+With a disk-backed `--index`, HTTP `/add` and `/add/batch` endpoints and
+workspace-aware IPC equivalents acknowledge after validating and syncing their
+transaction to `pending-adds.jsonl`, then applying it to the mutable store. They do not refresh for each add. The default response includes
 `published: false` when the request is staged; it has no final adjudication.
 
 Publication starts 250 ms after the first pending add, or after 512 pending

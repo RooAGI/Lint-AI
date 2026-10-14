@@ -15,9 +15,10 @@ hide:
 
 <div class="admonition info">
 <p class="admonition-title">A new name: Membrick</p>
-<p>Previously known as Lint-AI, the project is now Membrick. Version 0.4.0
-updates the product and package names. The legacy <code>lint-ai</code> command
-and existing configuration are supported during the transition.</p>
+<p>Previously known as Lint-AI, the project is now Membrick. Version 0.5.0
+moves bundled provider integrations to a resident local IPC service. The
+standalone HTTP API remains available, and the legacy <code>lint-ai</code>
+command remains supported.</p>
 </div>
 
 ## From one conversation to a lasting relationship {.landing-heading}
@@ -97,7 +98,9 @@ Membrick keeps memory in a persistent store and provides a shared service for
 agents and applications. It supports user and session scoping, durable writes,
 and retrieval that can account for newer corrections while preserving history.
 Run it locally or connect through its HTTP and MCP servers. A dashboard helps
-you inspect memory and agent activity.
+you inspect memory and agent activity. Bundled Rust integrations communicate
+with their resident memory owner over local IPC; see the
+[transport architecture](local-ipc-architecture.md).
 
 <h3>Benchmark highlights</h3>
 

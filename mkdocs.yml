@@ -70,6 +70,7 @@ nav:
       - Prometheus: prometheus.md
       - Telemetry details: telemetry.md
   - Architecture:
+      - Local IPC transport: local-ipc-architecture.md
       - Ingestion architecture: ingestion-architecture.md
       - How indexing works: tier0-ingestion.md
       - Search and retrieval: tier1-indexing-and-search.md
@@ -103,6 +104,7 @@ nav:
   - Languages:
       - Korean: korean.md
   - Releases:
+      - 0.5.0: releases/0.5.0.md
       - 0.4.0: releases/0.4.0.md
       - 0.3.0: releases/0.3.0.md
       - Tantivy upgrade verification: releases/tantivy-0.26.2-verification.md

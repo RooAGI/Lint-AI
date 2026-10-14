@@ -59,6 +59,26 @@ this as a saturated queue/backlog diagnostic only. The
 [mixed-load artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/server-throughput-mixed-2026-10-12.json)
 preserves the raw results.
 
+## Matched HTTP and IPC diagnostic (2026-10-14)
+
+This short comparison sent the same `/provider-memory/mcp/tools/call` requests
+through loopback HTTP and the resident Unix socket. Each transport ran for 10
+seconds with four search callers and one writer adding a single memory per
+call. The workspace was seeded and isolated. Every request opened a fresh
+connection; both runs had zero errors, and the last acknowledged write was
+searchable.
+
+| Transport | Search requests/s | Search p50 / p95 / p99 | Writes/s | Write p50 / p95 / p99 |
+|---|---:|---:|---:|---:|
+| HTTP over loopback TCP | 76.97 | 51.8 / 64.4 / 68.2 ms | 11.15 | 87.9 / 101.7 / 103.4 ms |
+| Local IPC over Unix socket | 79.95 | 48.9 / 64.1 / 74.0 ms | 11.75 | 82.0 / 97.4 / 99.8 ms |
+
+This is one short run per transport. The small differences are within run
+variation and do not show a meaningful throughput advantage for either path.
+This diagnostic covers a local MCP workload, not Windows named pipes or large
+production corpora. See the [local IPC architecture](local-ipc-architecture.md)
+for design details.
+
 ## Earlier reference results (through 2026-10-05)
 
 | Workload | HTTP request and load | Rate | Result |

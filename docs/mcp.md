@@ -4,6 +4,18 @@ Each agent adapter exposes a provider-local MCP server over the host client's
 configured MCP transport. The server gives the agent direct access to Membrick
 search, inspection, memory controls, and session controls.
 
+Bundled Rust provider MCP adapters and hook subcommands reach the shared
+resident workspace owner over local IPC. The first request starts that owner
+automatically. macOS and Linux use a user-private Unix socket; Windows uses a
+named pipe. The bundled MCP adapters do not read environment variables to
+select a server or transport.
+Resident service diagnostics are written to
+`~/.membrick/runtime/resident.log` (or `%USERPROFILE%\.membrick\runtime\resident.log`
+on Windows). At resident startup, logs over 1 MiB are rotated to `resident.log.1`.
+See [Local IPC server architecture](local-ipc-architecture.md) for the request
+flow, endpoint permissions, and its relationship to the standalone HTTP
+server.
+
 ## Where each mode applies
 
 MCP and server mode are general Membrick interfaces; they are not restricted to

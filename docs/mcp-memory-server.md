@@ -34,6 +34,8 @@ A typical memory MCP server gives your agent two operations: save this, find thi
 
 Membrick's MCP interface is built on the same retrieval core as everything else in the project: current-state ranking, evidence links, and supersession tracking — exposed as standard MCP tools any MCP-capable client can call.
 
+Bundled Rust MCP adapters connect to their resident workspace owner over local IPC; this is separate from the transport the agent uses to reach its MCP adapter. The standalone HTTP API remains available to custom clients and integrations. See the [local IPC architecture](local-ipc-architecture.md).
+
 ## What the server gives your agent
 
 Seven tools, same names across every supported agent:

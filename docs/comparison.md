@@ -337,7 +337,7 @@ and [receipt-journal comparison](https://github.com/RooAGI/Membrick/blob/main/co
 The primary HTTP server now persists adds to a synced journal, accumulates them
 in the mutable store and publishes an independent read view. Defaults are a
 250 ms publication trigger, 512 pending documents and a 30-second checkpoint
-cadence. [The concurrency document](index-concurrency.md#staged-http-writes)
+cadence. [The concurrency document](index-concurrency.md#staged-writes-through-http-or-ipc)
 explains visibility, flush, recovery and ownership.
 
 The write-only runner separately reports durable acknowledgement rate and

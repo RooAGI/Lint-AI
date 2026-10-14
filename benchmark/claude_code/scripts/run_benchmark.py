@@ -174,6 +174,12 @@ def main() -> None:
                     env[key] = user_env[key]
             env.update({
                 "HOME": str(claude_home),
+                # Keep benchmark worktrees outside the Membrick checkout. Claude
+                # discovers ancestor AGENTS.md files from the physical path,
+                # even when the worktree's git tree contains only a synthetic
+                # fixture. A nested worktree inherited the checkout's memory
+                # policy and triggered unrelated ToolSearch calls during setup.
+                "MEMBRICK_BENCHMARK_WORKTREE_ROOT": str(temp_root / "worktrees"),
                 "MEMBRICK_CLAUDE_SETTINGS": str(settings_path),
                 "MEMBRICK_CLAUDE_MODEL": args.model,
                 "MEMBRICK_CLAUDE_MCP_CONFIG": str(mcp_config_path),
@@ -185,7 +191,7 @@ def main() -> None:
             # installing the skill there just confuses the model with a tool that isn't there.
             if args.profile != "hooks-only":
                 env["MEMBRICK_BENCHMARK_SKILL_PATH"] = str(
-                    repo_root / "src" / "integrations" / "claude_code" / "skill.md"
+                    repo_root / ".claude" / "skills" / "membrick-memory" / "SKILL.md"
                 )
             else:
                 env.pop("MEMBRICK_BENCHMARK_SKILL_PATH", None)

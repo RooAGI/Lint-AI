@@ -27,6 +27,7 @@ mod segment_scoped_benchmark;
 #[cfg(feature = "agent-integrations")]
 #[path = "bin/server.rs"]
 mod server;
+#[cfg(feature = "agent-integrations")]
 #[path = "bin/session_ab_benchmark.rs"]
 mod session_ab_benchmark;
 #[path = "bin/validate_corpus.rs"]
@@ -49,6 +50,7 @@ pub(crate) fn run(name: &str) -> anyhow::Result<()> {
         "segment_scoped_benchmark" => segment_scoped_benchmark::main(),
         #[cfg(feature = "agent-integrations")]
         "server" => server::main(),
+        #[cfg(feature = "agent-integrations")]
         "session_ab_benchmark" => session_ab_benchmark::main(),
         "validate_corpus" => {
             validate_corpus::main();

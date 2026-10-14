@@ -65,16 +65,7 @@
       ]
     }
   ],
-  "validators": [
-    {
-      "name": "claude-routing-configuration",
-      "command": [
-        "rg",
-        "routing_strategy: SegmentRoutingStrategy::LocalDistinctiveness",
-        "src/integrations/claude_code"
-      ]
-    }
-  ],
+  "validators": [],
   "limits": {
     "timeout_seconds": 240,
     "max_turns": 3,

@@ -231,7 +231,13 @@ def main() -> None:
     host_home = Path.home()
     host_cargo_home = host_home / ".cargo"
     host_rustup_home = host_home / ".rustup"
-    temp_root = Path(tempfile.mkdtemp(prefix="membrick-codex-perf."))
+    # The resident Unix socket lives below HOME/.membrick/runtime and macOS
+    # sockaddr_un has a short pathname limit. Keep the isolated HOME shallow
+    # enough that its socket path remains connectable even on macOS.
+    temp_root_kwargs = {"prefix": "mbcp-"}
+    if os.name == "posix" and Path("/tmp").is_dir():
+        temp_root_kwargs["dir"] = "/tmp"
+    temp_root = Path(tempfile.mkdtemp(**temp_root_kwargs))
     binary = args.membrick_binary.resolve() if args.membrick_binary else repo_root / "target" / "debug" / "membrick"
     runner = repo_root / "benchmark" / "codex_code" / "src" / "runner.py"
     report_module = load_report_module(benchmark_root / "src" / "report.py")

@@ -1,0 +1,355 @@
+{
+  "benchmark_root": "benchmark/codex_code",
+  "repo_root": "isolated-worktree",
+  "scenario_count": 1,
+  "repetitions": 1,
+  "summary": {
+    "result_count": 3,
+    "success_count": 3,
+    "invalid_count": 0,
+    "scenarios": {
+      "routing-decision-supersession": {
+        "codex-native": 1,
+        "membrick": 1,
+        "membrick-with-codex-memory": 1
+      }
+    },
+    "scores": [
+      {
+        "scenario_id": "routing-decision-supersession",
+        "arm": "codex-native",
+        "repetition": 1,
+        "success": true,
+        "expected_fact_ids_found": [
+          "current-local-routing",
+          "query-top-three",
+          "old-sparse-superseded"
+        ],
+        "forbidden_fact_ids_found": [],
+        "invalid_reason": null,
+        "validator_count": 1
+      },
+      {
+        "scenario_id": "routing-decision-supersession",
+        "arm": "membrick",
+        "repetition": 1,
+        "success": true,
+        "expected_fact_ids_found": [
+          "current-local-routing",
+          "query-top-three",
+          "old-sparse-superseded"
+        ],
+        "forbidden_fact_ids_found": [],
+        "invalid_reason": null,
+        "validator_count": 1
+      },
+      {
+        "scenario_id": "routing-decision-supersession",
+        "arm": "membrick-with-codex-memory",
+        "repetition": 1,
+        "success": true,
+        "expected_fact_ids_found": [
+          "current-local-routing",
+          "query-top-three",
+          "old-sparse-superseded"
+        ],
+        "forbidden_fact_ids_found": [],
+        "invalid_reason": null,
+        "validator_count": 1
+      }
+    ],
+    "final_results": {
+      "status": "passed",
+      "total_runs": 3,
+      "successful_runs": 3,
+      "invalid_runs": 0,
+      "success_rate": 1.0,
+      "average_setup_elapsed_ms": 7136.140625,
+      "average_continuation_elapsed_ms": 18896.019,
+      "average_interaction_round_latency_ms": 18896.019,
+      "average_validator_elapsed_ms": 20.85572199999793,
+      "average_input_tokens": 214732.66666666666,
+      "average_cached_input_tokens": 178602.66666666666,
+      "average_output_tokens": 767.6666666666666,
+      "average_tool_calls": 4.333333333333333,
+      "average_repeated_tool_calls": 0.3333333333333333,
+      "comparison_note": "This report compares membrick, membrick-with-codex-memory against codex-native.",
+      "arm_summaries": {
+        "codex-native": {
+          "runs": 1,
+          "successful_runs": 1,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          },
+          "average_input_tokens": 312019.0,
+          "average_cached_input_tokens": 265984.0,
+          "average_output_tokens": 1047.0,
+          "average_tool_calls": 7.0,
+          "average_repeated_tool_calls": 1.0,
+          "average_setup_hook_elapsed_ms": 0.0,
+          "average_continuation_hook_elapsed_ms": 0.0,
+          "average_continuation_elapsed_ms": 27950.695917,
+          "average_interaction_round_latency_ms": 27950.695917
+        },
+        "membrick": {
+          "runs": 1,
+          "successful_runs": 1,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          },
+          "average_input_tokens": 195451.0,
+          "average_cached_input_tokens": 158720.0,
+          "average_output_tokens": 651.0,
+          "average_tool_calls": 4.0,
+          "average_repeated_tool_calls": 0.0,
+          "average_setup_hook_elapsed_ms": 655.1341649999999,
+          "average_continuation_hook_elapsed_ms": 1.7214989999999997,
+          "average_continuation_elapsed_ms": 13799.96775,
+          "average_interaction_round_latency_ms": 13799.96775
+        },
+        "membrick-with-codex-memory": {
+          "runs": 1,
+          "successful_runs": 1,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          },
+          "average_input_tokens": 136728.0,
+          "average_cached_input_tokens": 111104.0,
+          "average_output_tokens": 605.0,
+          "average_tool_calls": 2.0,
+          "average_repeated_tool_calls": 0.0,
+          "average_setup_hook_elapsed_ms": 1499.577499,
+          "average_continuation_hook_elapsed_ms": 1.752,
+          "average_continuation_elapsed_ms": 14937.393333000004,
+          "average_interaction_round_latency_ms": 14937.393333000004
+        }
+      },
+      "scenarios": [
+        {
+          "scenario_id": "routing-decision-supersession",
+          "arm": "codex-native",
+          "repetition": 1,
+          "success": true,
+          "invalid_reason": null,
+          "setup_elapsed_ms": 10913.822332999998,
+          "continuation_elapsed_ms": 27950.695917,
+          "interaction_round_latency_ms": 27950.695917,
+          "setup_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "continuation_hooks": {
+            "events": 0,
+            "elapsed_ms": 0.0,
+            "retrieve_ms": 0.0,
+            "capture_ms": 0.0
+          },
+          "validator_elapsed_ms": 7.120207999996353,
+          "expected_fact_ids_found": [
+            "current-local-routing",
+            "query-top-three",
+            "old-sparse-superseded"
+          ],
+          "forbidden_fact_ids_found": [],
+          "input_tokens": 312019,
+          "cached_input_tokens": 265984,
+          "output_tokens": 1047,
+          "reasoning_output_tokens": null,
+          "tool_calls": 7,
+          "repeated_tool_calls": 1,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          }
+        },
+        {
+          "scenario_id": "routing-decision-supersession",
+          "arm": "membrick",
+          "repetition": 1,
+          "success": true,
+          "invalid_reason": null,
+          "setup_elapsed_ms": 6031.400625,
+          "continuation_elapsed_ms": 13799.96775,
+          "interaction_round_latency_ms": 13799.96775,
+          "setup_hooks": {
+            "events": 8,
+            "elapsed_ms": 655.1341649999999,
+            "retrieve_ms": 653.9330409999999,
+            "capture_ms": 1.201124
+          },
+          "continuation_hooks": {
+            "events": 4,
+            "elapsed_ms": 1.7214989999999997,
+            "retrieve_ms": 0.518291,
+            "capture_ms": 1.203208
+          },
+          "validator_elapsed_ms": 25.462124999997116,
+          "expected_fact_ids_found": [
+            "current-local-routing",
+            "query-top-three",
+            "old-sparse-superseded"
+          ],
+          "forbidden_fact_ids_found": [],
+          "input_tokens": 195451,
+          "cached_input_tokens": 158720,
+          "output_tokens": 651,
+          "reasoning_output_tokens": null,
+          "tool_calls": 4,
+          "repeated_tool_calls": 0,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          }
+        },
+        {
+          "scenario_id": "routing-decision-supersession",
+          "arm": "membrick-with-codex-memory",
+          "repetition": 1,
+          "success": true,
+          "invalid_reason": null,
+          "setup_elapsed_ms": 4463.1989170000015,
+          "continuation_elapsed_ms": 14937.393333000004,
+          "interaction_round_latency_ms": 14937.393333000004,
+          "setup_hooks": {
+            "events": 11,
+            "elapsed_ms": 1499.577499,
+            "retrieve_ms": 1499.165499,
+            "capture_ms": 0.41200000000000003
+          },
+          "continuation_hooks": {
+            "events": 4,
+            "elapsed_ms": 1.752,
+            "retrieve_ms": 0.464792,
+            "capture_ms": 1.2872080000000001
+          },
+          "validator_elapsed_ms": 29.98483300000032,
+          "expected_fact_ids_found": [
+            "current-local-routing",
+            "query-top-three",
+            "old-sparse-superseded"
+          ],
+          "forbidden_fact_ids_found": [],
+          "input_tokens": 136728,
+          "cached_input_tokens": 111104,
+          "output_tokens": 605,
+          "reasoning_output_tokens": null,
+          "tool_calls": 2,
+          "repeated_tool_calls": 0,
+          "recall": {
+            "found": 3,
+            "expected": 3,
+            "rate": 1.0
+          }
+        }
+      ],
+      "comparison": [
+        {
+          "scenario_id": "routing-decision-supersession",
+          "repetition": 1,
+          "reference_arm": "codex-native",
+          "candidate_arm": "membrick",
+          "reference": {
+            "recall": {
+              "found": 3,
+              "expected": 3,
+              "rate": 1.0
+            },
+            "input_tokens": 312019,
+            "cached_input_tokens": 265984,
+            "output_tokens": 1047,
+            "tool_calls": 7,
+            "repeated_tool_calls": 1,
+            "interaction_round_latency_ms": 27950.695917
+          },
+          "candidate": {
+            "recall": {
+              "found": 3,
+              "expected": 3,
+              "rate": 1.0
+            },
+            "input_tokens": 195451,
+            "cached_input_tokens": 158720,
+            "output_tokens": 651,
+            "tool_calls": 4,
+            "repeated_tool_calls": 0,
+            "interaction_round_latency_ms": 13799.96775
+          },
+          "candidate_minus_reference": {
+            "input_tokens": -116568,
+            "cached_input_tokens": -107264,
+            "output_tokens": -396,
+            "tool_calls": -3,
+            "repeated_tool_calls": -1,
+            "interaction_round_latency_ms": -14150.728167000001
+          },
+          "candidate_percent_delta_from_reference": {
+            "input_tokens": -0.37359263378191715,
+            "cached_input_tokens": -0.4032723772858518,
+            "output_tokens": -0.37822349570200575,
+            "tool_calls": -0.42857142857142855,
+            "repeated_tool_calls": -1.0,
+            "interaction_round_latency_ms": -0.506274627616457
+          }
+        },
+        {
+          "scenario_id": "routing-decision-supersession",
+          "repetition": 1,
+          "reference_arm": "codex-native",
+          "candidate_arm": "membrick-with-codex-memory",
+          "reference": {
+            "recall": {
+              "found": 3,
+              "expected": 3,
+              "rate": 1.0
+            },
+            "input_tokens": 312019,
+            "cached_input_tokens": 265984,
+            "output_tokens": 1047,
+            "tool_calls": 7,
+            "repeated_tool_calls": 1,
+            "interaction_round_latency_ms": 27950.695917
+          },
+          "candidate": {
+            "recall": {
+              "found": 3,
+              "expected": 3,
+              "rate": 1.0
+            },
+            "input_tokens": 136728,
+            "cached_input_tokens": 111104,
+            "output_tokens": 605,
+            "tool_calls": 2,
+            "repeated_tool_calls": 0,
+            "interaction_round_latency_ms": 14937.393333000004
+          },
+          "candidate_minus_reference": {
+            "input_tokens": -175291,
+            "cached_input_tokens": -154880,
+            "output_tokens": -442,
+            "tool_calls": -5,
+            "repeated_tool_calls": -1,
+            "interaction_round_latency_ms": -13013.302583999997
+          },
+          "candidate_percent_delta_from_reference": {
+            "input_tokens": -0.5617959162743295,
+            "cached_input_tokens": -0.5822906641000962,
+            "output_tokens": -0.4221585482330468,
+            "tool_calls": -0.7142857142857143,
+            "repeated_tool_calls": -1.0,
+            "interaction_round_latency_ms": -0.46558062892756547
+          }
+        }
+      ]
+    }
+  }
+}

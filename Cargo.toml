@@ -10,6 +10,24 @@ homepage = "https://www.rooagi.com"
 readme = "README.md"
 keywords = ["agent-memory", "mcp", "knowledge-base", "AI", "agents"]
 categories = ["text-processing", "command-line-utilities"]
+exclude = [
+    "lint-AI",
+    "benchmark/**",
+    "bindings/**",
+    "charts/**",
+    "comparison/**",
+    "deploy/**",
+    "docs/**",
+    ".github/**",
+    "metrics/**",
+    "scripts/**",
+    "site/**",
+    "vendor/**",
+    "docker-compose.yml",
+    "mkdocs.yml",
+    "package-lock.json",
+    "requirements-docs.txt",
+]
 
 [lib]
 name = "membrick"

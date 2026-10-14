@@ -124,7 +124,11 @@ pub(crate) fn post_json(root: &Path, path: &str, payload: &Value) -> Result<(Sta
         Ok(response) => Ok(response),
         Err(first_error) => {
             start_server(&root)?;
-            for _ in 0..40 {
+            // A cold resident start also opens and indexes the workspace. On
+            // slower machines that can take longer than the former 2 second
+            // window, which made the first hook call fail even though the
+            // service was still starting.
+            for _ in 0..200 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 if let Ok(response) = call() {
                     return Ok(response);

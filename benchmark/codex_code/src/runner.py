@@ -323,16 +323,39 @@ def run_command(
     stderr_path = output_dir / f"{phase}.stderr.log"
     last_path = output_dir / f"{phase}.last"
     started = time.monotonic()
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        env=env,
-        input=stdin_text,
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            input=stdin_text,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Preserve the provider stream on timeout. It can show whether the
+        # model was still working, blocked on a hook, or simply exceeded the
+        # benchmark budget; dropping it makes failed runs impossible to audit.
+        def captured_text(value: str | bytes | None) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return value or ""
+
+        partial_stdout = captured_text(exc.stdout)
+        partial_stderr = captured_text(exc.stderr)
+        stdout_path.write_text(partial_stdout, encoding="utf-8")
+        stderr_path.write_text(partial_stderr, encoding="utf-8")
+        (output_dir / f"{phase}.timeout.txt").write_text(
+            f"Timed out after {timeout_seconds}s\n", encoding="utf-8"
+        )
+        last_message = extract_claude_last_message(partial_stdout)
+        if last_message is None:
+            last_message = extract_muse_last_message(partial_stdout)
+        if last_message is not None:
+            last_path.write_text(last_message, encoding="utf-8")
+        raise
     elapsed_ms = (time.monotonic() - started) * 1000.0
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")

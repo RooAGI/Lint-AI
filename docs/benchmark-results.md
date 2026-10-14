@@ -43,9 +43,8 @@ Structured-fact retrieval is now the benchmark default; pass
 
 The three former top-20 misses ranked 19, 14, and 14. The hamster case is an
 abstention answer without a supported hamster-name fact. The segmented path was
-not rerun with this session-depth protocol. The [JSON report](../scripts/longmemeval-500-misses-session-depth4-2026-10-12.json)
-and [console log](../scripts/longmemeval-500-misses-session-depth4-2026-10-12.txt)
-are retained under `scripts/`.
+not rerun with this session-depth protocol. The [JSON report](https://github.com/RooAGI/Membrick/blob/main/scripts/longmemeval-500-misses-session-depth4-2026-10-12.json)
+is retained under `scripts/`; the local console log is not part of the release artifacts.
 
 Reproduce it with:
 
@@ -63,6 +62,44 @@ different metric from the comparison headline), see
 [`retrieval-longmemeval-current.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-current.json).
 The rust-bert POS/NER branch is reported separately in
 [`benchmark/README.md`](https://github.com/RooAGI/Membrick/blob/main/benchmark/README.md).
+
+## v0.5.0 release-candidate rerun (2026-10-14)
+
+A release-profile run evaluated all 500 LongMemEval-S questions on the v0.5.0
+candidate working tree. It used the single index, heuristic NER, structured-fact
+retrieval enabled, beKIND disabled, no embeddings, and cutoffs 1, 3, 5, 10,
+and 20.
+
+| Metric | Result |
+|---|---:|
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% |
+| MRR / NDCG@10 | 88.85% / 87.91% |
+| Mean search time | 3.62 ms |
+
+Compared with the Oct 13 release-candidate rerun, Recall, MRR, and Any-hit
+results are unchanged at displayed precision. Mean search time changed from
+5.59 ms to 3.62 ms. The top-20 lists differ for 301 questions, but all
+per-question MRR values are unchanged, only three per-question NDCG@10 values
+change, and no question has an empty result or loses an Any-hit@5. Differences
+are among low-ranked results and do not affect the first relevant rank.
+
+Reproduce with:
+
+```bash
+cargo run --release --locked --bin haystack_scoped_benchmark -- \
+  --longmemeval benchmark/data/longmemeval_s_raw.json \
+  --k 1 --k 3 --k 5 --k 10 --k 20 \
+  --ner-provider heuristic --structured-fact-retrieval \
+  --out comparison/results/retrieval-longmemeval-500-2026-10-14-v0.5.0.json
+```
+
+The complete per-question report is available as a
+[compressed JSON artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-14-v0.5.0.json.gz).
+It was measured on an Apple Silicon macOS host from candidate revision
+`52675e5` with local release-preparation changes in the working tree. This is
+a candidate diagnostic; the v0.4.0 tag baseline is being measured separately
+because its committed benchmark does not default structured retrieval on.
 
 ## Native event retrieval run (2026-10-12)
 
@@ -84,8 +121,8 @@ full set, Any-hit Recall@5 increased 0.4 percentage points. MRR changed from
 88.76% to 88.52%, and mean search time increased from 2.80 to 3.50 ms. The
 result is a working-tree diagnostic, not a tagged-release benchmark.
 
-Reports: [structured native events](../scripts/longmemeval-500-claim-contract-2026-10-12.json)
-and [structured retrieval off](../comparison/results/retrieval-longmemeval-500-nobekind-2026-10-12.json).
+Reports: [structured native events](https://github.com/RooAGI/Membrick/blob/main/scripts/longmemeval-500-claim-contract-2026-10-12.json)
+and [structured retrieval off](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-nobekind-2026-10-12.json).
 
 ### Previous standalone rerun (2026-10-04)
 
@@ -166,7 +203,7 @@ with lower recall and MRR than before the upgrade.
 | Fused temporal + global | **95.2%** | **97.6%** | **87.07%** | **0.865** | 18.78 ms |
 | Single-index control | 92.6% | 96.2% | 82.89% | 0.837 | 13.28 ms |
 
-Full report: [segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz](../comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz).
+Full report: [segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.26.2.json.gz).
 
 ### Reasoning-rules rerun (2026-10-12)
 
@@ -189,7 +226,7 @@ latency. The single-index control had slightly lower retrieval scores and lower
 latency than that fused mode. The direct-index timings are not comparable to
 the standalone MemoryService timings above.
 
-Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz`](../comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz).
+Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz).
 
 ### Default LocalDistinctiveness router comparison (2026-10-12)
 
@@ -204,7 +241,7 @@ because it queries all segments.
 | Adaptive 5→12, enriched + reranked | 94.0% | 95.2% | 85.35% | 0.872 | 10.26 ms |
 | Fused temporal + global | 95.0% | 98.2% | 87.25% | 0.887 | 42.50 ms |
 
-Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz`](../comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz).
+Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules-local-distinctiveness.json.gz).
 
 The earlier 133-query multi-session comparison is retained as a historical
 slice in [`segment-multisession-v0.2.0.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-multisession-v0.2.0.json).

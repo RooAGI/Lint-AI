@@ -6,19 +6,21 @@ benchmark work before opening the release PR. Merge the PR before creating its
 
 ## Before opening the release PR
 
-- [ ] Choose the version using semantic versioning: patch for fixes, minor for
+Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Checked items below have evidence in the linked release notes, metadata, and benchmark pages. Remaining boxes are open gates.
+
+- [x] Choose the version using semantic versioning: patch for fixes, minor for
   compatible features, major for breaking changes.
 - [ ] Confirm the release scope and identify migrations, configuration changes,
   compatibility limits, and known issues.
 - [ ] Confirm the version is unused on GitHub Releases, crates.io, PyPI, npm,
   and any other registry being published to.
 - [ ] Confirm publishing access and required GitHub environments are configured.
-- [ ] Update the Rust crate, Python package, Node package and platform packages,
+- [x] Update the Rust crate, Python package, Node package and platform packages,
   OpenClaw plugin, Helm chart, and application version to the intended release
   version. If a component is versioned independently, document that exception.
-- [ ] Add release notes at `docs/releases/X.Y.Z.md` covering user-visible
+- [x] Add release notes at `docs/releases/X.Y.Z.md` covering user-visible
   changes, upgrade steps, compatibility, and known limitations.
-- [ ] Update installation, configuration, architecture, and website docs that
+- [x] Update installation, configuration, architecture, and website docs that
   the release changes.
 - [ ] Check migration behavior against existing user data and configuration.
 - [ ] Keep unrelated workspace changes out of the release PR.

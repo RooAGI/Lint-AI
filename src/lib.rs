@@ -64,13 +64,6 @@ mod index;
 ))]
 mod integrations;
 mod lang;
-#[cfg(any(
-    feature = "claude-code",
-    feature = "codex",
-    feature = "gemini-cli",
-    feature = "agy",
-    feature = "muse-code"
-))]
 /// Agent-facing search-result shaping, shared by the MCP `search` tools and
 /// the retrieval benchmark so both present hits identically.
 pub mod memory_api;

@@ -222,7 +222,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn doc_kind_tags_emit_admitted_herb_and_food_only() {
         assert_eq!(
             doc_kind_tags(&kind_verdict(&[

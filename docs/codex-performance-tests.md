@@ -35,7 +35,7 @@ models and token accounting.
 
 Preserved report:
 
-- `scripts/provider-performance-0.4.0/results/codex/report.json`
+- [Machine-readable Codex report](https://github.com/RooAGI/Membrick/blob/main/benchmark/codex_code/results/v0.5.0-routing-decision-supersession/report.json)
 
 ## Earlier Index-Store Smoke Result
 

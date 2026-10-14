@@ -2,7 +2,9 @@
 
 use crate::conversational_rerank::{conversational_rerank, RERANK_DEEP_TOP_K, RERANK_WEIGHTS};
 use crate::index::ClaimStatus;
-use crate::pipeline::{PipelineOptions, Tier1NerProvider};
+use crate::pipeline::PipelineOptions;
+#[cfg(test)]
+use crate::pipeline::Tier1NerProvider;
 use crate::query_plan::PreparedQuery;
 use crate::query_semantics::{QueryEvidenceOrder, QueryEvidenceRelation};
 use crate::segments::relations::{

@@ -9,9 +9,10 @@ exploration without reducing answer quality.
 
 This document reports the evidence collected so far and defines the benchmark
 required before making general performance claims. The latest result is a
-single-run, three-arm comparison of one memory-recall scenario. It demonstrates
-that the integration works, but does not establish statistically reliable
-improvements across projects or workloads.
+three-repetition, three-arm comparison of one memory-recall scenario. It
+reports fresh input, complete input, overall token use, and overall tokens per
+fresh input token. It is a diagnostic result, not evidence of general gains
+across projects or workloads.
 
 ## Invalidated Matched-Scenario Run: Routing Decision Supersession
 
@@ -41,7 +42,17 @@ Preserved report:
 
 - `scripts/provider-performance-0.4.0/results/claude-correctness-verification/comparison.json`
 
-## Latest Diagnostic Result: Sonnet 5.5 and Membrick 0.4.0
+## Latest Three-Arm Token Efficiency Result
+
+The latest three-arm Claude result is summarized on the dedicated
+[Performance page](performance.md#claude-code-token-use). This report retains
+the run details and raw report paths below.
+
+- Native: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-provider-2026-10-14/claude-native/report.json)
+- Membrick hooks only: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-claude-hooks-only-rerun-2026-10-14/claude-membrick/report.json)
+- Claude + Membrick: [machine-readable report](https://github.com/RooAGI/Membrick/blob/main/benchmark/claude_code/results/v0.5.0-claude-both-hooks-only-three-rounds-2026-10-14/claude-both/report.json)
+
+## Earlier Diagnostic Result: Sonnet 5.5 and Membrick 0.4.0
 
 On 2026-10-13, we reran the
 `index-store-segmented-routing` scenario with Claude Sonnet 5.5 and the

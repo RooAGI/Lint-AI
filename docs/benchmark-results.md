@@ -105,9 +105,28 @@ no empty result lists, and no Any-hit@5 regressions. Mean search time was
 3.52 ms on this run. The complete exact-head report is available as a
 [compressed JSON artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-14-v0.5.0-5d650067.json.gz).
 
-This remains a candidate diagnostic. The v0.4.0 tag baseline is being measured
-separately because its committed benchmark does not default structured
-retrieval on.
+### Matched v0.4.0 tag comparison
+
+I also ran the `v0.4.0` tag (`b46291b2`) on the same Apple Silicon host, dataset,
+and settings, explicitly passing `--structured-fact-retrieval` because that
+tag's default is off. Retrieval quality matched the exact-head v0.5.0 run:
+
+| Metric | v0.4.0 tag | v0.5.0 candidate |
+|---|---:|---:|
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% | 96.6% / 98.8% / 100.0% |
+| MRR | 0.8885 | 0.8885 |
+| NDCG@10 | 0.8791 | 0.8791 |
+| Mean search time | 3.54 ms | 3.52 ms |
+
+Three questions had a different top-20 list. Their MRR and NDCG stayed the
+same; no result list was empty and no question lost Any-hit@5. Treat the small
+latency difference as noise. The v0.4.0 tag has no committed `Cargo.lock`, so
+Cargo resolved its latest compatible dependencies offline; this limits exact
+dependency parity and makes latency a diagnostic. The quality comparison used
+the same dataset, query set, top-k cutoffs, heuristic NER, single-index mode,
+and structured-fact retrieval. The baseline's complete per-question report is
+available as a [compressed JSON artifact](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-14-v0.4.0.json.gz).
 
 ## Native event retrieval run (2026-10-12)
 

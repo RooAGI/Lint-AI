@@ -31,13 +31,15 @@ Current v0.5.0 candidate: PR #110, branch `release/v0.5.0-ipc-architecture`. Che
   query set, result depth, and harness wherever possible. Record the commit SHA,
   build features, configuration, command, host, dataset identity, raw output,
   and summary. Keep dated artifacts; do not replace prior results.
-- [ ] **LongMemEval-S retrieval quality:** run all 500 questions through the
+- [x] **LongMemEval-S retrieval quality:** run all 500 questions through the
   production retrieval settings, including structured-fact retrieval enabled
-  and the documented release NER backend. Compare Any-hit and Fractional
-  Recall at @5/@10/@20, MRR, NDCG@10, and latency with the prior release.
-- [ ] **Per-question retrieval diff:** report questions whose retrieved IDs or
-  ranks changed, inspect regressions and misses, and confirm there are no
-  unexpected empty retrievals. Aggregate scores alone are insufficient.
+  and the documented release NER backend. The v0.4.0 tag and exact v0.5.0 PR
+  head runs have matching retrieval metrics; dependency-lock and timing limits
+  are documented in `benchmark-results.md`.
+- [x] **Per-question retrieval diff:** the v0.5.0 candidate has three changed
+  top-20 lists versus v0.4.0, with unchanged MRR and NDCG, no empty results,
+  and no Any-hit@5 regressions. Full reports are linked in
+  `benchmark-results.md`.
 - [ ] **Temporal and multi-session correctness:** run the existing temporal
   and multi-session benchmark track when retrieval, claim reconciliation,
   indexing, or memory publication changes. Record the exact subset and mode;

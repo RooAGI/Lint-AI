@@ -10,8 +10,8 @@ Search can find the right topic. Membrick helps an agent answer the harder quest
 
 [Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Membrick/)
 
-**Current benchmark:** 500 questions · 86.37% fractional Recall@5 ·
-96.8% any-hit Recall@10 · 2.58 ms mean search time · single CPU · no GPU
+**Current benchmark:** 500 questions · 89.78% fractional Recall@5 ·
+98.8% any-hit Recall@10 · 3.69 ms mean search time · single CPU · no GPU
 
 ---
 
@@ -217,29 +217,28 @@ segmented routing—not a second overall headline.
 Because the scopes and query mix differ, their recall and latency values must
 not be compared as a time series or combined into one score.
 
-The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 question-scoped queries through the heuristic backend, and uses no embedding vectors. This latest result is a working-tree run with Tantivy 0.25.0, not a tagged-release measurement.
+The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 question-scoped queries through the heuristic backend, enables structured-fact retrieval, and uses no embedding vectors. This latest result is a release-candidate run, not a tagged-release measurement.
 
 **500 questions · heuristic backend · single CPU · no GPU**
 
 | Metric | Result |
 |---|---:|
-| Fractional Recall@5 | **86.37%** |
-| Fractional Recall@10 | **91.89%** |
-| Fractional Recall@20 | **92.93%** |
-| Any-hit Recall@5 | **94.2%** |
-| Any-hit Recall@10 | **96.8%** |
-| Any-hit Recall@20 | **97.6%** |
-| MRR | **86.97%** |
-| NDCG@10 | **85.11%** |
-| Mean search latency | **2.58 ms** |
+| Fractional Recall@5 | **89.78%** |
+| Fractional Recall@10 | **95.20%** |
+| Fractional Recall@20 | **98.34%** |
+| Any-hit Recall@5 | **96.6%** |
+| Any-hit Recall@10 | **98.8%** |
+| Any-hit Recall@20 | **100.0%** |
+| MRR | **88.85%** |
+| NDCG@10 | **87.91%** |
+| Mean search latency | **3.69 ms** |
 
 `Fractional Recall@k` is the average fraction of all correct answer sessions recovered in the top *k*. `Any-hit Recall@k` counts a query as successful when any correct answer session appears in the top *k*.
 
 Search latency measures the `MemoryService::search` call and excludes indexing
 the question's haystack. The older published 13.0 ms figure used a different
 timing scope and is not directly comparable. See the
-[latest 500-question report](comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz)
-and [benchmark results](docs/benchmark-results.md) for details.
+[latest 500-question report and benchmark details](docs/benchmark-results.md).
 
 The repository keeps the dataset downloader, production-style benchmark binary, shared AgentMemory scorer, comparison workflow, and temporal-reasoning experiment harnesses so results can be reproduced and changes can be evaluated without silently changing the query path.
 

@@ -21,7 +21,7 @@ On Windows, download the latest `membrick-windows-x86_64.exe` from the
 Open a terminal in your project folder and run:
 
 ```bash
-membrick --openclaw-install .
+membrick install openclaw .
 ```
 
 This adds Membrick to OpenClaw and installs its memory skill. It preserves your
@@ -33,7 +33,7 @@ setup.
 Restart your OpenClaw Gateway so it loads the new settings, then run:
 
 ```bash
-membrick --openclaw-verify-mcp
+membrick verify openclaw .
 ```
 
 This checks that the Membrick server starts and offers its MCP tools. The
@@ -108,7 +108,7 @@ agents in the same project.
 ## If it does not work
 
 - If the verification command fails, confirm `membrick` is installed and on
-  your `PATH`, then run `membrick --openclaw-install .` again.
+  your `PATH`, then run `membrick install openclaw .` again.
 - If the agent does not recall memories, make sure the OpenClaw Gateway was
   restarted after installation and that you started the agent from the project
   where you installed Membrick.

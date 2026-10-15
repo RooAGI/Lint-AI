@@ -68,14 +68,11 @@ can therefore confirm, conflict with, or explicitly correct facts from earlier
 sessions in the same project. Ordinary captures and provider summaries retain
 their per-session scope.
 
-`MemoryService::reconcile_session_context` accepts the full-session
-`SourceDocument`, attaches the already stored documents for that same provider,
-project, and session through the existing `links` field, then publishes through
-the normal service refresh. Its result uses the existing
-`WriteAdjudicationReceipt`; claims retain evidence text from the context and
-relations use the core semantic detector. When claim evidence appears verbatim
-inside a linked turn document, the receipt adds that turn's document ID and byte
-span to the evidence text.
+Hooks send the session-context document in the same upsert batch as the
+observations it links through the existing `links` field. Claims retain
+evidence text from the context and relations use the core semantic detector.
+When claim evidence appears verbatim inside a linked turn document, the receipt
+adds that turn's document ID and byte span to the evidence text.
 
 Claude Code and Codex hook ingestion now sends one ordered `session-observation`
 document per parsed message and one linked `session-context` document. The

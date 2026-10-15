@@ -49,8 +49,8 @@ jobs:
         run: |
           set -euo pipefail
           QUERY='How many retry attempts should we use for gateway timeouts?'
-          ./target/release/membrick --query "$QUERY" examples/demo-real-terminal > demo-artifacts/raw-query.json
-          ./target/release/membrick --llm-context "$QUERY" --result-count 5 examples/demo-real-terminal > demo-artifacts/llm-context.json
+          ./target/release/membrick query "$QUERY" examples/demo-real-terminal > demo-artifacts/raw-query.json
+          ./target/release/membrick context "$QUERY" --count 5 examples/demo-real-terminal > demo-artifacts/llm-context.json
           python3 - <<'PY'
           import json
           q=json.load(open('demo-artifacts/raw-query.json'))

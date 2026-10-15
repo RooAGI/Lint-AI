@@ -20,7 +20,7 @@ On Windows, download `membrick-windows-x86_64.exe` from the
 Open a terminal in the project folder and run:
 
 ```bash
-membrick --gemini-cli-install .
+membrick install gemini .
 ```
 
 This enables Gemini CLI to use Membrick in the project. It configures the MCP connection and hooks and preserves your other Gemini settings.
@@ -29,7 +29,7 @@ On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 
 ```powershell
-.\membrick-windows-x86_64.exe --gemini-cli-install .
+.\membrick-windows-x86_64.exe install gemini .
 ```
 
 Restart Gemini CLI and open the project so it loads the new settings.
@@ -46,7 +46,7 @@ Restart Gemini CLI and make sure you opened the project where you installed
 Membrick. You can check the MCP connection with:
 
 ```bash
-membrick --gemini-cli-verify-mcp .
+membrick verify gemini .
 ```
 
 For details, see [all agent integrations](agents.md) and

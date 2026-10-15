@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const CHECK_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const MANAGED_MARKER: &str = ".membrick-managed";
 const INSTALL_METHOD_MARKER: &str = "membrick-install-method";
@@ -27,6 +28,16 @@ struct UpdateState {
 /// The result is written to a per-installation user cache and surfaced by a
 /// provider lifecycle hook on a later interaction.
 pub(crate) fn schedule_daily_check() {
+    static SCHEDULER: std::sync::Once = std::sync::Once::new();
+    SCHEDULER.call_once(|| {
+        std::thread::spawn(|| loop {
+            start_release_check_if_due();
+            std::thread::sleep(CHECK_POLL_INTERVAL);
+        });
+    });
+}
+
+fn start_release_check_if_due() {
     if cfg!(debug_assertions) {
         return;
     }
@@ -153,13 +164,21 @@ pub(crate) fn install_cached_update(expected_version: &str) -> anyhow::Result<St
     let _lock = try_lock(&cache_file)
         .ok_or_else(|| anyhow::anyhow!("update state is busy; retry in a moment"))?;
     let current = env!("CARGO_PKG_VERSION");
-    let state = read_state(&cache_file).ok_or_else(|| {
-        anyhow::anyhow!("no update check is cached yet; retry after the next session start")
-    })?;
-    anyhow::ensure!(
-        state.checked_current_version == current,
-        "cached update check belongs to a different installed version; restart the MCP client and check again"
-    );
+    // A release can be published after the daily startup check. Refresh here
+    // so an explicit, approved update request never treats an old "no update"
+    // result as current. The supplied version is still checked below before
+    // any package manager runs or binary is replaced.
+    let mut state = read_state(&cache_file).unwrap_or_default();
+    let method = if state.install_method.is_empty() {
+        install_method(&executable).unwrap_or_else(|| "unknown".to_string())
+    } else {
+        state.install_method.clone()
+    };
+    state.checked_at = now_seconds();
+    state.checked_current_version = current.to_string();
+    state.install_method = method;
+    state.latest_version = fetch_available_version(current)?;
+    write_state(&cache_file, &state)?;
     let latest = state
         .latest_version
         .as_deref()

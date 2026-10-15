@@ -43,19 +43,43 @@ project decision, or ask the agent to remember an outcome from the current
 session. The agent uses Membrick's memory tools and lifecycle integration in
 the background.
 
-If you already installed the `membrick` executable, the same provider setup
-can be run with a shorter command:
+If you already installed the `membrick` executable, use the shared provider
+commands for setup and maintenance:
 
 ```bash
-membrick setup codex .
-membrick setup claude .
-membrick setup gemini .
-membrick setup agy .
+membrick install codex .
+membrick install claude .
+membrick install gemini .
+membrick install agy .
+membrick serve codex .
+membrick verify codex .
+membrick uninstall codex .
 ```
 
-Use `membrick serve <provider> [PATH]` to run its MCP server, or
-`membrick verify <provider> [PATH]` to check the connection. The existing
-provider-specific flags remain accepted for scripts and older instructions.
+Use `membrick hook <provider> <event> [PATH]` to run a lifecycle hook, such as
+`membrick hook claude session-start .`. `setup` remains an alias for `install`.
+Older provider-specific flags remain accepted for installed agent configs and
+existing scripts.
+
+Advanced path overrides use `--provider-config`, `--provider-settings`,
+`--provider-skills-dir`, `--provider-hooks-dir`, and
+`--provider-plugin-dir`. Use `--force-skill` with `install` when you
+intentionally want to replace a customized skill.
+
+## Uninstall Claude Code or Codex
+
+From the project directory, remove the Membrick integration with:
+
+```bash
+membrick uninstall claude .
+membrick uninstall codex .
+```
+
+Uninstall removes only Membrick or legacy Lint-AI MCP entries, hooks, and
+project memory guidance for that provider. It preserves unrelated agent
+settings, customized Claude skills, the project's `.membrick` memory data, and
+the Membrick executable. Restart the agent after uninstalling. The Codex hook
+feature flag is left unchanged because other Codex hooks may use it.
 
 ## Migrate from Lint-AI
 

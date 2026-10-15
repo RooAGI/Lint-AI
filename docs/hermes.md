@@ -29,7 +29,7 @@ For Windows or another download option, use the
 Open a terminal in your project folder and run:
 
 ```bash
-membrick --hermes-install .
+membrick install hermes .
 ```
 
 This adds the Membrick connection to Hermes and installs a memory skill that
@@ -41,7 +41,7 @@ Hermes settings and memory provider in place.
 Restart Hermes so it loads the new connection, then check it:
 
 ```bash
-membrick --hermes-verify-mcp
+membrick verify hermes .
 hermes mcp test
 ```
 
@@ -103,7 +103,7 @@ for the same project can use those memories too.
 
 ## If something does not work
 
-- If `hermes mcp test` cannot connect, run `membrick --hermes-install .`
+- If `hermes mcp test` cannot connect, run `membrick install hermes .`
   again from the project folder, restart Hermes, and retry the check.
 - If Hermes has the memory skill but no Membrick tools, check the MCP connection
   in `~/.hermes/config.yaml` and restart Hermes. The skill gives Hermes

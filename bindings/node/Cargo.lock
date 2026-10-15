@@ -1807,7 +1807,7 @@ dependencies = [
 
 [[package]]
 name = "membrick"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "Inflector",
  "aho-corasick",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "membrick-node"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "membrick",

@@ -2712,91 +2712,6 @@ impl MemoryService {
         self.store.upsert(document)
     }
 
-    /// Reconcile a whole-session context document against earlier session
-    /// contexts from the same provider and project. Existing documents from
-    /// this session are attached as turn evidence through `SourceDocument::links`;
-    /// claims and cross-session decisions continue to use the normal semantic
-    /// relation refresh and its existing adjudication receipt.
-    pub fn reconcile_session_context(
-        &mut self,
-        mut context: crate::SourceDocument,
-    ) -> anyhow::Result<WriteAdjudicationReceipt> {
-        let provider = context
-            .filters
-            .get("provider")
-            .filter(|value| !value.trim().is_empty())
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("session context requires a provider"))?;
-        let project_id = context
-            .filters
-            .get("project_id")
-            .filter(|value| !value.trim().is_empty())
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("session context requires a project_id"))?;
-        let session_id = context
-            .filters
-            .get("session_id")
-            .filter(|value| !value.trim().is_empty())
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("session context requires a session_id"))?;
-        anyhow::ensure!(
-            context.filters.get("document_type").map(String::as_str) == Some("session-context"),
-            "document_type must be session-context"
-        );
-        anyhow::ensure!(
-            !context.content.trim().is_empty(),
-            "session context is empty"
-        );
-
-        let mut turn_docs = self
-            .store
-            .source_documents()
-            .into_iter()
-            .filter(|document| {
-                document.doc_id != context.doc_id
-                    && document.filters.get("provider") == Some(&provider)
-                    && document.filters.get("project_id") == Some(&project_id)
-                    && document.filters.get("session_id") == Some(&session_id)
-            })
-            .collect::<Vec<_>>();
-        turn_docs.sort_by(|left, right| {
-            let left_order = left
-                .filters
-                .get("observation_index")
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(usize::MAX);
-            let right_order = right
-                .filters
-                .get("observation_index")
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(usize::MAX);
-            left_order
-                .cmp(&right_order)
-                .then_with(|| left.timestamp.cmp(&right.timestamp))
-                .then_with(|| left.doc_id.cmp(&right.doc_id))
-        });
-        anyhow::ensure!(
-            !turn_docs.is_empty(),
-            "session context has no matching turn evidence documents"
-        );
-        let mut reconciled_doc_ids = Vec::with_capacity(turn_docs.len() + 1);
-        for turn in turn_docs {
-            if !context.links.iter().any(|link| link == &turn.doc_id) {
-                context.links.push(turn.doc_id.clone());
-            }
-            reconciled_doc_ids.push(turn.doc_id.clone());
-        }
-
-        let context_id = context.doc_id.clone();
-        self.upsert(context);
-        self.refresh_index()?;
-        reconciled_doc_ids.push(context_id.clone());
-        Ok(self.build_adjudication_receipt(
-            format!("session:{provider}:{project_id}:{session_id}"),
-            &reconciled_doc_ids,
-        ))
-    }
-
     /// Replace a host-owned capture group, removing obsolete chunks on replay.
     /// Call under the workspace write lock. The replacement filter must match
     /// every new document; an empty filter is never a whole-store delete.
@@ -2808,19 +2723,6 @@ impl MemoryService {
     ) -> anyhow::Result<()> {
         self.replace_source_group_unpublished(key, value, documents)?;
         self.refresh_index()
-    }
-
-    /// Replace capture documents and reconcile their linked session context in
-    /// one service mutation, publishing only after the final graph is rebuilt.
-    pub(crate) fn replace_session_capture(
-        &mut self,
-        key: &str,
-        value: &str,
-        documents: Vec<crate::SourceDocument>,
-        context: crate::SourceDocument,
-    ) -> anyhow::Result<WriteAdjudicationReceipt> {
-        self.replace_source_group_unpublished(key, value, documents)?;
-        self.reconcile_session_context(context)
     }
 
     fn replace_source_group_unpublished(

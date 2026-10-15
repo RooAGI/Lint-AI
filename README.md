@@ -10,8 +10,8 @@ Search can find the right topic. Membrick helps an agent answer the harder quest
 
 [Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Membrick/)
 
-**Current benchmark:** 500 questions · 89.78% fractional Recall@5 ·
-98.8% any-hit Recall@10 · 3.69 ms mean search time · single CPU · no GPU
+**Current benchmark:** 500-question LongMemEval-S. See the
+[latest benchmark results](#benchmark-highlights) for metrics and the source report.
 
 ---
 
@@ -50,12 +50,12 @@ That difference matters anywhere project truth changes over time: architecture d
 There is no required `supersedes:` frontmatter in this example. For simple configuration/value claims, Membrick can infer chronological replacement when the documents establish the same semantic domain. Inferred supersession is domain-scoped so unrelated settings such as two different services' `timeout` values do not suppress one another. Explicit supersession metadata remains authoritative when you provide it.
 
 ```bash
-membrick --query \
+membrick query \
   "How many retry attempts should we use for gateway timeouts?" \
   examples/demo-real-terminal
 ```
 
-Current-state retrieval returns the newer decision with `semantic_status: current`, and `--llm-context` excludes the stale value.
+Current-state retrieval returns the newer decision with `semantic_status: current`, and `membrick context` excludes the stale value.
 
 ### Reproducible terminal demo
 
@@ -104,25 +104,32 @@ Install directly from GitHub:
 cargo install --git https://github.com/RooAGI/Membrick
 ```
 
-Lint or index a local corpus:
+Check what is currently indexed in a folder without scanning it:
 
 ```bash
-membrick /path/to/repo
+membrick status .
+```
+
+Check or index a local corpus:
+
+```bash
+membrick review /path/to/repo
 ```
 
 Query it:
 
 ```bash
-membrick --query "what is the current retry policy?" /path/to/repo/docs
+membrick query "what is the current retry policy?" /path/to/repo/docs
 ```
 
 Get LLM-ready context:
 
 ```bash
-membrick --llm-context "what is the current retry policy?" /path/to/repo/docs
+membrick context "what is the current retry policy?" /path/to/repo/docs
 ```
 
-For Docker, HTTP, Python, Rust, and MCP setup, see the [full quickstart](docs/quickstart.md).
+See the [CLI reference](docs/cli.md) and [full quickstart](docs/quickstart.md)
+for Docker, HTTP, Python, Rust, and MCP setup.
 
 ---
 
@@ -142,8 +149,8 @@ Build the Claude Code and Codex integrations:
 
 ```bash
 cargo build --release --features claude-code,codex
-./target/release/membrick --claude-code-install /path/to/project
-./target/release/membrick --codex-install /path/to/project
+./target/release/membrick install claude /path/to/project
+./target/release/membrick install codex /path/to/project
 ```
 
 All agents share one project-scoped memory store:
@@ -221,17 +228,20 @@ The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 
 
 **500 questions · heuristic backend · single CPU · no GPU**
 
+<!-- BEGIN GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
+**LongMemEval-S, 500 questions · 2026-10-15 · single index · heuristic NER · structured-fact retrieval · no embeddings**
+Working-tree run based on `b204b7e`; not a clean release measurement.
+
 | Metric | Result |
 |---|---:|
-| Fractional Recall@5 | **89.78%** |
-| Fractional Recall@10 | **95.20%** |
-| Fractional Recall@20 | **98.34%** |
-| Any-hit Recall@5 | **96.6%** |
-| Any-hit Recall@10 | **98.8%** |
-| Any-hit Recall@20 | **100.0%** |
-| MRR | **88.85%** |
-| NDCG@10 | **87.91%** |
-| Mean search latency | **3.69 ms** |
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% |
+| MRR | 88.85% |
+| NDCG@10 | 87.91% |
+| Mean search time | 3.39 ms |
+
+Source report: [`retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json).
+<!-- END GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
 
 `Fractional Recall@k` is the average fraction of all correct answer sessions recovered in the top *k*. `Any-hit Recall@k` counts a query as successful when any correct answer session appears in the top *k*.
 
@@ -364,7 +374,7 @@ For implementation details, see:
 ### CLI
 
 ```bash
-membrick --query "what is the current retry policy?" /path/to/repo
+membrick query "what is the current retry policy?" /path/to/repo
 ```
 
 ### Docker / HTTP
@@ -384,7 +394,7 @@ Rust `membrick` CLI on supported platforms:
 
 ```bash
 pipx install membrick
-membrick --codex-install .
+membrick install codex .
 ```
 
 For development from this checkout, build the optional Python extension with

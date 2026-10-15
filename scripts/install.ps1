@@ -53,31 +53,12 @@ try {
     }
 
     if ($Agent) {
-        switch ($Agent) {
-            'codex' {
-                $InstallFlag = '--codex-install'
-                $VerifyFlag = '--codex-verify-mcp'
-            }
-            'claude' {
-                $InstallFlag = '--claude-code-install'
-                $VerifyFlag = '--claude-code-verify-mcp'
-            }
-            'gemini' {
-                $InstallFlag = '--gemini-cli-install'
-                $VerifyFlag = '--gemini-cli-verify-mcp'
-            }
-            'agy' {
-                $InstallFlag = '--agy-install'
-                $VerifyFlag = '--agy-verify-mcp'
-            }
-        }
-
         Write-Host "Configuring Membrick for $Agent in $Project..."
-        & $InstalledBinary $InstallFlag $Project
+        & $InstalledBinary install $Agent $Project
         if ($LASTEXITCODE -ne 0) { throw "Membrick $Agent configuration failed." }
 
         Write-Host 'Verifying the Membrick MCP runtime...'
-        & $InstalledBinary $VerifyFlag $Project
+        & $InstalledBinary verify $Agent $Project
         if ($LASTEXITCODE -ne 0) { throw 'Membrick MCP verification failed.' }
 
         Write-Host "Membrick is installed, configured for $Agent, and MCP verification passed."

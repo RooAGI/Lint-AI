@@ -118,18 +118,18 @@ kubectl create secret generic membrick-auth \
   --from-file=SERVER_TOKEN=secrets/server-token
 ```
 
-The chart defaults to `ghcr.io/rooagi/membrick-server:0.5.0`; the repository
+The chart defaults to `ghcr.io/rooagi/membrick-server:0.6.0`; the repository
 does not currently publish this image automatically. Build and push the image
 to a registry you control, then set `image.repository` and `image.tag` during
 installation. For example:
 
 ```bash
-docker build -t registry.example.com/membrick-server:0.5.0 .
-docker push registry.example.com/membrick-server:0.5.0
+docker build -t registry.example.com/membrick-server:0.6.0 .
+docker push registry.example.com/membrick-server:0.6.0
 helm upgrade --install membrick ./charts/membrick \
   --namespace membrick \
   --set image.repository=registry.example.com/membrick-server \
-  --set image.tag=0.5.0
+  --set image.tag=0.6.0
 ```
 
 The default chart provisions a 10 GiB persistent volume claim using the

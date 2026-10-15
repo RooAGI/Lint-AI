@@ -14,7 +14,7 @@ example, install it globally and connect a project to Codex:
 
 ```bash
 npm install --global membrick
-membrick --codex-install .
+membrick install codex .
 ```
 
 The CLI is the same Rust executable shipped in Membrick releases. The npm

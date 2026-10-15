@@ -231,8 +231,72 @@ def prepare_worktree(repo_root: Path, revision: str, run_root: Path) -> Path:
     return worktree_path
 
 
+def stop_resident_servers(worktree_path: Path, timeout_seconds: float = 10.0) -> list[int]:
+    """Stop Membrick resident servers whose working directory is inside the worktree.
+
+    Hooks start one resident per workspace on first use, and residents do not
+    exit on their own. A disposable benchmark worktree must stop its resident
+    when the repetition ends, or every run leaves a background process behind.
+    SIGTERM lets the resident flush and remove its socket; SIGKILL is the
+    fallback for a resident that does not exit in time.
+    """
+    roots = {str(worktree_path.resolve())}
+    if str(worktree_path).startswith("/var/"):
+        roots.add("/private" + str(worktree_path))
+    listing = subprocess.run(
+        ["lsof", "-a", "-c", "membrick", "-d", "cwd", "-Fpn"],
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout
+    pids: list[int] = []
+    pid = None
+    for line in listing.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None:
+            cwd = line[1:]
+            if any(cwd == root or cwd.startswith(root + "/") for root in roots):
+                command = subprocess.run(
+                    ["ps", "-o", "command=", "-p", str(pid)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                ).stdout
+                if "--resident-server" in command:
+                    pids.append(pid)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + timeout_seconds
+    remaining = list(pids)
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.1)
+        remaining = [pid for pid in remaining if process_alive(pid)]
+    for pid in remaining:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return pids
+
+
+def process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def cleanup_worktree(repo_root: Path, worktree_path: Path) -> None:
     """Remove a worktree left over from a prior (uncleaned) run of the same rep dir."""
+    if worktree_path.exists():
+        stop_resident_servers(worktree_path)
     subprocess.run(
         ["git", "-C", str(repo_root), "worktree", "remove", "--force", str(worktree_path)],
         check=False,
@@ -935,6 +999,12 @@ def execute_scenario(
             log(f"scenario {scenario['id']} repetition {repetition}: wrote run record")
             outputs.append(record)
         finally:
+            stopped = stop_resident_servers(worktree_path)
+            if stopped:
+                log(
+                    f"scenario {scenario['id']} repetition {repetition}: stopped resident "
+                    f"Membrick server(s) {stopped}"
+                )
             log(
                 f"scenario {scenario['id']} repetition {repetition}: leaving worktree "
                 f"in place at {worktree_path} for inspection (removed automatically on next run)"

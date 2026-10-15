@@ -14,6 +14,20 @@ struct PublicationResult {
     checkpoint: Option<crate::pipeline::PreparedCheckpoint>,
 }
 
+/// One journal line. Add batches keep their original array form, so journals
+/// written before document upserts were journaled still recover.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JournalEntry {
+    Add(Vec<AddRequest>),
+    Upsert { upsert: Vec<crate::SourceDocument> },
+}
+
+#[derive(Serialize)]
+struct JournalUpsert<'a> {
+    upsert: &'a [crate::SourceDocument],
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StagedAddResponse {
     pub success: bool,
@@ -297,30 +311,7 @@ impl MemoryService {
             }
         }
         if !new_requests.is_empty() {
-            if let Some(path) = self.staged_journal_path() {
-                crate::pipeline::persistence::ensure_safe_output_path(&path)?;
-                let created = !path.exists();
-                let mut options = std::fs::OpenOptions::new();
-                options.create(true).append(true);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
-                }
-                let mut file = options.open(&path)?;
-                let original_len = file.metadata()?.len();
-                let mut bytes = serde_json::to_vec(&new_requests)?;
-                bytes.push(b'\n');
-                let persisted = file.write_all(&bytes).and_then(|_| file.sync_all());
-                if let Err(error) = persisted {
-                    file.set_len(original_len)?;
-                    file.sync_all()?;
-                    return Err(error.into());
-                }
-                if created {
-                    std::fs::File::open(path.parent().expect("journal parent"))?.sync_all()?;
-                }
-            }
+            self.append_journal_entry(&serde_json::to_vec(&new_requests)?)?;
         }
         let mut responses = Vec::with_capacity(requests.len());
         for request in requests {
@@ -342,6 +333,63 @@ impl MemoryService {
 
     pub fn stage_add(&mut self, request: AddRequest) -> anyhow::Result<StagedAddResponse> {
         Ok(self.stage_add_batch(vec![request])?.remove(0))
+    }
+
+    /// Persist documents to the journal, then apply them to the mutable store.
+    /// No index refresh: the background publisher makes them searchable.
+    /// Returns whether the write is durable, which is false only for a
+    /// service without a journal (in-memory or workspace-derived stores).
+    pub(crate) fn stage_upsert_batch(
+        &mut self,
+        documents: Vec<crate::SourceDocument>,
+    ) -> anyhow::Result<bool> {
+        if documents.is_empty() {
+            return Ok(self.staged_journal_path().is_some());
+        }
+        let durable = self.staged_journal_path().is_some();
+        if durable {
+            self.append_journal_entry(&serde_json::to_vec(&JournalUpsert { upsert: &documents })?)?;
+        }
+        for document in documents {
+            self.upsert(document);
+        }
+        Ok(durable)
+    }
+
+    /// Append one journal transaction and sync it before returning.
+    fn append_journal_entry(&self, entry: &[u8]) -> anyhow::Result<()> {
+        let Some(path) = self.staged_journal_path() else {
+            return Ok(());
+        };
+        crate::pipeline::persistence::ensure_safe_output_path(&path)?;
+        let created = !path.exists();
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+        }
+        let mut file = options.open(&path)?;
+        let original_len = file.metadata()?.len();
+        let mut bytes = entry.to_vec();
+        bytes.push(b'\n');
+        let persisted = file.write_all(&bytes).and_then(|_| file.sync_all());
+        if let Err(error) = persisted {
+            file.set_len(original_len)?;
+            file.sync_all()?;
+            return Err(error.into());
+        }
+        if created {
+            std::fs::File::open(path.parent().expect("journal parent"))?.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// Accepted writes not yet visible in the published snapshot.
+    pub(crate) fn has_unpublished_writes(&self) -> bool {
+        let (accepted, published, _) = self.publication_revisions();
+        self.pending_document_count() > 0 || accepted > published
     }
 
     pub(crate) fn enrichment_ready(&self) -> bool {
@@ -427,12 +475,20 @@ impl MemoryService {
             if line.last() != Some(&b'\n') {
                 break;
             }
-            let requests: Vec<AddRequest> = serde_json::from_slice(line)?;
-            for request in requests {
-                let key = (request.user_id.clone(), request.request_id.clone());
-                let (_, documents) = self.add_unpublished(request)?;
-                if !documents.is_empty() {
-                    self.pending_adds.insert(key, documents);
+            match serde_json::from_slice::<JournalEntry>(line)? {
+                JournalEntry::Add(requests) => {
+                    for request in requests {
+                        let key = (request.user_id.clone(), request.request_id.clone());
+                        let (_, documents) = self.add_unpublished(request)?;
+                        if !documents.is_empty() {
+                            self.pending_adds.insert(key, documents);
+                        }
+                    }
+                }
+                JournalEntry::Upsert { upsert } => {
+                    for document in upsert {
+                        self.upsert(document);
+                    }
                 }
             }
             valid_len += line.len();
@@ -677,6 +733,49 @@ mod tests {
         );
         drop(service);
         std::fs::remove_dir_all(path).unwrap();
+    }
+    fn capture(doc_id: &str) -> crate::SourceDocument {
+        crate::SourceDocument {
+            doc_id: doc_id.into(),
+            source: format!("claude-code://project/session/{doc_id}"),
+            content: "quartz capture".into(),
+            concept: "session-observation".into(),
+            group_id: None,
+            filters: std::collections::BTreeMap::new(),
+            headings: vec![],
+            links: vec![],
+            timestamp: None,
+            doc_length: "quartz capture".len(),
+            author_agent: None,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        }
+    }
+    #[test]
+    fn staged_upsert_is_durable_before_publication_and_survives_restart() {
+        let path = root();
+        {
+            let mut service = MemoryService::at_path(&path, options()).unwrap();
+            assert!(service.stage_upsert_batch(vec![capture("c1")]).unwrap());
+            assert!(service.has_unpublished_writes());
+            assert!(
+                std::fs::metadata(path.join("pending-adds.jsonl"))
+                    .unwrap()
+                    .len()
+                    > 0
+            );
+            // Dropped without flush: only the journal holds the document.
+        }
+        let recovered = MemoryService::at_path(&path, options()).unwrap();
+        assert!(recovered.store.source_document_by_id("c1").is_some());
+        drop(recovered);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn staged_upsert_without_journal_reports_not_durable() {
+        let mut service = MemoryService::in_memory(options());
+        assert!(!service.stage_upsert_batch(vec![capture("c1")]).unwrap());
+        assert!(service.has_unpublished_writes());
     }
     #[test]
     fn restart_replays_acknowledged_add_and_ignores_interrupted_tail() {

@@ -20,7 +20,7 @@ On Windows, download `membrick-windows-x86_64.exe` from the
 Open a terminal in the project folder and run:
 
 ```bash
-membrick --codex-install .
+membrick install codex .
 ```
 
 This enables Codex to use Membrick in the project. It configures the MCP connection and hooks, adds the project memory instructions, and preserves your other Codex settings.
@@ -44,7 +44,7 @@ On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 
 ```powershell
-.\membrick-windows-x86_64.exe --codex-install .
+.\membrick-windows-x86_64.exe install codex .
 ```
 
 If Codex asks whether to trust the project's configuration or hooks, approve them so the integration can run.
@@ -61,9 +61,22 @@ Check that the project is trusted in Codex and start a new session. You can
 check the MCP connection with:
 
 ```bash
-membrick --codex-verify-mcp .
+membrick verify codex .
 ```
 
 For details, see [all agent integrations](agents.md),
 [Codex performance measurements](codex-performance-tests.md), and
 [session recording](session-recording-design.md).
+
+## Uninstall
+
+From the project directory, run:
+
+```bash
+membrick uninstall codex .
+```
+
+This removes the Membrick MCP entries and hook commands, plus the Membrick
+policy block from `AGENTS.md`. Other settings, `.membrick` data, and the
+executable remain. Codex's hooks feature flag is left unchanged because other
+Codex hooks may use it. Restart Codex to reload its settings.

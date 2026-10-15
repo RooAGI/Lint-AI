@@ -68,6 +68,7 @@ mod lang;
 /// the retrieval benchmark so both present hits identically.
 pub mod memory_api;
 mod pipeline;
+mod provider_sources;
 mod query_plan;
 #[cfg(feature = "experimental")]
 mod remote_query;

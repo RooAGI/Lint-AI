@@ -1,6 +1,9 @@
 # Show Concepts
 
-`--show-concepts` prints a section-aware concept inventory from the corpus.
+This page describes the legacy concept diagnostic. Its `--show-concepts`
+switch is hidden from normal CLI help and retained only for compatibility; it
+is not part of the supported command-line workflow. Use `membrick index` to
+build the current project index.
 
 ## Goal
 Provide a fast view of which concepts are most prominent in which document sections.

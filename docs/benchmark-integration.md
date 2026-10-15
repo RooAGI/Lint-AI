@@ -120,6 +120,11 @@ starts a new client session. The setup messages establish facts that should be
 captured into durable memory. The setup turn is allowed to perform normal
 client work and lifecycle capture.
 
+When a repetition ends, the runner sends SIGTERM to any Membrick resident
+server whose working directory is inside that worktree, so disposable
+worktrees do not leave background processes behind. The worktree itself stays
+in place for inspection until the next run of the same repetition.
+
 The setup phase measures setup and capture behavior, but it is not the primary
 latency comparison. Setup cost can include initial repository indexing,
 authentication, model startup, hook execution, and session persistence.
@@ -179,7 +184,7 @@ enabled together). Each client maps these roles onto its own `--arms` names:
 
 AGY has no built-in "native memory" feature of its own to combine with
 Membrick, so it has no `Both` arm; `agy-native` is Membrick-absent entirely
-(`--agy-install` is not even run), and `agy-membrick-disabled` is a stricter
+(the `install agy` command is skipped), and `agy-membrick-disabled` is a stricter
 control than `agy-native`. Membrick is installed identically to `agy-membrick`
 but toggled off via `disable_membrick`, isolating "installed but inactive"
 from "never installed."
@@ -195,10 +200,10 @@ Concretely, each launcher configures its arms as follows:
 - `claude-native`: Claude auto-memory enabled, no Membrick configuration at all.
 - `claude-membrick`: Claude auto-memory disabled, Membrick hooks enabled, MCP excluded from `hooks-only` profile.
 - `claude-both`: Claude auto-memory enabled *and* Membrick hooks enabled together.
-- `codex-native`: `memories = true` in Codex's own `config.toml`, no Membrick hook installation (`--codex-install` is skipped entirely).
+- `codex-native`: `memories = true` in Codex's own `config.toml`, no Membrick hook installation (the `install codex` command is skipped entirely).
 - `membrick`: `memories = false`, Membrick hooks installed and restricted to the Claude-equivalent lifecycle (see below).
 - `membrick-with-codex-memory`: `memories = true` *and* Membrick hooks installed. This is the Codex analogue of `claude-both`.
-- `agy-native`: no `--agy-install` step at all; pure AGY with nothing Membrick-related present.
+- `agy-native`: no `install agy` step at all; pure AGY with nothing Membrick-related present.
 - `agy-membrick`: Membrick installed and explicitly enabled (`enable_membrick`), MCP server config emptied so only hooks are active.
 - `agy-membrick-disabled`: Membrick installed identically to `agy-membrick` but explicitly disabled (`disable_membrick`). This is a matched-installation control.
 - `agy-mcp-only`: Membrick installed with hook settings emptied (no hooks fire) and the MCP server config left in place. This isolates the MCP path.
@@ -364,8 +369,8 @@ Use the provider health command to validate process startup, `initialize`, and
 `tools/list`:
 
 ```bash
-./membrick --claude-code-verify-mcp /path/to/repo --mcp-timeout-ms 30000
-./membrick --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick verify claude /path/to/repo
+./membrick verify codex /path/to/repo
 ```
 
 To validate the search path, use an MCP client to call:

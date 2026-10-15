@@ -88,3 +88,7 @@ comparison/results/retrieval-longmemeval-current-*.json
 comparison/results/segment-longmemeval-500-2026-10-*.json
 comparison/results/retrieval-longmemeval-route-width-*-100-2026-10-04.json
 comparison/results/segment-multisession-2026-10-04.json
+# Local provider benchmark runs contain large worktrees, logs, and binaries.
+/scripts/provider-performance-0.4.0/
+/comparison/results/release-v0.5.0-multisession-133-nobekind-c8fef3d7.json
+/comparison/results/release-v0.5.0-temporal-133-nobekind-c8fef3d7.json

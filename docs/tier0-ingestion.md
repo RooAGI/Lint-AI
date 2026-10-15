@@ -36,26 +36,19 @@ Tier 0 does not perform semantic reasoning. It only captures ingestion metadata 
 Tier 0 links metadata to documents through `id` and `source`.
 Both map back to the processed document path.
 
-## Tier 0 Index File
-Use the CLI to write a persistent index:
+## Persistent Index
+Build or refresh the project's persistent index with the current CLI:
 
 ```bash
-./target/debug/membrick /path/to/repo --tier0-index-out
+membrick index /path/to/repo
 ```
 
-Default output file:
-- `tier0-index.json`
+The current CLI stores index data under the project's `.membrick` directory.
+The older `--tier0-index-out` JSON export switch is hidden for compatibility
+and is not part of the supported command-line workflow.
 
-Custom output path:
-
-```bash
-./target/debug/membrick /path/to/repo --tier0-index-out out/my-index
-```
-
-If the provided output path has no extension, `.json` is appended automatically.
-
-## Index Structure
-The index file includes:
+## Legacy Tier 0 export format
+Older standalone Tier 0 JSON exports include:
 - `tier`
 - `generated_at_unix`
 - `path`

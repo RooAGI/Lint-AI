@@ -59,17 +59,17 @@ Each agent adapter exposes a provider-local MCP server over the host client's co
 
 ```bash
 # Claude Code: merges the MCP server entry into ~/.claude.json
-./membrick --claude-code-install /path/to/project
+./membrick install claude /path/to/project
 
 # Codex: merges mcp_servers.membrick into ~/.codex/config.toml
-./membrick --codex-install /path/to/project
+./membrick install codex /path/to/project
 ```
 
 Or run a server directly — for example, to point any MCP-capable client at it:
 
 ```bash
-./membrick --claude-code-serve /path/to/repo
-./membrick --codex-serve /path/to/repo
+./membrick serve claude /path/to/repo
+./membrick serve codex /path/to/repo
 ```
 
 Memory and recording state are project- and provider-scoped. Recording is capture-only: it writes session events but never injects them as memory. Tool and hook failures are fail-open, so the host agent keeps working if the memory layer has a bad day.
@@ -79,7 +79,7 @@ Memory and recording state are project- and provider-scoped. Recording is captur
 Download the release binary for your platform (macOS, Linux, or Windows) from the [releases page](https://github.com/RooAGI/Membrick/releases), then start a server against any project:
 
 ```bash
-./membrick --claude-code-serve /path/to/project
+./membrick serve claude /path/to/project
 ```
 
 We did exactly that against the real Membrick repo and sent a standard MCP `tools/call`. Verbatim exchange:
@@ -107,7 +107,7 @@ We did exactly that against the real Membrick repo and sent a standard MCP `tool
 Ranked results with scores, sources, and a `semantic_status` verdict on every hit — over plain JSON-RPC, callable from any MCP client. To see what's in the index underneath, inspect it directly:
 
 ```bash
-membrick --inspect-index .membrick/claude-memory
+membrick inspect-index .membrick/claude-memory
 ```
 
 For the full agent experience (automatic retrieval at session start, capture at session end), use the installer for your agent instead of running the server by hand.

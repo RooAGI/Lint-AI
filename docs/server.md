@@ -347,9 +347,9 @@ resident owner on the first request. They do not read environment variables to
 select a transport or server. This avoids local TCP firewall rules and keeps
 one `MemoryService` per workspace. The standalone HTTP API remains available
 to external clients and is configured through its command-line options.
-The local resident service writes startup and listener diagnostics to
-`~/.membrick/runtime/resident.log` (or `%USERPROFILE%\.membrick\runtime\resident.log`
-on Windows); startup rotates it to one backup when it exceeds 1 MiB.
+The local resident service writes startup and listener diagnostics to the
+project's `.membrick/runtime/resident.log`; startup rotates it to one backup
+when it exceeds 1 MiB.
 
 Hermes and OpenClaw plugins can share one HTTP server process. OpenClaw hook payloads with a
 workspace directory are routed to that workspace's runtime. Hermes currently

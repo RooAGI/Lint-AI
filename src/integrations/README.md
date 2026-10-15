@@ -205,7 +205,7 @@ segmented memory store later.
 
 Replay is an orchestrated new provider session rather than a conversation
 fork. It always records a new `replay-*` archive, supports explicit
-`--replay-enable-membrick` and `--replay-disable-membrick` arms, and preserves the
+`--enable-membrick` and `--disable-membrick` arms, and preserves the
 baseline archive. Codex resumes the provider conversation after its first
 prompt; Claude runs prompts independently because it lacks a portable resume
 API.
@@ -228,7 +228,7 @@ cargo build --release --features claude-code
 Install into a project:
 
 ```bash
-./membrick --claude-code-install /path/to/repo
+./membrick install claude /path/to/repo
 ```
 
 Installation configures the project MCP entry, lifecycle hooks, and the
@@ -247,13 +247,13 @@ of model tool selection.
 Run the server directly:
 
 ```bash
-./membrick --claude-code-serve /path/to/repo
+./membrick serve claude /path/to/repo
 ```
 
 Verify startup and tool discovery:
 
 ```bash
-./membrick --claude-code-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick verify claude /path/to/repo
 ```
 
 ## Codex
@@ -267,7 +267,7 @@ cargo build --release --features codex
 Install into a project:
 
 ```bash
-./membrick --codex-install /path/to/repo
+./membrick install codex /path/to/repo
 ```
 
 Installation updates the Codex MCP configuration and hook settings while
@@ -277,13 +277,13 @@ prompt retrieval, tool-use context, compaction, and session capture.
 Run the server directly:
 
 ```bash
-./membrick --codex-serve /path/to/repo
+./membrick serve codex /path/to/repo
 ```
 
 Verify startup and tool discovery:
 
 ```bash
-./membrick --codex-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+./membrick verify codex /path/to/repo
 ```
 
 ## Hook and MCP Responsibilities

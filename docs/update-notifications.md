@@ -1,10 +1,11 @@
 # Update notifications
 
 Membrick checks for a newer stable release when an installed MCP server starts
-and its last check was more than 24 hours ago. The check runs in the background
-and does not delay MCP startup or searches. It requests release metadata from
-the Membrick GitHub releases API. It does not send workspace paths, queries, or
-memory content.
+and its last check was more than 24 hours ago. A running server also rechecks
+once an hour, so it does not need to restart when the 24-hour interval expires.
+The check runs in the background and does not delay MCP startup or searches. It
+requests release metadata from the Membrick GitHub releases API. It does not
+send workspace paths, queries, or memory content.
 
 The release version is cached under the current user's operating system cache
 directory, keyed by the installed executable. This shares one check across
@@ -39,9 +40,12 @@ executing `update_membrick` if you want the same explicit approval prompt. MCP
 itself does not standardize a yes/no approval dialog, so the action description
 also instructs the agent to ask and wait for approval.
 
-The action uses fixed package names and arguments, does not invoke a shell, and
-refuses unknown installation methods. Local npm installs are left to the user
-because updating them would modify the project's dependency state.
+The action refreshes release metadata before installing, so an old cached
+"no update" result cannot block an approved update. It then verifies that the
+requested version still matches the latest release. It uses fixed package
+names and arguments, does not invoke a shell, and refuses unknown installation
+methods. Local npm installs are left to the user because updating them would
+modify the project's dependency state.
 Official-installer updates verify the release asset checksum. Restart the
 agent client after a successful update to reconnect the new MCP process.
 

@@ -105,15 +105,15 @@ with their resident memory owner over local IPC; see the
 <h3>Benchmark highlights</h3>
 
 <section class="proof-grid proof-grid--six" aria-label="Membrick benchmark highlights">
-  <div><strong>96.0%</strong><span>fused temporal any-hit Recall@5 · 500 questions</span></div>
-  <div><strong>94.2%</strong><span>routed top-5 any-hit Recall@5</span></div>
-  <div><strong>2.63 ms</strong><span>single-index mean search latency</span></div>
-  <div><strong>2,246.69/s</strong><span>read-only searches · C=10 · Oct 4</span></div>
-  <div><strong>212.36/s</strong><span>single records published · <code>/add</code></span></div>
-  <div><strong>1,977.12/s</strong><span>batch records published · 128 per call</span></div>
+  <div><strong>89.78%</strong><span>fractional Recall@5 · 500 questions</span></div>
+  <div><strong>95.20%</strong><span>fractional Recall@10 · 500 questions</span></div>
+  <div><strong>98.34%</strong><span>fractional Recall@20 · 500 questions</span></div>
+  <div><strong>96.6%</strong><span>any-hit Recall@5 · 500 questions</span></div>
+  <div><strong>98.8%</strong><span>any-hit Recall@10 · 500 questions</span></div>
+  <div><strong>100%</strong><span>any-hit Recall@20 · 500 questions</span></div>
 </section>
 
-<p class="benchmark-note">Retrieval scores use 500 LongMemEval-S questions with Tantivy 0.25.0. In an experimental route comparison, fused temporal + global reached 96.0% any-hit Recall@5; routed top-5 reached 94.2%. Mean single-index search time was 2.58 ms. Read throughput is a separate C=10 read-only run on 23,366 records from October 4. Published write rates include final flush: <code>/add</code> completed 212.36 records/s; batches of 128 completed 1,977.12 records/s. The batch run was saturated and rejected about 25,500–26,700 requests per repetition, so its rate is a burst result. In the October 5 sparse mixed-load check, ten readers sustained 1,248.69 searches/s with one single-record write per second, versus 1,209.01 searches/s without writes. See the <a href="benchmark-results/">retrieval results</a> and <a href="http-server-benchmarks/">HTTP server benchmarks</a> for methods and reports.</p>
+<p class="benchmark-note">These are the latest release-candidate results across all 500 LongMemEval-S questions, using the heuristic NER backend, structured-fact retrieval, a single index, and no embeddings. Fractional Recall reports how many relevant sessions were recovered; any-hit Recall reports whether at least one relevant session appeared in the results. See the <a href="benchmark-results/">full benchmark results</a> for MRR, NDCG, search timing, methodology, and reports. HTTP throughput is measured separately and documented on the <a href="http-server-benchmarks/">HTTP server benchmarks</a> page.</p>
 
 <p class="benchmark-note">Agent integration results and their limits are listed on the <a href="performance/">Performance page</a>. The latest Claude comparison covers three repetitions of one scenario in each of three arms; it reports a 75% drop in fresh input tokens, a 79.0% to 79.6% drop in overall tokens, and a 16.0% to 18.5% drop in overall tokens per fresh input token. This is diagnostic evidence for that fixture and scenario, not a general performance claim.</p>
 

@@ -87,6 +87,60 @@ measurements are in [`comparison/ipc_http_mcp_benchmark.py`](https://github.com/
 and [`comparison/results/release-v0.5.0-ipc-http-mcp-18339c0.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/release-v0.5.0-ipc-http-mcp-18339c0.json).
 See the [local IPC architecture](local-ipc-architecture.md) for design details.
 
+## Resident filesystem queue optimization (2026-10-14)
+
+To measure the filesystem fallback itself, I ran the same mixed MCP workload
+after each change: three 10-second repetitions, four search clients, one writer
+adding a memory every 500 ms, and 100 matching Markdown documents per isolated
+workspace. The benchmark client waits up to 10 ms for queue responses, matching
+the production client. Every stage had zero request errors and every
+acknowledged write was searchable. The table shows medians; latency columns are
+the median of the per-run p50 and p95 values.
+
+| Stage | Change applied | Search requests/s | Search p50 / p95 | Write p50 / p95 |
+|---|---|---:|---:|---:|
+| Baseline | 20 ms resident scan, sequential dispatch, 10 ms client polling, queue `sync_all()` | 130.4 | 26.32 / 63.01 ms | 90.92 / 106.52 ms |
+| Concurrent dispatch | Claim up to 32 requests and dispatch concurrently through the existing router | 135.7 | 27.03 / 52.78 ms | 81.01 / 93.08 ms |
+| Event wakeups | Watch pending and response directories, retaining periodic recovery scans | 190.2 | 17.84 / 30.12 ms | 75.22 / 81.94 ms |
+| No queue `sync_all()` | Remove sync calls for transient request and response envelopes | **289.7** | **12.87 / 13.48 ms** | **62.28 / 67.49 ms** |
+
+The largest measured improvement came from removing queue-file `sync_all()`:
+throughput rose 52% from the event-wakeup stage, and p95 search latency fell
+55%. Across the full sequence, queue throughput rose 122% and p95 latency fell
+79%. Queue files are transient transport messages; durability for accepted
+memory writes remains the responsibility of `MemoryService`, whose journal and
+index persistence still calls `sync_all()` before acknowledging writes.
+Queue request and response files are now transient handoff data and are not
+guaranteed to survive an operating-system crash. If a resident stops after a
+write is committed but before its response reaches the client, that client can
+still see an uncertain outcome and should reconcile before retrying.
+
+The no-sync stage also gives a direct comparison among the three transports.
+Each value below is the median of three 10-second runs; latency columns are
+medians of the per-run percentiles. The writer was paced to two writes per
+second, so this is completion of the offered write workload, not maximum write
+capacity.
+
+| Transport | Search requests/s (median; range) | Search p50 / p95 / p99 | Writes/s | Write p50 / p95 / p99 | Errors | Last write searchable |
+|---|---:|---:|---:|---:|---:|---|
+| HTTP over loopback TCP | 2,411.7 (2,357.4–2,441.2) | 1.51 / 2.33 / 2.84 ms | 1.8 | 55.07 / 58.83 / 59.24 ms | 0 | Yes, all runs |
+| Local IPC over Unix socket | 2,629.7 (2,444.0–2,640.6) | 1.44 / 1.87 / 2.69 ms | 1.8 | 58.51 / 62.67 / 63.68 ms | 0 | Yes, all runs |
+| Filesystem request queue, no queue `sync_all()` | 289.7 (282.7–290.8) | 12.87 / 13.48 / 61.57 ms | 1.8 | 62.28 / 67.49 / 73.64 ms | 0 | Yes, all runs |
+
+The file queue remains slower, but is the fallback when a sandbox blocks
+sockets. These are short local diagnostics on macOS 26.6.2 arm64 with Python
+3.9.6, a local release server, and a seeded 100-document corpus. They are not a
+production capacity guarantee or a Windows named-pipe result. The binary was
+built from the dirty working tree on top of commit `b204b7e`.
+
+Per-stage run data, including latency distributions and binary metadata, is
+available in the [baseline](../comparison/results/resident-queue-stage-baseline-2026-10-14.json),
+[concurrent-dispatch](../comparison/results/resident-queue-stage-concurrent-2026-10-14.json),
+[event-wakeup](../comparison/results/resident-queue-stage-events-2026-10-14.json),
+and [no-sync](../comparison/results/resident-queue-stage-no-sync-2026-10-14.json)
+artifacts. The reusable harness is
+[`comparison/ipc_http_mcp_benchmark.py`](../comparison/ipc_http_mcp_benchmark.py).
+
 ## Earlier reference results (through 2026-10-05)
 
 | Workload | HTTP request and load | Rate | Result |

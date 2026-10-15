@@ -3,6 +3,27 @@
 This is Membrick's standalone benchmark track: it measures retrieval quality,
 recency behavior, and corpus-scale performance without an agent client.
 
+## Latest standalone LongMemEval-S result
+
+This latest 500-question single-index run is the current standalone headline.
+The fair cross-system comparison and segmented route experiments below are
+different benchmark tracks and retain their own reports.
+
+<!-- BEGIN GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
+**LongMemEval-S, 500 questions · 2026-10-15 · single index · heuristic NER · structured-fact retrieval · no embeddings**
+Working-tree run based on `b204b7e`; not a clean release measurement.
+
+| Metric | Result |
+|---|---:|
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% |
+| MRR | 88.85% |
+| NDCG@10 | 87.91% |
+| Mean search time | 3.39 ms |
+
+Source report: [`retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json).
+<!-- END GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
+
 ## Canonical LongMemEval-S comparison result
 
 The public headline uses the fair 500-question comparison track: both systems

@@ -6,18 +6,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Canonical provider values for `filters.provider`, the per-document
-/// attribution stamped on every captured memory.
-pub(crate) const PROVIDER_FILTER_VALUES: &[&str] = &[
-    "claude",
-    "codex",
-    "gemini-cli",
-    "agy",
-    "muse",
-    "openclaw",
-    "hermes",
-    "rooagi_runtime",
-];
+pub(crate) fn provider_filter_values() -> Vec<&'static str> {
+    crate::provider_sources::PROVIDERS
+        .iter()
+        .map(|provider| provider.name)
+        .collect()
+}
 
 pub(crate) const fn resident_backend_enabled() -> bool {
     !cfg!(test)
@@ -41,7 +35,16 @@ fn post_resident_json(
     path: &str,
     payload: &Value,
 ) -> anyhow::Result<(reqwest::StatusCode, Value)> {
-    crate::local_ipc::post_json(root, path, payload)
+    let (status, body, _) = crate::local_ipc::post_json_with_transport(root, path, payload)?;
+    Ok((status, body))
+}
+
+fn post_resident_json_with_transport(
+    root: &Path,
+    path: &str,
+    payload: &Value,
+) -> anyhow::Result<(reqwest::StatusCode, Value, &'static str)> {
+    crate::local_ipc::post_json_with_transport(root, path, payload)
 }
 
 fn resident_text_response(id: Option<Value>, text: &str) -> JsonRpcResponse {
@@ -126,7 +129,7 @@ pub(crate) fn call_resident_tool(
     arguments: &Value,
 ) -> anyhow::Result<JsonRpcResponse> {
     let root = root.canonicalize()?;
-    let (status, mut body) = match post_resident_json(
+    let (status, mut body, transport) = match post_resident_json_with_transport(
         &root,
         "/provider-memory/mcp/tools/call",
         &json!({
@@ -148,17 +151,20 @@ pub(crate) fn call_resident_tool(
         }
     };
     if !status.is_success() {
+        let detail = body
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| body.to_string());
         return Ok(resident_error_response(
             id,
             -32602,
-            body.get("detail")
-                .and_then(Value::as_str)
-                .unwrap_or("resident memory tool failed"),
+            &format!("resident memory tool failed (HTTP {status}): {detail}"),
         ));
     }
     if tool == "info" {
-        let endpoint = crate::local_ipc::endpoint(&root).ok();
-        let transport = json!({"transport":"ipc", "status":"connected", "endpoint":endpoint});
+        let endpoint = crate::local_ipc::transport_endpoint(&root, transport);
+        let transport = json!({"transport":transport, "status":"connected", "endpoint":endpoint});
         if let Some(info) = body.as_object_mut() {
             info.insert("server".to_string(), transport);
         }
@@ -211,70 +217,28 @@ pub(crate) fn upsert_hook_document(
     upsert_hook_documents(root, provider, session_id, vec![document])
 }
 
-/// Publish a batch of hook captures through the resident workspace owner.
+/// Publish a batch of hook captures through the resident workspace owner's
+/// single upsert path. Returns once the batch is durable.
 pub(crate) fn upsert_hook_documents(
     root: &Path,
     provider: &str,
     session_id: &str,
-    mut documents: Vec<crate::SourceDocument>,
+    documents: Vec<crate::SourceDocument>,
 ) -> anyhow::Result<()> {
-    let session_context = documents
-        .iter()
-        .find(|document| {
-            document.filters.get("document_type").map(String::as_str) == Some("session-context")
-        })
-        .cloned();
-    let capture_group = session_context.as_ref().map(|context| {
-        let provider = context
-            .filters
-            .get("provider")
-            .map(String::as_str)
-            .unwrap_or(provider);
-        let project_id = context
-            .filters
-            .get("project_id")
-            .map(String::as_str)
-            .unwrap_or("");
-        let session_id = context
-            .filters
-            .get("session_id")
-            .map(String::as_str)
-            .unwrap_or(session_id);
-        crate::ids::stable_doc_id_from_source(&format!(
-            "session-capture:{}",
-            serde_json::to_string(&(provider, project_id, session_id)).unwrap_or_default()
-        ))
-    });
-    if let Some(capture_group) = capture_group.as_ref() {
-        for document in &mut documents {
-            document
-                .filters
-                .insert("session_capture_id".into(), capture_group.clone());
-        }
-    }
     #[cfg(test)]
     {
+        let _ = (provider, session_id);
         return MemoryService::with_shared_memory(root, |service| {
-            if let (Some(context), Some(capture_group)) = (session_context, capture_group) {
-                service.replace_session_capture(
-                    "session_capture_id",
-                    &capture_group,
-                    documents,
-                    context,
-                )?;
-                Ok(())
-            } else {
-                for document in documents {
-                    service.upsert(document);
-                }
-                service.refresh_index()
+            for document in documents {
+                service.upsert(document);
             }
+            service.refresh_index()
         });
     }
     #[cfg(not(test))]
     {
         anyhow::ensure!(
-            PROVIDER_FILTER_VALUES.contains(&provider),
+            provider_filter_values().contains(&provider),
             "invalid provider"
         );
         let root = root.canonicalize()?;
@@ -317,7 +281,7 @@ pub(crate) fn replace_hook_documents(
     #[cfg(not(test))]
     {
         anyhow::ensure!(
-            PROVIDER_FILTER_VALUES.contains(&provider),
+            provider_filter_values().contains(&provider),
             "invalid provider"
         );
         let root = root.canonicalize()?;
@@ -411,10 +375,11 @@ pub(crate) fn search_hook_documents(
 
 /// JSON Schema fragment for the optional `provider` search argument.
 pub(crate) fn provider_argument_schema() -> Value {
+    let providers = provider_filter_values();
     json!({
         "type": "string",
-        "description": "Restrict results to memories captured by one provider (claude, codex, gemini-cli, agy, muse, openclaw, hermes). Omit to search the shared pool.",
-        "enum": PROVIDER_FILTER_VALUES,
+        "description": format!("Restrict results to memories captured by one provider ({}). Omit to search the shared pool.", providers.join(", ")),
+        "enum": providers,
     })
 }
 
@@ -424,6 +389,7 @@ pub(crate) fn provider_argument_schema() -> Value {
 pub(crate) fn search_provider_filters(
     arguments: &Value,
 ) -> Result<BTreeMap<String, String>, String> {
+    let providers = provider_filter_values();
     let provider = arguments
         .get("provider")
         .and_then(Value::as_str)
@@ -432,10 +398,10 @@ pub(crate) fn search_provider_filters(
     let Some(provider) = provider else {
         return Ok(BTreeMap::new());
     };
-    if !PROVIDER_FILTER_VALUES.contains(&provider) {
+    if !providers.contains(&provider) {
         return Err(format!(
             "unknown provider \"{provider}\"; expected one of: {}",
-            PROVIDER_FILTER_VALUES.join(", ")
+            providers.join(", ")
         ));
     }
     Ok(BTreeMap::from([(
@@ -620,11 +586,20 @@ fn preserve_matched_excerpt(
 /// the caller can inspect their evidence. Automatic hook context must not
 /// promote their competing claims into project guidance.
 pub(crate) fn automatic_context_allowed(result: &Value) -> bool {
-    result.get("semantic_status").and_then(Value::as_str) != Some("conflicted")
+    let conflicted = result.get("semantic_status").and_then(Value::as_str) == Some("conflicted");
+    let unprovenanced_legacy_file_change = result
+        .get("source")
+        .and_then(Value::as_str)
+        .is_some_and(|source| source.starts_with("lint-ai://workspace/file-change/"))
+        && result.get("branch").is_none_or(Value::is_null)
+        && result.get("revision").is_none_or(Value::is_null);
+
+    !conflicted && !unprovenanced_legacy_file_change
 }
 
 /// Filter shared automatic-hook retrieval before any provider formats context.
-/// Explicit MCP search remains unfiltered so callers can inspect conflicts.
+/// Explicit MCP search remains unfiltered so callers can inspect conflicts and
+/// legacy file-change history.
 fn filter_automatic_context_results(mut payload: Value) -> Value {
     if let Some(results) = payload.get_mut("results").and_then(Value::as_array_mut) {
         results.retain(automatic_context_allowed);
@@ -652,33 +627,18 @@ pub(crate) fn list_memories(service: &MemoryService, limit: usize) -> Value {
 }
 
 fn is_recorded_memory(document: &SourceDocument) -> bool {
-    document.source.starts_with("claude://")
-        || document.source.starts_with("codex://")
-        || document.source.starts_with("gemini-cli://")
-        || document.source.starts_with("agy://")
-        || document.source.starts_with("agy://")
-        || document.source.starts_with("muse://")
-        || document.source.starts_with("openclaw://")
-        || document.source.starts_with("hermes://")
-        || document.source.starts_with("membrick://")
-        || document.source.starts_with("lint-ai://")
+    crate::provider_sources::is_provider_source(&document.source)
+        || crate::provider_sources::INTERNAL_MEMORY_SOURCE_PREFIXES
+            .iter()
+            .any(|prefix| document.source.starts_with(prefix))
         || document
             .filters
             .get("source_type")
             .is_some_and(|source_type| source_type == "recorded-session")
         || document.group_id.as_deref().is_some_and(|group_id| {
-            [
-                "claude-session:",
-                "codex-session:",
-                "gemini-cli-session:",
-                "agy-session:",
-                "agy-session:",
-                "muse-session:",
-                "openclaw-session:",
-                "hermes-session:",
-            ]
-            .iter()
-            .any(|prefix| group_id.starts_with(prefix))
+            crate::provider_sources::PROVIDERS
+                .iter()
+                .any(|provider| group_id.starts_with(provider.session_tag))
         })
 }
 
@@ -1716,6 +1676,48 @@ mod tests {
         );
         assert_eq!(parse_list_memories_limit(&json!({"limit": 0})).unwrap(), 1);
         assert!(parse_list_memories_limit(&json!({"unexpected": true})).is_err());
+    }
+
+    #[test]
+    fn list_memories_recognizes_canonical_claude_code_sources() {
+        let document = SourceDocument {
+            doc_id: "claude-session".to_string(),
+            source: "claude-code://project/session/outcome".to_string(),
+            content: "captured Claude session".to_string(),
+            concept: "outcome".to_string(),
+            group_id: None,
+            headings: vec![],
+            links: vec![],
+            timestamp: None,
+            doc_length: 23,
+            author_agent: Some("claude".to_string()),
+            filters: BTreeMap::new(),
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        };
+
+        assert!(is_recorded_memory(&document));
+    }
+
+    #[test]
+    fn list_memories_recognizes_muse_session_tag() {
+        let document = SourceDocument {
+            doc_id: "muse-session".to_string(),
+            source: "muse://project/session/outcome".to_string(),
+            content: "captured Muse session".to_string(),
+            concept: "outcome".to_string(),
+            group_id: Some("muse-session:project:session".to_string()),
+            headings: vec![],
+            links: vec![],
+            timestamp: None,
+            doc_length: 21,
+            author_agent: Some("muse".to_string()),
+            filters: BTreeMap::new(),
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        };
+
+        assert!(is_recorded_memory(&document));
     }
 
     #[test]

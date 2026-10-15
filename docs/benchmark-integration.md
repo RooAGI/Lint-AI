@@ -120,6 +120,11 @@ starts a new client session. The setup messages establish facts that should be
 captured into durable memory. The setup turn is allowed to perform normal
 client work and lifecycle capture.
 
+When a repetition ends, the runner sends SIGTERM to any Membrick resident
+server whose working directory is inside that worktree, so disposable
+worktrees do not leave background processes behind. The worktree itself stays
+in place for inspection until the next run of the same repetition.
+
 The setup phase measures setup and capture behavior, but it is not the primary
 latency comparison. Setup cost can include initial repository indexing,
 authentication, model startup, hook execution, and session persistence.

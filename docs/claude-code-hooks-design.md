@@ -38,19 +38,30 @@ in source order as session memory, including tool calls, tool results, empty
 messages, and image blocks. Text blocks and serialized structured blocks are
 kept in full. Credentials are redacted before persistence.
 
-Each parsed transcript observation is stored as its own stable `SourceDocument`
-with its speaker, order, provider message ID when available, timestamp when
-available, and complete text or serialized blocks. A separate
-whole-session context document links those observations in source order.
-Repeated hook captures upsert the same observation IDs and context ID, so they
-do not duplicate the full transcript. Transcript discovery uses the hook path
-or project `.membrick/settings.toml`; it does not read environment variables.
+Each capture hook stores only the transcript written since the previous capture
+of the same session. The byte position of the last capture is kept per session
+under `.membrick/claude-state/capture-cursors/`, and it advances only after the
+capture is stored, so a failed capture is retried by the next hook. A trailing
+line that is still being written is left for the next capture.
 
-The resident ingestion endpoint submits observations and context together.
-`MemoryService` first refreshes session-scoped observation claims, then calls
-`reconcile_session_context` for the linked whole-session document. This keeps
-within-session corrections auditable while allowing project-scoped comparison
-across sessions. Session documents participate in normal hook retrieval. Hooks
+Each parsed transcript observation in that slice is stored as its own stable
+`SourceDocument` with its speaker, order, provider message ID when available,
+timestamp when available, and complete text or serialized blocks. The slice's
+text is also stored once as a turn document of the hook's type (`outcome`,
+`checkpoint`, or `session-summary`) with project semantic scope, so its claims
+are compared with other sessions. Transcript discovery uses the hook path or
+project `.membrick/settings.toml`; it does not read environment variables.
+
+One `session-context` document per session holds a short header and links the
+observations of the latest capture. Every capture is a single batch sent to
+`POST /provider-memory/mcp/documents/upsert`. The resident owner journals the
+batch and replies once it is durable; the background publisher makes it
+searchable, usually within the refresh interval. The server does not rebuild
+the session from the store, so a capture never waits for a full index refresh.
+If the transcript becomes shorter than the stored position, the capture starts
+from the beginning of the file and upserts the observations again. Observations
+from the old transcript that no longer exist remain as history. Session
+documents participate in normal hook retrieval. Hooks
 inject only query-matched excerpts, and the shared policy excludes conflicted
 results. Explicit search remains available for inspecting conflicts and full
 source documents.
@@ -154,7 +165,7 @@ to `SourceDocument`.
 | `links` | affected repository paths |
 | `timestamp` | event timestamp |
 | `author_agent` | `claude-code` |
-| `filters` | project, session, type, command, branch, and revision metadata |
+| `filters` | project, session, type, and command metadata |
 
 The initial segment ID is:
 
@@ -319,24 +330,17 @@ not cause another stop cycle.
 Purpose: record final resumable session state and termination metadata.
 
 The adapter creates a compact `SessionSummary` document containing the latest
-known outcome, unresolved work, affected paths, branch, and revision. It does
+known outcome, unresolved work, and affected paths. It does
 not inject context. Session end does not make the segment immutable; resumed
 sessions may update it.
 
 ## Retrieval Provenance
 
-Each injected memory item includes its capture timestamp, branch, captured
-revision, current branch, current revision, and a locally computed revision
-status:
-
-- `exact-match`: captured and current revisions are identical
-- `captured-revision-is-ancestor`: current `HEAD` descends from the capture
-- `diverged`: the capture is not an ancestor of current `HEAD`
-- `unknown`: either revision or repository ancestry cannot be resolved
-
-Exact-match provenance lets Claude distinguish a recorded decision at the
-current revision from potentially stale memory. It does not disable Claude's
-tools or prevent source verification.
+Each injected memory item includes its source, document type, capture
+timestamp, memory status, and relation evidence. Hooks do not run `git` or read
+the repository's `.git` directory, so captures carry no branch or revision
+metadata. Staleness comes from the capture timestamp and Membrick's semantic
+status (current, superseded, or conflicted), not from repository ancestry.
 
 Retrieval emits at most one document per Claude session. When a session has
 multiple durable captures, the adapter prefers `session-summary`, then

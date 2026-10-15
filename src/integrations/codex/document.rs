@@ -32,8 +32,6 @@ pub struct CodexDocument {
     pub command_name: Option<String>,
     pub command_args: Option<String>,
     pub affected_paths: Vec<String>,
-    pub branch: Option<String>,
-    pub revision: Option<String>,
 }
 
 impl CodexDocument {
@@ -41,8 +39,11 @@ impl CodexDocument {
         let project_id = project_id(&self.cwd)?;
         let document_type = self.document_type.as_str();
         let source = format!(
-            "codex://{}/{}/{}",
-            project_id, self.session_id, document_type
+            "{}{}/{}/{}",
+            crate::provider_sources::source_prefix("codex"),
+            project_id,
+            self.session_id,
+            document_type
         );
         let mut filters = BTreeMap::from([
             ("provider".to_string(), "codex".to_string()),
@@ -52,8 +53,6 @@ impl CodexDocument {
         ]);
         insert_optional(&mut filters, "command_name", self.command_name);
         insert_optional(&mut filters, "command_args", self.command_args);
-        insert_optional(&mut filters, "branch", self.branch);
-        insert_optional(&mut filters, "revision", self.revision);
 
         let content = format!("Codex Code {document_type}\n{}", self.content.trim());
         let doc_length = content.len();
@@ -62,7 +61,11 @@ impl CodexDocument {
             source,
             content,
             concept: document_type.to_string(),
-            group_id: Some(format!("codex-session:{project_id}:{}", self.session_id)),
+            group_id: Some(format!(
+                "{}{project_id}:{}",
+                crate::provider_sources::session_tag("codex"),
+                self.session_id
+            )),
             headings: vec![document_type.to_string()],
             links: self.affected_paths,
             timestamp: self.timestamp,
@@ -110,8 +113,6 @@ mod tests {
             command_name: Some("review".to_string()),
             command_args: None,
             affected_paths: vec!["src/pipeline.rs".to_string()],
-            branch: Some("feature/hooks".to_string()),
-            revision: Some("abc123".to_string()),
         }
         .into_source_document()
         .unwrap();
@@ -137,8 +138,6 @@ mod tests {
             command_name: None,
             command_args: None,
             affected_paths: vec![],
-            branch: None,
-            revision: None,
         };
 
         assert_eq!(

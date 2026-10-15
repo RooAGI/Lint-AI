@@ -1,24 +1,26 @@
 # Local IPC server architecture
 
 Bundled Rust provider MCP adapters and lifecycle hooks send workspace requests
-to a resident Membrick owner over local inter-process communication (IPC). This
-keeps the local agent path off TCP, so it does not require a local HTTP listener
-or depend on loopback connections being allowed by endpoint security policy.
+to one resident Membrick owner. They use local IPC first, an optional configured
+loopback HTTP listener second, and a project-local file queue when socket
+creation is blocked. Every transport reaches the same router, writer, and
+`MemoryService` instance.
 
 ## Request path
 
 The agent still connects to its provider MCP adapter using the transport
 configured by that agent, commonly stdio. The adapter then forwards the tool
 request to the resident owner over the operating system's local IPC mechanism.
-The IPC listener and standalone HTTP listener use the same application router
-and `MemoryService` APIs.
+The resident may expose IPC and HTTP listeners over the same application router
+and `MemoryService` owner. The standalone HTTP server uses that router too, but
+the workspace owner lock prevents it from opening a second writer for a project.
 
 ```mermaid
 flowchart LR
     Agent[Claude Code, Codex, or another host] -->|provider MCP transport| Adapter[Bundled Rust MCP adapter]
-    Adapter -->|local IPC| Resident[Resident Membrick owner]
-    Hook[Provider lifecycle hook] -->|local IPC| Resident
-    HttpClient[External or custom HTTP client] -->|TCP HTTP| Http[Standalone HTTP server]
+    Adapter -->|IPC, configured HTTP, or file queue| Resident[One resident owner per project]
+    Hook[Provider lifecycle hook] -->|IPC, configured HTTP, or file queue| Resident
+    HttpClient[External or custom HTTP client] -->|TCP HTTP| Http[HTTP listener]
     Resident --> Router[Shared API router]
     Http --> Router
     Router --> Runtime[Workspace registry and resident MemoryService]
@@ -34,23 +36,63 @@ search routes.
 
 ## Automatic startup and endpoint security
 
-The client first tries to connect to the workspace's resident endpoint. If no
-owner is available, it starts the Membrick resident-server mode for that
-workspace, then retries the request while the listener starts. Concurrent
-first requests coordinate through a startup marker so they share the same
-owner rather than starting several writers for one workspace.
+The client first tries the workspace's resident IPC endpoint. If
+`resident_http_bind` is configured in `.membrick/server.toml`, it next tries
+that loopback HTTP listener. If both socket transports are unavailable, it
+writes one atomic request file under the project's `.membrick/runtime/requests`
+directory and waits for the resident to return a matching response file. If no
+owner is available, the client starts resident-server mode. Concurrent first
+requests coordinate through a startup marker, and a kernel-backed owner lock
+prevents a second resident or standalone HTTP process from opening another
+writer for the same project.
 
-On macOS and Linux, the endpoint is under
-`~/.membrick/runtime/`. The runtime directory is private to the current user
-and the socket is restricted to that user. The socket name is derived from the
-user and project root, so different workspaces use separate local endpoints.
-Windows uses a user- and workspace-specific named pipe. Startup and listener
-diagnostics go to `~/.membrick/runtime/resident.log` on Unix-like systems or
-`%USERPROFILE%\\.membrick\\runtime\\resident.log` on Windows.
+The process that starts a resident watches it until an endpoint responds.
+If the child exits before binding, the starter removes only its own marker and
+reports the startup failure. Other waiting clients notice the cleared marker
+and fail promptly; a later request can claim startup and launch a replacement.
+Failures while preparing the launch also clear the marker, so they cannot
+strand future requests behind a marker for a server that was never started.
 
-Bundled Rust provider adapters do not use environment variables to select the
-IPC endpoint or choose between IPC and HTTP. The operating system endpoint is
-resolved from the configured workspace and current user.
+Each workspace keeps its resident socket (macOS and Linux), startup marker,
+and diagnostics under its own `.membrick/runtime/` directory. On Unix-like
+systems the directory is restricted to the current user and the socket is
+restricted to its owner. Windows uses a workspace-specific named pipe, with
+its startup marker and diagnostics in the project runtime directory. Different
+project roots therefore use separate runtime state and endpoints without
+requiring access to the user's home directory.
+
+On Ctrl-C or SIGTERM the resident stops accepting connections, flushes its
+writer, and removes its socket file if the path still refers to the socket it
+created. A socket left by a process that was killed outright is removed by the
+next owner when it fails to connect to it. The resident does not exit on its
+own when idle; stop it with SIGTERM.
+
+Project installation creates `.membrick/server.toml` when it does not already
+exist. It preserves an existing file. The installed port is selected for the
+project from the loopback range `8465` through `9999`; the example below shows
+one possible assignment:
+
+```toml
+bind = "127.0.0.1:8080"
+resident_http_bind = "127.0.0.1:8465"
+resident_http_auto_port = true
+dashboard_url = "http://127.0.0.1:8465/dashboard"
+```
+
+`bind` is the standalone HTTP server address. The bundled client reads
+`resident_http_bind` and tries that loopback listener only after local IPC fails.
+The dashboard URL points to the resident HTTP listener while the resident is
+running. When multiple projects start concurrently with the same candidate, the
+operating system grants the port to one resident; the other resident advances
+to the next available port and atomically saves the selected bind and dashboard
+URL. The HTTP fallback checks the listener's workspace identity before sending
+any request, so a candidate collision can never route a project's memory call
+to a different project. Later sessions for that project read the saved value. Set
+`resident_http_auto_port = false` to keep a manually chosen resident port fixed.
+If both socket transports are blocked, the file queue uses atomic rename to
+claim each request once and routes it through the same resident router. A
+timeout after a request was claimed reports that its outcome may be unknown;
+Membrick does not replay the operation with a new identifier.
 
 ## Relationship to the HTTP server
 
@@ -60,10 +102,10 @@ need an explicit service boundary or access from another machine. Its network
 interface and authentication are configured through server settings and
 command-line options.
 
-The resident IPC listener and the standalone TCP HTTP listener are separate
-server modes. Both use the same route and memory-service implementation, but a
-workspace store must have only one active writer owner. Do not start a second
-server against a workspace already owned by a resident IPC process. See the
+The resident can optionally expose a TCP HTTP listener alongside IPC. The
+standalone HTTP mode remains available for applications and custom clients. A
+workspace store has one active writer owner across both modes; starting a second
+server against that project fails before it opens the store. See the
 [HTTP server guide](server.md) for network configuration and the
 [MCP interface guide](mcp.md) for provider tools.
 

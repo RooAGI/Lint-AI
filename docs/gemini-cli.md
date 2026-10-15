@@ -46,7 +46,7 @@ Restart Gemini CLI and make sure you opened the project where you installed
 Membrick. You can check the MCP connection with:
 
 ```bash
-membrick --gemini-cli-verify-mcp .
+membrick verify gemini .
 ```
 
 For details, see [all agent integrations](agents.md) and

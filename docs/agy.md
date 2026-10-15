@@ -60,7 +60,7 @@ Restart AGY and make sure you opened the project where you installed Membrick.
 You can check the MCP connection with:
 
 ```bash
-membrick --agy-verify-mcp .
+membrick verify agy .
 ```
 
 For details, see [all agent integrations](agents.md) and

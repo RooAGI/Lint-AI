@@ -46,9 +46,22 @@ Restart Claude Code and make sure you opened the project where you installed
 Membrick. You can check the MCP connection with:
 
 ```bash
-membrick --claude-code-verify-mcp .
+membrick verify claude .
 ```
 
 For details, see [all agent integrations](agents.md),
 [Claude Code performance measurements](claude-code-performance-tests.md), and
 [session recording](session-recording-design.md).
+
+## Uninstall
+
+From the project directory, run:
+
+```bash
+membrick uninstall claude .
+```
+
+This removes the Membrick MCP entry and hook commands from Claude's config,
+plus the generated project memory skill when it has not been edited. Customized
+skills are kept. Other settings, `.membrick` data, and the executable remain.
+Restart Claude Code to reload its settings.

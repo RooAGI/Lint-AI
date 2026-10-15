@@ -142,7 +142,7 @@ pub enum IndexInspectView {
 #[command(
     name = "membrick",
     version = env!("CARGO_PKG_VERSION"),
-    after_help = "Quick provider commands:\n  membrick setup <provider> [PATH]\n  membrick serve <provider> [PATH]\n  membrick verify <provider> [PATH]\n\nProviders: claude, codex, gemini, agy, muse, openclaw, hermes, roo-runtime."
+    after_help = "Provider commands:\n  membrick install <provider> [PATH] (setup is an alias)\n  membrick serve <provider> [PATH]\n  membrick verify <provider> [PATH]\n  membrick uninstall <provider> [PATH]\n  membrick hook <provider> <event> [PATH]\n  membrick statusline <provider> [PATH]\n\nProvider config overrides:\n  --provider-config <PATH>\n  --provider-settings <PATH>\n  --provider-skills-dir <PATH>\n  --provider-hooks-dir <PATH>\n  --provider-plugin-dir <PATH>\n  --force-skill (install only)\n\nUninstall is currently supported for: claude, codex.\nProviders: claude, codex, gemini, agy, muse, openclaw, hermes, roo-runtime."
 )]
 /// CLI arguments for the membrick binary.
 pub struct Args {
@@ -173,7 +173,7 @@ pub struct Args {
     pub result_count: usize,
     #[arg(long, alias = "simplifed")]
     pub simplified: bool,
-    #[arg(long, value_enum, default_value = "all")]
+    #[arg(long, value_enum, default_value = "all", hide = true)]
     pub llm_chunk_strategy: LlmChunkStrategy,
     #[arg(long, value_enum)]
     pub export_graph: Option<GraphExportFormat>,
@@ -201,15 +201,15 @@ pub struct Args {
     /// as the spaCy model when `--spacy-model` is not given.
     #[arg(long, value_enum, default_value = "auto")]
     pub lang: Lang,
-    #[arg(long, value_enum, default_value = "heading")]
+    #[arg(long, value_enum, default_value = "heading", hide = true)]
     pub chunk_strategy: ChunkStrategy,
-    #[arg(long, default_value_t = 40)]
+    #[arg(long, default_value_t = 40, hide = true)]
     pub chunk_lines: usize,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 10, hide = true)]
     pub chunk_overlap: usize,
-    #[arg(long, default_value_t = 450)]
+    #[arg(long, default_value_t = 450, hide = true)]
     pub chunk_target_tokens: usize,
-    #[arg(long, default_value_t = 800)]
+    #[arg(long, default_value_t = 800, hide = true)]
     pub chunk_max_tokens: usize,
     #[arg(long)]
     pub debug_matches: bool,
@@ -220,19 +220,43 @@ pub struct Args {
     /// Run the lint checks with the project search index prepared.
     #[arg(long)]
     pub review: bool,
-    #[arg(long, default_value_t = 5_000_000)]
+    #[arg(long, default_value_t = 5_000_000, hide = true)]
     pub max_bytes: usize,
-    #[arg(long, default_value_t = 50_000)]
+    #[arg(long, default_value_t = 50_000, hide = true)]
     pub max_files: usize,
-    #[arg(long, default_value_t = 20)]
+    #[arg(long, default_value_t = 20, hide = true)]
     pub max_depth: usize,
     #[arg(long)]
     pub strict_config: bool,
     #[arg(long)]
     pub mcp_timeout_ms: Option<u64>,
+    /// Override the selected provider's MCP configuration file.
+    #[arg(long, help = "Override the selected provider's MCP configuration file")]
+    pub provider_config: Option<String>,
+    /// Override the selected provider's hooks or settings file.
+    #[arg(long, help = "Override the selected provider's hooks or settings file")]
+    pub provider_settings: Option<String>,
+    /// Override the selected provider's skills directory.
+    #[arg(long, help = "Override the selected provider's skills directory")]
+    pub provider_skills_dir: Option<String>,
+    /// Override the selected provider's hooks directory.
+    #[arg(long, help = "Override the selected provider's hooks directory")]
+    pub provider_hooks_dir: Option<String>,
+    /// Override the selected provider's plugin directory.
+    #[arg(long, help = "Override the selected provider's plugin directory")]
+    pub provider_plugin_dir: Option<String>,
+    /// Replace a user-modified provider memory skill during setup.
+    #[arg(
+        long,
+        help = "Replace a user-modified provider memory skill during setup"
+    )]
+    pub force_skill: bool,
     #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_install: bool,
+    #[arg(long, hide = true)]
+    #[cfg(feature = "claude-code")]
+    pub claude_code_uninstall: bool,
     #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_serve: bool,
@@ -242,18 +266,21 @@ pub struct Args {
     #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_verify_mcp: bool,
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_hook: Option<ClaudeCodeHook>,
     #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_config: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "claude-code")]
     pub claude_code_settings: Option<String>,
     #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_install: bool,
+    #[arg(long, hide = true)]
+    #[cfg(feature = "codex")]
+    pub codex_uninstall: bool,
     #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_serve: bool,
@@ -263,13 +290,13 @@ pub struct Args {
     #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_verify_mcp: bool,
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_hook: Option<CodexHook>,
     #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_config: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "codex")]
     pub codex_settings: Option<String>,
     #[arg(long, hide = true)]
@@ -281,7 +308,7 @@ pub struct Args {
     #[arg(long, hide = true)]
     #[cfg(feature = "muse-code")]
     pub muse_verify_mcp: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "muse-code")]
     pub muse_config: Option<String>,
     #[arg(long, value_enum, hide = true)]
@@ -298,21 +325,21 @@ pub struct Args {
     pub gemini_cli_verify_mcp: bool,
     #[arg(long)]
     #[cfg(feature = "gemini-cli")]
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide = true)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_hook: Option<GeminiCliHook>,
     #[arg(long)]
     #[cfg(feature = "gemini-cli")]
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_settings: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "gemini-cli")]
     pub gemini_cli_config: Option<String>,
     #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_install: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_force_skill: bool,
     #[arg(long, hide = true)]
@@ -321,13 +348,13 @@ pub struct Args {
     #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_verify_mcp: bool,
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_hook: Option<AgyHook>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_settings: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "agy")]
     pub agy_config: Option<String>,
     /// Install the membrick MCP server and memory skill for OpenClaw.
@@ -347,27 +374,27 @@ pub struct Args {
     #[cfg(feature = "openclaw")]
     pub openclaw_verify_mcp: bool,
     /// Override the OpenClaw config path (default `~/.openclaw/openclaw.json`).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_config: Option<String>,
     /// Override the OpenClaw skills directory (default `~/.openclaw/skills`).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_skill_dir: Option<String>,
     /// Handle one OpenClaw lifecycle hook event: read the event JSON from
     /// stdin, write the response JSON to stdout. Spawned by the installed
     /// hook wrappers; fail-open on any error.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_hook: Option<OpenClawHook>,
     /// Override the OpenClaw internal-hooks directory (default
     /// `$OPENCLAW_STATE_DIR/hooks` or `~/.openclaw/hooks`).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_hooks_dir: Option<String>,
     /// Override the OpenClaw plugin (extensions) directory (default
     /// `~/.openclaw/extensions`).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "openclaw")]
     pub openclaw_plugin_dir: Option<String>,
     /// Install the membrick MCP server and memory skill for Hermes.
@@ -387,19 +414,19 @@ pub struct Args {
     #[cfg(feature = "hermes")]
     pub hermes_verify_mcp: bool,
     /// Override the Hermes config path (default `~/.hermes/config.yaml`).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "hermes")]
     pub hermes_config: Option<String>,
     /// Override the Hermes skills directory (default `~/.hermes/skills`).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "hermes")]
     pub hermes_skill_dir: Option<String>,
     /// Install Roo Runtime lifecycle hooks in the user hooks configuration.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "roo-runtime")]
     pub roo_runtime_install: bool,
     /// Run the shared workspace memory MCP server over stdio for Roo Runtime.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "roo-runtime")]
     pub roo_runtime_serve: bool,
     /// Handle one Roo Runtime hook invocation from stdin.
@@ -407,7 +434,7 @@ pub struct Args {
     #[cfg(feature = "roo-runtime")]
     pub roo_runtime_hook: Option<RooRuntimeHook>,
     /// Override Roo Runtime's hooks.json path (default ~/.rooagi/hooks.json).
-    #[arg(long)]
+    #[arg(long, hide = true)]
     #[cfg(feature = "roo-runtime")]
     pub roo_runtime_config: Option<String>,
     /// Query the unified store (project documents and recorded memories) once
@@ -436,9 +463,9 @@ pub struct Args {
     pub session_root: Option<String>,
     #[arg(long, value_enum, default_value = "summary")]
     pub inspect_view: IndexInspectView,
-    #[arg(long, default_value_t = 2_000_000)]
+    #[arg(long, default_value_t = 2_000_000, hide = true)]
     pub max_config_bytes: u64,
-    #[arg(long, default_value_t = 100_000_000)]
+    #[arg(long, default_value_t = 100_000_000, hide = true)]
     pub max_total_bytes: usize,
 }
 
@@ -452,41 +479,147 @@ fn normalize_provider_command(args: impl IntoIterator<Item = String>) -> Vec<Str
     if args.len() < 3 {
         return args;
     }
-    let action = match args[1].as_str() {
-        "setup" => "install",
+    let command = args[1].as_str();
+    let action = match command {
+        "setup" | "install" => "install",
         "serve" => "serve",
         "verify" => "verify-mcp",
+        "uninstall" => "uninstall",
+        "hook" => "hook",
+        "statusline" => "statusline",
         _ => return args,
     };
-    let provider = args[2].as_str();
-    let option = match (provider, action) {
+    let provider = args[2].clone();
+    let option = match (provider.as_str(), action) {
         ("claude", "install") => "--claude-code-install",
+        ("claude", "uninstall") => "--claude-code-uninstall",
         ("claude", "serve") => "--claude-code-serve",
         ("claude", "verify-mcp") => "--claude-code-verify-mcp",
+        ("claude", "hook") => "--claude-code-hook",
+        ("claude", "statusline") => "--claude-code-statusline",
         ("codex", "install") => "--codex-install",
+        ("codex", "uninstall") => "--codex-uninstall",
         ("codex", "serve") => "--codex-serve",
         ("codex", "verify-mcp") => "--codex-verify-mcp",
-        ("gemini", "install") => "--gemini-cli-install",
-        ("gemini", "serve") => "--gemini-cli-serve",
-        ("gemini", "verify-mcp") => "--gemini-cli-verify-mcp",
-        ("agy", "install") => "--agy-install",
-        ("agy", "serve") => "--agy-serve",
-        ("agy", "verify-mcp") => "--agy-verify-mcp",
+        ("codex", "hook") => "--codex-hook",
+        ("codex", "statusline") => "--codex-statusline",
         ("muse", "install") => "--muse-install",
         ("muse", "serve") => "--muse-serve",
         ("muse", "verify-mcp") => "--muse-verify-mcp",
+        ("muse", "hook") => "--muse-hook",
+        ("gemini", "install") => "--gemini-cli-install",
+        ("gemini", "serve") => "--gemini-cli-serve",
+        ("gemini", "verify-mcp") => "--gemini-cli-verify-mcp",
+        ("gemini", "hook") => "--gemini-cli-hook",
+        ("gemini-cli", "install") => "--gemini-cli-install",
+        ("gemini-cli", "serve") => "--gemini-cli-serve",
+        ("gemini-cli", "verify-mcp") => "--gemini-cli-verify-mcp",
+        ("gemini-cli", "hook") => "--gemini-cli-hook",
+        ("agy", "install") => "--agy-install",
+        ("agy", "serve") => "--agy-serve",
+        ("agy", "verify-mcp") => "--agy-verify-mcp",
+        ("agy", "hook") => "--agy-hook",
         ("openclaw", "install") => "--openclaw-install",
         ("openclaw", "serve") => "--openclaw-serve",
         ("openclaw", "verify-mcp") => "--openclaw-verify-mcp",
+        ("openclaw", "hook") => "--openclaw-hook",
         ("hermes", "install") => "--hermes-install",
         ("hermes", "serve") => "--hermes-serve",
         ("hermes", "verify-mcp") => "--hermes-verify-mcp",
         ("roo-runtime", "install") => "--roo-runtime-install",
         ("roo-runtime", "serve") => "--roo-runtime-serve",
+        ("roo-runtime", "hook") => "--roo-runtime-hook",
+        ("rooagi-runtime", "install") => "--roo-runtime-install",
+        ("rooagi-runtime", "serve") => "--roo-runtime-serve",
+        ("rooagi-runtime", "hook") => "--roo-runtime-hook",
         _ => return args,
     };
     args.drain(1..3);
     args.insert(1, option.to_string());
+
+    let replacements = match provider.as_str() {
+        "claude" => [
+            ("--provider-config", "--claude-code-config"),
+            ("--provider-settings", "--claude-code-settings"),
+            ("--provider-skills-dir", "--provider-skills-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--force-skill"),
+        ],
+        "codex" => [
+            ("--provider-config", "--codex-config"),
+            ("--provider-settings", "--codex-settings"),
+            ("--provider-skills-dir", "--provider-skills-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--force-skill"),
+        ],
+        "muse" => [
+            ("--provider-config", "--muse-config"),
+            ("--provider-settings", "--muse-config"),
+            ("--provider-skills-dir", "--provider-skills-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--force-skill"),
+        ],
+        "gemini" | "gemini-cli" => [
+            ("--provider-config", "--gemini-cli-config"),
+            ("--provider-settings", "--gemini-cli-settings"),
+            ("--provider-skills-dir", "--provider-skills-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--force-skill"),
+        ],
+        "agy" => [
+            ("--provider-config", "--agy-config"),
+            ("--provider-settings", "--agy-settings"),
+            ("--provider-skills-dir", "--provider-skills-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--agy-force-skill"),
+        ],
+        "openclaw" => [
+            ("--provider-config", "--openclaw-config"),
+            ("--provider-settings", "--provider-settings"),
+            ("--provider-skills-dir", "--openclaw-skill-dir"),
+            ("--provider-hooks-dir", "--openclaw-hooks-dir"),
+            ("--provider-plugin-dir", "--openclaw-plugin-dir"),
+            ("--force-skill", "--openclaw-force-skill"),
+        ],
+        "hermes" => [
+            ("--provider-config", "--hermes-config"),
+            ("--provider-settings", "--provider-settings"),
+            ("--provider-skills-dir", "--hermes-skill-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--hermes-force-skill"),
+        ],
+        "roo-runtime" | "rooagi-runtime" => [
+            ("--provider-config", "--roo-runtime-config"),
+            ("--provider-settings", "--roo-runtime-config"),
+            ("--provider-skills-dir", "--provider-skills-dir"),
+            ("--provider-hooks-dir", "--provider-hooks-dir"),
+            ("--provider-plugin-dir", "--provider-plugin-dir"),
+            ("--force-skill", "--force-skill"),
+        ],
+        _ => unreachable!(),
+    };
+    for argument in args.iter_mut() {
+        let (flag, value) = argument
+            .split_once('=')
+            .map_or((argument.as_str(), None), |(flag, value)| {
+                (flag, Some(value))
+            });
+        if let Some((_, replacement)) = replacements
+            .iter()
+            .find(|(candidate, _)| *candidate == flag)
+        {
+            *argument = match value {
+                Some(value) => format!("{replacement}={value}"),
+                None => replacement.to_string(),
+            };
+        }
+    }
     args
 }
 

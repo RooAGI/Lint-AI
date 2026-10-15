@@ -17,6 +17,40 @@ use walkdir::WalkDir;
 const STORE_INIT_LOCK_WAIT: Duration = Duration::from_secs(30);
 const STORE_INIT_LOCK_RETRY: Duration = Duration::from_millis(100);
 
+/// Exclusive lifetime ownership of one project's persistent workspace and
+/// provider stores. Kept by the resident runtime while it serves requests.
+pub(crate) struct WorkspaceOwnerLock {
+    _file: File,
+    #[cfg(not(unix))]
+    path: std::path::PathBuf,
+}
+
+impl WorkspaceOwnerLock {
+    pub(crate) fn acquire(project_root: &Path) -> Result<Self> {
+        let runtime = project_root.join(".membrick").join("runtime");
+        fs::create_dir_all(&runtime)?;
+        let path = runtime.join("workspace-owner.lock");
+        let file = acquire_file_lock(
+            &path,
+            Duration::ZERO,
+            STORE_INIT_LOCK_RETRY,
+            "workspace resident owner",
+        )?;
+        Ok(Self {
+            _file: file,
+            #[cfg(not(unix))]
+            path,
+        })
+    }
+}
+
+#[cfg(not(unix))]
+impl Drop for WorkspaceOwnerLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Kernel-released file-lock primitive shared by both guards below.
 ///
 /// On Unix this is an advisory exclusive lock via `File::try_lock` (std):
@@ -598,6 +632,17 @@ mod tests {
         assert!(published
             .source_document_by_id("workspace-updated")
             .is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_one_resident_can_own_a_project_at_a_time() {
+        let root = board_test_root("exclusive-resident-owner");
+        fs::create_dir_all(&root).unwrap();
+        let first = WorkspaceOwnerLock::acquire(&root).unwrap();
+        assert!(WorkspaceOwnerLock::acquire(&root).is_err());
+        drop(first);
+        assert!(WorkspaceOwnerLock::acquire(&root).is_ok());
         let _ = fs::remove_dir_all(root);
     }
 

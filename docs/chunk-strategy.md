@@ -7,9 +7,9 @@ This document defines how Membrick chunks documents for Tier 1 indexing and quer
 - Keep chunk IDs stable enough for incremental updates.
 - Preserve document structure where possible.
 
-## Available Strategies
+## Built-in behavior
 
-### 1. `heading` (default)
+### Heading
 Splits content by Markdown headings (`#` to `######`).
 
 Rules:
@@ -21,63 +21,17 @@ Best for:
 - Well-structured Markdown docs.
 - Section-aware retrieval and explanation.
 
-### 2. `line`
-Splits by fixed line windows.
-
-Rules:
-- Uses `--chunk-lines` as window size.
-- Uses `--chunk-overlap` as overlap between windows.
-- Produces line-ranged headings like `lines 1-40`.
-
-Best for:
-- Stable diffs and incremental updates.
-- Documents with weak heading quality.
-
-### 3. `hybrid`
-Line-stable chunking + token-aware splitting.
-
-Rules:
-- First chunk by line windows (`--chunk-lines`, `--chunk-overlap`).
-- Estimate token size for each line chunk.
-- If chunk exceeds token budget, split further into smaller parts.
-- Controlled by:
-  - `--chunk-target-tokens` (preferred size)
-  - `--chunk-max-tokens` (hard cap)
-
-Best for:
-- LLM context-fit retrieval with stable change tracking.
-- Large documents where fixed line windows can be too large.
-
-## CLI Flags
-- `--chunk-strategy heading|line|hybrid`
-- `--chunk-lines <N>` (default: `40`)
-- `--chunk-overlap <N>` (default: `10`)
-- `--chunk-target-tokens <N>` (default: `450`)
-- `--chunk-max-tokens <N>` (default: `800`)
-
-## Recommended Defaults
-For general use:
-- `--chunk-strategy hybrid`
-- `--chunk-lines 40`
-- `--chunk-overlap 10`
-- `--chunk-target-tokens 450`
-- `--chunk-max-tokens 800`
-
-## Example Commands
-Build index with hybrid chunking:
+Membrick uses its built-in chunking defaults during indexing and retrieval. Chunk
+size and scan limits are implementation details rather than routine CLI tuning
+options. For normal use, index a project with the standard command:
 
 ```bash
-./target/debug/membrick --index /path/to/docs --chunk-strategy hybrid --chunk-lines 40 --chunk-overlap 10 --chunk-target-tokens 450 --chunk-max-tokens 800
-```
-
-Query with same chunk strategy:
-
-```bash
-./target/debug/membrick --query "linux install docker compose" /path/to/docs --chunk-strategy hybrid
+membrick --index /path/to/docs
 ```
 
 ## Notes on Caching
-Query cache validity includes chunk settings. Changing strategy or chunk parameters triggers rebuild.
+Query cache validity includes the chunking behavior, so cached results are
+reused only when the indexing inputs remain compatible.
 
 ## Internal Chunk Schema
 Each chunk stores:

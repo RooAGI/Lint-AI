@@ -36,7 +36,8 @@ By default this:
 - merges the Membrick memory policy into the project's `AGENTS.md`, which Muse
   Code prefers over `CLAUDE.md` for standing project instructions
 
-Use `--muse-config <path>` to target a different settings file (useful for
+Use `--provider-config <path>` with `membrick install muse .` to target a
+different settings file (useful for
 testing without touching your real Muse Code configuration).
 
 The MCP entry looks like this:
@@ -105,7 +106,7 @@ project, and is not promoted into durable memory automatically.
 
 `--muse-install` wires capture-only session hooks into the same
 `settings.json`. Each event gets a matcher group that runs
-`membrick --muse-hook <event>` as a shell command string with a 60-second
+`membrick hook muse <event> .` as a shell command string with a 60-second
 timeout — the entry schema was validated against a live `muse` 1.3.0 binary.
 The hooks record the session lifecycle and tool use into
 `<project>/.membrick/muse-sessions/`:
@@ -132,7 +133,7 @@ their fields are parsed defensively.
 Run the Muse Code integration server directly:
 
 ```bash
-./membrick --muse-serve /path/to/repo
+./membrick serve muse /path/to/repo
 ```
 
 ## Verify installation
@@ -142,7 +143,7 @@ complete both the MCP initialize and tool-list handshakes:
 
 ```bash
 MEMBRICK_MCP_HEALTH_PATH=/tmp/membrick-muse-mcp-health.json \
-  ./membrick --muse-verify-mcp /path/to/repo --mcp-timeout-ms 30000
+  ./membrick verify muse /path/to/repo --mcp-timeout-ms 30000
 ```
 
 The command emits JSON with startup and handshake timings, protocol version,

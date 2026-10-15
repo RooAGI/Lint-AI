@@ -1431,15 +1431,10 @@ fn is_generic_scalar_heading(heading: &str) -> bool {
 }
 
 fn source_kind(doc: &SourceDocument) -> &'static str {
-    if doc.source.starts_with("codex://")
-        || doc.source.starts_with("claude://")
-        || doc.source.starts_with("claude-code://")
-        || doc.source.starts_with("gemini-cli://")
-        || doc.source.starts_with("agy://")
-        || doc.source.starts_with("openclaw://")
-        || doc.source.starts_with("hermes://")
-        || doc.source.starts_with("membrick://")
-        || doc.source.starts_with("lint-ai://")
+    if crate::provider_sources::is_provider_source(&doc.source)
+        || crate::provider_sources::INTERNAL_MEMORY_SOURCE_PREFIXES
+            .iter()
+            .any(|prefix| doc.source.starts_with(prefix))
         || doc.filters.contains_key("document_type")
     {
         "memory"
@@ -1643,6 +1638,17 @@ mod tests {
             key_phrases: Vec::new(),
             key_phrase_extraction_hash: String::new(),
         }
+    }
+
+    #[test]
+    fn muse_provider_sources_are_classified_as_memories() {
+        let document = doc(
+            "muse",
+            "captured session",
+            None,
+            "muse://project/session/outcome",
+        );
+        assert_eq!(source_kind(&document), "memory");
     }
 
     #[test]

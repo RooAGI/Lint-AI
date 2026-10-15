@@ -130,6 +130,141 @@ pub fn install_memory_skill(root: &Path) -> Result<PathBuf> {
     Ok(skill_path)
 }
 
+/// Remove only the Claude Code configuration managed by Membrick. Project
+/// memory data and the executable are intentionally left in place.
+pub fn uninstall(
+    root: &Path,
+    config_path: Option<&Path>,
+    settings_path: Option<&Path>,
+) -> Result<()> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+
+    let config_path = match config_path {
+        Some(path) => path.to_path_buf(),
+        None => default_claude_config_path()?,
+    };
+    if config_path.exists() {
+        let mut config = read_claude_config(&config_path)?;
+        let removed = config.mcp_servers.remove(SERVER_NAME).is_some();
+        let removed_legacy = config.mcp_servers.remove("lint-ai").is_some();
+        if removed || removed_legacy {
+            write_claude_config(&config_path, &config)?;
+        }
+    }
+
+    let settings_path = match settings_path {
+        Some(path) => path.to_path_buf(),
+        None => default_claude_settings_path()?,
+    };
+    if settings_path.exists() {
+        let mut settings = read_json_object(&settings_path)?;
+        if remove_managed_settings(&mut settings) {
+            write_json_object(&settings_path, &settings)?;
+        }
+    }
+
+    let skill_dir = root.join(".claude").join("skills").join("membrick-memory");
+    let skill_path = skill_dir.join("SKILL.md");
+    if skill_path.exists() {
+        let contents = fs::read_to_string(&skill_path)
+            .with_context(|| format!("failed to read {}", skill_path.display()))?;
+        if contents == include_str!("skill.md") {
+            fs::remove_file(&skill_path)
+                .with_context(|| format!("failed to remove {}", skill_path.display()))?;
+            remove_dir_if_empty(&skill_dir)?;
+        } else {
+            eprintln!(
+                "leaving {} in place because it has no Membrick ownership marker",
+                skill_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn remove_managed_settings(settings: &mut Map<String, Value>) -> bool {
+    let mut changed = false;
+    if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
+        let event_names = hooks.keys().cloned().collect::<Vec<_>>();
+        for event_name in event_names {
+            let Some(entries) = hooks.get_mut(&event_name).and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let mut event_changed = false;
+            entries.retain_mut(|entry| {
+                if let Some(commands) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                    let before = commands.len();
+                    commands.retain(|hook| {
+                        !hook
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .is_some_and(|command| command.contains(HOOK_MARKER))
+                    });
+                    let removed_managed_hook = commands.len() != before;
+                    changed |= removed_managed_hook;
+                    event_changed |= removed_managed_hook;
+                    if removed_managed_hook && commands.is_empty() {
+                        return false;
+                    }
+                }
+                true
+            });
+            if entries.is_empty() && event_changed {
+                hooks.remove(&event_name);
+                changed = true;
+            }
+        }
+        if hooks.is_empty() && changed {
+            settings.remove("hooks");
+            changed = true;
+        }
+    }
+
+    if settings
+        .get("statusLine")
+        .and_then(|line| line.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.contains("--claude-code-statusline"))
+    {
+        settings.remove("statusLine");
+        changed = true;
+    }
+
+    if let Some(ask) = settings
+        .get_mut("permissions")
+        .and_then(|permissions| permissions.get_mut("ask"))
+        .and_then(Value::as_array_mut)
+    {
+        let before = ask.len();
+        ask.retain(|rule| rule.as_str() != Some("mcp__membrick__update_membrick"));
+        let removed_update_rule = ask.len() != before;
+        changed |= removed_update_rule;
+        if removed_update_rule && ask.is_empty() {
+            if let Some(permissions) = settings
+                .get_mut("permissions")
+                .and_then(Value::as_object_mut)
+            {
+                permissions.remove("ask");
+                if permissions.is_empty() {
+                    settings.remove("permissions");
+                }
+            }
+        }
+    }
+    changed
+}
+
+fn remove_dir_if_empty(path: &Path) -> Result<()> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
 pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Result<PathBuf> {
     let settings_path = match settings_path {
         Some(path) => path.to_path_buf(),

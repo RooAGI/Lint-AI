@@ -25,6 +25,17 @@ The `--ner-provider` flag selects the Tier1 NER backend (`heuristic` or `spacy`,
 default `spacy`). Pass `--ner-provider heuristic` to reproduce the numbers below,
 which were recorded with the heuristic release backend.
 
+After reviewing a new 500-question single-index report with heuristic NER and
+structured-fact retrieval enabled, refresh the README and website headline with:
+
+```bash
+python3 scripts/update_benchmark_results.py comparison/results/<report>.json
+```
+
+The updater changes only the marked current-result sections in `README.md`,
+`docs/index.md`, this page, and `docs/benchmark-results.md`. It leaves dated
+historical and comparison-track results unchanged.
+
 Structured-fact retrieval is enabled by default, matching production. Use
 `--no-structured-fact-retrieval` for a lexical-only baseline. The positive
 `--structured-fact-retrieval` flag remains available to make that setting
@@ -76,19 +87,23 @@ is the average fraction of all correct answer sessions recovered in the top
 *K* results. Any-hit measures whether the search found usable evidence;
 fractional recall measures how much of the relevant evidence it found.
 
+<!-- BEGIN GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
+**LongMemEval-S, 500 questions · 2026-10-15 · single index · heuristic NER · structured-fact retrieval · no embeddings**
+Working-tree run based on `b204b7e`; not a clean release measurement.
+
 | Metric | Result |
 |---|---:|
-| Any-hit Recall@5 | 94.2% |
-| Any-hit Recall@10 | 96.8% |
-| Any-hit Recall@20 | 97.6% |
-| Fractional Recall@5 | 86.37% |
-| Fractional Recall@10 | 91.89% |
-| Fractional Recall@20 | 92.93% |
-| MRR | 86.97% |
-| NDCG@10 | 85.11% |
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% |
+| MRR | 88.85% |
+| NDCG@10 | 87.91% |
+| Mean search time | 3.39 ms |
 
-These headline values are from the current 500-question Tantivy 0.25.0
-LongMemEval-S run.
+Source report: [`retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json).
+<!-- END GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
+
+This generated summary is the latest standalone single-index run. The
+cross-system comparison and segmented experiments below are separate tracks.
 
 ### Standalone session-level rerun (2026-10-12)
 

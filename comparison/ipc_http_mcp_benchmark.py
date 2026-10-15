@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the resident MCP route over HTTP and local IPC.
+"""Compare the resident MCP route over HTTP, local IPC, and file queue.
 
 The script uses only the Python standard library. It starts an isolated server
 for every repetition, seeds the same Markdown corpus, and measures four search
@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -58,8 +59,7 @@ def percentile(values: list[float], p: float) -> float | None:
 def socket_path_for(root: Path) -> Path:
     identity = os.environ.get("USER", "")
     digest = hashlib.sha256(identity.encode() + b"\0" + os.fsencode(root)).hexdigest()
-    home = Path.home()
-    return home / ".membrick" / "runtime" / f"mb-{digest[:24]}.sock"
+    return root / ".membrick" / "runtime" / f"mb-{digest[:24]}.sock"
 
 
 def request(
@@ -81,6 +81,39 @@ def request(
         body_obj["session_id"] = session_id
     body = json.dumps(body_obj, separators=(",", ":")).encode()
     start = time.perf_counter()
+    if transport == "file-queue":
+        request_id = f"bench-{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
+        base = root / ".membrick" / "runtime" / "requests"
+        pending = base / "pending"
+        responses = base / "responses"
+        pending.mkdir(parents=True, exist_ok=True)
+        responses.mkdir(parents=True, exist_ok=True)
+        request_path = pending / f"{request_id}.json"
+        temporary_path = pending / f"{request_id}.tmp"
+        queued = json.dumps(
+            {"id": request_id, "path": ROUTE, "payload": body_obj},
+            separators=(",", ":"),
+        ).encode()
+        descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as request_file:
+                request_file.write(queued)
+                request_file.flush()
+            os.replace(temporary_path, request_path)
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
+        response_path = responses / f"{request_id}.json"
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            try:
+                result = json.loads(response_path.read_bytes())
+                response_path.unlink(missing_ok=True)
+                return int(result["status"]), result["body"], (time.perf_counter() - start) * 1000
+            except FileNotFoundError:
+                # Match the production Rust file-queue client's response poll.
+                time.sleep(0.010)
+        raise TimeoutError("file-queue request timed out; outcome may be unknown")
     if transport == "ipc":
         connection: http.client.HTTPConnection = UnixHTTPConnection(Path(endpoint))
     else:
@@ -144,7 +177,7 @@ def start_server(
         "--checkpoint-interval-seconds",
         "30",
     ]
-    if transport == "ipc":
+    if transport in {"ipc", "file-queue"}:
         command.append("--resident-server")
         endpoint: str | Path = socket_path_for(root)
     else:
@@ -328,12 +361,20 @@ def main() -> None:
     if args.runs < 1 or args.seconds <= 0 or args.readers < 1:
         raise SystemExit("runs, seconds, and readers must be positive")
 
-    with tempfile.TemporaryDirectory(prefix="membrick-ipc-http-bench-") as temp:
+    short_temp = "/tmp" if os.name == "posix" and Path("/tmp").is_dir() else None
+    with tempfile.TemporaryDirectory(
+        prefix="mbr-bench-", dir=short_temp
+    ) as temp:
         root = Path(temp)
         results = []
         for repetition in range(1, args.runs + 1):
             # Alternate order to reduce ordering effects from thermals or load.
-            order = ("http", "ipc") if repetition % 2 else ("ipc", "http")
+            orders = (
+                ("http", "ipc", "file-queue"),
+                ("file-queue", "http", "ipc"),
+                ("ipc", "file-queue", "http"),
+            )
+            order = orders[(repetition - 1) % len(orders)]
             for transport in order:
                 results.append(
                     run_repetition(
@@ -347,10 +388,13 @@ def main() -> None:
                 )
 
     report = {
-        "benchmark": "matched-mcp-http-vs-ipc-read-write",
+        "benchmark": "matched-mcp-http-ipc-file-queue-read-write",
         "commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
         ).strip(),
+        "working_tree_dirty": bool(
+            subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+        ),
         "binary": str(binary),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "python": platform.python_version(),
@@ -360,7 +404,7 @@ def main() -> None:
             "seconds_per_run": args.seconds,
             "search_readers": args.readers,
             "writer_interval_s": 0.5,
-            "connections": "fresh connection per request",
+            "connections": "fresh connection per request; atomic file request/response for file-queue",
             "search_query": QUERY,
             "seeded_markdown_documents": 100,
         },

@@ -51,9 +51,7 @@ where
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             if complete_after_timeout {
-                return receiver
-                    .recv()
-                    .map_err(|_| anyhow::anyhow!("hook operation worker disconnected"))?;
+                return finish_capture(&receiver, Duration::from_secs(30));
             }
             anyhow::bail!("hook operation exceeded {timeout_ms}ms budget")
         }
@@ -61,6 +59,17 @@ where
             anyhow::bail!("hook operation worker disconnected")
         }
     }
+}
+
+fn finish_capture<T>(
+    receiver: &mpsc::Receiver<anyhow::Result<T>>,
+    grace: Duration,
+) -> anyhow::Result<T> {
+    // Captures may exceed the normal hook budget, but a wedged resident
+    // service must not keep the provider process waiting forever.
+    receiver.recv_timeout(grace).map_err(|error| {
+        anyhow::anyhow!("hook capture did not finish within its grace period: {error}")
+    })?
 }
 
 #[cfg(test)]
@@ -134,5 +143,20 @@ mod tests {
             "capture must finish before hook returns"
         );
         assert!(started.elapsed() >= Duration::from_millis(35));
+    }
+
+    #[test]
+    fn stalled_capture_returns_after_its_grace_period() {
+        let (sender, receiver) = mpsc::sync_channel::<anyhow::Result<()>>(1);
+        let (done_sender, done_receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = done_sender.send(finish_capture(&receiver, Duration::from_millis(20)));
+        });
+
+        assert!(matches!(
+            done_receiver.recv_timeout(Duration::from_millis(200)),
+            Ok(Err(_))
+        ));
+        drop(sender);
     }
 }

@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use toml::map::Map as TomlMap;
 use toml::Value as TomlValue;
+use toml_edit::DocumentMut;
 
 const SERVER_NAME: &str = "membrick";
 const DEFAULT_QUERY_TOP_K: usize = 5;
@@ -271,6 +272,129 @@ pub fn install_memory_policy(root: &Path) -> Result<PathBuf> {
     write_text_object(&path, &next)
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(path)
+}
+
+/// Remove the Codex MCP server, hooks, and Membrick policy block for this
+/// project. It deliberately leaves `.membrick` data and the executable intact.
+pub fn uninstall(
+    root: &Path,
+    config_path: Option<&Path>,
+    settings_path: Option<&Path>,
+) -> Result<()> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", root.display()))?;
+    let global_config = match config_path {
+        Some(path) => path.to_path_buf(),
+        None => default_codex_config_path()?,
+    };
+    remove_mcp_server(&global_config)?;
+    remove_mcp_server(&root.join(".codex").join("config.toml"))?;
+
+    let settings_path = match settings_path {
+        Some(path) => path.to_path_buf(),
+        None => default_codex_settings_path()?,
+    };
+    if settings_path.exists() {
+        let mut settings = read_json_object(&settings_path)?;
+        if remove_codex_hooks(&mut settings) {
+            write_json_object(&settings_path, &settings)?;
+        }
+    }
+
+    remove_memory_policy(&root.join("AGENTS.md"))?;
+    Ok(())
+}
+
+fn remove_mcp_server(config_path: &Path) -> Result<()> {
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let contents = fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read {}", config_path.display()))?;
+    let mut config = contents
+        .parse::<DocumentMut>()
+        .with_context(|| format!("failed to parse Codex config {}", config_path.display()))?;
+    let mut changed = false;
+    if let Some(servers) = config
+        .get_mut("mcp_servers")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        changed = servers.remove(SERVER_NAME).is_some();
+        changed |= servers.remove("lint-ai").is_some();
+        if servers.is_empty() && changed {
+            config.as_table_mut().remove("mcp_servers");
+        }
+    }
+    if changed {
+        write_text_object(config_path, &config.to_string())
+            .with_context(|| format!("failed to write {}", config_path.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_codex_hooks(settings: &mut Map<String, Value>) -> bool {
+    let mut changed = false;
+    if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
+        let event_names = hooks.keys().cloned().collect::<Vec<_>>();
+        for event_name in event_names {
+            let Some(entries) = hooks.get_mut(&event_name).and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let mut event_changed = false;
+            entries.retain_mut(|entry| {
+                if let Some(commands) = entry.get_mut("hooks").and_then(Value::as_array_mut) {
+                    let before = commands.len();
+                    commands.retain(|hook| {
+                        !hook
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .is_some_and(|command| command.contains(HOOK_MARKER))
+                    });
+                    let removed_managed_hook = commands.len() != before;
+                    changed |= removed_managed_hook;
+                    event_changed |= removed_managed_hook;
+                    if removed_managed_hook && commands.is_empty() {
+                        return false;
+                    }
+                }
+                true
+            });
+            if entries.is_empty() && event_changed {
+                hooks.remove(&event_name);
+                changed = true;
+            }
+        }
+        if hooks.is_empty() && changed {
+            settings.remove("hooks");
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn remove_memory_policy(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let existing =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let (Some(start), Some(end)) = (existing.find(POLICY_START), existing.find(POLICY_END)) else {
+        return Ok(());
+    };
+    if end <= start {
+        return Ok(());
+    }
+    let mut updated = String::with_capacity(existing.len());
+    updated.push_str(&existing[..start]);
+    updated.push_str(&existing[end + POLICY_END.len()..]);
+    if updated.trim().is_empty() {
+        fs::remove_file(path).with_context(|| format!("failed to remove {}", path.display()))?;
+    } else {
+        write_text_object(path, &updated)
+            .with_context(|| format!("failed to update {}", path.display()))?;
+    }
+    Ok(())
 }
 
 pub fn install_hook_settings(root: &Path, settings_path: Option<&Path>) -> Result<PathBuf> {

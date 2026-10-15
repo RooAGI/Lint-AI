@@ -25,7 +25,7 @@ use crate::integrations::claude_code::hooks::{run_hook, ClaudeHookKind};
 #[cfg(feature = "claude-code")]
 use crate::integrations::claude_code::{
     install_hook_settings, install_memory_skill, install_user_config, run_server, run_status_line,
-    ClaudeCodeServerOptions,
+    uninstall as uninstall_claude, ClaudeCodeServerOptions,
 };
 #[cfg(feature = "codex")]
 use crate::integrations::codex::hooks::{run_hook as run_codex_hook, CodexHookKind};
@@ -34,7 +34,7 @@ use crate::integrations::codex::{
     install_hook_settings as install_codex_hook_settings,
     install_memory_policy as install_codex_memory_policy,
     install_user_config as install_codex_user_config, run_server as run_codex_server,
-    run_status_line as run_codex_status_line, CodexServerOptions,
+    run_status_line as run_codex_status_line, uninstall as uninstall_codex, CodexServerOptions,
 };
 #[cfg(feature = "gemini-cli")]
 use crate::integrations::gemini_cli::hooks::{run_hook as run_gemini_hook, GeminiHookKind};
@@ -83,6 +83,18 @@ use std::time::Instant;
 ///
 /// This is the main entry point used by the CLI wrapper in `main.rs`.
 pub fn run(args: crate::cli::Args) -> Result<()> {
+    if args.provider_config.is_some()
+        || args.provider_settings.is_some()
+        || args.provider_skills_dir.is_some()
+        || args.provider_hooks_dir.is_some()
+        || args.provider_plugin_dir.is_some()
+        || args.force_skill
+    {
+        anyhow::bail!(
+            "provider options must be used with a supported provider command; see `membrick --help`"
+        );
+    }
+
     if args.resident_server {
         #[cfg(feature = "agent-integrations")]
         return crate::executables::run("server");
@@ -418,8 +430,34 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
     }
 
     #[cfg(feature = "claude-code")]
+    if args.claude_code_uninstall {
+        uninstall_claude(
+            Path::new(&args.path),
+            args.claude_code_config.as_deref().map(Path::new),
+            args.claude_code_settings.as_deref().map(Path::new),
+        )?;
+        println!("Removed the Claude Code Membrick integration. Project memory data and the Membrick executable were kept.");
+        return Ok(());
+    }
+
+    #[cfg(feature = "codex")]
+    if args.codex_uninstall {
+        uninstall_codex(
+            Path::new(&args.path),
+            args.codex_config.as_deref().map(Path::new),
+            args.codex_settings.as_deref().map(Path::new),
+        )?;
+        println!("Removed the Codex Membrick integration. Project memory data and the Membrick executable were kept.");
+        return Ok(());
+    }
+
+    #[cfg(feature = "claude-code")]
     if args.claude_code_install {
-        crate::state_paths::migrate_legacy_state_dir(Path::new(&args.path))?;
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let written = install_memory_skill(Path::new(&args.path))?;
         println!("Wrote Claude Code memory skill to {}", written.display());
         let config_path = args.claude_code_config.as_deref().map(Path::new);
@@ -433,7 +471,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "codex")]
     if args.codex_install {
-        crate::state_paths::migrate_legacy_state_dir(Path::new(&args.path))?;
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let config_path = args.codex_config.as_deref().map(Path::new);
         let written = install_codex_user_config(Path::new(&args.path), config_path)?;
         println!("Wrote Codex config to {}", written.display());
@@ -449,6 +491,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "muse-code")]
     if args.muse_install {
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let config_path = args.muse_config.as_deref().map(Path::new);
         let written = install_muse_user_config(Path::new(&args.path), config_path)?;
         println!("Wrote Muse Code config to {}", written.display());
@@ -475,6 +522,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "gemini-cli")]
     if args.gemini_cli_install {
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let written = install_gemini_user_config(
             Path::new(&args.path),
             args.gemini_cli_config.as_deref().map(Path::new),
@@ -522,6 +574,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "agy")]
     if args.agy_install {
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let written = install_agy_memory_skill(Path::new(&args.path), args.agy_force_skill)?;
         println!("Wrote AGY memory skill to {}", written.display());
         let written = install_agy_user_config(
@@ -573,6 +630,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "openclaw")]
     if args.openclaw_install {
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let written = install_openclaw_memory_skill(
             args.openclaw_skill_dir.as_deref().map(Path::new),
             args.openclaw_force_skill,
@@ -604,6 +666,11 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
 
     #[cfg(feature = "hermes")]
     if args.hermes_install {
+        let settings = crate::state_paths::initialize_project_state(Path::new(&args.path))?;
+        println!(
+            "Initialized Membrick project settings at {}",
+            settings.display()
+        );
         let written = install_hermes_memory_skill(
             args.hermes_skill_dir.as_deref().map(Path::new),
             args.hermes_force_skill,

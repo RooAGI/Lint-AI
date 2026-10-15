@@ -1,1 +1,10 @@
-{"name":"membrick","openclaw":{"extensions":["./index.js"]},"type":"module","version":"0.5.0"}
+{
+  "name": "membrick",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "type": "module",
+  "version": "0.6.0"
+}

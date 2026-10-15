@@ -49,9 +49,17 @@ fn admission_error(error: mpsc::TrySendError<(MemoryStore, Command)>) -> anyhow:
 
 type Reply = oneshot::Sender<anyhow::Result<Value>>;
 type Mutation = Box<dyn FnOnce(&mut MemoryService) -> anyhow::Result<Value> + Send>;
+
+/// Content-free audit entry written in the same step as a document upsert.
+pub(super) struct CaptureAudit {
+    pub provider: String,
+    pub user_id: String,
+    pub session_id: String,
+}
+
 enum Command {
     Add(Vec<AddRequest>, bool, Reply),
-    Upsert(Vec<crate::SourceDocument>, Reply),
+    Upsert(Vec<crate::SourceDocument>, Option<CaptureAudit>, Reply),
     ReplaceGroup(String, String, Vec<crate::SourceDocument>, Reply),
     ReplaceWorkspace(Vec<crate::SourceDocument>, Reply),
     Mutate(Mutation, Reply),
@@ -256,12 +264,65 @@ fn run_writer(
                             }
                         }
                     }
-                    command @ (Command::Upsert(..) | Command::ReplaceWorkspace(..)) => {
-                        let (documents, reply, reconcile) = match command {
-                            Command::Upsert(documents, reply) => (documents, reply, false),
-                            Command::ReplaceWorkspace(documents, reply) => (documents, reply, true),
-                            _ => unreachable!(),
-                        };
+                    Command::Upsert(documents, audit, reply) => {
+                        // Journal, apply, audit, and acknowledge. Publication
+                        // happens in the background; callers needing
+                        // visibility use Flush.
+                        let result = (|| -> anyhow::Result<Option<u64>> {
+                            let mut owner = service
+                                .write()
+                                .map_err(|_| anyhow::anyhow!("memory writer poisoned"))?;
+                            let pending: usize = targets
+                                .iter()
+                                .map(|&t| owner.memory_store(t).pending_document_count())
+                                .sum();
+                            anyhow::ensure!(
+                                pending + documents.len() <= MAX_PENDING_DOCUMENTS,
+                                PendingWriteLimit
+                            );
+                            let ids = documents
+                                .iter()
+                                .map(|document| document.doc_id.clone())
+                                .collect::<Vec<_>>();
+                            let store = owner.memory_store_mut(target);
+                            let durable = store.stage_upsert_batch(documents)?;
+                            if let Some(audit) = audit.filter(|_| !ids.is_empty()) {
+                                store.record_capture_mutation(
+                                    &audit.provider,
+                                    &audit.user_id,
+                                    &audit.session_id,
+                                    &ids,
+                                )?;
+                            }
+                            schedules[slot]
+                                .first_pending
+                                .get_or_insert_with(Instant::now);
+                            // A store without a journal is durable only after
+                            // a checkpoint, so it keeps the barrier reply.
+                            Ok((!durable).then(|| store.publication_revisions().0))
+                        })();
+                        match result {
+                            Ok(None) => {
+                                let _ = reply.send(Ok(Value::Null));
+                            }
+                            Ok(Some(revision)) => {
+                                if barriers.len() < QUEUE_CAPACITY {
+                                    barriers.push(BarrierReply::for_store(
+                                        target,
+                                        revision,
+                                        BarrierWork::None,
+                                        reply,
+                                    ));
+                                } else {
+                                    let _ = reply.send(Err(PendingWriteLimit.into()));
+                                }
+                            }
+                            Err(error) => {
+                                let _ = reply.send(Err(error));
+                            }
+                        }
+                    }
+                    Command::ReplaceWorkspace(documents, reply) => {
                         let result = (|| -> anyhow::Result<Option<u64>> {
                             anyhow::ensure!(barriers.len() < QUEUE_CAPACITY, PendingWriteLimit);
                             let mut owner = service
@@ -276,15 +337,7 @@ fn run_writer(
                                 PendingWriteLimit
                             );
                             let store = owner.memory_store_mut(target);
-                            let changed = if reconcile {
-                                store.replace_workspace_documents(documents)?
-                            } else {
-                                for document in documents {
-                                    store.upsert(document);
-                                }
-                                true
-                            };
-                            if changed {
+                            if store.replace_workspace_documents(documents)? {
                                 schedules[slot]
                                     .first_pending
                                     .get_or_insert_with(Instant::now);
@@ -442,7 +495,7 @@ fn run_writer(
                     schedules[slot].checkpoint_build = false;
                     if service
                         .read()
-                        .is_ok_and(|owner| owner.memory_store(target).pending_document_count() > 0)
+                        .is_ok_and(|owner| owner.memory_store(target).has_unpublished_writes())
                     {
                         schedules[slot]
                             .first_pending
@@ -496,7 +549,12 @@ fn run_writer(
                 .read()
                 .map(|owner| {
                     let store = owner.memory_store(target);
-                    (store.pending_document_count(), store.enrichment_ready())
+                    // Staged upserts are not pending adds, but still need
+                    // a build once due.
+                    let pending = store
+                        .pending_document_count()
+                        .max(usize::from(store.has_unpublished_writes()));
+                    (pending, store.enrichment_ready())
                 })
                 .unwrap_or((MAX_PENDING_DOCUMENTS, false));
             let due = schedules[slot]
@@ -643,12 +701,15 @@ impl StagedWriter {
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
             .map_err(Self::status)
     }
+    /// Journal and apply documents. Returns once they are durable; they
+    /// become searchable on the next background publication.
     pub(super) async fn upsert_documents(
         &self,
         documents: Vec<crate::SourceDocument>,
+        audit: Option<CaptureAudit>,
     ) -> Result<(), StatusCode> {
         let (reply, receive) = oneshot::channel();
-        self.send(Command::Upsert(documents, reply))?;
+        self.send(Command::Upsert(documents, audit, reply))?;
         receive
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
@@ -675,7 +736,7 @@ impl StagedWriter {
     ) -> anyhow::Result<()> {
         let (reply, receive) = oneshot::channel();
         self.sender
-            .try_send(Command::Upsert(documents, reply))
+            .try_send(Command::Upsert(documents, None, reply))
             .map_err(admission_error)?;
         receive.blocking_recv().map_err(|_| WriterStopped)??;
         Ok(())

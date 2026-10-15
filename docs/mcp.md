@@ -4,14 +4,18 @@ Each agent adapter exposes a provider-local MCP server over the host client's
 configured MCP transport. The server gives the agent direct access to Membrick
 search, inspection, memory controls, and session controls.
 
-Bundled Rust provider MCP adapters and hook subcommands reach the shared
-resident workspace owner over local IPC. The first request starts that owner
-automatically. macOS and Linux use a user-private Unix socket; Windows uses a
-named pipe. The bundled MCP adapters do not read environment variables to
-select a server or transport.
-Resident service diagnostics are written to
-`~/.membrick/runtime/resident.log` (or `%USERPROFILE%\.membrick\runtime\resident.log`
-on Windows). At resident startup, logs over 1 MiB are rotated to `resident.log.1`.
+Bundled Rust provider MCP adapters and hook subcommands reach one shared
+resident workspace owner. They try the user-private local IPC endpoint first
+(Unix socket on macOS/Linux, named pipe on Windows), then an optional loopback
+HTTP listener configured in `.membrick/server.toml`, then an atomic filesystem
+request queue under `.membrick/runtime/requests`. The first request starts the
+resident automatically. Every transport feeds the same router and
+`MemoryService`; a project ownership lock prevents a second resident from
+opening the same workspace. The bundled adapters do not read environment
+variables to select a server or transport.
+Resident sockets, startup coordination files, and diagnostics are kept in the
+project's `.membrick/runtime/` directory. At resident startup, logs over 1 MiB
+are rotated to `.membrick/runtime/resident.log.1`.
 See [Local IPC server architecture](local-ipc-architecture.md) for the request
 flow, endpoint permissions, and its relationship to the standalone HTTP
 server.
@@ -36,7 +40,7 @@ Codex, Gemini CLI, or AGY to use the core index, HTTP API, or MCP interface.
 | Tool | Purpose |
 |---|---|
 | `search` | Search the indexed workspace and return ranked results. Requires `query`; accepts `top_k` (1–20). Each hit carries `created_at` and `session_id`, and the hit text is prefixed with `[session date: ...]` when the memory has a timestamp, so relative date expressions ("yesterday", "last month") resolve against an absolute date. |
-| `info` | Return the workspace root, indexed document count, and resident IPC connection status and endpoint. |
+| `info` | Return the workspace root, indexed document count, and the transport and endpoint that served the current request. |
 | `list_memories` | List bounded previews of indexed agent memories. Accepts `limit` (1–100, default 20). |
 | `add_memory` | Add an explicitly chosen memory. Accepts `content`, `request_id`, `session_id`, optional `role`, and optional `supersedes_id` to correct an older memory. |
 | `get_memory` | Read one memory by ID. Accepts `memory_id` and optional `include_inactive`. |
@@ -51,9 +55,9 @@ Antigravity CLI through their configured Membrick MCP integration.
 The MCP memory-write tools are scoped to the stable `mcp` owner within the
 workspace. Lifecycle-captured memories use a separate owner and are not deleted
 by `delete_memory`.
-The `info` transport status describes the connection that served that request.
-`connected` means the resident owner responded successfully over that IPC
-endpoint.
+The `info` transport status describes the connection that served that request:
+`ipc`, `http`, or `file-queue`. `connected` means the resident owner responded
+successfully through that transport.
 
 ## Search versus hooks
 

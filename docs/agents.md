@@ -182,11 +182,9 @@ preserve every parsed message and structured block in source order,
 after credential redaction. Their stable session document is upserted on each
 capture instead of storing another full copy for every turn. Other adapters
 capture the session data exposed in their hook payloads. Claude and Codex
-replace the session capture group and reconcile it in one `MemoryService`
-mutation, removing observations that disappeared from a changed transcript.
-This makes the
-document available in the index when the hook completes successfully, but it
-does not inject the new document back into the conversation that just ended.
+send each capture as one upsert batch. The hook returns once the batch is
+journaled, and the document becomes searchable on the next background
+publication. It is not injected back into the conversation that just ended.
 The document is returned on a later retrieval event, typically the next prompt
 or next session. If the transcript is missing or has no parsed messages, the
 event completes without adding a document.

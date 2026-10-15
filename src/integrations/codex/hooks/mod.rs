@@ -3,9 +3,10 @@ mod protocol;
 use super::document::{CodexDocument, CodexDocumentType};
 use crate::ids::stable_doc_id_from_source;
 use crate::integrations::session_recording::{
-    membrick_enabled, record_event_if_enabled, record_transcript_usage_if_available,
-    RecordingProvider,
+    membrick_enabled, provider_state_dir, record_event_if_enabled,
+    record_transcript_usage_if_available, RecordingProvider,
 };
+use crate::integrations::transcript_cursor;
 use crate::memory_api::MemoryService;
 #[cfg(test)]
 use crate::pipeline::{MemoryIndexLayout, PipelineOptions};
@@ -63,61 +64,6 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
     let input: CodexHookInput =
         serde_json::from_value(raw).context("failed to decode Codex hook input")?;
     let root = resolve_root(&input.cwd, fallback_root)?;
-    let session_id = input.session_id.clone();
-    // The MCP search dispatch inherits this session when the agent does not
-    // pass session_id explicitly. The conversation-state store opens without
-    // touching the index (a full MemoryService open would load it); skipped
-    // until memory exists so hooks never create store directories for
-    // memory-less projects. Fail-open: the write never breaks the hook.
-    if memory_root(&root).exists() {
-        MemoryService::note_active_session_at_path(
-            memory_root(&root),
-            RecordingProvider::Codex.as_str(),
-            &input.session_id,
-        );
-    }
-    let payload = serde_json::json!({
-        "hook_event_name": input.hook_event_name,
-        "prompt": input.prompt,
-        "tool_name": input.tool_name,
-        "tool_input": input.tool_input,
-        "tool_response": input.tool_response,
-        "transcript_path": input.transcript_path,
-        "agent_id": input.agent_id,
-        "agent_type": input.agent_type,
-        "turn_id": input.turn_id,
-        "expansion_type": input.expansion_type,
-        "command_name": input.command_name,
-        "command_args": input.command_args,
-        "command_source": input.command_source,
-        "permission_mode": input.permission_mode,
-        "trigger": input.trigger,
-        "reason": input.reason,
-        "extra": input.extra,
-    });
-    if let Err(error) = record_event_if_enabled(
-        RecordingProvider::Codex,
-        &root,
-        &input.session_id,
-        kind.event_name(),
-        payload,
-    ) {
-        eprintln!("warning: Membrick session recording failed open: {error:#}");
-    }
-    if matches!(kind, CodexHookKind::Stop) && !input.stop_hook_active {
-        if let Err(error) = record_transcript_usage_if_available(
-            RecordingProvider::Codex,
-            &root,
-            &input.session_id,
-            input.transcript_path.as_deref(),
-            input.turn_id.as_deref(),
-            input.agent_id.as_deref(),
-            input.agent_type.as_deref(),
-            "codex-transcript",
-        ) {
-            eprintln!("warning: Codex transcript usage capture failed open: {error:#}");
-        }
-    }
     let started = Instant::now();
     let mut output = match run_with_budget(kind, input, fallback_root) {
         Ok(output) => output,
@@ -126,13 +72,6 @@ pub fn run_hook(kind: CodexHookKind, fallback_root: &Path) -> Result<()> {
             CodexHookOutput::default()
         }
     };
-    if kind == CodexHookKind::SessionEnd && memory_root(&root).exists() {
-        MemoryService::deactivate_session_at_path(
-            memory_root(&root),
-            RecordingProvider::Codex.as_str(),
-            &session_id,
-        );
-    }
     if matches!(
         kind,
         CodexHookKind::SessionStart | CodexHookKind::UserPromptSubmit
@@ -230,10 +169,63 @@ fn handle_hook(
         );
     }
     let root = resolve_root(&input.cwd, fallback_root)?;
+    // Keep every filesystem, resident IPC, and transcript operation inside
+    // run_with_budget so a stalled resident request cannot bypass the hook
+    // timeout before capture or retrieval starts.
+    let session_id = input.session_id.clone();
+    if memory_root(&root).exists() {
+        MemoryService::note_active_session_at_path(
+            memory_root(&root),
+            RecordingProvider::Codex.as_str(),
+            &session_id,
+        );
+    }
+    let payload = serde_json::json!({
+        "hook_event_name": input.hook_event_name,
+        "prompt": input.prompt,
+        "tool_name": input.tool_name,
+        "tool_input": input.tool_input,
+        "tool_response": input.tool_response,
+        "transcript_path": input.transcript_path,
+        "agent_id": input.agent_id,
+        "agent_type": input.agent_type,
+        "turn_id": input.turn_id,
+        "expansion_type": input.expansion_type,
+        "command_name": input.command_name,
+        "command_args": input.command_args,
+        "command_source": input.command_source,
+        "permission_mode": input.permission_mode,
+        "trigger": input.trigger,
+        "reason": input.reason,
+        "extra": input.extra,
+    });
+    if let Err(error) = record_event_if_enabled(
+        RecordingProvider::Codex,
+        &root,
+        &session_id,
+        kind.event_name(),
+        payload,
+    ) {
+        eprintln!("warning: Membrick session recording failed open: {error:#}");
+    }
+    if matches!(kind, CodexHookKind::Stop) && !input.stop_hook_active {
+        if let Err(error) = record_transcript_usage_if_available(
+            RecordingProvider::Codex,
+            &root,
+            &session_id,
+            input.transcript_path.as_deref(),
+            input.turn_id.as_deref(),
+            input.agent_id.as_deref(),
+            input.agent_type.as_deref(),
+            "codex-transcript",
+        ) {
+            eprintln!("warning: Codex transcript usage capture failed open: {error:#}");
+        }
+    }
     if !membrick_enabled(RecordingProvider::Codex, &root)? {
         return Ok(CodexHookOutput::default());
     }
-    match kind {
+    let output = match kind {
         CodexHookKind::SessionStart => retrieve(
             &root,
             kind.event_name(),
@@ -288,7 +280,15 @@ fn handle_hook(
             input.prompt.as_deref().unwrap_or_default(),
         ),
         CodexHookKind::SubagentStop => capture(&root, input, CodexDocumentType::Outcome),
+    }?;
+    if kind == CodexHookKind::SessionEnd && memory_root(&root).exists() {
+        MemoryService::deactivate_session_at_path(
+            memory_root(&root),
+            RecordingProvider::Codex.as_str(),
+            &session_id,
+        );
     }
+    Ok(output)
 }
 
 fn retrieve(
@@ -334,8 +334,6 @@ fn retrieve(
         .take(DEFAULT_TOP_K);
     let mut seen = HashSet::new();
     let mut retrieved_memories = Vec::new();
-    let current_revision = git_value(root, &["rev-parse", "HEAD"]);
-    let current_branch = git_value(root, &["branch", "--show-current"]);
     let mut context = String::new();
     for result in selected {
         let content = result
@@ -362,8 +360,6 @@ fn retrieve(
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {
             continue;
         }
-        let captured_revision = result.get("revision").and_then(Value::as_str);
-        let status = revision_status(root, captured_revision, current_revision.as_deref());
         let semantic_status = result
             .get("semantic_status")
             .and_then(Value::as_str)
@@ -376,7 +372,7 @@ fn retrieve(
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         let entry = format!(
-            "\n- Source: {}\n  Type: {}\n  Captured: {}\n  Captured branch: {}\n  Captured revision: {}\n  Current branch: {}\n  Current revision: {}\n  Revision status: {}\n  Memory status: {}\n  Relation evidence: {}\n  {}\n",
+            "\n- Source: {}\n  Type: {}\n  Captured: {}\n  Memory status: {}\n  Relation evidence: {}\n  {}\n",
             source,
             result
                 .get("document_type")
@@ -386,14 +382,6 @@ fn retrieve(
                 .get("created_at")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
-            result
-                .get("branch")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            captured_revision.unwrap_or("unknown"),
-            current_branch.as_deref().unwrap_or("unknown"),
-            current_revision.as_deref().unwrap_or("unknown"),
-            status,
             semantic_status,
             if relation_evidence.is_empty() {
                 "none".to_string()
@@ -555,48 +543,48 @@ fn capture(
     let Some(transcript_path) = transcript_path(&input, root) else {
         return Ok(CodexHookOutput::default());
     };
-    let affected_paths = affected_paths(&input.extra);
-    let messages = extract_recent_messages(&transcript_path)?;
-    let content = extract_structured_memory(&transcript_path, document_type, &affected_paths)?;
-    if content.trim().is_empty() {
+    // Store only the transcript written since this session's previous
+    // capture, so earlier turns are never re-sent.
+    let state_dir = provider_state_dir(RecordingProvider::Codex, root);
+    let slice = transcript_cursor::read_since_last_capture(
+        &state_dir,
+        &input.session_id,
+        &transcript_path,
+    )?;
+    let messages = extract_messages(&slice.text);
+    if messages.is_empty() {
+        transcript_cursor::mark_captured(&state_dir, &input.session_id, slice.end)?;
         return Ok(CodexHookOutput::default());
     }
+    let affected_paths = affected_paths(&input.extra);
+    let content = structured_memory(&messages, document_type, &affected_paths);
     let captured_session_id = input.session_id.clone();
-    let make_document = |event_id: String, content: String, timestamp| CodexDocument {
-        event_id,
-        session_id: input.session_id.clone(),
-        document_type: CodexDocumentType::SessionSummary,
-        content,
-        cwd: root.to_path_buf(),
-        timestamp,
-        command_name: input.command_name.clone(),
-        command_args: input.command_args.clone(),
-        affected_paths: affected_paths.clone(),
-        branch: git_value(root, &["branch", "--show-current"]),
-        revision: git_value(root, &["rev-parse", "HEAD"]),
-    };
-    let mut context = make_document(
-        "whole-session".to_string(),
-        content,
-        Some(current_timestamp()),
-    )
-    .into_source_document()?;
-    context
-        .filters
-        .insert("document_type".into(), "session-context".into());
-    context.concept = "session-context".into();
-    context.headings = vec!["session-context".into()];
-    context.links.clear();
-    let mut documents = Vec::with_capacity(messages.len() + 1);
-    for (index, message) in messages.into_iter().enumerate() {
+    let make_document =
+        |event_id: String, document_type, content: String, timestamp| CodexDocument {
+            event_id,
+            session_id: input.session_id.clone(),
+            document_type,
+            content,
+            cwd: root.to_path_buf(),
+            timestamp,
+            command_name: input.command_name.clone(),
+            command_args: input.command_args.clone(),
+            affected_paths: affected_paths.clone(),
+        };
+    let mut documents = Vec::with_capacity(messages.len() + 2);
+    for (offset, message) in messages.into_iter().enumerate() {
+        // Byte offsets grow faster than message counts, so this order stays
+        // unique and increasing across captures.
+        let order = slice.start as usize + offset;
         let identity = message.message_id.as_deref().unwrap_or("");
         let event_id = if identity.is_empty() {
-            format!("observation-{index}")
+            format!("observation-{order}")
         } else {
             format!("observation-{identity}")
         };
         let mut observation = make_document(
             event_id,
+            CodexDocumentType::SessionSummary,
             format!("{}\n{}", message.role, message.content),
             message.timestamp,
         )
@@ -607,12 +595,45 @@ fn capture(
         observation.filters.insert("speaker".into(), message.role);
         observation
             .filters
-            .insert("observation_index".into(), index.to_string());
+            .insert("observation_index".into(), order.to_string());
         observation.concept = "session-observation".into();
         observation.headings = vec!["session-observation".into()];
-        context.links.push(observation.doc_id.clone());
         documents.push(observation);
     }
+    // This capture's text, compared with other sessions at project scope.
+    let mut turn = make_document(
+        format!("turn-{}", slice.start),
+        document_type,
+        content,
+        Some(current_timestamp()),
+    )
+    .into_source_document()?;
+    if let Some(project_id) = turn.filters.get("project_id").cloned() {
+        turn.filters
+            .insert("semantic_scope".into(), format!("project:{project_id}"));
+    }
+    documents.push(turn);
+    let mut context = make_document(
+        "whole-session".to_string(),
+        CodexDocumentType::SessionSummary,
+        format!(
+            "Session {} context. Observations are linked in source order.",
+            input.session_id
+        ),
+        Some(current_timestamp()),
+    )
+    .into_source_document()?;
+    context
+        .filters
+        .insert("document_type".into(), "session-context".into());
+    context.concept = "session-context".into();
+    context.headings = vec!["session-context".into()];
+    // Link the observations captured in this batch. The server never
+    // rebuilds the context from the store, so each capture stays one upsert.
+    context.links = documents
+        .iter()
+        .map(|document| document.doc_id.clone())
+        .collect();
     context.doc_id = stable_doc_id_from_source(&format!("{}::whole-session", context.source));
     context.doc_length = context.content.len();
     documents.push(context);
@@ -622,6 +643,7 @@ fn capture(
         &captured_session_id,
         documents,
     )?;
+    transcript_cursor::mark_captured(&state_dir, &captured_session_id, slice.end)?;
     Ok(CodexHookOutput::default())
 }
 
@@ -719,15 +741,14 @@ struct ConversationMessage {
     message_id: Option<String>,
 }
 
-fn extract_structured_memory(
-    path: &Path,
+fn structured_memory(
+    messages: &VecDeque<ConversationMessage>,
     document_type: CodexDocumentType,
     affected_paths: &[String],
-) -> Result<String> {
-    let messages = extract_recent_messages(path)?;
+) -> String {
     let mut fields = vec![
         format!("Memory type: {}", document_type.as_str()),
-        "All parsed transcript text observations in source order. Credentials are redacted."
+        "Parsed transcript text observations in source order. Credentials are redacted."
             .to_string(),
     ];
     for (index, message) in messages.iter().enumerate() {
@@ -743,18 +764,27 @@ fn extract_structured_memory(
         ));
     }
     if fields.len() == 2 {
-        return Ok(String::new());
+        return String::new();
     }
     if !affected_paths.is_empty() {
         fields.push(format!("Affected paths: {}", affected_paths.join(", ")));
     }
-    Ok(fields.join("\n"))
+    fields.join("\n")
 }
 
-fn extract_recent_messages(path: &Path) -> Result<VecDeque<ConversationMessage>> {
+#[cfg(test)]
+fn extract_structured_memory(
+    path: &Path,
+    document_type: CodexDocumentType,
+    affected_paths: &[String],
+) -> Result<String> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read Codex transcript {}", path.display()))?;
-    Ok(extract_messages(&text))
+    Ok(structured_memory(
+        &extract_messages(&text),
+        document_type,
+        affected_paths,
+    ))
 }
 
 fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
@@ -806,33 +836,6 @@ fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
         });
     }
     messages
-}
-
-/// Object ids are passed to `git` as positional arguments, so anything that is
-/// not a plain hexadecimal id (a leading `-` above all) must never get through.
-fn is_object_id(value: &str) -> bool {
-    (4..=64).contains(&value.len()) && value.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-fn revision_status(root: &Path, captured: Option<&str>, current: Option<&str>) -> &'static str {
-    let (Some(captured), Some(current)) = (captured, current) else {
-        return "unknown";
-    };
-    if captured == current {
-        return "exact-match";
-    }
-    if !is_object_id(captured) || !is_object_id(current) {
-        return "unknown";
-    }
-    let status = std::process::Command::new("git")
-        .args(["merge-base", "--is-ancestor", captured, current])
-        .current_dir(root)
-        .status();
-    match status {
-        Ok(status) if status.success() => "captured-revision-is-ancestor",
-        Ok(status) if status.code() == Some(1) => "diverged",
-        _ => "unknown",
-    }
 }
 
 fn text_blocks(value: &Value) -> String {
@@ -915,19 +918,6 @@ fn affected_paths(extra: &serde_json::Map<String, Value>) -> Vec<String> {
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect()
-}
-
-fn git_value(root: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn current_timestamp() -> String {
@@ -1084,7 +1074,11 @@ mod tests {
         handle_hook(CodexHookKind::Stop, stop_input.clone(), &root).unwrap();
         let mut stored = open_store(&root).unwrap();
         stored.refresh_index().unwrap();
-        assert_eq!(stored.records().len(), 3);
+        assert_eq!(
+            stored.records().len(),
+            4,
+            "capture should store two observations, one outcome, and one session context"
+        );
         let records_after_first_capture = stored.records().len();
         drop(stored);
         handle_hook(CodexHookKind::Stop, stop_input, &root).unwrap();
@@ -1220,16 +1214,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_revision_provenance_does_not_require_repository_revalidation() {
-        let root = std::env::current_dir().unwrap();
-        let revision = git_value(&root, &["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(
-            revision_status(&root, Some(&revision), Some(&revision)),
-            "exact-match"
-        );
-    }
-
-    #[test]
     fn relevant_excerpt_selects_matching_lines_and_enforces_byte_limit() {
         let content = format!(
             "Memory type: outcome\nRequest: update unrelated documentation\nResult: {}\nNoise: {}",
@@ -1255,11 +1239,22 @@ mod tests {
         )
         .unwrap();
 
-        for (kind, event) in [
+        for (index, (kind, event)) in [
             (CodexHookKind::PreCompact, "PreCompact"),
             (CodexHookKind::Stop, "Stop"),
             (CodexHookKind::SessionEnd, "SessionEnd"),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index > 0 {
+                append_line(
+                    &transcript,
+                    &format!(
+                        r#"{{"type":"assistant","message":{{"role":"assistant","content":"Routing step {index}"}}}}"#
+                    ),
+                );
+            }
             handle_hook(kind, input(&root, Some(transcript.clone()), event), &root).unwrap();
         }
 
@@ -1273,12 +1268,125 @@ mod tests {
         assert_eq!(
             document_types,
             HashSet::from([
+                "checkpoint".to_string(),
+                "outcome".to_string(),
                 "session-context".to_string(),
                 "session-observation".to_string(),
             ])
         );
-        assert_eq!(store.records().len(), 2);
+        assert_eq!(
+            store.records().len(),
+            5,
+            "two observations, two turn documents, one session context; SessionEnd writes nothing"
+        );
 
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn append_line(path: &Path, line: &str) {
+        use std::io::Write as _;
+        let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(file, "{line}").unwrap();
+    }
+
+    #[test]
+    fn each_stop_stores_only_the_transcript_since_the_previous_stop() {
+        let root = temp_dir("incremental");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"Choose the cobalt cache"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let stop = input(&root, Some(transcript.clone()), "Stop");
+        handle_hook(CodexHookKind::Stop, stop.clone(), &root).unwrap();
+        append_line(
+            &transcript,
+            r#"{"type":"assistant","message":{"role":"assistant","content":"Switched to the amber cache"}}"#,
+        );
+        handle_hook(CodexHookKind::Stop, stop, &root).unwrap();
+
+        let store = open_store(&root).unwrap();
+        let records = store.source_documents();
+        let of_type = |kind: &str| {
+            records
+                .iter()
+                .filter(|record| {
+                    record.filters.get("document_type").map(String::as_str) == Some(kind)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(of_type("session-observation").len(), 2);
+        let outcomes = of_type("outcome");
+        assert_eq!(outcomes.len(), 2, "one outcome per stop");
+        let second = outcomes
+            .iter()
+            .find(|record| record.content.contains("amber"))
+            .expect("second stop outcome");
+        assert!(
+            !second.content.contains("cobalt"),
+            "second stop must not repeat the first turn"
+        );
+        let contexts = of_type("session-context");
+        assert_eq!(contexts.len(), 1, "one session-wide context");
+        assert!(!contexts[0].content.contains("cobalt"));
+        // The context links the observations of the latest capture.
+        let latest = of_type("session-observation")
+            .into_iter()
+            .find(|record| record.content.contains("amber"))
+            .expect("second stop observation");
+        assert!(contexts[0].links.contains(&latest.doc_id));
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shrunk_transcript_is_captured_again_from_the_start() {
+        let root = temp_dir("restart");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"First version of a long request"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":"First version of a long answer"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let stop = input(&root, Some(transcript.clone()), "Stop");
+        handle_hook(CodexHookKind::Stop, stop.clone(), &root).unwrap();
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"Short"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        handle_hook(CodexHookKind::Stop, stop, &root).unwrap();
+
+        let store = open_store(&root).unwrap();
+        let observations = store
+            .records()
+            .into_iter()
+            .filter(|record| {
+                record.filters.get("document_type").map(String::as_str)
+                    == Some("session-observation")
+            })
+            .collect::<Vec<_>>();
+        // Captures are upserts only: the rewritten first line replaces the
+        // observation at the same position, and later ones remain as history.
+        assert!(observations
+            .iter()
+            .any(|record| record.content.contains("Short")));
+        assert!(!observations
+            .iter()
+            .any(|record| record.content.contains("long request")));
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }

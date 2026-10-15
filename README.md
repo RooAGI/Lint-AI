@@ -10,8 +10,8 @@ Search can find the right topic. Membrick helps an agent answer the harder quest
 
 [Agent memory guide](docs/agent-memory.md) · [Quickstart](docs/quickstart.md) · [Reproducible demo](#reproducible-terminal-demo) · [Agent integrations](docs/agents.md) · [Benchmarks](#benchmark-highlights) · [Documentation](https://rooagi.github.io/Membrick/)
 
-**Current benchmark:** 500 questions · 89.78% fractional Recall@5 ·
-98.8% any-hit Recall@10 · 3.69 ms mean search time · single CPU · no GPU
+**Current benchmark:** 500-question LongMemEval-S. See the
+[latest benchmark results](#benchmark-highlights) for metrics and the source report.
 
 ---
 
@@ -221,17 +221,20 @@ The current benchmark uses the repository's raw LongMemEval-S dataset, runs 500 
 
 **500 questions · heuristic backend · single CPU · no GPU**
 
+<!-- BEGIN GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
+**LongMemEval-S, 500 questions · 2026-10-15 · single index · heuristic NER · structured-fact retrieval · no embeddings**
+Working-tree run based on `b204b7e`; not a clean release measurement.
+
 | Metric | Result |
 |---|---:|
-| Fractional Recall@5 | **89.78%** |
-| Fractional Recall@10 | **95.20%** |
-| Fractional Recall@20 | **98.34%** |
-| Any-hit Recall@5 | **96.6%** |
-| Any-hit Recall@10 | **98.8%** |
-| Any-hit Recall@20 | **100.0%** |
-| MRR | **88.85%** |
-| NDCG@10 | **87.91%** |
-| Mean search latency | **3.69 ms** |
+| Fractional Recall@5 / @10 / @20 | 89.78% / 95.20% / 98.34% |
+| Any-hit Recall@5 / @10 / @20 | 96.6% / 98.8% / 100.0% |
+| MRR | 88.85% |
+| NDCG@10 | 87.91% |
+| Mean search time | 3.39 ms |
+
+Source report: [`retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-500-2026-10-15-v0.6.0-b204b7e-working-tree.json).
+<!-- END GENERATED LONGMEMEVAL-S 500-QUESTION HEADLINE -->
 
 `Fractional Recall@k` is the average fraction of all correct answer sessions recovered in the top *k*. `Any-hit Recall@k` counts a query as successful when any correct answer session appears in the top *k*.
 

@@ -29,6 +29,7 @@ use clap::{CommandFactory, FromArgMatches, Parser};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::Digest;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -113,6 +114,8 @@ struct Args {
 #[serde(default)]
 struct ServerSettings {
     bind: Option<String>,
+    resident_http_bind: Option<String>,
+    resident_http_auto_port: Option<bool>,
     index: Option<PathBuf>,
     project_root: Option<PathBuf>,
     server_token: Option<String>,
@@ -210,6 +213,7 @@ struct WorkspaceRuntime {
     service: Arc<RwLock<MemoryService>>,
     staged_writer: StagedWriter,
     writer_gate: Arc<tokio::sync::Mutex<()>>,
+    _owner_lock: Arc<crate::memory_api::workspace::WorkspaceOwnerLock>,
     project_root: PathBuf,
     workspace_index_root: PathBuf,
 }
@@ -362,6 +366,7 @@ fn open_workspace_runtime(
     options: PipelineOptions,
     schedule: server_writer::WriteSchedule,
 ) -> anyhow::Result<WorkspaceRuntime> {
+    let owner_lock = crate::memory_api::workspace::WorkspaceOwnerLock::acquire(&project_root)?;
     let workspace_index_root = project_root
         .join(".membrick")
         .join(crate::memory_api::workspace::WORKSPACE_MEMORY_NAME);
@@ -372,6 +377,7 @@ fn open_workspace_runtime(
         service,
         staged_writer,
         writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        _owner_lock: Arc::new(owner_lock),
         project_root,
         workspace_index_root,
     };
@@ -616,6 +622,8 @@ pub(crate) async fn main() -> anyhow::Result<()> {
     let mut args = Args::from_arg_matches_mut(&mut matches)?;
     let settings_file = settings_path(&args)?;
     let settings = load_server_settings(&settings_file)?;
+    let resident_http_bind = settings.resident_http_bind.clone();
+    let resident_http_auto_port = settings.resident_http_auto_port.unwrap_or(false);
     if !bind_was_set {
         if let Some(bind) = settings.bind {
             args.bind = bind;
@@ -655,6 +663,16 @@ pub(crate) async fn main() -> anyhow::Result<()> {
         args.server_token.is_some() || jwt_secret.is_some(),
         args.allow_unauthenticated,
     )?;
+    if args.resident_server {
+        if let Some(bind) = &resident_http_bind {
+            ensure_bind_allowed(
+                bind,
+                args.allow_non_loopback,
+                args.server_token.is_some() || jwt_secret.is_some(),
+                args.allow_unauthenticated,
+            )?;
+        }
+    }
     let mut options = memory_pipeline_options(
         args.adaptive_segment_max_n,
         args.single_index,
@@ -668,6 +686,7 @@ pub(crate) async fn main() -> anyhow::Result<()> {
         .project_root
         .unwrap_or(std::env::current_dir()?)
         .canonicalize()?;
+    let owner_lock = crate::memory_api::workspace::WorkspaceOwnerLock::acquire(&project_root)?;
     anyhow::ensure!(
         args.max_active_workspaces > 0,
         "--max-active-workspaces must be greater than zero"
@@ -783,6 +802,7 @@ pub(crate) async fn main() -> anyhow::Result<()> {
         service: state.service.clone(),
         staged_writer: state.staged_writer.as_ref().unwrap().clone(),
         writer_gate: state.writer_gate.clone(),
+        _owner_lock: Arc::new(owner_lock),
         project_root: state.project_root.clone(),
         workspace_index_root: state.workspace_index_root.clone(),
     });
@@ -859,26 +879,22 @@ pub(crate) async fn main() -> anyhow::Result<()> {
     }
     let app = app_router(state.clone());
     if args.resident_server {
-        crate::local_ipc::serve(app, &state.project_root).await?;
-        return Ok(());
-    }
-    let listener = tokio::net::TcpListener::bind(&args.bind).await?;
-    eprintln!("Membrick server listening on {}", args.bind);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            #[cfg(unix)]
-            {
-                let mut terminate =
-                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                        .expect("install SIGTERM handler");
-                tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        })
+        crate::local_ipc::serve(
+            app,
+            &state.project_root,
+            shutdown_signal(),
+            resident_http_bind.as_deref(),
+            resident_http_auto_port,
+            Some(&settings_file),
+        )
         .await?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(&args.bind).await?;
+        eprintln!("Membrick server listening on {}", args.bind);
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
     if let Some(worker) = &state.staged_writer {
         worker
             .flush()
@@ -886,6 +902,21 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             .map_err(|status| anyhow::anyhow!("shutdown flush failed: {status}"))?;
     }
     Ok(())
+}
+
+/// Completes on Ctrl-C or SIGTERM, so either listener can stop and flush.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn app_router(state: AppState) -> Router {
@@ -1278,8 +1309,18 @@ struct AuthContext {
     user_id: String,
 }
 
-async fn health() -> impl IntoResponse {
-    Json(json!({"status":"ok", "version": env!("CARGO_PKG_VERSION")}))
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let canonical = state
+        .project_root
+        .canonicalize()
+        .unwrap_or_else(|_| state.project_root.clone());
+    let digest = sha2::Sha256::digest(canonical.to_string_lossy().as_bytes());
+    let workspace_id: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    Json(json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "workspace_id": workspace_id
+    }))
 }
 
 fn now_unix_ms() -> u64 {
@@ -2037,11 +2078,14 @@ async fn provider_memory_search(
     }
 }
 
+/// Journal provider documents through the resident owner's single upsert
+/// path. The reply means the documents are durable; they become searchable
+/// on the next background publication.
 async fn provider_mcp_document_upsert(
     State(state): State<AppState>,
     auth: Option<Extension<AuthContext>>,
     Json(value): Json<Value>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
         return error.into_response();
     }
@@ -2057,7 +2101,7 @@ async fn provider_mcp_document_upsert(
         .get("provider")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !crate::integrations::mcp_tools::PROVIDER_FILTER_VALUES.contains(&provider) {
+    if !crate::integrations::mcp_tools::provider_filter_values().contains(&provider) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"detail":"invalid provider"})),
@@ -2103,119 +2147,66 @@ async fn provider_mcp_document_upsert(
             }
         }
     }
-    let session_context = documents
-        .iter()
-        .find(|document| {
-            document.filters.get("document_type").map(String::as_str) == Some("session-context")
-        })
-        .cloned();
     let writer = &runtime.staged_writer;
-    let audit_ids = documents
-        .iter()
-        .map(|document| document.doc_id.clone())
-        .collect::<Vec<_>>();
-    let audit_provider = provider.to_string();
-    let audit_user_id = value
-        .get("user_id")
-        .and_then(Value::as_str)
-        .unwrap_or("mcp")
-        .to_string();
-    let audit_session_id = value
-        .get("session_id")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let result = if let Some(context) = session_context {
-        let capture_group = context
-            .filters
-            .get("session_capture_id")
-            .cloned()
-            .filter(|value| !value.is_empty());
-        let Some(capture_group) = capture_group else {
+    let audit = server_writer::CaptureAudit {
+        provider: provider.to_string(),
+        user_id: value
+            .get("user_id")
+            .and_then(Value::as_str)
+            .unwrap_or("mcp")
+            .to_string(),
+        session_id: value
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+    };
+    let result = if let Some(group) = value.get("replace_group") {
+        let key = group.get("key").and_then(Value::as_str).unwrap_or_default();
+        let group_value = group
+            .get("value")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if key.is_empty() || group_value.is_empty() {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"detail":"session context requires session_capture_id"})),
-            )
-                .into_response();
-        };
-        if !documents
-            .iter()
-            .all(|document| document.filters.get("session_capture_id") == Some(&capture_group))
-        {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"detail":"session capture group does not match all documents"})),
+                Json(json!({"detail":"replace_group requires key and value"})),
             )
                 .into_response();
         }
-        writer
-            .mutate(move |service| {
-                let receipt = service.replace_session_capture(
-                    "session_capture_id",
-                    &capture_group,
-                    documents,
-                    context,
-                )?;
-                service.record_capture_mutation(
-                    &audit_provider,
-                    &audit_user_id,
-                    &audit_session_id,
-                    &audit_ids,
-                )?;
-                Ok(serde_json::to_value(receipt).unwrap_or(Value::Null))
-            })
+        let audit_ids = documents
+            .iter()
+            .map(|document| document.doc_id.clone())
+            .collect::<Vec<_>>();
+        match writer
+            .replace_group(key.to_string(), group_value.to_string(), documents)
             .await
-            .map_err(|error| {
-                server_writer::mutation_status(&error, StatusCode::INTERNAL_SERVER_ERROR)
-            })
-    } else {
-        let result = if let Some(group) = value.get("replace_group") {
-            let key = group.get("key").and_then(Value::as_str).unwrap_or_default();
-            let group_value = group
-                .get("value")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if key.is_empty() || group_value.is_empty() {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({"detail":"replace_group requires key and value"})),
-                )
-                    .into_response();
-            }
-            writer
-                .replace_group(key.to_string(), group_value.to_string(), documents)
-                .await
-        } else {
-            writer.upsert_documents(documents).await
-        };
-        match result {
+        {
             Ok(()) => writer
                 .mutate(move |service| {
                     service.record_capture_mutation(
-                        &audit_provider,
-                        &audit_user_id,
-                        &audit_session_id,
+                        &audit.provider,
+                        &audit.user_id,
+                        &audit.session_id,
                         &audit_ids,
                     )?;
                     Ok(Value::Null)
                 })
                 .await
+                .map(|_| ())
                 .map_err(|error| {
                     server_writer::mutation_status(&error, StatusCode::INTERNAL_SERVER_ERROR)
                 }),
             Err(status) => Err(status),
         }
+    } else {
+        writer.upsert_documents(documents, Some(audit)).await
     };
     match result {
-        Ok(adjudication) => Json(json!({
-            "success": true,
-            "published": true,
-            "adjudication": adjudication,
-        }))
-        .into_response(),
+        Ok(()) => Json(json!({"success": true, "durable": true})).into_response(),
         Err(status) => (
             status,
-            Json(json!({"detail":"provider memory publication failed"})),
+            Json(json!({"detail":"provider memory write failed"})),
         )
             .into_response(),
     }
@@ -2241,7 +2232,7 @@ async fn provider_mcp_tool_call(
         .get("provider")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !crate::integrations::mcp_tools::PROVIDER_FILTER_VALUES.contains(&provider) {
+    if !crate::integrations::mcp_tools::provider_filter_values().contains(&provider) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"detail":"invalid provider"})),
@@ -2935,6 +2926,7 @@ mod tests {
             crate::memory_api::workspace::segmented_store_options(),
         )
         .unwrap();
+        let owner_lock = crate::memory_api::workspace::WorkspaceOwnerLock::acquire(root).unwrap();
         let service = Arc::new(RwLock::new(owner));
         let writer = StagedWriter::start(service.clone()).unwrap();
         let writer_gate = Arc::new(tokio::sync::Mutex::new(()));
@@ -2956,6 +2948,7 @@ mod tests {
             service: service.clone(),
             staged_writer: writer.clone(),
             writer_gate: writer_gate.clone(),
+            _owner_lock: Arc::new(owner_lock),
             project_root: root.to_path_buf(),
             workspace_index_root: root.to_path_buf(),
         });
@@ -3939,6 +3932,20 @@ mod tests {
         assert_eq!(audit_records[0]["action"], "capture:codex");
         assert_eq!(audit_records[0]["memory_ids"][0], "resident-hook-document");
 
+        // The upsert reply means durable, not yet searchable; flush publishes.
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/flush")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
         let search = json!({
             "workspace":root,
             "provider":"codex",
@@ -4110,6 +4117,10 @@ mod tests {
             crate::local_ipc::serve(
                 app_router(provider_memory_test_state(&server_root)),
                 &server_root,
+                std::future::pending(),
+                None,
+                false,
+                None,
             )
             .await
             .unwrap();

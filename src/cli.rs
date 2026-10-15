@@ -189,7 +189,11 @@ pub struct Args {
     pub ontology_out: String,
     #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json", hide = true)]
     pub tier0_index_out: Option<String>,
-    #[arg(long, value_enum, default_value = "spacy", hide = true)]
+    // Heuristic is the product default (PipelineOptions::default agrees):
+    // no Python/spaCy is required unless the user explicitly opts in with
+    // --tier1-ner-provider spacy. This flag previously defaulted to spacy,
+    // so every default CLI run spawned Python, warned, and fell back.
+    #[arg(long, value_enum, default_value = "heuristic", hide = true)]
     pub tier1_ner_provider: Tier1NerProvider,
     #[arg(long, value_enum, default_value = "yake", hide = true)]
     pub tier1_term_ranker: Tier1TermRankerKind,

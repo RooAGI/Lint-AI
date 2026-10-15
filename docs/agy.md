@@ -20,7 +20,7 @@ On Windows, download `membrick-windows-x86_64.exe` from the
 Open a terminal in the project folder and run:
 
 ```bash
-membrick --agy-install .
+membrick install agy .
 ```
 
 This enables AGY to use Membrick in the project. It configures the MCP connection and hooks, installs the project memory skill, and preserves your other AGY settings.
@@ -29,7 +29,7 @@ On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 
 ```powershell
-.\membrick-windows-x86_64.exe --agy-install .
+.\membrick-windows-x86_64.exe install agy .
 ```
 
 Restart AGY and open the project so it loads the new settings.

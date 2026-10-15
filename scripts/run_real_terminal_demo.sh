@@ -25,13 +25,13 @@ run_cmd "cat $DEMO_DIR/decision-a.md"
 run_cmd "cat $DEMO_DIR/decision-b.md"
 run_cmd "stat -c '%n  %y' $DEMO_DIR/decision-a.md $DEMO_DIR/decision-b.md | sed 's/\\.000000000 +0000//'"
 
-prompt "$BIN --query \"$QUERY\" $DEMO_DIR | jq '{result: (.results[0] | {doc_id, semantic_status}), aggregation}'"
-"$BIN" --query "$QUERY" "$DEMO_DIR" \
+prompt "$BIN query \"$QUERY\" $DEMO_DIR | jq '{result: (.results[0] | {doc_id, semantic_status}), aggregation}'"
+"$BIN" query "$QUERY" "$DEMO_DIR" \
   | jq '{result: (.results[0] | {doc_id, semantic_status}), aggregation}'
 sleep 1.4
 
-prompt "$BIN --llm-context \"$QUERY\" --result-count 5 $DEMO_DIR | jq '{current_context: ([.top_chunks[] | select(.doc_id == \"decision-b.md\")][0] | {doc_id, text}), stale_value_in_context: any(.top_chunks[]; (.text // \"\") | contains(\"retry attempts: 5\"))}'"
-"$BIN" --llm-context "$QUERY" --result-count 5 "$DEMO_DIR" \
+prompt "$BIN context \"$QUERY\" --count 5 $DEMO_DIR | jq '{current_context: ([.top_chunks[] | select(.doc_id == \"decision-b.md\")][0] | {doc_id, text}), stale_value_in_context: any(.top_chunks[]; (.text // \"\") | contains(\"retry attempts: 5\"))}'"
+"$BIN" context "$QUERY" --count 5 "$DEMO_DIR" \
   | jq '{current_context: ([.top_chunks[] | select(.doc_id == "decision-b.md")][0] | {doc_id, text}), stale_value_in_context: any(.top_chunks[]; (.text // "") | contains("retry attempts: 5"))}'
 sleep 1.8
 

@@ -26,7 +26,7 @@ size and scan limits are implementation details rather than routine CLI tuning
 options. For normal use, index a project with the standard command:
 
 ```bash
-membrick --index /path/to/docs
+membrick index /path/to/docs
 ```
 
 ## Notes on Caching

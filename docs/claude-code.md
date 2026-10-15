@@ -20,7 +20,7 @@ On Windows, download `membrick-windows-x86_64.exe` from the
 Open a terminal in the project folder and run:
 
 ```bash
-membrick --claude-code-install .
+membrick install claude .
 ```
 
 This enables Claude Code to use Membrick in the project. It configures the MCP connection and hooks, installs the project memory skill, and preserves your other Claude Code settings.
@@ -29,7 +29,7 @@ On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 
 ```powershell
-.\membrick-windows-x86_64.exe --claude-code-install .
+.\membrick-windows-x86_64.exe install claude .
 ```
 
 Restart Claude Code and open the project so it loads the new settings.

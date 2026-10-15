@@ -1,6 +1,9 @@
 # Show Headings
 
-`--show-headings` prints the heading structure detected in each processed Markdown document.
+This page describes the legacy heading diagnostic. Its `--show-headings`
+switch is hidden from normal CLI help and retained only for compatibility; it
+is not part of the supported command-line workflow. Use `membrick index` to
+build the current project index.
 
 ## Goal
 Provide a quick structural view of the corpus so you can inspect document organization before semantic checks.
@@ -35,4 +38,4 @@ If a document has no explicit heading text, fallback placeholders may appear for
 ## Typical use cases
 - Audit documentation structure consistency.
 - Find pages missing expected sections.
-- Validate section naming before running `--show-concepts` or cross-ref checks.
+- Validate section naming during documentation maintenance.

@@ -64,18 +64,22 @@ service.
 Ask Membrick a question about the memories in that folder:
 
 ```bash
-membrick --query "How do I prefer answers to be written?" ~/my-assistant-memory
+membrick query "How do I prefer answers to be written?" ~/my-assistant-memory
 ```
 
 To print a short answer context that you can paste into an AI assistant, use
-`--llm-context`:
+the `context` command:
 
 ```bash
-membrick --llm-context "How do I prefer answers to be written?" ~/my-assistant-memory
+membrick context "How do I prefer answers to be written?" ~/my-assistant-memory
 ```
 
 Ask a new question whenever you want to look something up. To show more
-matches, add `--result-count 10`.
+matches, add `--count 10`.
+
+To see which indexes already exist in the current project, run
+`membrick status .`. This only inspects existing index stores; it does not scan
+project files.
 
 ## 4. Change or forget a memory
 

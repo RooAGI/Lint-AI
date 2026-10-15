@@ -20,7 +20,7 @@ On Windows, download `membrick-windows-x86_64.exe` from the
 Open a terminal in the project folder and run:
 
 ```bash
-membrick --codex-install .
+membrick install codex .
 ```
 
 This enables Codex to use Membrick in the project. It configures the MCP connection and hooks, adds the project memory instructions, and preserves your other Codex settings.
@@ -44,7 +44,7 @@ On Windows, run this in PowerShell from the project folder (adjust the path if
 you saved the executable elsewhere):
 
 ```powershell
-.\membrick-windows-x86_64.exe --codex-install .
+.\membrick-windows-x86_64.exe install codex .
 ```
 
 If Codex asks whether to trust the project's configuration or hooks, approve them so the integration can run.

@@ -181,14 +181,14 @@ sleep 2  # ensure the second file is newer, like a real update would be
 printf '# Gateway Retry Policy\n\nGateway timeout retry attempts: 2.\n' > decision-b.md
 
 # 2. Ask the neutral question
-membrick --query "How many retry attempts should we use for gateway timeouts?" .
+membrick query "How many retry attempts should we use for gateway timeouts?" .
 ```
 
 You get `decision-b.md` back with `semantic_status: current`. The old file is still there as history — it just isn't presented as the truth anymore.
 
 ```bash
 # 3. See exactly what your agent would receive
-membrick --llm-context "How many retry attempts should we use for gateway timeouts?" .
+membrick context "How many retry attempts should we use for gateway timeouts?" .
 ```
 
 The context contains the current value (**2**); the stale value (**5**) is excluded. That's the moment it clicks: your agent can't act on the outdated decision, because it never sees it as current.
@@ -196,7 +196,7 @@ The context contains the current value (**2**); the stale value (**5**) is exclu
 Now point it at your own docs — especially the ones where you *know* a decision changed — and ask about them:
 
 ```bash
-membrick --query "what is our current deploy process?" /path/to/repo/docs
+membrick query "what is our current deploy process?" /path/to/repo/docs
 ```
 
 Start with the [quickstart](quickstart.md), or read the [agent memory guide](agent-memory.md) for the bigger picture. If you want the full from-source reproduction with the benchmark data, the [reproduce-it steps above](#reproduce-it) have you covered.

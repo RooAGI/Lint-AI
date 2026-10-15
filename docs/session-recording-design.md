@@ -123,8 +123,9 @@ The command reads the active project from Claude's status-line JSON input, so
 the indicator remains project-scoped, and existing Claude status lines are
 preserved. Codex does not currently expose an equivalent arbitrary command
 status-line hook. The Codex integration still exposes the same compact status
-through `mcp__membrick__membrick_status` and the hidden
-`--codex-statusline` renderer for external terminal/status-bar integrations.
+through `mcp__membrick__membrick_status`. The former `--codex-statusline`
+renderer is an internal compatibility path and is not part of the supported
+CLI.
 
 After the session, show one compact result with clear next actions:
 
@@ -208,12 +209,12 @@ same baseline, each with a distinct provider session ID and recording archive.
 The implemented command surface is:
 
 ```text
-membrick --replay-session baseline-a \
-  --session-provider claude \
-  --replay-enable-membrick
+membrick session replay baseline-a \
+  --provider claude \
+  --enable-membrick
 ```
 
-For the no-memory arm, use `--replay-disable-membrick`. It is also the default
+For the no-memory arm, use `--disable-membrick`. It is also the default
 when neither replay toggle is supplied.
 
 The command extracts all recorded user prompts. For Codex, it launches a
@@ -293,11 +294,11 @@ replay session while keeping the same scenario expectations and validators for
 each arm. Evaluation results belong in a separate result artifact and must not
 modify either the session archive or the scenario definition.
 
-An eventual import command can be exposed as:
+A possible future import command could look like this (it is not part of the current CLI):
 
 ```text
 membrick --scenario-from-session abc123 \
-  --session-provider claude \
+  --provider claude \
   --scenario-out benchmark/claude_code/scenarios/review-session-abc123.json
 ```
 
@@ -530,27 +531,7 @@ future explicit cascade policy is enabled.
 
 ## Configuration
 
-The exact CLI surface may evolve, but the configuration needs equivalent
-controls to the following:
-
-```text
-membrick --claude-code-install /path/to/project \
-  --session-recording capture-only \
-  --session-root /path/to/project/.membrick/claude-sessions
-
-membrick --codex-install /path/to/project \
-  --session-recording capture-only \
-  --session-root /path/to/project/.membrick/codex-sessions
-```
-
-For experiments, settings and storage must be supplied explicitly or created
-under a disposable directory:
-
-```text
-membrick --claude-code-install /path/to/project \
-  --session-recording ab \
-  --experiment-root /tmp/membrick-experiment/run-1
-```
+Session recording is enabled and managed through each provider’s `record_session` MCP tool. The CLI does not provide session-recording or experiment-root flags. Use the benchmark harness to configure isolated recording roots for A/B runs.
 
 Installation must not silently overwrite global provider settings. It should
 prefer project-local settings or require an explicit settings path. Existing
@@ -715,19 +696,16 @@ warning before enabling recording and provide a clear way to disable it.
 The recorder should expose timing counters so A/B runs can measure recording
 overhead separately from retrieval and MCP startup.
 
-## Inspection and export
+## Future CLI inspection and export
 
-Provide read-only commands for local review:
+The current CLI does not list, inspect, or export session archives. Recording
+controls are available through the provider's `record_session` MCP tool. If
+CLI archive management is added later, it should provide read-only inspection
+and export without printing secrets.
 
-```text
-membrick --list-sessions /path/to/project
-membrick --inspect-session <session-id> --session-root .membrick/claude-sessions
-membrick --export-session <session-id> --format jsonl --out session.jsonl
-```
-
-Inspection should show event counts, duration, provider, recording mode,
-redaction count, completion status, and storage path without printing secrets.
-Export should preserve the normalized event order and include the manifest.
+An eventual inspection view should show event counts, duration, provider,
+recording mode, redaction count, completion status, and storage path. Export
+should preserve normalized event order and include the manifest.
 
 Converting a recorded event into durable memory is a separate, explicit
 operation. The first version should support selecting a session or event

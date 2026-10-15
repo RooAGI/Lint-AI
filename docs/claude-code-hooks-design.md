@@ -220,10 +220,10 @@ let results = store.query(&retrieval_query, top_k)?;
 The same store can be inspected without reading internal persistence files:
 
 ```text
-membrick --inspect-index <project>/.membrick/memory
-membrick --inspect-index <project>/.membrick/memory --inspect-view source-documents
-membrick --inspect-index <project>/.membrick/memory --inspect-view records
-membrick --inspect-index <project>/.membrick/memory --inspect-view segments
+membrick inspect-index <project>/.membrick/memory
+membrick inspect-index <project>/.membrick/memory --view source-documents
+membrick inspect-index <project>/.membrick/memory --view records
+membrick inspect-index <project>/.membrick/memory --view segments
 ```
 
 With segmented layout, `MemoryService::search_with_filters()` routes over the configured top-N
@@ -482,16 +482,16 @@ The installer will continue to preserve existing user configuration. It will:
 Installed hook command shape:
 
 ```text
-membrick --claude-code-hook session-start /path/to/project
-membrick --claude-code-hook user-prompt-submit /path/to/project
-membrick --claude-code-hook user-prompt-expansion /path/to/project
-membrick --claude-code-hook pre-tool-use /path/to/project
-membrick --claude-code-hook post-tool-use /path/to/project
-membrick --claude-code-hook pre-compact /path/to/project
-membrick --claude-code-hook stop /path/to/project
-membrick --claude-code-hook session-end /path/to/project
-membrick --claude-code-hook subagent-start /path/to/project
-membrick --claude-code-hook subagent-stop /path/to/project
+membrick hook claude session-start /path/to/project
+membrick hook claude user-prompt-submit /path/to/project
+membrick hook claude user-prompt-expansion /path/to/project
+membrick hook claude pre-tool-use /path/to/project
+membrick hook claude post-tool-use /path/to/project
+membrick hook claude pre-compact /path/to/project
+membrick hook claude stop /path/to/project
+membrick hook claude session-end /path/to/project
+membrick hook claude subagent-start /path/to/project
+membrick hook claude subagent-stop /path/to/project
 ```
 
 Each command reads one Claude hook payload from stdin and writes one hook

@@ -43,6 +43,7 @@ nav:
   - Home: index.md
   - Get started:
       - Quickstart: quickstart.md
+      - Command line: cli.md
       - Connect your AI agents:
           - Codex: codex.md
           - Claude Code: claude-code.md

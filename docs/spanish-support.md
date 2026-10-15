@@ -25,7 +25,9 @@ chosen in Rust (`src/lang.rs::default_spacy_model_for_lang`).
   (`hola`, `el`) is not enough — this avoids misclassifying English text
   containing loanwords.
 
-`--lang es` forces Spanish; `--lang auto` (default) detects per text.
+Language is detected per text by default. The consolidated CLI does not expose
+the former `--lang` switch; callers using Rust or Python APIs can set the
+`Lang`/`lang` option explicitly.
 
 ## Tokenization and indexing
 
@@ -62,11 +64,10 @@ byte-identical to before (single emission).
 - Tier-1 document batches are grouped by `PipelineOptions::spacy_model_for_text`,
   so Spanish documents use the Spanish model.
 - `spacy_model_for_request()` (`src/memory_api.rs`) picks the model: an
-  explicit `--lang` pins it, while `auto`/omitted follows the document
+  an explicit language pins it, while `auto`/omitted follows the document
   turns' detected script (`extractor_model_for_turns`) — Spanish turns get
   `es_core_news_sm`.
-- The CLI currently defaults `--tier1-ner-provider` to `spacy`, while
-  `PipelineOptions` defaults to the heuristic, Python-free provider. Install
+- `PipelineOptions` defaults to the heuristic, Python-free provider. Install
   the model only if you enable the spaCy provider:
   `python3 -m spacy download es_core_news_sm`
   (use `PIP_BREAK_SYSTEM_PACKAGES=1` on Debian-based systems if needed).
@@ -159,15 +160,15 @@ excluded from focus-term expansion via `is_expandable_concept`.
   stopword fixed-point, focus, temporal, aggregation, expansion no-op).
 - Tokenizer tests: `cargo test --lib cjk_tokenizer` (accent preservation,
   ASCII unchanged, long-token drop, CJK segmentation).
-- Smoke test: `cargo test --lib internal_tests::spanish_smoke` — add Spanish memories,
-  search in Spanish, verify retrieval (explicit `--lang es` and
-  `--lang auto`).
+- Smoke test: `cargo test --lib internal_tests::spanish_smoke` — add Spanish
+  memories and verify retrieval with automatic detection and an explicit
+  `Lang::Es` API setting.
 - English regression: `cargo test --lib internal_tests::english_smoke` — add/search in
   English, verify no behavior change.
 
 ## Merge notes (zh/ko parallel tracks)
 
-- `src/lang.rs`, `src/index/cjk_tokenizer.rs`, `--lang` plumbing, and spaCy
+- `src/lang.rs`, `src/index/cjk_tokenizer.rs`, language plumbing, and spaCy
   allowlists are owned by the zh (foundation) track. The `Es` variant,
   Spanish detection signals, and `es_core_news_sm` mapping in this branch
   are additive and merge into the canonical shared files at integration.

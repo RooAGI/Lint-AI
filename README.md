@@ -50,12 +50,12 @@ That difference matters anywhere project truth changes over time: architecture d
 There is no required `supersedes:` frontmatter in this example. For simple configuration/value claims, Membrick can infer chronological replacement when the documents establish the same semantic domain. Inferred supersession is domain-scoped so unrelated settings such as two different services' `timeout` values do not suppress one another. Explicit supersession metadata remains authoritative when you provide it.
 
 ```bash
-membrick --query \
+membrick query \
   "How many retry attempts should we use for gateway timeouts?" \
   examples/demo-real-terminal
 ```
 
-Current-state retrieval returns the newer decision with `semantic_status: current`, and `--llm-context` excludes the stale value.
+Current-state retrieval returns the newer decision with `semantic_status: current`, and `membrick context` excludes the stale value.
 
 ### Reproducible terminal demo
 
@@ -104,25 +104,32 @@ Install directly from GitHub:
 cargo install --git https://github.com/RooAGI/Membrick
 ```
 
-Lint or index a local corpus:
+Check what is currently indexed in a folder without scanning it:
 
 ```bash
-membrick /path/to/repo
+membrick status .
+```
+
+Check or index a local corpus:
+
+```bash
+membrick review /path/to/repo
 ```
 
 Query it:
 
 ```bash
-membrick --query "what is the current retry policy?" /path/to/repo/docs
+membrick query "what is the current retry policy?" /path/to/repo/docs
 ```
 
 Get LLM-ready context:
 
 ```bash
-membrick --llm-context "what is the current retry policy?" /path/to/repo/docs
+membrick context "what is the current retry policy?" /path/to/repo/docs
 ```
 
-For Docker, HTTP, Python, Rust, and MCP setup, see the [full quickstart](docs/quickstart.md).
+See the [CLI reference](docs/cli.md) and [full quickstart](docs/quickstart.md)
+for Docker, HTTP, Python, Rust, and MCP setup.
 
 ---
 
@@ -142,8 +149,8 @@ Build the Claude Code and Codex integrations:
 
 ```bash
 cargo build --release --features claude-code,codex
-./target/release/membrick --claude-code-install /path/to/project
-./target/release/membrick --codex-install /path/to/project
+./target/release/membrick install claude /path/to/project
+./target/release/membrick install codex /path/to/project
 ```
 
 All agents share one project-scoped memory store:
@@ -367,7 +374,7 @@ For implementation details, see:
 ### CLI
 
 ```bash
-membrick --query "what is the current retry policy?" /path/to/repo
+membrick query "what is the current retry policy?" /path/to/repo
 ```
 
 ### Docker / HTTP
@@ -387,7 +394,7 @@ Rust `membrick` CLI on supported platforms:
 
 ```bash
 pipx install membrick
-membrick --codex-install .
+membrick install codex .
 ```
 
 For development from this checkout, build the optional Python extension with

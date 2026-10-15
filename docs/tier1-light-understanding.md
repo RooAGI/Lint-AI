@@ -122,15 +122,15 @@ Implementation design:
 - `HeuristicKeyEntityRanker` and `SpacyKeyEntityRanker` implementations
 - engine selects ranker at runtime, enabling plug-and-play ranker swaps
 
-CLI examples:
+Build the persistent project index with the current CLI:
 
 ```bash
-./target/debug/membrick /path/to/repo --show-tier1-entities
+membrick index /path/to/repo
 ```
 
-```bash
-./target/debug/membrick /path/to/repo --show-tier1-entities --tier1-ner-provider spacy --spacy-model en_core_web_sm
-```
+The former `--show-tier1-entities`, `--tier1-ner-provider`, and
+`--spacy-model` switches are hidden compatibility options. Configure
+extraction through `PipelineOptions` when using the API.
 
 Behavior:
 - default provider is `heuristic`
@@ -140,15 +140,15 @@ Behavior:
 ## Important Terms Rankers
 Tier 1 important terms are now pluggable through the `ImportantTermRanker` trait.
 
-CLI examples:
+Term rankers are selected through the pipeline API. The supported CLI command
+for building the persistent project index is:
 
 ```bash
-./target/debug/membrick /path/to/repo --show-tier1-terms --tier1-term-ranker yake
+membrick index /path/to/repo
 ```
 
-```bash
-./target/debug/membrick /path/to/repo --show-tier1-terms --tier1-term-ranker rake
-```
+The former `--show-tier1-terms` and `--tier1-term-ranker` switches remain
+hidden for compatibility and are omitted from the supported CLI workflow.
 
 Available rankers:
 - `yake`: YAKE-style scoring (position, frequency, dispersion)

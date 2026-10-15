@@ -9,7 +9,7 @@ hide:
   <div class="hero__eyebrow">THE MEMORY LAYER FOR AI AGENTS</div>
   <h1>Give your AI a memory that lasts.</h1>
   <p class="hero__lede"><strong>Context that persists. Built for production.</strong> Membrick helps an assistant remember useful preferences, decisions, and history across interactions, then brings the right context back when it matters.</p>
-  <p><a class="md-button md-button--primary" href="quickstart/">Get started</a> <a class="md-button" href="agent-memory/">Explore agent memory</a></p>
+  <p><a class="md-button md-button--primary" href="quickstart/">Get started</a> <a class="md-button" href="cli/">CLI reference</a> <a class="md-button" href="agent-memory/">Explore agent memory</a></p>
 </section>
 </div>
 

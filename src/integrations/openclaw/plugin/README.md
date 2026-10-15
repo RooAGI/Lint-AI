@@ -33,7 +33,7 @@ Use the Membrick installer to configure the plugin together with its MCP
 server, hooks, and skill:
 
 ```bash
-membrick --openclaw-install /path/to/project
+membrick install openclaw /path/to/project
 ```
 
 After the plugin is published to ClawHub, it can also be installed with
@@ -49,7 +49,7 @@ Optional keys under `plugins.entries.membrick.config` in `openclaw.json`:
 | `projectRoot` | Project root membrick captures for | The event's `workspaceDir` |
 | `binaryPath` | Absolute path to the `membrick` binary | `membrick` on `PATH` |
 
-`--openclaw-install` writes `projectRoot` for you. If your Gateway runs
+`membrick install openclaw` writes `projectRoot` for you. If your Gateway runs
 multiple workspaces and events don't carry `workspaceDir`, set `projectRoot`
 in the plugin configuration.
 

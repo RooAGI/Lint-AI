@@ -134,12 +134,12 @@ production capacity guarantee or a Windows named-pipe result. The binary was
 built from the dirty working tree on top of commit `b204b7e`.
 
 Per-stage run data, including latency distributions and binary metadata, is
-available in the [baseline](../comparison/results/resident-queue-stage-baseline-2026-10-14.json),
-[concurrent-dispatch](../comparison/results/resident-queue-stage-concurrent-2026-10-14.json),
-[event-wakeup](../comparison/results/resident-queue-stage-events-2026-10-14.json),
-and [no-sync](../comparison/results/resident-queue-stage-no-sync-2026-10-14.json)
+available in the [baseline](https://github.com/RooAGI/Membrick/blob/main/comparison/results/resident-queue-stage-baseline-2026-10-14.json),
+[concurrent-dispatch](https://github.com/RooAGI/Membrick/blob/main/comparison/results/resident-queue-stage-concurrent-2026-10-14.json),
+[event-wakeup](https://github.com/RooAGI/Membrick/blob/main/comparison/results/resident-queue-stage-events-2026-10-14.json),
+and [no-sync](https://github.com/RooAGI/Membrick/blob/main/comparison/results/resident-queue-stage-no-sync-2026-10-14.json)
 artifacts. The reusable harness is
-[`comparison/ipc_http_mcp_benchmark.py`](../comparison/ipc_http_mcp_benchmark.py).
+[`comparison/ipc_http_mcp_benchmark.py`](https://github.com/RooAGI/Membrick/blob/main/comparison/ipc_http_mcp_benchmark.py).
 
 ## Earlier reference results (through 2026-10-05)
 

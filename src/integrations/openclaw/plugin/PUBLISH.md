@@ -92,7 +92,7 @@ config — it must exit 0 and print the one-line stderr diagnostic.
 ## Future work (out of scope for this publish)
 
 - The file-based recall hooks (`hooks/handler.js`, `agent:bootstrap`) are
-  still installed only via `membrick --openclaw-install`; migrating them to
+  still installed only via `membrick install openclaw`; migrating them to
   SDK `registerHook` would make the ClawHub install fully self-contained.
   Hook schemas for that migration must be probed against a live OpenClaw
   host before shipping (standing rule).

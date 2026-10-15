@@ -142,64 +142,64 @@ pub enum IndexInspectView {
 #[command(
     name = "membrick",
     version = env!("CARGO_PKG_VERSION"),
-    after_help = "Provider commands:\n  membrick install <provider> [PATH] (setup is an alias)\n  membrick serve <provider> [PATH]\n  membrick verify <provider> [PATH]\n  membrick uninstall <provider> [PATH]\n  membrick hook <provider> <event> [PATH]\n  membrick statusline <provider> [PATH]\n\nProvider config overrides:\n  --provider-config <PATH>\n  --provider-settings <PATH>\n  --provider-skills-dir <PATH>\n  --provider-hooks-dir <PATH>\n  --provider-plugin-dir <PATH>\n  --force-skill (install only)\n\nUninstall is currently supported for: claude, codex.\nProviders: claude, codex, gemini, agy, muse, openclaw, hermes, roo-runtime."
+    after_help = "Project commands:\n  membrick status [PATH]                  Show local index state; does not scan\n  membrick review [PATH]                  Run project lint checks\n  membrick analyze [PATH]                 Analyze project structure\n  membrick index [PATH] [--redacted]     Build or refresh the project index\n  membrick query <TEXT> [PATH] [--count N]\n  membrick context <TEXT> [PATH]          Prepare context for an LLM\n  membrick recall <TEXT> [PATH] [--count N]\n  membrick recall serve [PATH]            Serve recall requests over stdin/stdout\n  membrick inspect-index <PATH> [--view VIEW]\n  membrick session promote <ID> [--provider PROVIDER] [--root PATH]\n  membrick session replay <ID> [--provider PROVIDER] [--root PATH]\n  membrick export graph <FORMAT> [PATH] [--output FILE] [--level LEVEL]\n  membrick export ontology [PATH] [--output FILE]\n\nProvider commands:\n  membrick install <provider> [PATH]\n  membrick serve <provider> [PATH]\n  membrick verify <provider> [PATH]\n  membrick uninstall <provider> [PATH]\n  membrick hook <provider> <event> [PATH]\n  membrick statusline <claude|codex> [PATH]\n\nProvider options: --provider-config, --provider-settings, --provider-skills-dir,\n--provider-hooks-dir, --provider-plugin-dir, --force-skill, --timeout.\nUninstall is supported for: claude, codex. Providers: claude, codex, gemini, agy, muse, openclaw, hermes, roo-runtime."
 )]
 /// CLI arguments for the membrick binary.
 pub struct Args {
     /// Skip the interactive release update check for this invocation.
     #[arg(long)]
     pub no_update_check: bool,
-    #[arg(default_value = ".")]
+    #[arg(default_value = ".", hide = true)]
     pub path: String,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub show_concepts: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub show_headings: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub show_tier0: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub show_tier1_entities: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub show_tier1_terms: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub index: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub index_redacted: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub query: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub llm_context: Option<String>,
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 5, hide = true)]
     pub result_count: usize,
-    #[arg(long, alias = "simplifed")]
+    #[arg(long, alias = "simplifed", hide = true)]
     pub simplified: bool,
     #[arg(long, value_enum, default_value = "all", hide = true)]
     pub llm_chunk_strategy: LlmChunkStrategy,
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide = true)]
     pub export_graph: Option<GraphExportFormat>,
-    #[arg(long, default_value = "membrick-graph.dot")]
+    #[arg(long, default_value = "membrick-graph.dot", hide = true)]
     pub graph_out: String,
-    #[arg(long, value_enum, default_value = "doc")]
+    #[arg(long, value_enum, default_value = "doc", hide = true)]
     pub graph_level: GraphLevel,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub show_chunk_graph_stats: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub export_ontology: bool,
-    #[arg(long, default_value = "membrick-ontology.json")]
+    #[arg(long, default_value = "membrick-ontology.json", hide = true)]
     pub ontology_out: String,
-    #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json")]
+    #[arg(long, num_args = 0..=1, default_missing_value = "tier0-index.json", hide = true)]
     pub tier0_index_out: Option<String>,
-    #[arg(long, value_enum, default_value = "spacy")]
+    #[arg(long, value_enum, default_value = "spacy", hide = true)]
     pub tier1_ner_provider: Tier1NerProvider,
-    #[arg(long, value_enum, default_value = "yake")]
+    #[arg(long, value_enum, default_value = "yake", hide = true)]
     pub tier1_term_ranker: Tier1TermRankerKind,
-    #[arg(long, default_value = "en_core_web_sm")]
+    #[arg(long, default_value = "en_core_web_sm", hide = true)]
     pub spacy_model: String,
     /// Content language. `auto` (default) detects per text from script
     /// statistics (plus Spanish signals for Latin text); pass
     /// `zh`/`ko`/`es`/`en` to force it. Drives per-language defaults such
     /// as the spaCy model when `--spacy-model` is not given.
-    #[arg(long, value_enum, default_value = "auto")]
+    #[arg(long, value_enum, default_value = "auto", hide = true)]
     pub lang: Lang,
     #[arg(long, value_enum, default_value = "heading", hide = true)]
     pub chunk_strategy: ChunkStrategy,
@@ -211,14 +211,14 @@ pub struct Args {
     pub chunk_target_tokens: usize,
     #[arg(long, default_value_t = 800, hide = true)]
     pub chunk_max_tokens: usize,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub debug_matches: bool,
     #[arg(long)]
     pub config: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub analyze: bool,
     /// Run the lint checks with the project search index prepared.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub review: bool,
     #[arg(long, default_value_t = 5_000_000, hide = true)]
     pub max_bytes: usize,
@@ -226,28 +226,55 @@ pub struct Args {
     pub max_files: usize,
     #[arg(long, default_value_t = 20, hide = true)]
     pub max_depth: usize,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub strict_config: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub mcp_timeout_ms: Option<u64>,
+    /// Show the index state for a project folder without scanning its files.
+    #[arg(long, hide = true)]
+    pub status: bool,
+    /// Internal parser target for rejecting ambiguous bare paths and commands.
+    #[arg(long, hide = true)]
+    pub unknown_command: Option<String>,
     /// Override the selected provider's MCP configuration file.
-    #[arg(long, help = "Override the selected provider's MCP configuration file")]
+    #[arg(
+        long,
+        hide = true,
+        help = "Override the selected provider's MCP configuration file"
+    )]
     pub provider_config: Option<String>,
     /// Override the selected provider's hooks or settings file.
-    #[arg(long, help = "Override the selected provider's hooks or settings file")]
+    #[arg(
+        long,
+        hide = true,
+        help = "Override the selected provider's hooks or settings file"
+    )]
     pub provider_settings: Option<String>,
     /// Override the selected provider's skills directory.
-    #[arg(long, help = "Override the selected provider's skills directory")]
+    #[arg(
+        long,
+        hide = true,
+        help = "Override the selected provider's skills directory"
+    )]
     pub provider_skills_dir: Option<String>,
     /// Override the selected provider's hooks directory.
-    #[arg(long, help = "Override the selected provider's hooks directory")]
+    #[arg(
+        long,
+        hide = true,
+        help = "Override the selected provider's hooks directory"
+    )]
     pub provider_hooks_dir: Option<String>,
     /// Override the selected provider's plugin directory.
-    #[arg(long, help = "Override the selected provider's plugin directory")]
+    #[arg(
+        long,
+        hide = true,
+        help = "Override the selected provider's plugin directory"
+    )]
     pub provider_plugin_dir: Option<String>,
     /// Replace a user-modified provider memory skill during setup.
     #[arg(
         long,
+        hide = true,
         help = "Replace a user-modified provider memory skill during setup"
     )]
     pub force_skill: bool,
@@ -439,29 +466,29 @@ pub struct Args {
     pub roo_runtime_config: Option<String>,
     /// Query the unified store (project documents and recorded memories) once
     /// and print chunk-level hits as JSON. Reads no stdin and starts no server.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub recall: Option<String>,
     /// Keep the project recall indexes open and answer newline-delimited JSON requests.
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub recall_server: Option<String>,
     /// Internal mode used by the provider clients to start the local resident memory owner.
     #[arg(long, hide = true)]
     pub resident_server: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub inspect_index: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub promote_session: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub replay_session: Option<String>,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub replay_enable_membrick: bool,
-    #[arg(long, conflicts_with = "replay_enable_membrick")]
+    #[arg(long, conflicts_with = "replay_enable_membrick", hide = true)]
     pub replay_disable_membrick: bool,
-    #[arg(long, value_enum, default_value = "claude")]
+    #[arg(long, value_enum, default_value = "claude", hide = true)]
     pub session_provider: SessionProvider,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub session_root: Option<String>,
-    #[arg(long, value_enum, default_value = "summary")]
+    #[arg(long, value_enum, default_value = "summary", hide = true)]
     pub inspect_view: IndexInspectView,
     #[arg(long, default_value_t = 2_000_000, hide = true)]
     pub max_config_bytes: u64,
@@ -476,11 +503,24 @@ pub fn parse() -> Args {
 
 fn normalize_provider_command(args: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut args: Vec<String> = args.into_iter().collect();
+    normalize_project_command(&mut args);
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "setup" | "install" | "serve" | "verify" | "uninstall" | "hook" | "statusline"
+        )
+        && args.len() < 3
+    {
+        args.truncate(1);
+        args.push("--unknown-command".to_string());
+        args.push("provider is required".to_string());
+        return args;
+    }
     if args.len() < 3 {
         return args;
     }
-    let command = args[1].as_str();
-    let action = match command {
+    let command = args[1].clone();
+    let action = match command.as_str() {
         "setup" | "install" => "install",
         "serve" => "serve",
         "verify" => "verify-mcp",
@@ -532,7 +572,14 @@ fn normalize_provider_command(args: impl IntoIterator<Item = String>) -> Vec<Str
         ("rooagi-runtime", "install") => "--roo-runtime-install",
         ("rooagi-runtime", "serve") => "--roo-runtime-serve",
         ("rooagi-runtime", "hook") => "--roo-runtime-hook",
-        _ => return args,
+        _ => {
+            args.truncate(1);
+            args.push("--unknown-command".to_string());
+            args.push(format!(
+                "unsupported provider command: {command} {provider}"
+            ));
+            return args;
+        }
     };
     args.drain(1..3);
     args.insert(1, option.to_string());
@@ -620,7 +667,118 @@ fn normalize_provider_command(args: impl IntoIterator<Item = String>) -> Vec<Str
             };
         }
     }
+    replace_option(&mut args, "--timeout", "--mcp-timeout-ms");
     args
+}
+
+fn normalize_project_command(args: &mut Vec<String>) {
+    if args.len() < 2 {
+        return;
+    }
+    let command = args[1].clone();
+    if command == "help" {
+        args[1] = "--help".to_string();
+        args.truncate(2);
+        return;
+    }
+    if command == "recall" && args.get(2).is_some_and(|arg| arg == "serve") {
+        args.drain(1..3);
+        args.insert(1, "--recall-server".to_string());
+        return;
+    }
+    if command == "session" && args.len() >= 3 {
+        let operation = args[2].clone();
+        let flag = match operation.as_str() {
+            "promote" => "--promote-session",
+            "replay" => "--replay-session",
+            _ => "",
+        };
+        if !flag.is_empty() {
+            args.drain(1..3);
+            args.insert(1, flag.to_string());
+            replace_option(args, "--provider", "--session-provider");
+            replace_option(args, "--root", "--session-root");
+            replace_switch(args, "--enable-membrick", "--replay-enable-membrick");
+            replace_switch(args, "--disable-membrick", "--replay-disable-membrick");
+            return;
+        }
+    }
+    let replacement = match command.as_str() {
+        "status" | "info" => Some("--status"),
+        "review" => Some("--review"),
+        "analyze" => Some("--analyze"),
+        "index" => Some("--index"),
+        "query" => Some("--query"),
+        "context" => Some("--llm-context"),
+        "recall" => Some("--recall"),
+        "inspect-index" => Some("--inspect-index"),
+        _ => None,
+    };
+    if let Some(flag) = replacement {
+        args.remove(1);
+        args.insert(1, flag.to_string());
+        if matches!(command.as_str(), "query" | "context" | "recall") {
+            replace_option(args, "--count", "--result-count");
+        }
+        if command == "inspect-index" {
+            replace_option(args, "--view", "--inspect-view");
+        }
+        if command == "index" {
+            replace_switch(args, "--redacted", "--index-redacted");
+        }
+        return;
+    }
+
+    if command == "export" && args.len() >= 3 {
+        let export_kind = args[2].clone();
+        match export_kind.as_str() {
+            "graph" => {
+                args.drain(1..3);
+                args.insert(1, "--export-graph".to_string());
+                replace_option(args, "--output", "--graph-out");
+                replace_option(args, "--level", "--graph-level");
+                return;
+            }
+            "ontology" => {
+                args.drain(1..3);
+                args.insert(1, "--export-ontology".to_string());
+                replace_option(args, "--output", "--ontology-out");
+                return;
+            }
+            _ => {}
+        }
+    }
+    replace_option(args, "--view", "--inspect-view");
+
+    // A path alone used to start a project scan. Require an explicit action.
+    if !command.starts_with('-')
+        && !matches!(
+            command.as_str(),
+            "setup" | "install" | "serve" | "verify" | "uninstall" | "hook" | "statusline"
+        )
+    {
+        args.truncate(1);
+        args.push("--unknown-command".to_string());
+        args.push(command);
+    }
+}
+
+fn replace_option(args: &mut [String], from: &str, to: &str) {
+    for arg in args {
+        if arg == from {
+            *arg = to.to_string();
+        } else if let Some(value) = arg.strip_prefix(&format!("{from}=")) {
+            *arg = format!("{to}={value}");
+        }
+    }
+}
+
+fn replace_switch(args: &mut [String], from: &str, to: &str) {
+    for arg in args {
+        if arg == from {
+            *arg = to.to_string();
+        }
+    }
 }
 
 /// Run the CLI: parse args from the environment and execute.
@@ -638,6 +796,287 @@ pub fn run() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    fn parse_public_args(args: &[&str]) -> Result<Args, clap::Error> {
+        let mut argv = vec!["membrick".to_string()];
+        argv.extend(args.iter().map(|arg| (*arg).to_string()));
+        Args::try_parse_from(normalize_provider_command(argv))
+    }
+
+    #[test]
+    fn public_project_command_matrix_parses_without_running_commands() {
+        let cases: &[&[&str]] = &[
+            &[
+                "status",
+                ".",
+                "--config",
+                "membrick.toml",
+                "--no-update-check",
+            ],
+            &["info", "."],
+            &["review", "."],
+            &["analyze", "."],
+            &["index", ".", "--redacted"],
+            &["query", "routing decision", ".", "--count", "3"],
+            &["context", "routing decision", "."],
+            &["recall", "routing decision", ".", "--count", "3"],
+            &["recall", "serve", "."],
+            &["inspect-index", ".membrick/index", "--view", "segments"],
+            &[
+                "session",
+                "promote",
+                "session-1",
+                "--provider",
+                "codex",
+                "--root",
+                ".",
+            ],
+            &[
+                "session",
+                "replay",
+                "session-1",
+                "--provider",
+                "claude",
+                "--root",
+                ".",
+                "--enable-membrick",
+            ],
+            &[
+                "export",
+                "graph",
+                "json",
+                ".",
+                "--output",
+                "graph.json",
+                "--level",
+                "chunk",
+            ],
+            &["export", "ontology", ".", "--output", "ontology.json"],
+        ];
+
+        for args in cases {
+            parse_public_args(args)
+                .unwrap_or_else(|error| panic!("public command {args:?} failed to parse: {error}"));
+        }
+    }
+
+    #[test]
+    fn bare_project_path_is_rejected_instead_of_starting_a_scan() {
+        let args = parse_public_args(&["."]).expect("bare paths are parsed as an explicit error");
+        assert_eq!(args.unknown_command.as_deref(), Some("."));
+    }
+
+    #[test]
+    fn public_provider_commands_and_shared_options_parse_for_enabled_providers() {
+        let mut providers = vec![
+            "claude",
+            "codex",
+            "gemini",
+            "gemini-cli",
+            "agy",
+            "muse",
+            "openclaw",
+            "hermes",
+            "roo-runtime",
+        ];
+        providers.retain(|provider| match *provider {
+            "claude" => cfg!(feature = "claude-code"),
+            "codex" => cfg!(feature = "codex"),
+            "gemini" | "gemini-cli" => cfg!(feature = "gemini-cli"),
+            "agy" => cfg!(feature = "agy"),
+            "muse" => cfg!(feature = "muse-code"),
+            "openclaw" => cfg!(feature = "openclaw"),
+            "hermes" => cfg!(feature = "hermes"),
+            "roo-runtime" => cfg!(feature = "roo-runtime"),
+            _ => false,
+        });
+
+        for provider in providers {
+            if provider == "claude" {
+                parse_public_args(&["setup", provider, "."])
+                    .expect("setup remains an alias for install");
+            }
+
+            for action in ["install", "serve", "verify"] {
+                let args = [
+                    action,
+                    provider,
+                    ".",
+                    "--provider-config",
+                    "provider-config.toml",
+                    "--provider-skills-dir",
+                    "skills",
+                    "--provider-hooks-dir",
+                    "hooks",
+                    "--provider-plugin-dir",
+                    "plugins",
+                    "--timeout",
+                    "900",
+                ];
+                let install_args = [
+                    "install",
+                    provider,
+                    ".",
+                    "--provider-config",
+                    "provider-config.toml",
+                    "--provider-skills-dir",
+                    "skills",
+                    "--provider-hooks-dir",
+                    "hooks",
+                    "--provider-plugin-dir",
+                    "plugins",
+                    "--force-skill",
+                    "--timeout",
+                    "900",
+                ];
+                if action == "install" {
+                    parse_public_args(&install_args).unwrap_or_else(|error| {
+                        panic!("public command {install_args:?} failed to parse: {error}")
+                    });
+                } else {
+                    parse_public_args(&args).unwrap_or_else(|error| {
+                        panic!("public command {args:?} failed to parse: {error}")
+                    });
+                }
+
+                let settings_args = [
+                    action,
+                    provider,
+                    ".",
+                    "--provider-settings",
+                    "provider-settings.json",
+                ];
+                parse_public_args(&settings_args).unwrap_or_else(|error| {
+                    panic!("public command {settings_args:?} failed to parse: {error}")
+                });
+            }
+
+            if matches!(provider, "claude" | "codex") {
+                for action in ["uninstall", "statusline"] {
+                    let args = [action, provider, "."];
+                    parse_public_args(&args).unwrap_or_else(|error| {
+                        panic!("public command {args:?} failed to parse: {error}")
+                    });
+                }
+            }
+
+            let events: &[&str] = match provider {
+                "claude" => &[
+                    "session-start",
+                    "user-prompt-submit",
+                    "user-prompt-expansion",
+                    "pre-tool-use",
+                    "post-tool-use",
+                    "pre-compact",
+                    "stop",
+                    "session-end",
+                    "subagent-start",
+                    "subagent-stop",
+                ],
+                "codex" => &[
+                    "session-start",
+                    "user-prompt-submit",
+                    "pre-tool-use",
+                    "post-tool-use",
+                    "user-prompt-expansion",
+                    "pre-compact",
+                    "post-compact",
+                    "stop",
+                    "session-end",
+                    "subagent-start",
+                    "subagent-stop",
+                ],
+                "gemini" | "gemini-cli" => &[
+                    "session-start",
+                    "before-agent",
+                    "after-agent",
+                    "before-model",
+                    "before-tool-selection",
+                    "before-tool",
+                    "after-tool",
+                    "pre-compress",
+                    "session-end",
+                ],
+                "muse" => &[
+                    "session-start",
+                    "user-prompt-submit",
+                    "pre-tool-use",
+                    "post-tool-use",
+                    "post-tool-use-failure",
+                    "stop",
+                    "session-end",
+                ],
+                "agy" => &[
+                    "pre-tool-use",
+                    "post-tool-use",
+                    "pre-invocation",
+                    "post-invocation",
+                    "stop",
+                ],
+                "openclaw" => &[
+                    "bootstrap",
+                    "agent-end",
+                    "before-reset",
+                    "session-start",
+                    "session-end",
+                    "shutdown",
+                ],
+                "hermes" => &[],
+                "roo-runtime" => &[
+                    "run-start",
+                    "agent-turn-start",
+                    "agent-turn-end",
+                    "run-end",
+                    "pre-tool-use",
+                    "post-tool-use",
+                ],
+                _ => unreachable!(),
+            };
+            for event in events {
+                let args = ["hook", provider, event, "."];
+                parse_public_args(&args).unwrap_or_else(|error| {
+                    panic!("public command {args:?} failed to parse: {error}")
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn public_cli_reference_lists_the_command_matrix() {
+        let reference = include_str!("../docs/cli.md");
+        for command in [
+            "membrick status [PATH]",
+            "membrick review [PATH]",
+            "membrick index [PATH]",
+            "membrick query <TEXT>",
+            "membrick recall serve [PATH]",
+            "membrick install <provider> [PATH]",
+            "membrick verify <provider> [PATH]",
+            "membrick hook <provider> <event> [PATH]",
+            "membrick session promote <ID>",
+            "membrick session replay <ID>",
+        ] {
+            assert!(
+                reference.contains(command),
+                "CLI reference is missing {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn detailed_help_keeps_legacy_and_tuning_flags_hidden() {
+        let help = Args::command().render_long_help().to_string();
+        for hidden in [
+            "--claude-code-install",
+            "--codex-install",
+            "--max-bytes",
+            "--max-files",
+            "--chunk-max-tokens",
+            "--tier1-ner-provider",
+        ] {
+            assert!(!help.contains(hidden), "help unexpectedly exposes {hidden}");
+        }
+    }
 
     #[test]
     fn parses_recall_query_and_result_count() {
@@ -697,7 +1136,7 @@ mod tests {
     #[test]
     fn claude_code_help_exposes_feature_flags_when_enabled() {
         let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("membrick setup <provider> [PATH]"));
+        assert!(help.contains("membrick install <provider> [PATH]"));
         assert!(help.contains("Providers: claude,"));
         assert!(!help.contains("--claude-code-install"));
     }
@@ -719,7 +1158,7 @@ mod tests {
     #[test]
     fn codex_help_exposes_feature_flags_when_enabled() {
         let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("membrick setup <provider> [PATH]"));
+        assert!(help.contains("membrick install <provider> [PATH]"));
         assert!(help.contains("Providers: claude, codex,"));
         assert!(!help.contains("--codex-install"));
     }
@@ -741,7 +1180,7 @@ mod tests {
     #[test]
     fn muse_code_help_exposes_feature_flags_when_enabled() {
         let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("membrick setup <provider> [PATH]"));
+        assert!(help.contains("membrick install <provider> [PATH]"));
         assert!(help.contains("Providers: claude, codex, gemini, agy, muse,"));
         assert!(!help.contains("--muse-install"));
     }

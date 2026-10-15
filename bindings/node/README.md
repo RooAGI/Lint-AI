@@ -18,7 +18,7 @@ on supported platforms. For example:
 
 ```sh
 npm install --global membrick
-membrick --codex-install .
+membrick install codex .
 ```
 
 The CLI is the Rust release executable. Platform packages contain it alongside

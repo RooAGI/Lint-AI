@@ -83,6 +83,9 @@ use std::time::Instant;
 ///
 /// This is the main entry point used by the CLI wrapper in `main.rs`.
 pub fn run(args: crate::cli::Args) -> Result<()> {
+    if let Some(command) = args.unknown_command.as_deref() {
+        anyhow::bail!("unrecognized command or bare path: {command}; see `membrick --help`");
+    }
     if args.provider_config.is_some()
         || args.provider_settings.is_some()
         || args.provider_skills_dir.is_some()
@@ -100,6 +103,9 @@ pub fn run(args: crate::cli::Args) -> Result<()> {
         return crate::executables::run("server");
         #[cfg(not(feature = "agent-integrations"))]
         anyhow::bail!("resident server requires agent integrations");
+    }
+    if args.status {
+        return show_project_status(Path::new(&args.path));
     }
     if let Some(index_path) = args.inspect_index.as_deref() {
         return inspect_index_store(Path::new(index_path), args.inspect_view);
@@ -1265,5 +1271,72 @@ fn inspect_index_store(index_path: &Path, view: IndexInspectView) -> Result<()> 
         }),
     };
     println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(())
+}
+
+fn show_project_status(project_root: &Path) -> Result<()> {
+    let root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    let membrick_dir = root.join(".membrick");
+
+    println!("Project: {}", root.display());
+    println!(
+        "Membrick data: {}",
+        if membrick_dir.is_dir() {
+            "present"
+        } else {
+            "not initialized"
+        }
+    );
+    let mut index_paths = std::fs::read_dir(&membrick_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && path.join("metadata.json").is_file())
+        .collect::<Vec<_>>();
+    index_paths.sort();
+    if index_paths.is_empty() {
+        println!("Indexes: none found");
+        return Ok(());
+    }
+
+    println!("Indexes: {}", index_paths.len());
+    for index_path in index_paths {
+        let options = PipelineOptions {
+            memory_index_layout: MemoryIndexLayout::Segmented {
+                query_top_n: 3,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::LocalDistinctiveness,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut store = crate::MemoryService::at_path(&index_path, options)?;
+        store.refresh()?;
+        let inspection = store.inspection();
+        let name = index_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("index");
+        println!("\n{name} ({})", index_path.display());
+        println!("  Source documents: {}", inspection.source_document_count);
+        println!("  Records: {}", inspection.record_count);
+        println!(
+            "  State: {}",
+            if inspection.dirty {
+                "pending updates"
+            } else {
+                "current"
+            }
+        );
+        println!(
+            "  Revision: store {}, published {}",
+            inspection.store_revision, inspection.snapshot_revision
+        );
+        if let Some(snapshot) = inspection.snapshot {
+            println!("  Layout: {}", snapshot.layout);
+            println!("  Segments: {}", snapshot.segment_count);
+        }
+    }
     Ok(())
 }

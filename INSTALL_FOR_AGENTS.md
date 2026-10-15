@@ -14,12 +14,12 @@ Use the agent explicitly named by the user or the environment you are currently 
 
 Supported values:
 
-| User / environment | Installer value | Membrick install flag | Verification flag |
+| User / environment | Installer value | Install command | Verification command |
 |---|---|---|---|
-| Codex | `codex` | `--codex-install` | `--codex-verify-mcp` |
-| Claude Code | `claude` | `--claude-code-install` | `--claude-code-verify-mcp` |
-| Gemini CLI | `gemini` | `--gemini-cli-install` | `--gemini-cli-verify-mcp` |
-| Antigravity CLI / AGY | `agy` | `--agy-install` | `--agy-verify-mcp` |
+| Codex | `codex` | `membrick install codex` | `membrick verify codex` |
+| Claude Code | `claude` | `membrick install claude` | `membrick verify claude` |
+| Gemini CLI | `gemini` | `membrick install gemini` | `membrick verify gemini` |
+| Antigravity CLI / AGY | `agy` | `membrick install agy` | `membrick verify agy` |
 
 If the user has not identified an agent and the environment is ambiguous, ask which integration they want instead of changing several agent configurations.
 
@@ -84,11 +84,11 @@ cargo install --git https://github.com/RooAGI/Membrick --features agent-integrat
 Then configure and verify the requested provider. For Codex:
 
 ```bash
-membrick --codex-install "$PWD"
-membrick --codex-verify-mcp "$PWD"
+membrick install codex "$PWD"
+membrick verify codex "$PWD"
 ```
 
-Use the corresponding flags from the table above for other providers.
+Use the corresponding commands from the table above for other providers.
 
 ## 6. Success criteria
 

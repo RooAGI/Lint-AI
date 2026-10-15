@@ -7,7 +7,7 @@ Membrick integrates with RooAGI AgentFlow through its external process hook prot
 Build Membrick with the `roo-runtime` feature (included by `agent-integrations`), then run:
 
 ```sh
-membrick --roo-runtime-install
+membrick install roo-runtime .
 ```
 
 This installs user-level hooks in `~/.rooagi/hooks.json`. Pass `--provider-config /path/to/hooks.json` with `membrick install roo-runtime .` to choose another location. Existing hooks are preserved; reinstalling replaces only Membrick's own registrations.
@@ -36,6 +36,6 @@ Recall searches the workspace's shared provider pool across runs and extracts a 
 
 ## On-demand retrieval through Roo's MCP transport
 
-Run `membrick serve roo-runtime /absolute/workspace/root` to expose the existing shared-memory MCP tools over stdio. A Roo MCP server entry uses `id: "membrick"` and `transport: { "type": "stdio", "command": "/absolute/path/to/membrick", "args": ["--roo-runtime-serve", "/absolute/workspace/root"] }`. The search capability is `membrick__search`. The host must select the root and enforce workspace permissions; tool arguments must not select a different workspace. Configure the graph's search tool with this capability through Roo's existing MCP mechanism. Hosted Builder supplies the reserved `workspace_memory_search` tool using server ID `roo-memory` and capability `roo-memory__search` automatically. Local providers coexist with HTTP MCP providers. Searches return bounded query excerpts and provenance, with coverage marked as a ranked subset; retrieved memory is excluded from tool capture. Node and Python bindings load standard hook configuration from the host-selected project root.
+Run `membrick serve roo-runtime /absolute/workspace/root` to expose the existing shared-memory MCP tools over stdio. A Roo MCP server entry uses `id: "membrick"` and `transport: { "type": "stdio", "command": "/absolute/path/to/membrick", "args": ["serve", "roo-runtime", "/absolute/workspace/root"] }`. The search capability is `membrick__search`. The host must select the root and enforce workspace permissions; tool arguments must not select a different workspace. Configure the graph's search tool with this capability through Roo's existing MCP mechanism. Hosted Builder supplies the reserved `workspace_memory_search` tool using server ID `roo-memory` and capability `roo-memory__search` automatically. Local providers coexist with HTTP MCP providers. Searches return bounded query excerpts and provenance, with coverage marked as a ranked subset; retrieved memory is excluded from tool capture. Node and Python bindings load standard hook configuration from the host-selected project root.
 
 Roo no longer embeds Membrick's index or offers `artifact_search` as an internal tool. Original artifact chunk access, execution records and checkpoints remain available. Hosted builder runs provision persistent per-workspace roots under `~/.rooagi/workspaces`; mount that directory in containers. Hook configuration and the external executable must be available in the runtime container.

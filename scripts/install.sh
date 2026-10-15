@@ -135,29 +135,10 @@ case ":${PATH}:" in
 esac
 
 if [ -n "$AGENT" ]; then
-  case "$AGENT" in
-    codex)
-      INSTALL_FLAG="--codex-install"
-      VERIFY_FLAG="--codex-verify-mcp"
-      ;;
-    claude)
-      INSTALL_FLAG="--claude-code-install"
-      VERIFY_FLAG="--claude-code-verify-mcp"
-      ;;
-    gemini)
-      INSTALL_FLAG="--gemini-cli-install"
-      VERIFY_FLAG="--gemini-cli-verify-mcp"
-      ;;
-    agy)
-      INSTALL_FLAG="--agy-install"
-      VERIFY_FLAG="--agy-verify-mcp"
-      ;;
-  esac
-
   echo "Configuring Membrick for ${AGENT} in ${PROJECT}..."
-  "$BIN" "$INSTALL_FLAG" "$PROJECT"
+  "$BIN" install "$AGENT" "$PROJECT"
   echo "Verifying the Membrick MCP runtime..."
-  "$BIN" "$VERIFY_FLAG" "$PROJECT"
+  "$BIN" verify "$AGENT" "$PROJECT"
   echo "Membrick is installed, configured for ${AGENT}, and MCP verification passed."
 else
   echo "Membrick is installed. To configure an agent, rerun with --agent codex|claude|gemini|agy."

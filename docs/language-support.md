@@ -10,8 +10,9 @@ Spanish (`es`).
 
 ## Selecting a language
 
-`--lang auto|en|zh|ko|es` (default `auto`) is available on the CLI, in
-`PipelineOptions`, and on the HTTP search API (`SearchRequest.lang`).
+Language selection is available in `PipelineOptions` and on the HTTP search
+API (`SearchRequest.lang`). The consolidated CLI detects language
+automatically and no longer exposes the former `--lang` switch.
 `auto` detects per text from script statistics: a Han majority selects
 Chinese, a Hangul majority Korean, otherwise English. Ambiguous or
 script-free text falls back to English.
@@ -23,10 +24,9 @@ it does not require Python or spaCy at runtime.
 
 spaCy is an optional enrichment path for NER and structured
 relation/key-phrase extraction. `PipelineOptions` defaults to the heuristic
-provider, which is Python-free and skips those spaCy-only enrichments. The CLI
-currently defaults `--tier1-ner-provider` to `spacy`. When that provider is
-selected, the model is chosen in Rust (`src/lang.rs`) unless `--spacy-model`
-overrides it:
+provider, which is Python-free and skips those spaCy-only enrichments. When a
+spaCy provider is selected through the API, the model is chosen in Rust
+(`src/lang.rs`) unless `spacy_model` overrides it:
 
 | Language | Default spaCy model |
 |----------|---------------------|

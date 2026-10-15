@@ -27,6 +27,17 @@ test.
 
 ## Required commands
 
+Run the table driven public CLI contract checks:
+
+```bash
+cargo test --lib public_
+```
+
+These checks parse every project command family, provider action and hook event
+for enabled features, shared provider override, and documented command references.
+They stop at argument parsing, so install, indexing, and other side-effecting
+commands are never executed.
+
 Run the integration contract suite with every integration enabled:
 
 ```bash

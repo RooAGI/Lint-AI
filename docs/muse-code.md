@@ -20,7 +20,7 @@ assets can enable the feature explicitly.
 From the repository root:
 
 ```bash
-./membrick --muse-install /path/to/repo
+./membrick install muse /path/to/repo
 ```
 
 By default this:
@@ -48,7 +48,7 @@ The MCP entry looks like this:
     "membrick": {
       "transport": "stdio",
       "command": "/path/to/membrick",
-      "args": ["--muse-serve", "/path/to/repo"],
+      "args": ["serve", "muse", "/path/to/repo"],
       "enabled": true
     }
   }
@@ -104,7 +104,7 @@ project, and is not promoted into durable memory automatically.
 
 ## Lifecycle hooks
 
-`--muse-install` wires capture-only session hooks into the same
+`membrick install muse .` wires capture-only session hooks into the same
 `settings.json`. Each event gets a matcher group that runs
 `membrick hook muse <event> .` as a shell command string with a 60-second
 timeout — the entry schema was validated against a live `muse` 1.3.0 binary.
@@ -142,8 +142,7 @@ After installation, verify that the configured MCP process can start and
 complete both the MCP initialize and tool-list handshakes:
 
 ```bash
-MEMBRICK_MCP_HEALTH_PATH=/tmp/membrick-muse-mcp-health.json \
-  ./membrick verify muse /path/to/repo --mcp-timeout-ms 30000
+./membrick verify muse /path/to/repo
 ```
 
 The command emits JSON with startup and handshake timings, protocol version,
@@ -156,15 +155,15 @@ repository because the persistent index may need to be built.
 Inspect the persisted store summary:
 
 ```bash
-membrick --inspect-index .membrick/memory
+membrick inspect-index .membrick/memory
 ```
 
 Inspect the documents at each indexing stage:
 
 ```bash
-membrick --inspect-index .membrick/memory --inspect-view source-documents
-membrick --inspect-index .membrick/memory --inspect-view records
-membrick --inspect-index .membrick/memory --inspect-view segments
+membrick inspect-index .membrick/memory --view source-documents
+membrick inspect-index .membrick/memory --view records
+membrick inspect-index .membrick/memory --view segments
 ```
 
 All views emit JSON and can be filtered with `jq`.
@@ -175,7 +174,7 @@ All views emit JSON and can be filtered with `jq`.
   rather than inventing a separate memory system.
 - Existing settings entries are preserved when the installer runs; a
   malformed `settings.json` is never overwritten.
-- Session replay (`--replay-session --session-provider muse`) is not wired
+- Session replay (`membrick session replay <ID> --provider muse`) is not wired
   yet.
 - Muse Code runs on macOS and Linux only; the integration inherits that
   platform scope.

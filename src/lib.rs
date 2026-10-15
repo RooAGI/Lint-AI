@@ -51,7 +51,6 @@ mod config;
 mod conversation_state;
 mod conversational_rerank;
 mod daemon;
-pub(crate) mod embedded_scripts;
 mod ids;
 mod index;
 #[cfg(any(

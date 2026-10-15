@@ -237,10 +237,7 @@ pub struct SpacyKeyEntityRanker {
 pub const DEFAULT_SPACY_MODEL: &str = "en_core_web_sm";
 
 pub fn default_spacy_script_path() -> PathBuf {
-    // The script is embedded in the binary and materialized at runtime;
-    // a CARGO_MANIFEST_DIR path would bake the build machine's checkout
-    // location into distributed binaries, where the file does not exist.
-    crate::embedded_scripts::spacy_ner_script_path()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_ner.py")
 }
 
 pub fn detect_python_executable() -> String {

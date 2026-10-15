@@ -339,8 +339,7 @@ pub(crate) fn python_executable() -> String {
 /// Behood owns the relation-extraction judgment; membrick consumes it.
 /// Resolution order:
 /// 1. `BEHOOD_RELATIONS` env var (explicit override)
-/// 2. The copy embedded in the binary, materialized at runtime
-///    (see `crate::embedded_scripts`)
+/// 2. Bundled `scripts/spacy_relations.py` (backward compatibility)
 pub(crate) fn extractor_script_path() -> std::path::PathBuf {
     if let Ok(value) = std::env::var("BEHOOD_RELATIONS") {
         let value = value.trim();
@@ -348,7 +347,7 @@ pub(crate) fn extractor_script_path() -> std::path::PathBuf {
             return std::path::PathBuf::from(value);
         }
     }
-    crate::embedded_scripts::spacy_relations_script_path()
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/spacy_relations.py")
 }
 
 /// Run the dependency-parse extractor (`scripts/spacy_relations.py`) over the

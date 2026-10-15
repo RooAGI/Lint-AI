@@ -21,8 +21,7 @@
     "index.js",
     "index.d.ts",
     "bin/membrick.js",
-    "README.md",
-    "*.node"
+    "README.md"
   ],
   "engines": {
     "node": ">=18"

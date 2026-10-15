@@ -66,16 +66,37 @@ fn query_cache_key(s: &CacheSettings<'_>) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// Directory holding the query cache for a corpus.
+///
+/// Anchored to the corpus root, never to the process working directory:
+/// a bare relative `.membrick-cache` scattered cache files into
+/// whatever directory the user happened to run `membrick index` from,
+/// while `membrick status <path>` (which inspects the project itself)
+/// reported the project as uninitialized. The cache key already hashes
+/// the root path and pipeline settings, so one directory per corpus is
+/// enough.
+pub(crate) fn query_cache_dir(s: &CacheSettings<'_>) -> PathBuf {
+    let root = Path::new(s.root_path);
+    let base = if root.is_file() {
+        root.parent()
+            .map(|parent| parent.to_path_buf())
+            .unwrap_or_else(|| root.to_path_buf())
+    } else {
+        root.to_path_buf()
+    };
+    base.join(".membrick-cache")
+}
+
 fn query_cache_file(s: &CacheSettings<'_>) -> PathBuf {
-    Path::new(".membrick-cache").join(format!("{}.json", query_cache_key(s)))
+    query_cache_dir(s).join(format!("{}.json", query_cache_key(s)))
 }
 
 pub(crate) fn query_cache_lexical_dir(s: &CacheSettings<'_>) -> PathBuf {
-    Path::new(".membrick-cache").join(format!("{}.tantivy", query_cache_key(s)))
+    query_cache_dir(s).join(format!("{}.tantivy", query_cache_key(s)))
 }
 
 fn query_cache_core_file(s: &CacheSettings<'_>) -> PathBuf {
-    Path::new(".membrick-cache").join(format!("{}.core.bin", query_cache_key(s)))
+    query_cache_dir(s).join(format!("{}.core.bin", query_cache_key(s)))
 }
 
 fn fingerprint_base_path(root_path: &str) -> PathBuf {
@@ -333,4 +354,77 @@ fn save_binary_core_atomic(index: &MemoryIndex, path: &Path) -> Result<()> {
     index.save_binary_core(&temp_path)?;
     fs::rename(&temp_path, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::Lang;
+
+    fn settings_parts() -> (Tier1NerProvider, Tier1TermRankerKind, Lang, ChunkStrategy) {
+        (
+            Tier1NerProvider::Heuristic,
+            Tier1TermRankerKind::Yake,
+            Lang::Auto,
+            ChunkStrategy::Hybrid,
+        )
+    }
+
+    fn cache_settings<'a>(
+        root_path: &'a str,
+        parts: &'a (Tier1NerProvider, Tier1TermRankerKind, Lang, ChunkStrategy),
+    ) -> CacheSettings<'a> {
+        CacheSettings {
+            root_path,
+            ner_provider: &parts.0,
+            term_ranker: &parts.1,
+            spacy_model: "en_core_web_sm",
+            lang: &parts.2,
+            chunk_strategy: &parts.3,
+            chunk_lines: 40,
+            chunk_overlap: 5,
+            chunk_target_tokens: 200,
+            chunk_max_tokens: 400,
+        }
+    }
+
+    #[test]
+    fn cache_paths_are_anchored_to_the_corpus_root() {
+        let root = "/nonexistent-membrick-test/project";
+        let parts = settings_parts();
+        let s = cache_settings(root, &parts);
+
+        let dir = query_cache_dir(&s);
+        assert_eq!(dir, Path::new(root).join(".membrick-cache"));
+        assert_eq!(query_cache_file(&s).parent(), Some(dir.as_path()));
+        assert_eq!(query_cache_core_file(&s).parent(), Some(dir.as_path()));
+        assert_eq!(query_cache_lexical_dir(&s).parent(), Some(dir.as_path()));
+        assert!(
+            query_cache_lexical_dir(&s)
+                .extension()
+                .is_some_and(|ext| ext == "tantivy")
+        );
+        // The historical bug: a bare relative path resolved against the
+        // process working directory instead of the corpus.
+        assert_ne!(dir, PathBuf::from(".membrick-cache"));
+    }
+
+    #[test]
+    fn cache_dir_for_a_file_corpus_is_the_files_parent() {
+        let file = std::env::temp_dir().join(format!(
+            "membrick-cache-test-{}-corpus.md",
+            std::process::id()
+        ));
+        fs::write(&file, "# corpus\n").expect("write temp corpus file");
+        let root = file.to_string_lossy().into_owned();
+        let parts = settings_parts();
+        let s = cache_settings(&root, &parts);
+
+        let expected = file
+            .parent()
+            .expect("temp file has a parent")
+            .join(".membrick-cache");
+        assert_eq!(query_cache_dir(&s), expected);
+        let _ = fs::remove_file(&file);
+    }
 }

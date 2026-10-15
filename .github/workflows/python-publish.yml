@@ -37,7 +37,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+          # Native ARM runner: cross-compiling this leg in maturin-action's
+          # Docker image fails in ring's build (the cross assembler is
+          # invoked without -march=armv8-a, so __ARM_ARCH is undefined and
+          # ring's pregenerated ARM assembly does not compile). Building
+          # natively on ARM avoids the cross toolchain entirely.
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
           - os: macos-15-intel
             target: x86_64-apple-darwin
@@ -56,7 +61,7 @@ jobs:
       - name: Build agent-capable CLI
         shell: bash
         run: |
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" && "${{ runner.arch }}" != "ARM64" ]]; then
             cargo install cross --locked
             cross build --release --bin membrick --features agent-integrations --target "${{ matrix.target }}"
           else

@@ -979,7 +979,8 @@ mod tests {
             json!({
                 "search_id": search_id,
                 "label": "not_helpful",
-                "feedback": "The query returned no matching documents."
+                "feedback": "The query returned no matching documents.",
+                "document_judgments": []
             }),
         );
         assert_eq!(feedback["status"], json!("reviewed"));

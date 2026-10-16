@@ -4,7 +4,7 @@ title: "Membrick: Persistent Memory for AI Coding Agents"
 type: software
 authors:
   - name: RooAGI
-version: 0.6.1
+version: 0.6.2
 date-released: 2026-10-13
 repository-code: "https://github.com/RooAGI/Membrick"
 url: "https://www.rooagi.com"

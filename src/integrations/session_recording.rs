@@ -653,6 +653,19 @@ pub fn membrick_enabled(provider: RecordingProvider, project_root: &Path) -> Res
     )
 }
 
+/// Whether provider lifecycle hooks should retrieve memory automatically.
+/// Capture remains controlled by `membrick_enabled`; explicit MCP searches
+/// are unaffected by this project-level observe-only setting.
+pub fn automatic_retrieval_enabled(project_root: &Path) -> bool {
+    let settings_path = project_root.join(".membrick").join("settings.toml");
+    let observe_only = fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|text| text.parse::<toml::Value>().ok())
+        .and_then(|value| value.get("hooks")?.get("observe_only")?.as_bool())
+        .unwrap_or(false);
+    !observe_only
+}
+
 /// Persist filesystem changes observed by a provider MCP watcher as shared
 /// workspace memories. Stable IDs deduplicate the same OS event when multiple
 /// provider MCP servers observe it.
@@ -1449,6 +1462,55 @@ fn timestamp_compact() -> u128 {
 mod tests {
     use super::*;
     use crate::memory_api::MemoryService;
+
+    #[test]
+    fn automatic_retrieval_defaults_to_enabled() {
+        let root = temp_root("retrieval-default");
+        assert!(automatic_retrieval_enabled(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observe_only_setting_disables_automatic_retrieval() {
+        let root = temp_root("observe-only");
+        let settings = root.join(".membrick");
+        fs::create_dir_all(&settings).unwrap();
+        fs::write(
+            settings.join("settings.toml"),
+            "[hooks]\nobserve_only = true\n",
+        )
+        .unwrap();
+        assert!(!automatic_retrieval_enabled(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observe_only_false_preserves_automatic_retrieval() {
+        let root = temp_root("automatic-retrieval");
+        let settings = root.join(".membrick");
+        fs::create_dir_all(&settings).unwrap();
+        fs::write(
+            settings.join("settings.toml"),
+            "[hooks]\nobserve_only = false\n",
+        )
+        .unwrap();
+        assert!(automatic_retrieval_enabled(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_settings_preserve_existing_retrieval_default() {
+        let root = temp_root("malformed-settings");
+        let settings = root.join(".membrick");
+        fs::create_dir_all(&settings).unwrap();
+        fs::write(
+            settings.join("settings.toml"),
+            "[hooks\nobserve_only = true",
+        )
+        .unwrap();
+        assert!(automatic_retrieval_enabled(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn workspace_file_capture_redacts_credentials() {

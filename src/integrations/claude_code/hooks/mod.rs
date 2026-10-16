@@ -219,6 +219,11 @@ fn handle_hook(
     if !membrick_enabled(RecordingProvider::Claude, &root)? {
         return Ok(ClaudeHookOutput::default());
     }
+    if is_retrieval_hook(kind)
+        && !crate::integrations::session_recording::automatic_retrieval_enabled(&root)
+    {
+        return Ok(ClaudeHookOutput::default());
+    }
     let output = match kind {
         ClaudeHookKind::SessionStart => retrieve(
             &root,
@@ -279,6 +284,18 @@ fn handle_hook(
         );
     }
     Ok(output)
+}
+
+fn is_retrieval_hook(kind: ClaudeHookKind) -> bool {
+    matches!(
+        kind,
+        ClaudeHookKind::SessionStart
+            | ClaudeHookKind::UserPromptSubmit
+            | ClaudeHookKind::UserPromptExpansion
+            | ClaudeHookKind::PreToolUse
+            | ClaudeHookKind::PostToolUse
+            | ClaudeHookKind::SubagentStart
+    )
 }
 
 fn retrieve(
@@ -1148,6 +1165,49 @@ mod tests {
         let output = handle_hook(ClaudeHookKind::UserPromptSubmit, prompt, &root).unwrap();
         assert!(output.hook_specific_output.is_none());
         assert!(!memory_root(&root).join("index.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observe_only_keeps_stop_capture_and_suppresses_prompt_context() {
+        let root = temp_dir("observe-only");
+        fs::create_dir_all(root.join(".membrick")).unwrap();
+        fs::write(
+            root.join(".membrick/settings.toml"),
+            "[hooks]\nobserve_only = true\n",
+        )
+        .unwrap();
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"Choose cobalt routing"}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":"Cobalt routing is configured"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        handle_hook(
+            ClaudeHookKind::Stop,
+            input(&root, Some(transcript), "Stop"),
+            &root,
+        )
+        .unwrap();
+        let mut stored = open_store(&root).unwrap();
+        stored.refresh_index().unwrap();
+        assert_eq!(
+            stored.records().len(),
+            4,
+            "Stop must still capture the turn"
+        );
+        drop(stored);
+
+        let mut prompt = input(&root, None, "UserPromptSubmit");
+        prompt.prompt = Some("How is cobalt routing configured?".into());
+        let output = handle_hook(ClaudeHookKind::UserPromptSubmit, prompt, &root).unwrap();
+        assert!(output.hook_specific_output.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

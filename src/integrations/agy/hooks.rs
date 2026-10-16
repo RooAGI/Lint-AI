@@ -150,6 +150,11 @@ fn handle_hook(kind: AgyHookKind, input: &AgyHookInput, root: &Path) -> Result<A
     if matches!(kind, AgyHookKind::PostToolUse | AgyHookKind::PostInvocation) {
         return Ok(AgyHookOutput::default());
     }
+    if is_retrieval_hook(kind)
+        && !crate::integrations::session_recording::automatic_retrieval_enabled(root)
+    {
+        return Ok(AgyHookOutput::default());
+    }
     let query_from_extra = input
         .extra
         .get("prompt")
@@ -295,6 +300,10 @@ fn extract_latest_user_prompt(transcript_path: &Path) -> Option<String> {
         }
     }
     None
+}
+
+fn is_retrieval_hook(kind: AgyHookKind) -> bool {
+    matches!(kind, AgyHookKind::PreToolUse | AgyHookKind::PreInvocation)
 }
 
 fn capture_transcript(root: &Path, session_id: &str, transcript_path: &Path) -> Result<()> {
@@ -611,6 +620,32 @@ mod tests {
         assert_eq!(usage.output_tokens, Some(8));
         assert_eq!(usage.total_tokens, Some(38));
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observe_only_suppresses_automatic_agy_retrieval() {
+        let nonce = test_nonce();
+        let root = std::env::temp_dir().join(format!("membrick-agy-observe-only-{nonce}"));
+        std::fs::create_dir_all(root.join(".membrick")).unwrap();
+        std::fs::write(
+            root.join(".membrick/settings.toml"),
+            "[hooks]\nobserve_only = true\n",
+        )
+        .unwrap();
+        let input = AgyHookInput {
+            conversation_id: "agy-observe-only-session".to_string(),
+            workspace_paths: vec![],
+            transcript_path: None,
+            tool_call: None,
+            extra: Map::from_iter([(
+                "prompt".to_string(),
+                Value::String("retrieve previous deployment decision".to_string()),
+            )]),
+        };
+        let output = handle_hook(AgyHookKind::PreInvocation, &input, &root).unwrap();
+        assert!(output.inject_steps.is_none());
+        assert!(!crate::integrations::mcp_index::shared_memory_root(&root).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

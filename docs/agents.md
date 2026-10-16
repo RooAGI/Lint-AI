@@ -135,6 +135,23 @@ hook response protocol:
 | Gemini CLI | `hookSpecificOutput.additionalContext` |
 | Antigravity CLI | `injectSteps[].ephemeralMessage` |
 
+### Capture without automatic retrieval
+
+To keep hook-based memory capture active without automatically adding recalled
+memories to prompts or tool decisions, set this in the project configuration:
+
+```toml
+[hooks]
+observe_only = true
+```
+
+Save it as `.membrick/settings.toml`. This disables lifecycle-hook retrieval
+and context injection for Claude Code, Codex, Gemini CLI, AGY, OpenClaw,
+Hermes, and Roo Runtime while leaving their capture hooks enabled. Muse hooks
+are already capture-only. Explicit MCP calls such as `search` continue to
+work. The default is `false`, preserving automatic retrieval for existing
+projects.
+
 If the query is empty, the store is absent, or no relevant records survive
 filtering, the hook returns no injected context and the agent continues normally.
 

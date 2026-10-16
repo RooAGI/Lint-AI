@@ -256,28 +256,37 @@ See [benchmark methodology](docs/benchmark.md), [benchmark results](docs/benchma
 
 ### Latest segmented-index comparison
 
-The latest segmented comparison uses all 500 eligible LongMemEval-S questions
-with Tantivy 0.25.0. It is an experimental working-tree result. Fixed routing
-uses five segments; adaptive routing may expand the candidate set to 12. The
-server and benchmark CLI default to fixed top-3.
+The v0.6.2 segmented comparison uses all 500 LongMemEval-S questions, Tantivy
+0.25.0, and heuristic NER. It compares the server-default `LocalDistinctiveness`
+router with the experimental `coverage-local` router. Both runs use fixed top-5
+and adaptive expansion up to 12; the server default remains fixed top-3.
+Timings are direct-index measurements and exclude haystack indexing.
 
-| Mode | Any-hit Recall@5 | Any-hit Recall@10 | Fractional Recall@5 | MRR | Avg. query latency |
-|---|---:|---:|---:|---:|---:|
-| Segmented (fixed top-5) | 94.20% | 94.20% | 86.77% | 0.880 | 2.49 ms |
-| Segmented (enriched + reranked) | 94.20% | 94.20% | 86.77% | 0.881 | 3.85 ms |
-| Adaptive (enriched + reranked) | 94.00% | 96.00% | 86.30% | 0.884 | 7.26 ms |
-| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.71 ms |
-| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 61.84 ms |
-| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 28.05 ms |
-| Single-index control | 94.40% | 96.60% | 86.41% | 0.872 | 13.45 ms |
+| Router | Mode | Any-hit @5 | Any-hit @10 | Fractional @5 | MRR | Mean query latency |
+|---|---|---:|---:|---:|---:|---:|
+| LocalDistinctiveness | Fixed top-3 (server default) | 88.2% | 88.2% | 75.21% | 0.854 | 3.23 ms |
+| LocalDistinctiveness | Fixed top-5 | 92.0% | 92.0% | 82.38% | 0.874 | 4.93 ms |
+| LocalDistinctiveness | Adaptive 5→12, enriched + reranked | 94.0% | 95.2% | 85.35% | 0.872 | 48.55 ms |
+| LocalDistinctiveness | Temporal route fused with all segments | 95.0% | 98.2% | 87.25% | 0.887 | 51.93 ms |
+| coverage-local | Fixed top-3 | 92.6% | 92.6% | 81.51% | 0.887 | 3.82 ms |
+| coverage-local | Fixed top-5 | 94.2% | 94.2% | 86.84% | 0.887 | 11.99 ms |
+| coverage-local | Adaptive 5→12, enriched + reranked | 94.8% | 96.4% | 87.06% | 0.889 | 11.84 ms |
+| coverage-local | Temporal route fused with all segments | **96.2%** | **98.4%** | **89.73%** | **0.895** | 94.58 ms |
+| No router | All segments | 95.8% | 98.0% | 88.92% | 0.892 | — |
+| Single-index control | Global | 95.8% | 98.0% | **88.94%** | 0.885 | 15.00 ms |
 
-Fused temporal + global has the highest recall and MRR in this comparison, with
-higher latency. These segmented timing numbers exclude question-haystack
-indexing and are not comparable to the standalone MemoryService latency above.
-See [benchmark results](docs/benchmark-results.md) and the
-[segmented-index design](docs/distributed-segment-index.md) for conditions and
-the full report:
-[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
+The October 5 README value of 86.77% Fractional Recall@5 came from an older
+`coverage-local` run; the latest `coverage-local` rerun is 86.84%. On the
+server-default router, fixed top-5 scored 82.38%. The fused `coverage-local`
+route had the highest retrieval scores in this comparison, with higher mean
+latency. Latency is sensitive to run conditions, so treat it as diagnostic.
+These direct-index timings are not comparable to the standalone MemoryService
+timing above. Dataset SHA-256:
+`08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894`. See the
+[benchmark results](docs/benchmark-results.md) and
+[segmented-index design](docs/distributed-segment-index.md). Full report:
+[`LocalDistinctiveness`](comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-local.json.gz) ·
+[`coverage-local`](comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-coverage-local.json.gz).
 
 <details>
 <summary><strong>Experimental rust-bert POS/NER branch</strong></summary>

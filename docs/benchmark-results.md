@@ -229,31 +229,54 @@ displayed precision; mean search latency is 2.58 ms.
 
 Report: [latest 500-question run](https://github.com/RooAGI/Membrick/blob/main/comparison/results/retrieval-longmemeval-current-2026-10-05-write-publication-k20.json.gz).
 
-## Segmented-index comparison (500 questions)
+## Latest segmented-index comparison (v0.6.2, 2026-10-16)
 
-The latest segmented benchmark evaluated all 500 eligible LongMemEval-S
-questions using Tantivy 0.25.0 and the experimental segmented feature. These
-variants share the same dataset and harness, including a single-index control.
-The source tree contained local changes, so this is a working-tree result.
+These v0.6.2 release runs evaluated all 500 eligible LongMemEval-S questions on
+commit `db03d0b8`, with Tantivy 0.25.0 and heuristic NER. They compare the
+server-default `LocalDistinctiveness` router with the experimental
+`coverage-local` router. Fixed top-5 and adaptive 5→12 routes are comparison
+settings; the server default remains fixed top-3. Both runs use the same dataset
+and query harness. Dataset SHA-256:
+`08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894`.
 
-| Mode | Any-hit Recall@5 | Any-hit Recall@10 | Fractional Recall@5 | MRR | Average latency |
-|---|---:|---:|---:|---:|---:|
-| Segmented (fixed top-5) | 94.20% | 94.20% | 86.77% | 0.880 | 2.49 ms |
-| Segmented (enriched + reranked) | 94.20% | 94.20% | 86.77% | 0.881 | 3.85 ms |
-| Adaptive (enriched + reranked) | 94.00% | 96.00% | 86.30% | 0.884 | 7.26 ms |
-| Intent baseline | 94.20% | 96.20% | 85.54% | 0.863 | 0.71 ms |
-| Fused adaptive + global | 95.40% | 97.20% | 87.11% | 0.880 | 61.84 ms |
-| Fused temporal + global | **96.00%** | **97.80%** | **88.51%** | **0.885** | 28.05 ms |
-| Single-index control | 94.40% | 96.60% | 86.41% | 0.872 | 13.45 ms |
+| Router | Mode | Any-hit @5 | Any-hit @10 | Fractional @5 | MRR | Mean latency |
+|---|---|---:|---:|---:|---:|---:|
+| LocalDistinctiveness | Fixed top-3 (server default) | 88.2% | 88.2% | 75.21% | 0.854 | 3.23 ms |
+| LocalDistinctiveness | Fixed top-5 | 92.0% | 92.0% | 82.38% | 0.874 | 4.93 ms |
+| LocalDistinctiveness | Adaptive 5→12, enriched + reranked | 94.0% | 95.2% | 85.35% | 0.872 | 48.55 ms |
+| LocalDistinctiveness | Temporal route fused with all segments | 95.0% | 98.2% | 87.25% | 0.887 | 51.93 ms |
+| coverage-local | Fixed top-3 | 92.6% | 92.6% | 81.51% | 0.887 | 3.82 ms |
+| coverage-local | Fixed top-5 | 94.2% | 94.2% | 86.84% | 0.887 | 11.99 ms |
+| coverage-local | Adaptive 5→12, enriched + reranked | 94.8% | 96.4% | 87.06% | 0.889 | 11.84 ms |
+| coverage-local | Temporal route fused with all segments | **96.2%** | **98.4%** | **89.73%** | **0.895** | 94.58 ms |
+| No router | All segments | 95.8% | 98.0% | 88.92% | 0.892 | — |
+| Single-index control | Global | 95.8% | 98.0% | **88.94%** | 0.885 | 15.00 ms |
 
-The run used the heuristic backend, fixed top-5 routing, adaptive expansion to
-12 segments, and the `coverage-local` router. Latency is per-query benchmark
-time excluding haystack indexing. These direct-index timings are not comparable
-to the standalone MemoryService timing in the 500-question headline above.
-Fused temporal + global had the strongest recall and MRR among these listed
-variants, with higher latency; the intent baseline was the fastest listed.
+The October 5 README result of 86.77% Fractional Recall@5 came from an older
+`coverage-local` run. The latest rerun scored 86.84%; the server-default router
+scored 82.38% for fixed top-5. The fused `coverage-local` route scored highest
+on retrieval, with higher mean latency. Timings exclude haystack indexing and
+are diagnostic; they are not comparable to standalone MemoryService timing.
 
-Full report: [`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
+Reproduction command:
+
+```bash
+cargo run --release --features experimental --bin segment_scoped_benchmark -- \
+  --longmemeval benchmark/data/longmemeval_s_raw.json \
+  --segment-compare \
+  --segment-top-n 5 \
+  --adaptive-segment-max-n 12 \
+  --segment-router local \
+  --ner-provider heuristic \
+  --k 1 --k 3 --k 5 --k 10 --k 20 \
+  --out comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-local.json.gz
+```
+
+Full report: [`segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-local.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-local.json.gz).
+
+Run the same command with `--segment-router coverage-local` to reproduce the
+comparison above. Full report:
+[`segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-coverage-local.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-coverage-local.json.gz).
 
 
 ### Historical Tantivy 0.26.2 segmented rerun (2026-10-05)
@@ -297,7 +320,7 @@ the standalone MemoryService timings above.
 
 Full report: [`segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-12-reasoning-rules.json.gz).
 
-### Default LocalDistinctiveness router comparison (2026-10-12)
+### Additional historical LocalDistinctiveness router comparison (2026-10-12)
 
 The same 500-question comparison was run with the server's default
 `LocalDistinctiveness` router. Relative to `coverage-local`, the fixed top-5

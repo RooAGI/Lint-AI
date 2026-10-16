@@ -6,10 +6,12 @@ search), **retrieval** (how to search selected segments), and **fusion** (how
 to combine ranked lists). The benchmark is an experimental comparison; these
 labels do not imply that every variant is a server default.
 
-For commands and the complete score tables, see the
-[benchmark overview](benchmark.md#segmented-index-comparison). The latest
-per-query data is in
-[`segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-05-tantivy-0.25.0-control.json.gz).
+For current commands and the latest complete score tables, see the
+[v0.6.2 segmented benchmark](benchmark.md#latest-segmented-index-comparison-v062-2026-10-16).
+The per-query reports compare the default `LocalDistinctiveness` router and
+`coverage-local` on the same 500 questions:
+[`LocalDistinctiveness report`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-local.json.gz) ·
+[`coverage-local report`](https://github.com/RooAGI/Membrick/blob/main/comparison/results/segment-longmemeval-500-2026-10-16-v0.6.2-db03d0b8-coverage-local.json.gz).
 
 ## Routing: choosing segments
 
@@ -84,9 +86,9 @@ comparison. It is distinct from the single-index control row. The exhaustive
 arm helps recover evidence that the router did not select, but querying all
 segments costs more time.
 
-## What the 500-question results show
+## Historical 500-question results (October 5)
 
-The latest run used LongMemEval-S, Tantivy 0.25.0, the heuristic NER backend,
+This earlier run used LongMemEval-S, Tantivy 0.25.0, the heuristic NER backend,
 no embeddings, `coverage-local` routing, five initial routed segments, and an
 adaptive maximum of twelve. It used the experimental segmented feature and a
 working tree with local changes. Latency is the benchmark's per-query

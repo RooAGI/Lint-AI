@@ -1289,6 +1289,30 @@ fn show_project_status(project_root: &Path) -> Result<()> {
             "not initialized"
         }
     );
+    // The ad-hoc index/query path keeps its cache next to the corpus
+    // (see engine::query_cache::query_cache_dir). Report it here so
+    // `status` agrees with what `index` and `query` actually did,
+    // instead of claiming a freshly indexed project has nothing.
+    let query_cache_dir = root.join(".membrick-cache");
+    if query_cache_dir.is_dir() {
+        let cached_indexes = std::fs::read_dir(&query_cache_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                entry.path().is_dir()
+                    && entry
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(".tantivy")
+            })
+            .count();
+        println!(
+            "Query cache: {} ({} cached index(es))",
+            query_cache_dir.display(),
+            cached_indexes
+        );
+    }
     let mut index_paths = std::fs::read_dir(&membrick_dir)
         .into_iter()
         .flatten()

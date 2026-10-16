@@ -35,6 +35,15 @@ def replace_marker(path: str, old: str, new: str) -> None:
     file.write_text(content.replace(old, new))
 
 
+def replace_pattern(path: str, pattern: str, replacement: str) -> None:
+    file = ROOT / path
+    content = file.read_text()
+    updated, count = re.subn(pattern, replacement, content, count=1)
+    if count != 1:
+        raise ValueError(f"expected one version marker in {path}")
+    file.write_text(updated)
+
+
 def replace_cargo_package_version(path: str, package: str, version: str) -> None:
     file = ROOT / path
     content = file.read_text()
@@ -97,7 +106,9 @@ def main() -> int:
     replace_marker("src/integrations/openclaw/plugin/openclaw.plugin.json",
                    f'"version":"{OLD_VERSION}"', f'"version":"{version}"')
     replace_marker(".github/workflows/python-publish.yml", f"default: v{OLD_VERSION}", f"default: v{version}")
-    replace_marker("docs/index.md", f"Version {OLD_VERSION}\n", f"Version {version}\n")
+    # The homepage can lag behind Cargo.toml, so update its displayed version
+    # independently instead of assuming its current copy matches OLD_VERSION.
+    replace_pattern("docs/index.md", r"Version \d+\.\d+\.\d+", f"Version {version}")
     replace_marker("docs/docker.md", f":{OLD_VERSION}", f":{version}")
     replace_marker("docs/docker.md", f"image.tag={OLD_VERSION}", f"image.tag={version}")
 

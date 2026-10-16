@@ -1,6 +1,6 @@
 {
   "name": "membrick",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Membrick's Rust MemoryService binding and CLI for Node.js",
   "license": "Apache-2.0",
   "repository": {
@@ -44,11 +44,11 @@
     ]
   },
   "optionalDependencies": {
-    "@rooagi/membrick-darwin-arm64": "0.6.0",
-    "@rooagi/membrick-darwin-x64": "0.6.0",
-    "@rooagi/membrick-linux-arm64-gnu": "0.6.0",
-    "@rooagi/membrick-linux-x64-gnu": "0.6.0",
-    "@rooagi/membrick-win32-x64-msvc": "0.6.0"
+    "@rooagi/membrick-darwin-arm64": "0.6.1",
+    "@rooagi/membrick-darwin-x64": "0.6.1",
+    "@rooagi/membrick-linux-arm64-gnu": "0.6.1",
+    "@rooagi/membrick-linux-x64-gnu": "0.6.1",
+    "@rooagi/membrick-win32-x64-msvc": "0.6.1"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.4.0"

@@ -15,10 +15,10 @@ hide:
 
 <div class="admonition info">
 <p class="admonition-title">A new name: Membrick</p>
-<p>Previously known as Lint-AI, the project is now Membrick. Version 0.5.0
-moves bundled provider integrations to a resident local IPC service. The
-standalone HTTP API remains available, and the legacy <code>lint-ai</code>
-command remains supported.</p>
+<p>Previously known as Lint-AI, the project is now Membrick. Version 0.6.1
+adds search review, document-level feedback, and source-document enrichment
+through MemoryService. The standalone HTTP API and legacy <code>lint-ai</code>
+command remain supported.</p>
 </div>
 
 ## From one conversation to a lasting relationship {.landing-heading}

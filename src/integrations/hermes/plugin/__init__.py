@@ -39,6 +39,7 @@ import threading
 import time
 import urllib.parse
 from datetime import datetime, timezone
+from pathlib import Path
 
 # --------------------------------------------------------------------------
 # Config
@@ -71,6 +72,30 @@ def load_config(hermes_home=None):
             continue
     cfg["server_url"] = cfg["server_url"].rstrip("/")
     return cfg
+
+
+def automatic_retrieval_enabled(workspace_root=None):
+    """Read the project's hook observe-only setting, defaulting to enabled."""
+    root = Path(workspace_root or Path.cwd())
+    settings_path = root / ".membrick" / "settings.toml"
+    try:
+        lines = settings_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return True
+
+    in_hooks = False
+    for raw_line in lines:
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_hooks = line[1:-1].strip() == "hooks"
+            continue
+        if in_hooks and "=" in line:
+            key, value = (part.strip() for part in line.split("=", 1))
+            if key == "observe_only":
+                return value.lower() != "true"
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -464,7 +489,8 @@ class MembrickPlugin:
     # -- hooks -----------------------------------------------------------
     def on_pre_llm_call(self, **kwargs):
         """Recall + inject. Runs synchronously (the turn blocks on it)."""
-        if not self.config["recall"]:
+        workspace_root = kwargs.get("workspace_root") or kwargs.get("cwd")
+        if not self.config["recall"] or not automatic_retrieval_enabled(workspace_root):
             return None
 
         def _recall():

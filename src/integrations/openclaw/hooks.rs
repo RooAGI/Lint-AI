@@ -349,7 +349,9 @@ fn handle_bootstrap(input: &OpenClawHookInput, root: &Path) -> Result<Value> {
         .filter(|file| file.get("name").and_then(Value::as_str) != Some(INJECTED_FILE_NAME))
         .collect();
 
-    if membrick_enabled(RecordingProvider::OpenClaw, root)? {
+    if membrick_enabled(RecordingProvider::OpenClaw, root)?
+        && crate::integrations::session_recording::automatic_retrieval_enabled(root)
+    {
         let query = input.query.trim();
         let query = if query.is_empty() {
             DEFAULT_BOOTSTRAP_QUERY
@@ -747,6 +749,33 @@ mod tests {
         assert_eq!(injected["missing"], false);
         // Pre-existing files survive.
         assert!(files.iter().any(|f| f["name"] == "SKILL.md"));
+    }
+
+    #[test]
+    fn observe_only_bootstrap_preserves_existing_files_without_memory_injection() {
+        let root = test_root();
+        write_memory_doc(
+            &root,
+            "seed-1",
+            "The team decided to adopt SQLite for storage.",
+        );
+        fs::create_dir_all(root.join(".membrick")).unwrap();
+        fs::write(
+            root.join(".membrick/settings.toml"),
+            "[hooks]\nobserve_only = true\n",
+        )
+        .unwrap();
+        let existing = vec![json!({
+            "name": "SKILL.md",
+            "path": "/ws/SKILL.md",
+            "content": "x",
+            "missing": false
+        })];
+        let input = bootstrap_input(root.to_str().unwrap(), "storage", existing);
+        let output = handle_bootstrap(&input, &root).unwrap();
+        let files = output.get("bootstrapFiles").unwrap().as_array().unwrap();
+        assert_eq!(files.len(), 1, "observe-only mode must not add MEMBRICK.md");
+        assert_eq!(files[0]["name"], "SKILL.md");
     }
 
     #[test]

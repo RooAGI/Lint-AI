@@ -25,6 +25,7 @@ from __init__ import (
     build_turn_record,
     format_recall_context,
     load_config,
+    automatic_retrieval_enabled,
     truncate,
 )
 
@@ -424,6 +425,25 @@ class PluginHookTest(unittest.TestCase):
         self.assertIsNone(p.on_pre_llm_call(session_id="s", turn_id="t",
                                             user_message="hi"))
         self.assertEqual(p.client.searches, [])
+
+    def test_observe_only_disables_hermes_recall_but_keeps_capture(self):
+        with tempfile.TemporaryDirectory() as root:
+            settings = Path(root) / ".membrick" / "settings.toml"
+            settings.parent.mkdir()
+            settings.write_text("[hooks]\nobserve_only = true\n", encoding="utf-8")
+            self.assertFalse(automatic_retrieval_enabled(root))
+
+            p = self._plugin()
+            self.assertIsNone(p.on_pre_llm_call(
+                session_id="s", turn_id="t", user_message="what tea?",
+                workspace_root=root))
+            self.assertEqual(p.client.searches, [])
+
+            p.on_post_llm_call(session_id="s", turn_id="t", user_message="u",
+                               assistant_response="a")
+            items = self._drain_queue(p)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["request_id"], "hermes:turn:s:t")
 
     def test_pre_llm_call_caches_per_turn(self):
         p = self._plugin()

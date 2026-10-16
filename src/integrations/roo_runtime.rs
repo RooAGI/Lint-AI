@@ -85,7 +85,12 @@ pub fn run_hook(kind: RooRuntimeHook) -> Result<()> {
             return Ok(HookResult::default());
         }
         match kind {
-            RooRuntimeHook::AgentTurnStart => recall(&root, &invocation),
+            RooRuntimeHook::AgentTurnStart
+                if crate::integrations::session_recording::automatic_retrieval_enabled(&root) =>
+            {
+                recall(&root, &invocation)
+            }
+            RooRuntimeHook::AgentTurnStart => Ok(HookResult::default()),
             RooRuntimeHook::AgentTurnEnd => {
                 capture(&root, &invocation, "turn")?;
                 Ok(HookResult::default())

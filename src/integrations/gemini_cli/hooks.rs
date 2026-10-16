@@ -164,6 +164,11 @@ fn handle_hook(
         GeminiHookKind::SessionEnd => return capture(_root, input, provider, "session-summary"),
         _ => {}
     }
+    if is_retrieval_hook(kind)
+        && !crate::integrations::session_recording::automatic_retrieval_enabled(_root)
+    {
+        return Ok(GeminiHookOutput::default());
+    }
     let query = input
         .prompt
         .clone()
@@ -239,6 +244,17 @@ fn handle_hook(
         }),
         system_message: None,
     })
+}
+
+fn is_retrieval_hook(kind: GeminiHookKind) -> bool {
+    matches!(
+        kind,
+        GeminiHookKind::BeforeAgent
+            | GeminiHookKind::BeforeModel
+            | GeminiHookKind::BeforeToolSelection
+            | GeminiHookKind::BeforeTool
+            | GeminiHookKind::AfterTool
+    )
 }
 
 fn capture(
@@ -503,6 +519,78 @@ mod tests {
                 .expect("memory should be injected")
                 .additional_context
                 .contains("Implemented blue canary deployment routing"));
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn observe_only_still_captures_but_skips_automatic_retrieval_for_both_providers() {
+        for (provider, label) in [
+            (RecordingProvider::Gemini, "Gemini-observe-only"),
+            (RecordingProvider::Agy, "Antigravity-observe-only"),
+        ] {
+            let root = temp_root(label);
+            fs::create_dir_all(root.join(".membrick")).unwrap();
+            fs::write(
+                root.join(".membrick/settings.toml"),
+                "[hooks]\nobserve_only = true\n",
+            )
+            .unwrap();
+            let capture_input = GeminiHookInput {
+                session_id: "observe-only-session".to_string(),
+                transcript_path: None,
+                cwd: root.clone(),
+                hook_event_name: "AfterAgent".to_string(),
+                prompt: None,
+                tool_name: None,
+                tool_input: None,
+                tool_response: None,
+                extra: Map::from_iter([(
+                    "response".to_string(),
+                    Value::String("Observe-only capture marker".to_string()),
+                )]),
+            };
+            handle_hook(
+                GeminiHookKind::AfterAgent,
+                &capture_input,
+                &root,
+                provider,
+                label,
+            )
+            .unwrap();
+
+            let mut store = IndexStore::at_path(
+                &crate::integrations::mcp_index::shared_memory_root(&root),
+                crate::integrations::mcp_index::segmented_store_options(),
+            )
+            .unwrap();
+            store.refresh().unwrap();
+            assert!(store
+                .records()
+                .iter()
+                .any(|record| record.content.contains("Observe-only capture marker")));
+            drop(store);
+
+            let query_input = GeminiHookInput {
+                session_id: "observe-only-session".to_string(),
+                transcript_path: None,
+                cwd: root.clone(),
+                hook_event_name: "BeforeAgent".to_string(),
+                prompt: Some("Observe-only capture marker".to_string()),
+                tool_name: None,
+                tool_input: None,
+                tool_response: None,
+                extra: Map::new(),
+            };
+            let output = handle_hook(
+                GeminiHookKind::BeforeAgent,
+                &query_input,
+                &root,
+                provider,
+                label,
+            )
+            .unwrap();
+            assert!(output.hook_specific_output.is_none());
             fs::remove_dir_all(root).unwrap();
         }
     }

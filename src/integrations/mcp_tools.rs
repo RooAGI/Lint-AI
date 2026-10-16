@@ -293,6 +293,29 @@ pub(crate) fn record_mcp_tool_response(
     }
 }
 
+/// Save capture work in the resident before returning from the provider hook.
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+pub(crate) fn submit_transcript_capture(
+    root: &Path,
+    provider: &str,
+    document_type: &str,
+    input: Value,
+) -> anyhow::Result<()> {
+    let root = root.canonicalize()?;
+    let (status, body) = post_resident_json(
+        &root,
+        "/provider-memory/captures",
+        &json!({
+            "workspace":root, "provider":provider, "document_type":document_type, "input":input,
+        }),
+    )?;
+    anyhow::ensure!(
+        status == reqwest::StatusCode::ACCEPTED,
+        "resident rejected transcript capture: {status}: {body}"
+    );
+    Ok(())
+}
+
 /// Publish a hook capture through the resident workspace owner.
 pub(crate) fn upsert_hook_document(
     root: &Path,

@@ -33,10 +33,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ))]
 pub(crate) mod workspace;
 
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+pub(crate) mod transcript_capture;
+
 mod staged;
 pub use staged::StagedAddResponse;
 
 const USER_FILTER: &str = "memory_user_id";
+const SESSION_OBSERVATION_DOCUMENT_TYPE: &str = "session-observation";
+
+fn is_session_observation(document: &SourceDocument) -> bool {
+    document
+        .filters
+        .get("document_type")
+        .is_some_and(|kind| kind == SESSION_OBSERVATION_DOCUMENT_TYPE)
+}
 
 fn read_search_review_state(path: &Path) -> anyhow::Result<serde_json::Value> {
     let state = match std::fs::read(path) {
@@ -597,6 +608,9 @@ pub struct MemoryService {
     published_search_view: Option<Arc<std::sync::RwLock<Arc<MemoryService>>>>,
     superseded_ids: HashSet<(String, String)>,
     has_expiring_documents: bool,
+    /// Transcript observations are retained as source evidence, but are
+    /// excluded from all MemoryService retrieval candidates.
+    has_session_observations: bool,
     request_fingerprints: HashMap<(String, String), String>,
     /// Cached write-adjudication receipts by (user_id, request_id), so an
     /// idempotent retry returns the identical response including the receipt.
@@ -1029,6 +1043,7 @@ fn structured_fact_results_with_rules(
         .iter()
         .copied()
         .filter(|doc| owns_memory(doc, &request.user_id))
+        .filter(|doc| !is_session_observation(doc))
         .filter(|doc| !superseded_ids.contains(&(request.user_id.clone(), doc.doc_id.clone())))
         .filter(|doc| {
             doc.filters
@@ -1122,6 +1137,9 @@ fn native_relationship_results(
             continue;
         };
         if !owns_memory(source, &request.user_id) {
+            continue;
+        }
+        if is_session_observation(source) {
             continue;
         }
         if superseded_ids.contains(&(request.user_id.clone(), record.doc_id.clone())) {
@@ -1529,6 +1547,9 @@ impl MemoryService {
         let has_expiring_documents = source_documents
             .iter()
             .any(|doc| doc.filters.contains_key("expires_at_ms"));
+        let has_session_observations = source_documents
+            .iter()
+            .any(|doc| is_session_observation(doc));
         let superseded_ids = source_documents
             .iter()
             .into_iter()
@@ -1564,6 +1585,7 @@ impl MemoryService {
             published_search_view: None,
             superseded_ids,
             has_expiring_documents,
+            has_session_observations,
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -2587,7 +2609,9 @@ impl MemoryService {
         // Keep expired and API-superseded documents out before ranking when
         // either lifecycle feature is present. Ordinary stores can use the
         // index's exact-filter bitmap without materializing every visible ID.
-        self.has_expiring_documents || !self.superseded_ids.is_empty()
+        self.has_expiring_documents
+            || self.has_session_observations
+            || !self.superseded_ids.is_empty()
     }
 
     fn visible_doc_ids_matching(&self, filters: &BTreeMap<String, String>) -> HashSet<String> {
@@ -2596,6 +2620,7 @@ impl MemoryService {
             .into_iter()
             .filter(|document| {
                 self.is_visible(document)
+                    && !is_session_observation(document)
                     && filters.iter().all(|(key, value)| {
                         document
                             .filters
@@ -2637,7 +2662,27 @@ impl MemoryService {
         // usually a no-op once every document carries its extraction stamp.
         self.backfill_key_phrases();
         self.flush()?;
-        self.search_with_filters_cached(query, scope, session_id, top_k, filters, reference_date)
+        if self.requires_visibility_allow_list() {
+            let allowed_doc_ids = self.visible_doc_ids_matching(filters);
+            self.search_with_filters_cached_and_allowed_doc_ids(
+                query,
+                scope,
+                session_id,
+                top_k,
+                filters,
+                reference_date,
+                Some(&allowed_doc_ids),
+            )
+        } else {
+            self.search_with_filters_cached(
+                query,
+                scope,
+                session_id,
+                top_k,
+                filters,
+                reference_date,
+            )
+        }
     }
 
     fn search_with_filters_restricted(
@@ -3111,6 +3156,10 @@ impl MemoryService {
             || provider_memory
                 .as_ref()
                 .is_some_and(|service| service.has_expiring_documents);
+        let has_session_observations = workspace.has_session_observations
+            || provider_memory
+                .as_ref()
+                .is_some_and(|service| service.has_session_observations);
         if let Some(provider) = &provider_memory {
             superseded_ids.extend(provider.superseded_ids.iter().cloned());
             request_fingerprints.extend(
@@ -3133,6 +3182,7 @@ impl MemoryService {
             published_search_view: None,
             superseded_ids,
             has_expiring_documents,
+            has_session_observations,
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -3220,6 +3270,7 @@ impl MemoryService {
     /// adapters must not mutate `IndexStore` directly.
     pub fn upsert(&mut self, document: crate::SourceDocument) {
         self.has_expiring_documents |= document.filters.contains_key("expires_at_ms");
+        self.has_session_observations |= is_session_observation(&document);
         self.queue_key_phrase_enrichment(std::slice::from_ref(&document));
         self.store.upsert(document)
     }
@@ -5715,6 +5766,57 @@ mod tests {
             })
             .unwrap();
         assert!(service.requires_visibility_allow_list());
+    }
+
+    #[test]
+    fn session_observations_are_persisted_but_excluded_from_memoryservice_search() {
+        let mut service = service();
+        let mut observation = direct_doc("observation-1", "rare raw transcript phrase");
+        observation.filters.insert(
+            "document_type".into(),
+            SESSION_OBSERVATION_DOCUMENT_TYPE.into(),
+        );
+        let turn = direct_doc("turn-1", "searchable turn result");
+        service.upsert(observation);
+        service.upsert(turn);
+        service.refresh_index().unwrap();
+
+        let hits = service
+            .search_with_filters(
+                "rare raw transcript phrase",
+                "user",
+                None,
+                10,
+                &BTreeMap::new(),
+                None,
+            )
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "raw observation leaked into search results"
+        );
+
+        let hits = service
+            .search_with_filters(
+                "searchable turn result",
+                "user",
+                None,
+                10,
+                &BTreeMap::new(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            hits.iter()
+                .map(|hit| hit.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            ["turn-1"]
+        );
+
+        assert!(service
+            .store
+            .source_document_by_id("observation-1")
+            .is_some());
     }
 
     #[cfg(any(

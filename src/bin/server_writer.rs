@@ -735,9 +735,16 @@ impl StagedWriter {
         &self,
         documents: Vec<crate::SourceDocument>,
     ) -> anyhow::Result<()> {
+        self.upsert_documents_blocking_with_audit(documents, None)
+    }
+    pub(super) fn upsert_documents_blocking_with_audit(
+        &self,
+        documents: Vec<crate::SourceDocument>,
+        audit: Option<CaptureAudit>,
+    ) -> anyhow::Result<()> {
         let (reply, receive) = oneshot::channel();
         self.sender
-            .try_send(Command::Upsert(documents, None, reply))
+            .try_send(Command::Upsert(documents, audit, reply))
             .map_err(admission_error)?;
         receive.blocking_recv().map_err(|_| WriterStopped)??;
         Ok(())

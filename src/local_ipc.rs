@@ -405,7 +405,11 @@ fn watch_directory(
     Ok(watcher)
 }
 
-fn queue_post_json(root: &Path, path: &str, payload: &Value) -> Result<(StatusCode, Value)> {
+pub(crate) fn queue_post_json(
+    root: &Path,
+    path: &str,
+    payload: &Value,
+) -> Result<(StatusCode, Value)> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let (pending, _, responses) = queue_dirs(root)?;
@@ -653,7 +657,7 @@ async fn request(root: &Path, path: &str, body: Vec<u8>) -> Result<(StatusCode, 
     Ok((status, value))
 }
 
-async fn process_queue_once(router: &Router, root: &Path) -> Result<()> {
+pub(crate) async fn process_queue_once(router: &Router, root: &Path) -> Result<()> {
     const MAX_IN_FLIGHT: usize = 32;
     let root = root.to_owned();
     let claims =

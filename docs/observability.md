@@ -158,3 +158,10 @@ OpenTelemetry OTLP data.
 
 See the [server setup](server.md) to start the dashboard, and
 [telemetry details](telemetry.md) for event coverage and data handling.
+
+## Transcript capture progress
+
+The Overview displays each Claude and Codex capture job, including captured and
+remaining bytes, last progress and errors. Queued means the request is safely
+saved; caught-up means every complete line through the current target has been
+captured. Search visibility follows normal MemoryService publication.

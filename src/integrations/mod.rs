@@ -58,4 +58,4 @@ pub mod session_recording;
 #[cfg(any(feature = "claude-code", feature = "codex"))]
 mod hook_settings;
 #[cfg(any(feature = "claude-code", feature = "codex"))]
-mod transcript_cursor;
+pub(crate) mod transcript_cursor;

@@ -177,17 +177,19 @@ not update the searchable `MemoryService`:
 | Gemini CLI | `AfterAgent`, `PreCompress`, `SessionEnd` | `.membrick/memory` |
 | Antigravity CLI | `Stop` (transcript capture) | `.membrick/memory` |
 
-At a capture event, Claude Code and Codex read the complete transcript and
-preserve every parsed message and structured block in source order,
-after credential redaction. Their stable session document is upserted on each
-capture instead of storing another full copy for every turn. Other adapters
-capture the session data exposed in their hook payloads. Claude and Codex
-send each capture as one upsert batch. The hook returns once the batch is
-journaled, and the document becomes searchable on the next background
-publication. It is not injected back into the conversation that just ended.
-The document is returned on a later retrieval event, typically the next prompt
-or next session. If the transcript is missing or has no parsed messages, the
-event completes without adding a document.
+At a capture event, Claude Code and Codex read only complete transcript lines
+appended since the previous durable capture. They preserve every parsed message
+and structured block in source order, after credential redaction. Each message
+becomes an observation document; the captured slice also becomes a turn
+document, and a stable session-context document links the observations. The
+cursor advances only after the batch is accepted by the resident `MemoryService`.
+Other adapters capture the session data exposed in their hook payloads. Claude
+and Codex send each batch as one upsert. The hook returns once the batch is
+journaled, and the documents become searchable on the next background
+publication. They are not injected back into the conversation that just ended.
+They can be returned on a later retrieval event, typically the next prompt or
+next session. If the transcript is missing or has no parsed messages, the event
+completes without adding a document.
 
 ### Two kinds of persistence
 
@@ -216,3 +218,29 @@ memory and context injection.
 The provider MCP tools and their request semantics are documented in the
 [MCP interface guide](mcp.md). For onboarding, see the Get started entries for
 the [HTTP server](server.md) and [MCP interface](mcp.md).
+
+## Durable Claude and Codex transcript capture
+
+Claude and Codex hooks submit a durable capture request to the existing project
+resident and return after acceptance. Acceptance means queued, not fully
+captured or searchable. The resident's MemoryService capture task drains the
+transcript independently of the hook process and its timeout. It reuses the
+provider parsers, source documents, stable document IDs and single writer.
+
+Pending requests are saved under `.membrick/runtime/transcript-captures/`.
+Repeated hooks for the same provider and session extend the pending target
+instead of starting competing replay loops. The resident processes one batch
+per pending session per pass, and saves the existing provider cursor only after
+MemoryService durably accepts that batch. A failed write leaves the cursor
+unchanged and retries with backoff. A crash after a write but before the cursor
+update safely repeats the same document IDs. Startup resumes saved jobs without
+another hook; graceful shutdown finishes the in-flight batch and retains the
+remaining work. Partial JSONL lines wait for completion. Requests use the same
+Unix socket, loopback HTTP, then filesystem queue fallback as other resident
+operations.
+
+The MCP `info` response and dashboard Overview show captured bytes, target bytes,
+remaining bytes, last progress time and the last error. `GET /api/captures`
+returns the same per-session progress. A pending capture can be accepted even
+while indexing is busy; it becomes searchable after the normal background
+publication.

@@ -210,6 +210,8 @@ impl AppState {
 
 #[derive(Clone)]
 struct WorkspaceRuntime {
+    #[cfg(any(feature = "claude-code", feature = "codex"))]
+    transcript_captures: Arc<crate::memory_api::transcript_capture::TranscriptCaptures>,
     service: Arc<RwLock<MemoryService>>,
     staged_writer: StagedWriter,
     writer_gate: Arc<tokio::sync::Mutex<()>>,
@@ -361,6 +363,46 @@ impl WorkspaceRegistry {
     }
 }
 
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+fn start_transcript_captures(
+    root: &std::path::Path,
+    writer: &StagedWriter,
+    owner_lock: &Arc<crate::memory_api::workspace::WorkspaceOwnerLock>,
+) -> anyhow::Result<Arc<crate::memory_api::transcript_capture::TranscriptCaptures>> {
+    let writer = writer.clone();
+    let owner_lock = owner_lock.clone();
+    Ok(Arc::new(MemoryService::start_transcript_captures(
+        root,
+        move |request, documents| {
+            let _keep_owner = &owner_lock;
+            let audit = server_writer::CaptureAudit {
+                provider: request.provider.clone(),
+                user_id: "mcp".into(),
+                session_id: request.input["session_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .into(),
+            };
+            writer.upsert_documents_blocking_with_audit(documents, Some(audit))
+        },
+    )?))
+}
+
+fn transcript_capture_status(runtime: &WorkspaceRuntime) -> Value {
+    #[cfg(any(feature = "claude-code", feature = "codex"))]
+    {
+        return match runtime.transcript_captures.status() {
+            Ok(status) => json!(status),
+            Err(error) => json!({"error":error.to_string()}),
+        };
+    }
+    #[cfg(not(any(feature = "claude-code", feature = "codex")))]
+    {
+        let _ = runtime;
+        Value::Null
+    }
+}
+
 fn open_workspace_runtime(
     project_root: PathBuf,
     options: PipelineOptions,
@@ -373,11 +415,14 @@ fn open_workspace_runtime(
     let owner = open_workspace_owner_at(&project_root, &workspace_index_root, options.clone())?;
     let service = Arc::new(RwLock::new(owner));
     let staged_writer = StagedWriter::start_with_schedule(service.clone(), schedule)?;
+    let owner_lock = Arc::new(owner_lock);
     let runtime = WorkspaceRuntime {
+        #[cfg(any(feature = "claude-code", feature = "codex"))]
+        transcript_captures: start_transcript_captures(&project_root, &staged_writer, &owner_lock)?,
         service,
         staged_writer,
         writer_gate: Arc::new(tokio::sync::Mutex::new(())),
-        _owner_lock: Arc::new(owner_lock),
+        _owner_lock: owner_lock,
         project_root,
         workspace_index_root,
     };
@@ -488,6 +533,7 @@ struct DashboardStatus {
     index: DashboardIndexStatus,
     telemetry: TelemetrySnapshot,
     integrations: Vec<DashboardIntegrationStatus>,
+    transcript_captures: Value,
 }
 
 #[derive(serde::Serialize)]
@@ -798,11 +844,18 @@ pub(crate) async fn main() -> anyhow::Result<()> {
         .ok();
     let writer = StagedWriter::start_with_schedule(state.service.clone(), write_schedule)?;
     state.staged_writer = Some(writer);
+    let owner_lock = Arc::new(owner_lock);
     workspace_registry.register_primary(WorkspaceRuntime {
+        #[cfg(any(feature = "claude-code", feature = "codex"))]
+        transcript_captures: start_transcript_captures(
+            &state.project_root,
+            state.staged_writer.as_ref().unwrap(),
+            &owner_lock,
+        )?,
         service: state.service.clone(),
         staged_writer: state.staged_writer.as_ref().unwrap().clone(),
         writer_gate: state.writer_gate.clone(),
-        _owner_lock: Arc::new(owner_lock),
+        _owner_lock: owner_lock,
         project_root: state.project_root.clone(),
         workspace_index_root: state.workspace_index_root.clone(),
     });
@@ -895,6 +948,24 @@ pub(crate) async fn main() -> anyhow::Result<()> {
             .with_graceful_shutdown(shutdown_signal())
             .await?;
     }
+    #[cfg(any(feature = "claude-code", feature = "codex"))]
+    {
+        let captures = state
+            .workspace_registry
+            .state
+            .lock()
+            .await
+            .entries
+            .values()
+            .map(|runtime| runtime.transcript_captures.clone())
+            .collect::<Vec<_>>();
+        tokio::task::spawn_blocking(move || {
+            for worker in captures {
+                worker.shutdown();
+            }
+        })
+        .await?;
+    }
     if let Some(worker) = &state.staged_writer {
         worker
             .flush()
@@ -925,7 +996,14 @@ fn app_router(state: AppState) -> Router {
         .route("/dashboard", get(dashboard))
         .route("/dashboard/app.js", get(dashboard_app))
         .route("/dashboard/event-detail.js", get(dashboard_event_detail))
-        .route("/dashboard/search-evaluation.mjs", get(dashboard_search_evaluation))
+        .route(
+            "/dashboard/capture-progress.mjs",
+            get(dashboard_capture_progress),
+        )
+        .route(
+            "/dashboard/search-evaluation.mjs",
+            get(dashboard_search_evaluation),
+        )
         .route("/dashboard/styles.css", get(dashboard_styles))
         .route("/dashboard/rooagi-logo.png", get(dashboard_logo))
         .route("/api/status", get(api_status))
@@ -975,6 +1053,13 @@ fn app_router(state: AppState) -> Router {
             "/provider-memory/mcp/documents/upsert",
             post(provider_mcp_document_upsert),
         );
+    #[cfg(any(feature = "claude-code", feature = "codex"))]
+    let router = router
+        .route(
+            "/provider-memory/captures",
+            post(provider_transcript_capture),
+        )
+        .route("/api/captures", get(api_transcript_captures));
     #[cfg(feature = "openclaw")]
     let router = router.route("/integrations/openclaw/hooks/:kind", post(openclaw_hook));
     router
@@ -1206,7 +1291,9 @@ async fn authorize(
         )
             .into_response();
     }
-    if state.tenant_id.is_some() && path.starts_with("/provider-memory/mcp/") {
+    if state.tenant_id.is_some()
+        && (path.starts_with("/provider-memory/mcp/") || path == "/provider-memory/captures")
+    {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"detail":"workspace MCP operations are unavailable in tenant mode"})),
@@ -1286,12 +1373,14 @@ fn is_workspace_operation_path(path: &str) -> bool {
         || path.starts_with("/integrations/openclaw/hooks/")
         || path == "/provider-memory/mcp/tools/call"
         || path == "/provider-memory/mcp/documents/upsert"
+        || path == "/provider-memory/captures"
 }
 
 fn is_workspace_telemetry_path(path: &str) -> bool {
     matches!(
         path,
         "/api/events"
+            | "/api/captures"
             | "/api/integrations"
             | "/api/sessions"
             | "/api/status"
@@ -1376,6 +1465,19 @@ async fn dashboard_search_evaluation() -> (
     )
 }
 
+async fn dashboard_capture_progress() -> (
+    [(axum::http::header::HeaderName, &'static str); 1],
+    &'static str,
+) {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        include_str!("../../dashboard/capture-progress.mjs"),
+    )
+}
+
 async fn dashboard_styles() -> (
     [(axum::http::header::HeaderName, &'static str); 1],
     &'static str,
@@ -1425,6 +1527,14 @@ async fn api_status(State(state): State<AppState>) -> impl IntoResponse {
         index: dashboard_index_status(inspection),
         telemetry,
         integrations: dashboard_integrations(&state.project_root),
+        transcript_captures: {
+            let registry = state.workspace_registry.state.lock().await;
+            registry
+                .entries
+                .get(&state.project_root)
+                .map(|runtime| transcript_capture_status(runtime))
+                .unwrap_or_else(|| json!([]))
+        },
     })
     .into_response()
 }
@@ -2125,6 +2235,84 @@ async fn provider_memory_search(
     }
 }
 
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+async fn provider_transcript_capture(
+    State(state): State<AppState>,
+    auth: Option<Extension<AuthContext>>,
+    Json(value): Json<Value>,
+) -> axum::response::Response {
+    if let Err(error) = tenant_check(&state, &value, auth.as_ref().map(|a| &a.0)) {
+        return error.into_response();
+    }
+    let runtime = match state
+        .workspace_registry
+        .resolve(
+            value
+                .get("workspace")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        )
+        .await
+    {
+        Ok(runtime) => runtime,
+        Err(error) => return error.into_response(),
+    };
+    let request = match serde_json::from_value::<
+        crate::memory_api::transcript_capture::CaptureRequest,
+    >(value)
+    {
+        Ok(request) => request,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail":error.to_string()})),
+            )
+                .into_response()
+        }
+    };
+    if let Err(error) = request.validate(&runtime.project_root) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"detail":error.to_string()})),
+        )
+            .into_response();
+    }
+    let worker = runtime.transcript_captures.clone();
+    match tokio::task::spawn_blocking(move || worker.submit(request)).await {
+        Ok(Ok(status)) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"accepted":true, "capture":status})),
+        )
+            .into_response(),
+        Ok(Err(error)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail":error.to_string()})),
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+async fn api_transcript_captures(State(state): State<AppState>) -> axum::response::Response {
+    let runtime = match state
+        .workspace_registry
+        .resolve(&state.project_root.to_string_lossy())
+        .await
+    {
+        Ok(runtime) => runtime,
+        Err(error) => return error.into_response(),
+    };
+    match runtime.transcript_captures.status() {
+        Ok(captures) => Json(json!({"captures":captures})).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 /// Journal provider documents through the resident owner's single upsert
 /// path. The reply means the documents are durable; they become searchable
 /// on the next background publication.
@@ -2466,6 +2654,7 @@ async fn provider_mcp_tool_call(
                     "root": workspace,
                     "docs_count": view.docs_count(),
                     "reasoning_rules": view.reasoning_rules_status(),
+                    "transcript_captures": transcript_capture_status(&runtime),
                 }))
             }
             "board_open" | "board_post" => {
@@ -3044,11 +3233,14 @@ mod tests {
             allowed_roots,
             DEFAULT_MAX_ACTIVE_WORKSPACES,
         ));
+        let owner_lock = Arc::new(owner_lock);
         workspace_registry.register_primary(WorkspaceRuntime {
+            #[cfg(any(feature = "claude-code", feature = "codex"))]
+            transcript_captures: start_transcript_captures(root, &writer, &owner_lock).unwrap(),
             service: service.clone(),
             staged_writer: writer.clone(),
             writer_gate: writer_gate.clone(),
-            _owner_lock: Arc::new(owner_lock),
+            _owner_lock: owner_lock,
             project_root: root.to_path_buf(),
             workspace_index_root: root.to_path_buf(),
         });
@@ -3123,6 +3315,145 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(feature = "codex")]
+    #[tokio::test]
+    async fn resident_capture_returns_before_indexing_and_drains_without_another_hook() {
+        use tower::ServiceExt;
+        let root = security_test_root();
+        let transcript = root.join("capture.jsonl");
+        let mut text = json!({"type":"response_item", "payload":{"type":"message", "role":"user", "id":"capture-user", "content":[{"type":"input_text","text":"remember the sapphire capture beacon"}]}}).to_string() + "\n";
+        for _ in 0..5 {
+            text.push_str(&json!({"type":"ignored", "padding":"x".repeat(600_000)}).to_string());
+            text.push('\n');
+        }
+        text.push_str(&json!({"type":"response_item", "payload":{"type":"message", "role":"assistant", "id":"capture-answer", "content":[{"type":"output_text","text":"The sapphire capture beacon is ready."}]}}).to_string());
+        text.push('\n');
+        std::fs::write(&transcript, &text).unwrap();
+        let state = provider_memory_test_state(&root);
+        let app = app_router(state.clone());
+        // A slow index must not prevent the hook from saving its request.
+        let blocked_index = state.service.write().unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), app.oneshot(
+            axum::http::Request::builder().method("POST")
+                .uri("/provider-memory/captures")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(json!({
+                    "workspace":root, "provider":"codex", "document_type":"outcome",
+                    "input":{"session_id":"capture-backlog", "hook_event_name":"Stop", "cwd":root, "transcript_path":transcript}
+                }).to_string())).unwrap()
+        )).await.expect("capture acknowledgement waited for the index").unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        drop(blocked_index);
+        let state_dir = crate::integrations::session_recording::provider_state_dir(
+            crate::integrations::session_recording::RecordingProvider::Codex,
+            &root,
+        );
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if crate::integrations::transcript_cursor::load_offset(
+                    &state_dir,
+                    "capture-backlog",
+                ) == text.len() as u64
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("backlog did not drain without a second hook");
+        state.staged_writer.as_ref().unwrap().flush().await.unwrap();
+        let view = state.provider_published_view().unwrap();
+        assert!(view
+            .source_documents()
+            .iter()
+            .any(|doc| doc.content.contains("sapphire capture beacon is ready")));
+    }
+
+    #[cfg(feature = "codex")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn file_queue_capture_continues_after_request_transport_stops() {
+        let root = security_test_root();
+        let transcript = root.join("queue-capture.jsonl");
+        let mut text=json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Retain the violet capture lantern."}]}}).to_string()+"\n";
+        for _ in 0..3 {
+            text.push_str(
+                &(json!({"type":"ignored", "padding":"x".repeat(600_000)}).to_string() + "\n"),
+            );
+        }
+        text.push_str(&(json!({"type":"response_item", "payload":{"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"The violet capture lantern is ready."}]}}).to_string()+"\n"));
+        std::fs::write(&transcript, &text).unwrap();
+        let state = provider_memory_test_state(&root);
+        let app = app_router(state.clone());
+        let pump_root = root.clone();
+        let pump = tokio::spawn(async move {
+            loop {
+                crate::local_ipc::process_queue_once(&app, &pump_root)
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        let client_root = root.clone();
+        let (status,body)=tokio::task::spawn_blocking(move || crate::local_ipc::queue_post_json(&client_root,"/provider-memory/captures",&json!({
+            "workspace":client_root,"provider":"codex","document_type":"outcome",
+            "input":{"session_id":"file-queue-capture","cwd":client_root,"hook_event_name":"Stop","transcript_path":transcript}
+        }))).await.unwrap().unwrap();
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        pump.abort();
+        let _ = pump.await;
+        let runtime = state
+            .workspace_registry
+            .resolve(&root.to_string_lossy())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if runtime
+                    .transcript_captures
+                    .status()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s.session_id == "file-queue-capture" && s.status == "caught-up")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        runtime.staged_writer.flush().await.unwrap();
+        let result = runtime
+            .staged_writer
+            .read_view()
+            .unwrap()
+            .search_agent_cached(
+                "violet capture lantern",
+                "codex",
+                None,
+                10,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        assert!(
+            result["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("violet capture lantern is ready")),
+            "{result}"
+        );
+        assert_eq!(
+            runtime.transcript_captures.status().unwrap()[0].captured_bytes,
+            text.len() as u64
+        );
+        runtime.transcript_captures.shutdown();
+    }
+
     #[tokio::test]
     async fn tenant_mode_rejects_workspace_wide_mcp_routes() {
         use tower::ServiceExt;
@@ -3133,6 +3464,7 @@ mod tests {
         for route in [
             "/provider-memory/mcp/tools/call",
             "/provider-memory/mcp/documents/upsert",
+            "/provider-memory/captures",
         ] {
             let response = app
                 .clone()

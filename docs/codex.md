@@ -25,6 +25,16 @@ membrick install codex .
 
 This enables Codex to use Membrick in the project. It configures the MCP connection and hooks, adds the project memory instructions, and preserves your other Codex settings.
 
+Capture hooks save a pending request and return promptly. The project resident
+drains transcript batches through MemoryService, resumes them after restart,
+and exposes progress through MCP `info` and the dashboard.
+
+Captured documents retain provider turn IDs in `filters["turn_id"]` and include
+those IDs in their document identity when attribution is available. Message IDs
+and transcript line positions distinguish documents within a turn. Captures
+containing several turns preserve each message's own attribution. See the
+[shared capture design](claude-code-hooks-design.md) for identity and replay details.
+
 Codex hooks use the transcript path supplied in the hook payload. If Codex
 doesn't supply a usable path, Membrick can locate the session transcript using
 the project setting below. Set `codex_transcript_dir` to the Codex sessions

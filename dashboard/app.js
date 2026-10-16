@@ -1,4 +1,5 @@
 import { renderEventDetail, renderToolCall, toolDetail, toolGroup } from './event-detail.js';
+import { renderCaptureProgressHtml } from './capture-progress.mjs';
 import { renderSearchEvaluationHtml } from './search-evaluation.mjs';
 
 const VIEWS = {
@@ -160,6 +161,7 @@ async function refresh() {
   try {
     const [status, series] = await Promise.all([api('/api/status'), api('/api/timeseries')]);
     state.status = status;
+    document.querySelector('#capture-progress').innerHTML = renderCaptureProgressHtml(status.transcript_captures);
     state.series = series.query_series || [];
 
     const healthy = status.status === 'healthy';

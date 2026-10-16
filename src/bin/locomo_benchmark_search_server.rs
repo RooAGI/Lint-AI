@@ -233,6 +233,7 @@ fn build_conv_index(conv: &LocomoConversation) -> Result<ConvIndex> {
             .push(crate::KeyPhrase {
                 text: kp.text,
                 kind: kp.kind,
+                origin: Some(crate::source::KeyPhraseOrigin::Extractor),
             });
     }
     for doc in docs.iter_mut() {
@@ -470,6 +471,7 @@ mod tests {
             key_phrases: vec![crate::KeyPhrase {
                 text: "Eiffel Tower".to_string(),
                 kind: "place".to_string(),
+                origin: None,
             }],
             key_phrase_extraction_hash: String::new(),
         });

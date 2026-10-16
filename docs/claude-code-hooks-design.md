@@ -53,8 +53,11 @@ are compared with other sessions. Transcript discovery uses the hook path or
 project `.membrick/settings.toml`; it does not read environment variables.
 
 One `session-context` document per session holds a short header and links the
-observations of the latest capture. Every capture is a single batch sent to
-`POST /provider-memory/mcp/documents/upsert`. The resident owner journals the
+observations captured for that session. Search feedback can add a managed
+conclusion, headings, and evidence-backed links to this existing document.
+Subsequent hook captures preserve those enrichments and accumulate links to
+the observations rather than dropping earlier references. Every capture is a
+single batch sent to `POST /provider-memory/mcp/documents/upsert`. The resident owner journals the
 batch and replies once it is durable; the background publisher makes it
 searchable, usually within the refresh interval. The server does not rebuild
 the session from the store, so a capture never waits for a full index refresh.

@@ -257,6 +257,36 @@ input:focus { border-color: var(--accent); }
 }
 .panel__note { color: var(--muted); font-size: 11.5px; text-align: right; }
 
+.reviews-intro { margin: -4px 0 14px; color: var(--muted); font-size: 12px; }
+.review-evaluation { margin-bottom: 14px; }
+.review-evaluation__panel { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.review-evaluation__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.review-evaluation__head h3 { margin-top: 3px; }
+.review-evaluation__panel > .muted { margin-top: 8px; font-size: 11px; }
+.review-evaluation__metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.review-evaluation__metrics > div { display: grid; gap: 5px; padding: 10px; border-radius: 6px; background: var(--surface); }
+.review-evaluation__metrics span { color: var(--muted); font-size: 10px; }
+.review-evaluation__metrics strong { font-size: 16px; }
+.review-evaluation__metrics small { color: var(--muted); font-size: 10px; font-weight: 400; }
+.review-evaluation__note { margin-top: 9px; color: var(--muted); font-size: 10.5px; }
+.search-reviews { display: grid; gap: 10px; }
+.search-review { padding: 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--surface-2); }
+.search-review__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.search-review__head h3 { margin-top: 4px; overflow-wrap: anywhere; }
+.search-review__feedback { margin-top: 10px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.search-review details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.search-review summary { color: var(--accent-ink); font-size: 11.5px; cursor: pointer; }
+.review-docs { display: grid; gap: 6px; margin-top: 9px; }
+.review-doc { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 12px; padding: 8px 10px; border-radius: 6px; background: var(--surface); }
+.review-doc > span:first-child { overflow-wrap: anywhere; font-size: 11px; }
+.review-doc p { grid-column: 1 / -1; color: var(--muted); font-size: 11px; white-space: pre-wrap; }
+.review-label { display: inline-flex; flex: 0 0 auto; padding: 3px 8px; border-radius: 99px; background: var(--info-tint); color: var(--info-ink); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.review-label--helpful, .review-label--relevant { background: var(--ok-tint); color: var(--ok-ink); }
+.review-label--partially_helpful, .review-label--partially_relevant, .review-label--pending { background: var(--warn-tint); color: var(--warn-ink); }
+.review-label--not_helpful, .review-label--not_relevant { background: var(--bad-tint); color: var(--bad-ink); }
+.reviews-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 14px; }
+.reviews-pagination .btn:disabled { opacity: .4; cursor: default; }
+
 /* Panels size to content: a sparse panel should be short, not a tall empty box. */
 .row { display: grid; gap: 14px; align-items: start; grid-template-columns: minmax(0, 1fr); }
 .row--wide-first { grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr); }

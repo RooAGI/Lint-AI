@@ -1,12 +1,14 @@
 import { renderEventDetail, renderToolCall, toolDetail, toolGroup } from './event-detail.js';
+import { renderSearchEvaluationHtml } from './search-evaluation.mjs';
 
 const VIEWS = {
   overview: { title: 'Overview', sub: 'How the memory index is serving agents right now.' },
   index: { title: 'Index', sub: 'Segment topology and document distribution of the primary query index.' },
-  providers: { title: 'Providers', sub: 'Per-integration sessions, tool use, and private memory stores.' }
+  providers: { title: 'Providers', sub: 'Per-integration sessions, tool use, and private memory stores.' },
+  reviews: { title: 'Search reviews', sub: 'Submitted feedback and offline ranking evaluation.' }
 };
 
-const state = { view: 'overview', status: null, series: [], provider: null, tool: null, hover: null };
+const state = { view: 'overview', status: null, series: [], provider: null, tool: null, hover: null, reviewOffset: 0, reviewTotal: 0 };
 
 const tokenInput = document.querySelector('#token');
 tokenInput.value = localStorage.getItem('membrick-dashboard-token') || '';
@@ -91,11 +93,65 @@ function showView(view) {
   if (location.hash.slice(1) !== view) history.replaceState(null, '', `#${view}`);
   document.querySelector('.viewport').scrollTop = 0;
   if (view === 'overview') drawSparks();
+  if (view === 'reviews') loadSearchReviews(state.reviewOffset);
 }
 
 document.querySelectorAll('.navitem').forEach(item => item.addEventListener('click', () => showView(item.dataset.view)));
 document.querySelectorAll('[data-goto]').forEach(item => item.addEventListener('click', () => showView(item.dataset.goto)));
 window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
+
+/* ── submitted search feedback ────────────────────────────────── */
+
+async function loadSearchReviews(offset = 0) {
+  const container = document.querySelector('#search-reviews');
+  container.innerHTML = '<div class="empty-state">Loading submitted feedback…</div>';
+  try {
+    const page = await api(`/api/search-reviews?offset=${offset}&page_size=25`);
+    state.reviewOffset = page.offset || 0;
+    state.reviewTotal = Number(page.total || 0);
+    const reviews = page.reviews || [];
+    renderSearchEvaluation(page.evaluation || {});
+    document.querySelector('#search-reviews-count').textContent = `${fmt(state.reviewTotal)} reviews`;
+    document.querySelector('#search-reviews-page').textContent = state.reviewTotal
+      ? `${fmt(state.reviewOffset + 1)}–${fmt(state.reviewOffset + reviews.length)} of ${fmt(state.reviewTotal)}`
+      : 'No submitted feedback yet';
+    document.querySelector('#search-reviews-previous').disabled = state.reviewOffset === 0;
+    document.querySelector('#search-reviews-next').disabled = page.next_offset == null;
+    document.querySelector('#search-reviews-previous').onclick = () => loadSearchReviews(Math.max(0, state.reviewOffset - 25));
+    document.querySelector('#search-reviews-next').onclick = () => loadSearchReviews(page.next_offset);
+    container.innerHTML = reviews.length ? reviews.map(renderSearchReview).join('')
+      : '<div class="empty-state">Search feedback submitted through MCP will appear here.</div>';
+  } catch (error) {
+    document.querySelector('#search-reviews-count').textContent = '';
+    document.querySelector('#search-reviews-page').textContent = '';
+    document.querySelector('#search-review-evaluation').innerHTML = '';
+    container.innerHTML = `<div class="empty-state">Could not load feedback: ${esc(error.message)}</div>`;
+  }
+}
+
+function renderSearchEvaluation(evaluation) {
+  document.querySelector('#search-review-evaluation').innerHTML = renderSearchEvaluationHtml(evaluation);
+}
+
+function renderSearchReview(review) {
+  const judgments = review.document_judgments || [];
+  const judgmentRows = judgments.length ? judgments.map(item => `
+    <div class="review-doc">
+      <span class="mono">#${fmt(item.rank)} · ${esc(item.doc_id)}</span>
+      <span class="review-label review-label--${esc(item.relevance)}">${esc(item.relevance)}</span>
+      ${item.feedback ? `<p>${esc(item.feedback)}</p>` : ''}
+    </div>`).join('') : '<p class="muted">No document judgments stored.</p>';
+  const label = review.label || review.status || 'unknown';
+  const submitted = review.submitted_at_ms ? new Date(review.submitted_at_ms).toLocaleString() : 'Date unavailable';
+  return `<article class="search-review">
+    <div class="search-review__head">
+      <div><p class="eyebrow">${esc(review.provider || 'Unknown provider')} · ${esc(submitted)}</p><h3>${esc(review.query || 'Search query unavailable')}</h3></div>
+      <span class="review-label review-label--${esc(label)}">${esc(label.replaceAll('_', ' '))}</span>
+    </div>
+    <p class="search-review__feedback">${esc(review.feedback || 'No overall explanation stored.')}</p>
+    <details><summary>${fmt(judgments.length)} document judgments · ${esc(review.search_id)}</summary><div class="review-docs">${judgmentRows}</div></details>
+  </article>`;
+}
 
 /* ── polling ───────────────────────────────────────────────────── */
 

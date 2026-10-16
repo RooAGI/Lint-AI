@@ -925,10 +925,12 @@ fn app_router(state: AppState) -> Router {
         .route("/dashboard", get(dashboard))
         .route("/dashboard/app.js", get(dashboard_app))
         .route("/dashboard/event-detail.js", get(dashboard_event_detail))
+        .route("/dashboard/search-evaluation.mjs", get(dashboard_search_evaluation))
         .route("/dashboard/styles.css", get(dashboard_styles))
         .route("/dashboard/rooagi-logo.png", get(dashboard_logo))
         .route("/api/status", get(api_status))
         .route("/api/timeseries", get(api_timeseries))
+        .route("/api/search-reviews", get(api_search_reviews))
         .route("/api/integrations", get(api_integrations))
         .route("/api/sessions", get(api_sessions))
         .route("/api/sessions/:session_key/events", get(api_session_events))
@@ -1294,6 +1296,7 @@ fn is_workspace_telemetry_path(path: &str) -> bool {
             | "/api/sessions"
             | "/api/status"
             | "/api/timeseries"
+            | "/api/search-reviews"
             | "/api/metrics"
             | "/metrics"
     ) || path.starts_with("/api/sessions/")
@@ -1360,6 +1363,19 @@ async fn dashboard_event_detail() -> (
     )
 }
 
+async fn dashboard_search_evaluation() -> (
+    [(axum::http::header::HeaderName, &'static str); 1],
+    &'static str,
+) {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        include_str!("../../dashboard/search-evaluation.mjs"),
+    )
+}
+
 async fn dashboard_styles() -> (
     [(axum::http::header::HeaderName, &'static str); 1],
     &'static str,
@@ -1420,6 +1436,37 @@ async fn api_timeseries(State(state): State<AppState>) -> impl IntoResponse {
             .flatten()
             .unwrap_or_else(|| state.telemetry.snapshot()),
     )
+}
+
+#[derive(Debug, Deserialize)]
+struct DashboardSearchReviewsQuery {
+    offset: Option<usize>,
+    page_size: Option<usize>,
+}
+
+async fn api_search_reviews(
+    State(state): State<AppState>,
+    Query(query): Query<DashboardSearchReviewsQuery>,
+) -> impl IntoResponse {
+    match state.service.read() {
+        Ok(service) => match service.dashboard_search_feedback_reviews(
+            &state.project_root,
+            query.offset.unwrap_or_default(),
+            query.page_size.unwrap_or(25),
+        ) {
+            Ok(reviews) => Json(reviews).into_response(),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("search reviews unavailable: {error}")})),
+            )
+                .into_response(),
+        },
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail":"search reviews unavailable"})),
+        )
+            .into_response(),
+    }
 }
 
 async fn api_integrations(State(state): State<AppState>) -> impl IntoResponse {
@@ -2301,7 +2348,56 @@ async fn provider_mcp_tool_call(
                     &arguments, &view, provider,
                 )
                 .map_err(anyhow::Error::msg)?;
-                view.search_agent_cached(query, provider, session_id.as_deref(), top_k, &filters)
+                let attribution = if arguments
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty())
+                {
+                    "explicit"
+                } else if session_id.is_some() {
+                    "inferred"
+                } else {
+                    "absent"
+                };
+                let mut payload = view.search_agent_cached(
+                    query,
+                    provider,
+                    session_id.as_deref(),
+                    top_k,
+                    &filters,
+                )?;
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert(
+                        "__membrick_telemetry".to_string(),
+                        json!({
+                            "session_id": session_id,
+                            "session_attribution": attribution,
+                        }),
+                    );
+                }
+                Ok(payload)
+            }
+            "review_search" => {
+                let root = runtime.project_root.clone();
+                runtime
+                    .staged_writer
+                    .read_view()?
+                    .review_search_mcp(&root, &arguments)
+            }
+            "search_feedback" => {
+                let root = runtime.project_root.clone();
+                let arguments = arguments.clone();
+                runtime
+                    .staged_writer
+                    .mutate(move |service| service.search_feedback_mcp(&root, &arguments))
+                    .await
+            }
+            "enrich_doc" => {
+                let arguments = arguments.clone();
+                runtime
+                    .staged_writer
+                    .mutate(move |service| service.enrich_doc_mcp(&arguments))
+                    .await
             }
             "add_memory" => {
                 let request = {
@@ -2366,7 +2462,11 @@ async fn provider_mcp_tool_call(
                     "info takes no arguments"
                 );
                 let view = runtime.staged_writer.read_view()?;
-                Ok(json!({"root": workspace, "docs_count": view.docs_count()}))
+                Ok(json!({
+                    "root": workspace,
+                    "docs_count": view.docs_count(),
+                    "reasoning_rules": view.reasoning_rules_status(),
+                }))
             }
             "board_open" | "board_post" => {
                 let writer = &runtime.staged_writer;
@@ -3687,10 +3787,11 @@ mod tests {
 
         let root = security_test_root();
         let second_root = security_test_root();
-        let app = app_router(provider_memory_test_state_with_allowed_workspaces(
+        let state = provider_memory_test_state_with_allowed_workspaces(
             &root,
             std::iter::once(second_root.clone()),
-        ));
+        );
+        let app = app_router(state.clone());
         let context = |tool: &str, arguments: Value| {
             json!({
                 "workspace": root,
@@ -3723,14 +3824,27 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let search = context(
+        let runtime = state
+            .workspace_registry
+            .resolve(&root.to_string_lossy())
+            .await
+            .unwrap();
+        runtime
+            .staged_writer
+            .read_view()
+            .unwrap()
+            .note_active_session("codex", "codex:resident-test-session");
+        let mut search = context(
             "search",
             json!({
                 "query":"cobalt telescope calibration",
                 "top_k":5,
-                "session_id":"codex:resident-test-session",
             }),
         );
+        search.as_object_mut().unwrap().remove("session_id");
+        // The search inherits the active session established by add_memory.
+        // Its session attribution is internal transport metadata, removed by
+        // the provider adapter before the response reaches the agent.
         let response = app
             .clone()
             .oneshot(
@@ -3748,6 +3862,14 @@ mod tests {
             .await
             .unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["__membrick_telemetry"]["session_id"],
+            "codex:resident-test-session"
+        );
+        assert_eq!(
+            body["__membrick_telemetry"]["session_attribution"],
+            "inferred"
+        );
         assert!(body["results"]
             .as_array()
             .is_some_and(|results| !results.is_empty()));

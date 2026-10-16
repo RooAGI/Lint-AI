@@ -1574,6 +1574,7 @@ fn doc_record_content_hash_is_stable_and_sensitive() {
     phrased.key_phrases = vec![crate::source::KeyPhrase {
         text: "Harry Potter conference".to_string(),
         kind: "event".to_string(),
+        origin: None,
     }];
     assert_ne!(
         baseline,

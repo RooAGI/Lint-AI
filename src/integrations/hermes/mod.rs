@@ -436,7 +436,11 @@ mod tests {
                 params: Some(json!({"name": name, "arguments": arguments})),
             })
             .unwrap();
-        assert!(response.error.is_none(), "{name} should succeed");
+        assert!(
+            response.error.is_none(),
+            "{name} should succeed: {:?}",
+            response.error
+        );
         let text = response.result.unwrap()["content"][0]["text"]
             .as_str()
             .unwrap()
@@ -469,6 +473,9 @@ mod tests {
             "search",
             "info",
             "list_memories",
+            "review_search",
+            "search_feedback",
+            "enrich_doc",
             "record_session",
             "enable_membrick",
             "disable_membrick",
@@ -535,6 +542,53 @@ mod tests {
             "top hit should be the tea note: {}",
             serde_json::to_string_pretty(&results[0]).unwrap()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hermes_search_review_and_feedback_use_shared_memory_service_route() {
+        let root = temp_root("mcp-search-review");
+        let _ = fs::remove_dir_all(&root);
+        let mcp = hermes_handle(&root);
+        call_tool(
+            &mcp,
+            "add_memory",
+            json!({"content":"The requested information concerns the workspace settings.","request_id":"review-enrich-seed","session_id":"review-enrich-session"}),
+        );
+
+        let search = call_tool(
+            &mcp,
+            "search",
+            json!({"query": "requested information workspace settings"}),
+        );
+        let search_id = search["search_id"]
+            .as_str()
+            .expect("search should have an ID");
+
+        let page = call_tool(&mcp, "review_search", json!({"page_size": 10}));
+        assert_eq!(page["searches"].as_array().unwrap().len(), 1);
+        assert_eq!(page["searches"][0]["search_id"], json!(search_id));
+
+        let exact = call_tool(&mcp, "review_search", json!({"search_id": search_id}));
+        assert_eq!(exact["reviewed"], json!(false));
+
+        let feedback = call_tool(
+            &mcp,
+            "search_feedback",
+            json!({
+                "search_id": search_id,
+                "label": "not_helpful",
+                "feedback": "The search did not find the requested information.",
+                "document_judgments": search["results"].as_array().unwrap().iter().map(|hit| json!({
+                    "doc_id": hit["doc_id"],
+                    "relevance": "not_relevant"
+                })).collect::<Vec<_>>()
+            }),
+        );
+        assert_eq!(feedback["status"], json!("reviewed"));
+
+        let reviewed = call_tool(&mcp, "review_search", json!({"search_id": search_id}));
+        assert_eq!(reviewed["reviewed"], json!(true));
         fs::remove_dir_all(root).unwrap();
     }
 

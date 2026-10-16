@@ -424,6 +424,7 @@ pub fn conversational_rerank<S: RerankDocSource>(
                     superseded_by: None,
                     relation_confidence: None,
                     relation_evidence: Vec::new(),
+                    comparison_operands: Vec::new(),
                 }
             });
             result.score = score;
@@ -479,6 +480,7 @@ mod tests {
             superseded_by: None,
             relation_confidence: None,
             relation_evidence: Vec::new(),
+            comparison_operands: Vec::new(),
         }
     }
 

@@ -303,7 +303,7 @@ impl GeminiMcp {
                     .cloned()
                     .unwrap_or_else(|| json!({}));
                 let started = std::time::Instant::now();
-                let response = self.call_tool(id.clone(), params);
+                let mut response = self.call_tool(id.clone(), params);
                 mcp_tools::record_mcp_tool_response(
                     &self.root,
                     self.provider.as_str(),
@@ -311,7 +311,7 @@ impl GeminiMcp {
                     id,
                     &arguments,
                     started.elapsed().as_millis() as u64,
-                    &response,
+                    &mut response,
                 );
                 response
             }
@@ -433,7 +433,7 @@ impl GeminiMcp {
                 Ok(text_response(
                     id,
                     &serde_json::to_string_pretty(
-                        &json!({"provider":self.provider_label, "root":self.root, "docs_count":service.as_ref().map(|s| s.docs_count()).unwrap_or(0)}),
+                        &json!({"provider":self.provider_label, "root":self.root, "docs_count":service.as_ref().map(|s| s.docs_count()).unwrap_or(0), "reasoning_rules":service.as_ref().and_then(|s| s.reasoning_rules_status())}),
                     )?,
                 ))
             }
@@ -487,7 +487,8 @@ impl GeminiMcp {
                 Ok(text_response(id, &serde_json::to_string_pretty(&state)?))
             }
             "board_open" | "board_list" | "board_info" | "board_post" | "board_read"
-            | "board_get" | "board_search" | "add_memory" | "get_memory" | "delete_memory" => {
+            | "board_get" | "board_search" | "add_memory" | "get_memory" | "delete_memory"
+            | "review_search" | "search_feedback" | "enrich_doc" => {
                 let mut service = self.store()?;
                 let service = service.as_mut().expect("initialized");
                 mcp_tools::call_board_or_memory_tool(

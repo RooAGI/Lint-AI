@@ -60,6 +60,7 @@ The dashboard refreshes every five seconds. It shows:
 
 - **Memory index health:** freshness, revisions, and segment counts.
 - **Search performance:** recent request rates, latency, errors, and empty results.
+- **Search reviews:** submitted feedback, usefulness labels, and relevance judgments for each returned document.
 - **Agent activity:** observed providers, recent sessions, lifecycle events, and
   tool activity when the connected agent reports it.
 - **Usage:** token counts when available from the agent's hooks or transcripts.

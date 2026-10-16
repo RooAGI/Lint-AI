@@ -120,6 +120,11 @@ name = "jevbench_case_classifier"
 path = "src/bin/launchers/jevbench_case_classifier.rs"
 
 [[bin]]
+name = "feedback_eval"
+path = "src/bin/feedback_eval.rs"
+required-features = ["experimental"]
+
+[[bin]]
 name = "locomo_benchmark"
 path = "src/bin/launchers/locomo_benchmark.rs"
 

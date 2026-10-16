@@ -1026,7 +1026,18 @@ impl IndexStore {
             return;
         }
         if let Some(doc) = Arc::make_mut(&mut self.source_docs).get_mut(doc_id) {
-            doc.key_phrases = key_phrases;
+            let mut merged = key_phrases;
+            for phrase in doc.key_phrases.iter().filter(|phrase| {
+                phrase.origin == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+            }) {
+                if !merged.iter().any(|existing| {
+                    existing.text.eq_ignore_ascii_case(&phrase.text)
+                        && existing.kind.eq_ignore_ascii_case(&phrase.kind)
+                }) {
+                    merged.push(phrase.clone());
+                }
+            }
+            doc.key_phrases = merged;
             // Stamp the content this extraction ran against: an empty phrase
             // list with a matching stamp is a completed extraction, not a
             // document still waiting for one.

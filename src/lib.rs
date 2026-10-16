@@ -136,7 +136,10 @@ pub use crate::pipeline::{
 };
 pub use crate::segments::{SegmentRoutingStrategy, ShardQueryCompleteness, ShardQueryFailure};
 pub use crate::semantic_relations::{SemanticStatus, SupersessionOptions};
-pub use crate::source::{KeyPhrase, SourceDocument};
+pub use crate::source::{
+    source_document_hash, KeyPhrase, KeyPhraseOrigin, SourceDocument, SourceDocumentEnrichment,
+    SourceDocumentEvidence,
+};
 pub use crate::temporal_fact::TemporalFact;
 
 // Internal aliases used by implementation modules and development tools.

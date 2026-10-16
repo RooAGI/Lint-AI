@@ -25,9 +25,22 @@ const MCP_CALL_HISTORY_FILE: &str = "mcp-call-history.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpCallRecord {
+    /// Stable identifier for correlating this request and its result across
+    /// maintenance/replay tooling. Older history entries do not have one.
+    #[serde(default)]
+    pub trace_id: Option<String>,
     pub timestamp_ms: u64,
     pub provider: String,
     pub tool: String,
+    /// Session explicitly named by the caller. An omitted id remains absent;
+    /// consumers must not infer session membership from nearby timestamps.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// `explicit` when `session_id` was supplied, otherwise `absent`.
+    /// Future resident-side attribution can add `inferred` without changing
+    /// the call-history schema again.
+    #[serde(default = "default_session_attribution")]
+    pub session_attribution: String,
     #[serde(default)]
     pub request_id: Option<serde_json::Value>,
     pub arguments: serde_json::Value,
@@ -49,20 +62,119 @@ pub fn record_mcp_call(
     error: bool,
     response: serde_json::Value,
 ) -> Result<()> {
+    let (timestamp_ms, trace_id) = mcp_trace_id_for_call(provider, tool, &request_id, arguments)?;
+    record_mcp_call_with_trace_id(
+        project_root,
+        provider,
+        tool,
+        request_id,
+        arguments,
+        duration_ms,
+        error,
+        response,
+        timestamp_ms,
+        trace_id,
+    )
+}
+
+/// Generate the trace/search ID before the provider response is returned, so
+/// the same ID can be included in the search result and its history record.
+pub(crate) fn mcp_trace_id_for_call(
+    provider: &str,
+    tool: &str,
+    request_id: &Option<serde_json::Value>,
+    arguments: &serde_json::Value,
+) -> Result<(u64, String)> {
+    let timestamp_ms = now_ms();
+    let record = McpCallRecord {
+        trace_id: None,
+        timestamp_ms,
+        provider: provider.to_string(),
+        tool: tool.to_string(),
+        session_id: explicit_session_id(arguments),
+        session_attribution: if explicit_session_id(arguments).is_some() {
+            "explicit".to_string()
+        } else {
+            "absent".to_string()
+        },
+        request_id: request_id.clone(),
+        arguments: arguments.clone(),
+        duration_ms: 0,
+        error: false,
+        response: serde_json::Value::Null,
+    };
+    Ok((timestamp_ms, mcp_trace_id(&record)?))
+}
+
+/// Append a call using a trace ID already exposed in its provider-facing
+/// response. Other callers can use `record_mcp_call`, which creates the ID.
+pub(crate) fn record_mcp_call_with_trace_id(
+    project_root: &Path,
+    provider: &str,
+    tool: &str,
+    request_id: Option<serde_json::Value>,
+    arguments: &serde_json::Value,
+    duration_ms: u64,
+    error: bool,
+    response: serde_json::Value,
+    timestamp_ms: u64,
+    trace_id: String,
+) -> Result<()> {
+    let session_id = explicit_session_id(arguments);
+    let attribution = if session_id.is_some() {
+        "explicit"
+    } else {
+        "absent"
+    };
+    record_mcp_call_with_trace_id_and_attribution(
+        project_root,
+        provider,
+        tool,
+        request_id,
+        arguments,
+        duration_ms,
+        error,
+        response,
+        timestamp_ms,
+        trace_id,
+        session_id,
+        attribution,
+    )
+}
+
+pub(crate) fn record_mcp_call_with_trace_id_and_attribution(
+    project_root: &Path,
+    provider: &str,
+    tool: &str,
+    request_id: Option<serde_json::Value>,
+    arguments: &serde_json::Value,
+    duration_ms: u64,
+    error: bool,
+    response: serde_json::Value,
+    timestamp_ms: u64,
+    trace_id: String,
+    session_id: Option<String>,
+    session_attribution: &str,
+) -> Result<()> {
     let root = project_root.join(".membrick");
     fs::create_dir_all(&root)?;
     let lock = acquire_telemetry_lock(&root.join("mcp-call-history.lock"))?;
     let path = root.join(MCP_CALL_HISTORY_FILE);
     let record = McpCallRecord {
-        timestamp_ms: now_ms(),
+        trace_id: None,
+        timestamp_ms,
         provider: provider.to_string(),
         tool: tool.to_string(),
+        session_id,
+        session_attribution: session_attribution.to_string(),
         request_id,
         arguments: arguments.clone(),
         duration_ms,
         error,
         response,
     };
+    let mut record = record;
+    record.trace_id = Some(trace_id);
     let mut line = serde_json::to_vec(&record)?;
     line.push(b'\n');
     let mut options = OpenOptions::new();
@@ -76,6 +188,40 @@ pub fn record_mcp_call(
     options.open(path)?.write_all(&line)?;
     drop(lock);
     Ok(())
+}
+
+fn default_session_attribution() -> String {
+    "absent".to_string()
+}
+
+fn explicit_session_id(arguments: &serde_json::Value) -> Option<String> {
+    arguments
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_string)
+}
+
+fn mcp_trace_id(record: &McpCallRecord) -> Result<String> {
+    let mut digest = Sha256::new();
+    digest.update(b"membrick-mcp-trace-v1\0");
+    digest.update(record.timestamp_ms.to_le_bytes());
+    digest.update(record.provider.as_bytes());
+    digest.update([0]);
+    digest.update(record.tool.as_bytes());
+    digest.update([0]);
+    if let Some(request_id) = &record.request_id {
+        digest.update(serde_json::to_vec(request_id)?);
+    } else {
+        digest.update(serde_json::to_vec(&record.arguments)?);
+    }
+    let encoded = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(format!("mcp:{encoded}"))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -940,6 +1086,83 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_directory() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "membrick-telemetry-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn mcp_call_history_has_trace_identity_and_explicit_session_attribution() {
+        let directory = test_directory();
+        record_mcp_call(
+            &directory,
+            "codex",
+            "search",
+            Some(serde_json::json!(7)),
+            &serde_json::json!({"query":"latest CLI","session_id":"session-1"}),
+            12,
+            false,
+            serde_json::json!({"results": []}),
+        )
+        .unwrap();
+        let history =
+            fs::read_to_string(directory.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record: McpCallRecord = serde_json::from_str(history.trim()).unwrap();
+        assert!(record
+            .trace_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("mcp:")));
+        assert_eq!(record.session_id.as_deref(), Some("session-1"));
+        assert_eq!(record.session_attribution, "explicit");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn mcp_call_history_marks_omitted_session_as_absent() {
+        let directory = test_directory();
+        record_mcp_call(
+            &directory,
+            "claude",
+            "search",
+            None,
+            &serde_json::json!({"query":"latest CLI"}),
+            8,
+            false,
+            serde_json::json!({"results": []}),
+        )
+        .unwrap();
+        let history =
+            fs::read_to_string(directory.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record: McpCallRecord = serde_json::from_str(history.trim()).unwrap();
+        assert!(record.trace_id.is_some());
+        assert!(record.session_id.is_none());
+        assert_eq!(record.session_attribution, "absent");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn mcp_call_history_accepts_legacy_records_without_attribution_fields() {
+        let record: McpCallRecord = serde_json::from_value(serde_json::json!({
+            "timestamp_ms": 1,
+            "provider": "codex",
+            "tool": "search",
+            "arguments": {"query":"q"},
+            "duration_ms": 1,
+            "error": false,
+            "response": {}
+        }))
+        .unwrap();
+        assert!(record.trace_id.is_none());
+        assert!(record.session_id.is_none());
+        assert_eq!(record.session_attribution, "absent");
+    }
 
     #[test]
     fn empty_snapshot_has_zero_rates() {

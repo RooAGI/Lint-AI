@@ -46,6 +46,62 @@ pub struct KeyPhrase {
     pub text: String,
     /// Ontological kind: "event" | "place" | "org" | "work" | "thing".
     pub kind: String,
+    /// Identifies the writer of this annotation so extractor refreshes can
+    /// replace their own output without deleting provider-approved phrases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<KeyPhraseOrigin>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyPhraseOrigin {
+    Extractor,
+    ProviderEnrichment,
+    SemanticTag,
+}
+
+/// Additive changes proposed for an existing searchable source document.
+/// Callers identify the document by its stable ID and the exact source
+/// revision they reasoned about; MemoryService performs validation and merge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceDocumentEnrichment {
+    pub doc_id: String,
+    pub expected_source_hash: String,
+    #[serde(default)]
+    pub key_phrases: Vec<KeyPhrase>,
+    /// Replace the managed conclusion on an existing session-context source.
+    /// The original observations remain separate linked source documents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_conclusion: Option<String>,
+    /// Add searchable headings to an existing generated session context.
+    #[serde(default)]
+    pub headings: Vec<String>,
+    /// Add links to existing source documents cited by this enrichment.
+    #[serde(default)]
+    pub links: Vec<String>,
+    /// Explicitly mark this document as replacing another reviewed document.
+    /// MemoryService stores this using the existing `supersedes_id` source
+    /// metadata consumed by the semantic relation engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes_document_id: Option<String>,
+    /// Existing source documents from the prepared operation that support
+    /// these additions. MCP submissions must cite at least one such source.
+    #[serde(default)]
+    pub evidence: Vec<SourceDocumentEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceDocumentEvidence {
+    pub doc_id: String,
+    pub expected_source_hash: String,
+}
+
+/// Deterministic optimistic-concurrency token for one complete source record.
+pub fn source_document_hash(document: &SourceDocument) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    let encoded = serde_json::to_vec(document)?;
+    let digest = Sha256::digest(encoded);
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 impl SourceDocument {
@@ -160,5 +216,36 @@ mod tests {
         assert_eq!(decoded.doc_length, doc.doc_length);
         assert_eq!(decoded.author_agent, doc.author_agent);
         assert_eq!(decoded.filters, doc.filters);
+    }
+
+    #[test]
+    fn legacy_key_phrases_without_origin_still_deserialize() {
+        let mut doc = SourceDocument::with_stable_doc_id_from_source(
+            "docs/legacy.md".to_string(),
+            "A legacy source document.".to_string(),
+            "legacy document".to_string(),
+            None,
+            vec![],
+            vec![],
+            None,
+            None,
+        );
+        doc.key_phrases = vec![KeyPhrase {
+            text: "legacy source".to_string(),
+            kind: "thing".to_string(),
+            origin: Some(KeyPhraseOrigin::ProviderEnrichment),
+        }];
+
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["key_phrases"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("origin");
+        let decoded: SourceDocument = serde_json::from_value(value).unwrap();
+
+        assert_eq!(decoded.key_phrases.len(), 1);
+        assert_eq!(decoded.key_phrases[0].text, "legacy source");
+        assert_eq!(decoded.key_phrases[0].kind, "thing");
+        assert_eq!(decoded.key_phrases[0].origin, None);
     }
 }

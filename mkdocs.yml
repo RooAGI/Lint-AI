@@ -88,6 +88,7 @@ nav:
       - Chunk strategy: chunk-strategy.md
       - Index concurrency: index-concurrency.md
       - Write publication plan: write-publication-plan.md
+      - Document enrichment plan: document-enrichment-plan.md
       - Distributed query architecture: distributed-query-architecture.md
       - Distributed segment index: distributed-segment-index.md
       - Remote query contract: remote-query-contract.md

@@ -104,6 +104,10 @@ fn starting_path(root: &Path) -> Result<PathBuf> {
     }
 }
 
+fn starting_lock_path(marker: &Path) -> PathBuf {
+    marker.with_extension("startup.lock")
+}
+
 fn resident_log_path(root: &Path) -> Result<PathBuf> {
     Ok(runtime_dir(root)?.join("resident.log"))
 }
@@ -283,6 +287,8 @@ struct QueueResponse {
     body: Value,
 }
 
+const QUEUE_ARTIFACT_RETENTION: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
 fn queue_dirs(root: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
     let base = root.join(".membrick").join("runtime").join("requests");
     let pending = base.join("pending");
@@ -300,6 +306,90 @@ fn queue_dirs(root: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
         }
     }
     Ok((pending, claimed, responses))
+}
+
+/// Recover claims left by a resident that exited unexpectedly. The request
+/// might already have mutated MemoryService before the crash, so never replay
+/// it. Return an explicit uncertain result to a still-waiting client instead.
+fn recover_interrupted_claims(root: &Path) -> Result<usize> {
+    let (_, claimed, responses) = queue_dirs(root)?;
+    let mut recovered = 0;
+    for entry in fs::read_dir(&claimed)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let request = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<QueueRequest>(&bytes).ok());
+        if let Some(request) = request {
+            if path.file_stem().and_then(|value| value.to_str()) != Some(request.id.as_str()) {
+                eprintln!(
+                    "removing abandoned queue claim with mismatched id {}",
+                    path.display()
+                );
+                fs::remove_file(path)?;
+                recovered += 1;
+                continue;
+            }
+            let response_path = responses.join(format!("{}.json", request.id));
+            if !response_path.exists() {
+                let response = QueueResponse {
+                    status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    body: serde_json::json!({
+                        "detail": "resident stopped while processing this request; outcome is unknown and the request was not replayed"
+                    }),
+                };
+                let temporary = responses.join(format!("{}.recovery.tmp", request.id));
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&temporary)?;
+                file.write_all(&serde_json::to_vec(&response)?)?;
+                fs::rename(temporary, response_path)?;
+            }
+        } else {
+            eprintln!(
+                "removing malformed abandoned queue claim {}",
+                path.display()
+            );
+        }
+        fs::remove_file(path)?;
+        recovered += 1;
+    }
+    Ok(recovered)
+}
+
+/// Remove old pending work, orphaned responses, and incomplete temporary
+/// files. Claimed requests are handled separately at resident startup, when
+/// the workspace owner lock proves the previous resident is gone.
+fn cleanup_expired_queue_files(root: &Path, now: std::time::SystemTime) -> Result<usize> {
+    let (pending, claimed, responses) = queue_dirs(root)?;
+    let mut removed = 0;
+    for directory in [&pending, &claimed, &responses] {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let extension = path.extension().and_then(|value| value.to_str());
+            if extension != Some("json") && extension != Some("tmp") {
+                continue;
+            }
+            if directory == &claimed && extension == Some("json") {
+                continue;
+            }
+            let modified = match entry.metadata()?.modified() {
+                Ok(modified) => modified,
+                Err(_) => continue,
+            };
+            if now.duration_since(modified).unwrap_or_default() >= QUEUE_ARTIFACT_RETENTION {
+                fs::remove_file(path)?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 fn watch_directory(
@@ -413,13 +503,15 @@ struct StartupOwner {
     child: Child,
     marker: PathBuf,
     token: String,
+    _startup_lock: fs::File,
 }
 
 fn start_server(root: &Path) -> Result<Option<StartupOwner>> {
-    let lock = starting_path(root)?;
-    let Some(token) = claim_startup(&lock)? else {
+    let marker = starting_path(root)?;
+    let Some(claim) = claim_startup(&marker)? else {
         return Ok(None);
     };
+    let token = claim.token.clone();
 
     let launch = (|| -> Result<Child> {
         let executable =
@@ -447,19 +539,46 @@ fn start_server(root: &Path) -> Result<Option<StartupOwner>> {
     match launch {
         Ok(child) => Ok(Some(StartupOwner {
             child,
-            marker: lock,
+            marker,
             token,
+            _startup_lock: claim.lock,
         })),
         Err(error) => {
-            remove_startup_marker_if_owned(&lock, &token);
+            remove_startup_marker_if_owned(&marker, &token);
             Err(error)
         }
     }
 }
 
-fn claim_startup(lock: &Path) -> Result<Option<String>> {
+struct StartupClaim {
+    token: String,
+    lock: fs::File,
+}
+
+/// The kernel lock establishes ownership; the `.starting` file is only a
+/// status record. A new owner may safely replace stale status after acquiring
+/// the lock because locks are released by the OS if the previous starter dies.
+fn claim_startup(marker: &Path) -> Result<Option<StartupClaim>> {
     use std::io::Write;
     static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    let lock_path = starting_lock_path(marker);
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("could not open startup lock {}", lock_path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => return Ok(None),
+        Err(fs::TryLockError::Error(error)) => {
+            return Err(error).with_context(|| {
+                format!("could not acquire startup lock {}", lock_path.display())
+            });
+        }
+    }
 
     let token = format!(
         "{}:{}:{}",
@@ -470,22 +589,25 @@ fn claim_startup(lock: &Path) -> Result<Option<String>> {
             .as_nanos(),
         NEXT_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
+    // We own the kernel lock, so any existing marker can only be stale.
+    match fs::remove_file(marker) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(lock)
+        .open(marker)
     {
         Ok(mut file) => {
             if let Err(error) = file.write_all(token.as_bytes()) {
                 drop(file);
-                let _ = std::fs::remove_file(lock);
+                let _ = std::fs::remove_file(marker);
                 return Err(error.into());
             }
-            Ok(Some(token))
+            Ok(Some(StartupClaim { token, lock }))
         }
-        // Another client owns startup. It is responsible for clearing this
-        // marker after binding; this caller only waits for its endpoint.
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
@@ -631,6 +753,21 @@ pub(crate) async fn serve(
     settings_path: Option<&Path>,
 ) -> Result<()> {
     tokio::pin!(shutdown);
+    let cleanup_root = root.to_owned();
+    match tokio::task::spawn_blocking(move || {
+        let recovered = recover_interrupted_claims(&cleanup_root)?;
+        let expired = cleanup_expired_queue_files(&cleanup_root, std::time::SystemTime::now())?;
+        Ok::<_, anyhow::Error>((recovered, expired))
+    })
+    .await
+    {
+        Ok(Ok((recovered, expired))) if recovered > 0 || expired > 0 => eprintln!(
+            "recovered {recovered} interrupted file-queue requests and removed {expired} expired queue files"
+        ),
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => eprintln!("file-queue startup cleanup failed: {error:#}"),
+        Err(error) => eprintln!("file-queue startup cleanup worker failed: {error}"),
+    }
     let mut http_listener = if let Some(bind) = http_bind {
         match bind_resident_http(bind, auto_http_port, settings_path).await {
             Ok(listener) => {
@@ -713,6 +850,10 @@ pub(crate) async fn serve(
             std::time::Duration::from_millis(20)
         };
         let mut recovery = tokio::time::interval(recovery_period);
+        let mut queue_cleanup = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(15 * 60),
+            std::time::Duration::from_secs(15 * 60),
+        );
         let result = loop {
             tokio::select! {
                 accepted = async {
@@ -747,6 +888,17 @@ pub(crate) async fn serve(
                 _ = recovery.tick() => if let Err(error) = process_queue_once(&router, root).await {
                     eprintln!("resident file-queue recovery scan failed: {error:#}");
                 },
+                _ = queue_cleanup.tick() => {
+                    let cleanup_root = root.to_owned();
+                    match tokio::task::spawn_blocking(move || {
+                        cleanup_expired_queue_files(&cleanup_root, std::time::SystemTime::now())
+                    }).await {
+                        Ok(Ok(removed)) if removed > 0 => eprintln!("removed {removed} expired file-queue artifacts"),
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => eprintln!("file-queue cleanup failed: {error:#}"),
+                        Err(error) => eprintln!("file-queue cleanup worker failed: {error}"),
+                    }
+                }
                 () = &mut shutdown => break Ok(()),
             }
         };
@@ -771,6 +923,10 @@ pub(crate) async fn serve(
             std::time::Duration::from_millis(20)
         };
         let mut recovery = tokio::time::interval(recovery_period);
+        let mut queue_cleanup = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(15 * 60),
+            std::time::Duration::from_secs(15 * 60),
+        );
         loop {
             let server = ServerOptions::new().create(&endpoint)?;
             let _ = std::fs::remove_file(starting_path(root)?);
@@ -800,6 +956,17 @@ pub(crate) async fn serve(
                 _ = recovery.tick() => if let Err(error) = process_queue_once(&router, root).await {
                     eprintln!("resident file-queue recovery scan failed: {error:#}");
                 },
+                _ = queue_cleanup.tick() => {
+                    let cleanup_root = root.to_owned();
+                    match tokio::task::spawn_blocking(move || {
+                        cleanup_expired_queue_files(&cleanup_root, std::time::SystemTime::now())
+                    }).await {
+                        Ok(Ok(removed)) if removed > 0 => eprintln!("removed {removed} expired file-queue artifacts"),
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => eprintln!("file-queue cleanup failed: {error:#}"),
+                        Err(error) => eprintln!("file-queue cleanup worker failed: {error}"),
+                    }
+                }
                 () = &mut shutdown => return Ok(()),
             }
         }
@@ -972,6 +1139,10 @@ mod tests {
             Some(runtime.as_path())
         );
         assert_eq!(
+            starting_lock_path(&starting_path(&root).unwrap()).parent(),
+            Some(runtime.as_path())
+        );
+        assert_eq!(
             resident_log_path(&root).unwrap(),
             runtime.join("resident.log")
         );
@@ -1005,6 +1176,33 @@ mod tests {
     }
 
     #[test]
+    fn stale_startup_marker_can_be_recovered_by_a_new_owner() {
+        let directory = TempDir::new();
+        let marker = directory.0.join("resident.starting");
+        std::fs::write(&marker, "dead-process-token").unwrap();
+
+        let claim = claim_startup(&marker).unwrap();
+
+        assert!(claim.is_some(), "a stale marker must not block startup");
+        assert_ne!(
+            std::fs::read_to_string(marker).unwrap(),
+            "dead-process-token",
+            "the acquired startup owner should replace stale marker status"
+        );
+    }
+
+    #[test]
+    fn startup_lock_blocks_another_starter_until_the_owner_releases_it() {
+        let directory = TempDir::new();
+        let marker = directory.0.join("resident.starting");
+        let first = claim_startup(&marker).unwrap().unwrap();
+
+        assert!(claim_startup(&marker).unwrap().is_none());
+        drop(first);
+        assert!(claim_startup(&marker).unwrap().is_some());
+    }
+
+    #[test]
     fn concurrent_startup_claims_have_one_owner() {
         let directory = TempDir::new();
         let marker = Arc::new(directory.0.join("resident.starting"));
@@ -1014,8 +1212,9 @@ mod tests {
                 let marker = Arc::clone(&marker);
                 let winners = Arc::clone(&winners);
                 std::thread::spawn(move || {
-                    if claim_startup(marker.as_ref()).unwrap().is_some() {
+                    if let Some(_claim) = claim_startup(marker.as_ref()).unwrap() {
                         *winners.lock().unwrap() += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(30));
                     }
                 })
             })
@@ -1024,6 +1223,70 @@ mod tests {
             thread.join().unwrap();
         }
         assert_eq!(*winners.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn interrupted_queue_claim_returns_uncertain_result_without_replaying_request() {
+        let directory = TempDir::new();
+        let (_, claimed, responses) = queue_dirs(&directory.0).unwrap();
+        let id = "interrupted-write";
+        let request = QueueRequest {
+            id: id.to_owned(),
+            path: "/memory/add".to_owned(),
+            payload: serde_json::json!({"text": "may already have been written"}),
+        };
+        fs::write(
+            claimed.join(format!("{id}.json")),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+
+        recover_interrupted_claims(&directory.0).unwrap();
+
+        assert!(!claimed.join(format!("{id}.json")).exists());
+        let (pending, _, _) = queue_dirs(&directory.0).unwrap();
+        assert!(!pending.join(format!("{id}.json")).exists());
+        let response: QueueResponse =
+            serde_json::from_slice(&fs::read(responses.join(format!("{id}.json"))).unwrap())
+                .unwrap();
+        assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE.as_u16());
+        assert!(response.body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("outcome is unknown"));
+    }
+
+    #[test]
+    fn expired_pending_and_orphan_response_files_are_removed_but_recent_files_remain() {
+        let directory = TempDir::new();
+        let (pending, _, responses) = queue_dirs(&directory.0).unwrap();
+        let expired_pending = pending.join("expired.json");
+        let recent_pending = pending.join("recent.json");
+        let expired_response = responses.join("orphan.json");
+        let recent_response = responses.join("active.json");
+        for path in [
+            &expired_pending,
+            &recent_pending,
+            &expired_response,
+            &recent_response,
+        ] {
+            fs::write(path, b"stale queue artifact").unwrap();
+        }
+        let now = std::time::SystemTime::now();
+        let old = now - QUEUE_ARTIFACT_RETENTION - std::time::Duration::from_secs(1);
+        for path in [&expired_pending, &expired_response] {
+            fs::File::open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(old))
+                .unwrap();
+        }
+
+        cleanup_expired_queue_files(&directory.0, now).unwrap();
+
+        assert!(!expired_pending.exists());
+        assert!(!expired_response.exists());
+        assert!(recent_pending.exists());
+        assert!(recent_response.exists());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1049,13 +1312,14 @@ mod tests {
             .map(|_| {
                 let app = app.clone();
                 let root = directory.0.clone();
+                let handled = handled.clone();
                 tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(2));
-                    for _ in 0..500 {
-                        interval.tick().await;
-                        if process_queue_once(&app, &root).await.is_err() {
-                            break;
-                        }
+                    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while handled.load(Ordering::SeqCst) < 24
+                        && tokio::time::Instant::now() < deadline
+                    {
+                        let _ = process_queue_once(&app, &root).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                     }
                 })
             })

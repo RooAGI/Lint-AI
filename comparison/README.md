@@ -4,6 +4,25 @@ This directory contains reproducible retrieval and HTTP throughput comparisons.
 Each artifact records its date, workload, and environment; older comparison
 results remain below as historical measurements.
 
+## Offline MCP search-feedback evaluation
+
+`feedback_eval` reads copies of `.membrick/mcp-call-history.jsonl` and
+`.membrick/search-review-state.json` and reports label coverage plus baseline
+NDCG and MRR. It is a separate, read-only binary: it does not import
+`MemoryService`, access the running resident, or write workspace files. The
+`experimental` feature keeps it out of normal builds and installs.
+
+```bash
+cargo run --features experimental --bin feedback_eval -- \
+  --history /path/to/copied/mcp-call-history.jsonl \
+  --reviews /path/to/copied/search-review-state.json \
+  --k 5,10
+```
+
+The metrics cover only returned documents with complete submitted judgments.
+They are not corpus-wide recall and do not measure a trained model. Keep the
+input copies private: MCP history includes full queries and search responses.
+
 ## Current HTTP throughput summary
 
 Keep the read and write workloads separate when quoting throughput:

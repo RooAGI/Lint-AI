@@ -673,6 +673,9 @@ pub struct SearchResult {
     pub relation_confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relation_evidence: Vec<String>,
+    /// Operands whose independently prepared queries retrieved this hit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comparison_operands: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

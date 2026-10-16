@@ -86,6 +86,9 @@ the other agent integrations:
 | Tool | Purpose |
 |---|---|
 | `search` | Query project memory; returns ranked hits with source, score, `semantic_status`, and `superseded_by` |
+| `review_search` | Page through unreviewed MCP searches or retrieve one exact search by `search_id` |
+| `search_feedback` | Record an overall search assessment and one relevance judgment per returned document; optionally propose grounded query-only rule additions |
+| `enrich_doc` | Enrich one hash-verified source document through MemoryService |
 | `info` | Return basic information about the indexed workspace |
 | `list_memories` | List stored memories |
 | `record_session` | Start, stop, or inspect local capture-only recording |

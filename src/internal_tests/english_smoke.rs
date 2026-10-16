@@ -30,7 +30,7 @@ fn add_fact(service: &mut MemoryService, user_id: &str, request_id: &str, conten
 #[test]
 fn english_add_search_regression() {
     let user_id = "en-regress-user";
-    let mut opts = options_for();
+    let opts = options_for();
     let mut service = MemoryService::in_memory(opts);
     add_fact(
         &mut service,
@@ -63,7 +63,6 @@ fn english_add_search_regression() {
         )
         .expect("search");
     let top = r.first().expect("no results");
-    eprintln!("en top: {} score={:.2}", top.doc_id, top.score);
     assert_eq!(top.doc_id, id_library, "English where-question regressed");
 
     // "What did the user buy yesterday?" must retrieve the book fact.

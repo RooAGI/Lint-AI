@@ -2,12 +2,14 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
-const DEFAULT_HOOK_TIMEOUT_MS: u64 = 12_000;
-const MIN_HOOK_TIMEOUT_MS: u64 = 12_000;
-const MAX_HOOK_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
+const MIN_HOOK_TIMEOUT_MS: u64 = 1_000;
+const MAX_HOOK_TIMEOUT_MS: u64 = 10_000;
+const CAPTURE_GRACE: Duration = Duration::from_secs(2);
 
 /// Read the shared Claude/Codex hook budget from project settings.
-/// The floor stays above the shared-store lock wait.
+/// Hook work is fail-open and bounded so a blocked resident cannot stall the
+/// provider. Capture operations get a short additional grace period.
 pub(crate) fn hook_timeout_ms(project_root: &Path) -> u64 {
     let settings_path = project_root.join(".membrick").join("settings.toml");
     let configured = std::fs::read_to_string(settings_path)
@@ -51,7 +53,7 @@ where
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             if complete_after_timeout {
-                return finish_capture(&receiver, Duration::from_secs(30));
+                return finish_capture(&receiver, CAPTURE_GRACE);
             }
             anyhow::bail!("hook operation exceeded {timeout_ms}ms budget")
         }
@@ -103,9 +105,12 @@ mod tests {
     }
 
     #[test]
-    fn hook_budget_defaults_above_shared_lock_wait() {
+    fn hook_budget_defaults_to_fast_fail_open_window() {
         let root = TempRoot::new();
-        assert_eq!(hook_timeout_ms(root.path()), 12_000);
+        assert_eq!(hook_timeout_ms(root.path()), 5_000);
+        assert!(
+            Duration::from_millis(MAX_HOOK_TIMEOUT_MS) + CAPTURE_GRACE <= Duration::from_secs(12)
+        );
     }
 
     #[test]
@@ -115,11 +120,11 @@ mod tests {
         std::fs::create_dir_all(&settings).unwrap();
         let path = settings.join("settings.toml");
         std::fs::write(&path, "[hooks]\ntimeout_ms = 20000\n").unwrap();
-        assert_eq!(hook_timeout_ms(root.path()), 20_000);
+        assert_eq!(hook_timeout_ms(root.path()), 10_000);
         std::fs::write(&path, "[hooks]\ntimeout_ms = 50000\n").unwrap();
-        assert_eq!(hook_timeout_ms(root.path()), 30_000);
+        assert_eq!(hook_timeout_ms(root.path()), 10_000);
         std::fs::write(&path, "[hooks]\ntimeout_ms = 100\n").unwrap();
-        assert_eq!(hook_timeout_ms(root.path()), 12_000);
+        assert_eq!(hook_timeout_ms(root.path()), 1_000);
     }
 
     #[test]

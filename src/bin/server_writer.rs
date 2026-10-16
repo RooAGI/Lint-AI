@@ -264,7 +264,7 @@ fn run_writer(
                             }
                         }
                     }
-                    Command::Upsert(documents, audit, reply) => {
+                    Command::Upsert(mut documents, audit, reply) => {
                         // Journal, apply, audit, and acknowledge. Publication
                         // happens in the background; callers needing
                         // visibility use Flush.
@@ -284,6 +284,7 @@ fn run_writer(
                                 .iter()
                                 .map(|document| document.doc_id.clone())
                                 .collect::<Vec<_>>();
+                            owner.preserve_document_enrichment(target, &mut documents);
                             let store = owner.memory_store_mut(target);
                             let durable = store.stage_upsert_batch(documents)?;
                             if let Some(audit) = audit.filter(|_| !ids.is_empty()) {

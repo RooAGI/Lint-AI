@@ -713,6 +713,9 @@ pub fn reveal_question_with_analysis(question: &str, analysis: &QueryAnalysis) -
         {
             ("difference of per-operand timestamps".to_string(), None)
         }
+        (SplitKind::Between, QueryIntent::Compare) if operands.len() == 2 => {
+            ("comparison of evidence for both operands".to_string(), None)
+        }
         (SplitKind::Between, _) => (
             String::new(),
             Some("between without a measurable time-unit question".to_string()),
@@ -727,6 +730,9 @@ pub fn reveal_question_with_analysis(question: &str, analysis: &QueryAnalysis) -
             if operands.len() >= 2 && (agg_markers || how_many) =>
         {
             ("sum/aggregate of per-operand values".to_string(), None)
+        }
+        (SplitKind::And, QueryIntent::Compare) if operands.len() == 2 => {
+            ("comparison of evidence for both operands".to_string(), None)
         }
         (SplitKind::And, _) => (
             String::new(),
@@ -745,6 +751,12 @@ pub fn reveal_question_with_analysis(question: &str, analysis: &QueryAnalysis) -
                 .unwrap_or_default()
                 .to_string(),
             Some("single-scope lookup: adaptive covers it".to_string()),
+        ),
+        (SplitKind::Single, QueryIntent::CurrentState) => (
+            single_scope_answer_type(&q_lower)
+                .unwrap_or_default()
+                .to_string(),
+            Some("current-state lookup: semantic visibility determines applicability".to_string()),
         ),
         (_, _) => (
             String::new(),
@@ -1029,6 +1041,19 @@ mod tests {
         );
         // No junk "Art"-only anchor and no mangled "Modern Art MoMA".
         assert!(!m0.iter().any(|m| m == "modern art moma"), "m0: {m0:?}");
+    }
+
+    #[test]
+    fn reveal_explicit_old_new_comparison_as_two_operands() {
+        let question = "Compare the old CLI and the new CLI";
+        let revealed = reveal_question(question);
+        assert_eq!(revealed.operation, IntentOperation::Compare);
+        assert!(revealed.fallback_reason.is_none(), "{revealed:?}");
+        assert_eq!(revealed.operands.len(), 2);
+        assert_eq!(
+            revealed.answer_shape,
+            "comparison of evidence for both operands"
+        );
     }
 
     #[test]

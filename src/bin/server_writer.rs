@@ -264,7 +264,7 @@ fn run_writer(
                             }
                         }
                     }
-                    Command::Upsert(documents, audit, reply) => {
+                    Command::Upsert(mut documents, audit, reply) => {
                         // Journal, apply, audit, and acknowledge. Publication
                         // happens in the background; callers needing
                         // visibility use Flush.
@@ -284,6 +284,7 @@ fn run_writer(
                                 .iter()
                                 .map(|document| document.doc_id.clone())
                                 .collect::<Vec<_>>();
+                            owner.preserve_document_enrichment(target, &mut documents);
                             let store = owner.memory_store_mut(target);
                             let durable = store.stage_upsert_batch(documents)?;
                             if let Some(audit) = audit.filter(|_| !ids.is_empty()) {
@@ -734,9 +735,16 @@ impl StagedWriter {
         &self,
         documents: Vec<crate::SourceDocument>,
     ) -> anyhow::Result<()> {
+        self.upsert_documents_blocking_with_audit(documents, None)
+    }
+    pub(super) fn upsert_documents_blocking_with_audit(
+        &self,
+        documents: Vec<crate::SourceDocument>,
+        audit: Option<CaptureAudit>,
+    ) -> anyhow::Result<()> {
         let (reply, receive) = oneshot::channel();
         self.sender
-            .try_send(Command::Upsert(documents, None, reply))
+            .try_send(Command::Upsert(documents, audit, reply))
             .map_err(admission_error)?;
         receive.blocking_recv().map_err(|_| WriterStopped)??;
         Ok(())

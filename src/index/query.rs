@@ -1527,6 +1527,7 @@ impl MemoryIndex {
                     superseded_by: None,
                     relation_confidence: None,
                     relation_evidence: Vec::new(),
+                    comparison_operands: Vec::new(),
                 });
             }
             if results.len() >= top_k.min(self.doc_u32_to_id.len()) {

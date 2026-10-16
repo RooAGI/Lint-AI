@@ -508,17 +508,63 @@ impl MemoryIndex {
             }
         }
 
+        let mut entity_postings_doc =
+            derive_doc_postings(&entity_postings_chunk, &chunks, MAX_DOC_POSTINGS);
+        let term_postings_doc =
+            derive_doc_postings(&term_postings_chunk, &chunks, MAX_DOC_POSTINGS);
+
+        // Semantic aggregation retains document-level entities that are not
+        // repeated verbatim inside a text chunk (for example, provider-added
+        // key phrases). Keep those searchable even though they cannot have a
+        // chunk posting. These fallback postings are weak signals because
+        // they lack chunk-local text evidence; a full entity confidence must
+        // not outweigh direct lexical matches for a narrower query.
+        for record in docs.values() {
+            for entity in &record.key_entities {
+                let key = normalize_for_index(&entity.text);
+                if key.is_empty() {
+                    continue;
+                }
+                let entity_u32 = if let Some(&entity_u32) = entity_lexicon.get(&key) {
+                    entity_u32
+                } else {
+                    let entity_u32 = entity_lexicon.len() as u32;
+                    entity_lexicon.insert(key.clone(), entity_u32);
+                    entity_u32
+                };
+                if entity_postings_doc.len() <= entity_u32 as usize {
+                    entity_postings_doc.resize_with(entity_u32 as usize + 1, Vec::new);
+                }
+                let doc_postings = &mut entity_postings_doc[entity_u32 as usize];
+                let Some(&doc_u32) = doc_id_to_u32.get(&record.doc_id) else {
+                    continue;
+                };
+                let score = entity.score.unwrap_or(0.25).min(0.25);
+                if let Some(existing) = doc_postings
+                    .iter_mut()
+                    .find(|(existing_doc_u32, _)| *existing_doc_u32 == doc_u32)
+                {
+                    existing.1 = existing.1.max(score);
+                } else {
+                    doc_postings.push((doc_u32, score));
+                }
+            }
+        }
+        for postings in &mut entity_postings_doc {
+            postings.sort_by(|left, right| {
+                right
+                    .1
+                    .partial_cmp(&left.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
         let (term_trie, entity_trie, doc_interval_trees) = Self::build_runtime_helpers(
             &term_lexicon,
             &entity_lexicon,
             &chunks,
             doc_u32_to_id.len(),
         );
-
-        let entity_postings_doc =
-            derive_doc_postings(&entity_postings_chunk, &chunks, MAX_DOC_POSTINGS);
-        let term_postings_doc =
-            derive_doc_postings(&term_postings_chunk, &chunks, MAX_DOC_POSTINGS);
 
         for postings in entity_to_docs.values_mut() {
             postings.sort_by(|a, b| {

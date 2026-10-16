@@ -85,6 +85,7 @@ fn search_result(doc_id: &str, score: f32) -> SearchResult {
         superseded_by: None,
         relation_confidence: None,
         relation_evidence: vec![],
+        comparison_operands: Vec::new(),
     }
 }
 

@@ -49,10 +49,13 @@
   "query_option_connectors": [" or "],
   "query_option_prefixes": ["which "],
   "query_option_phrases": ["which one", "should i choose"],
+  "query_comparison_markers": ["compare", "comparison", "differences between"],
   "query_temporal_diff_marker": "between",
   "query_temporal_filter_markers": [" before ", " after "],
   "query_both_marker": "both ",
   "query_event_marker": "event",
   "query_both_verbs": ["visit", "visited", "like", "use", "used", "have", "has", "share", "shared", "attend", "attended"],
-  "query_aggregate_phrases": ["in total", "combined", "altogether"]
+  "query_aggregate_phrases": ["in total", "combined", "altogether"],
+  "query_current_state_markers": ["latest", "current", "currently", "as of now", "right now", "most recent"],
+  "query_explanation_terms": ["reason", "rationale", "decision", "because"]
 }

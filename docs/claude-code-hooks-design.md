@@ -7,12 +7,13 @@ implementation supports ten hooks: the original six (`SessionStart`,
 `UserPromptSubmit`, `UserPromptExpansion`, `PreCompact`, `Stop`, `SessionEnd`)
 plus four added in the second release (`PreToolUse`, `PostToolUse`,
 `SubagentStart`, `SubagentStop`). It also provides persistent segmented session
-memory, complete transcript text capture, context injection, and settings
+memory, incremental transcript capture, context injection, and settings
 installation.
 
 Structured semantic summarization, configurable budgets, stronger secret
-classification, cross-process MCP memory sharing, `PostToolUseFailure` capture,
-and a subagent parent/child segment split remain future work.
+classification, `PostToolUseFailure` capture, and a subagent parent/child
+segment split remain future work. Claude and Codex capture batches already go
+through the resident `MemoryService` and are published asynchronously.
 
 The design deliberately keeps Claude-specific protocol types at the integration
 boundary. Membrick's public ingestion and query APIs remain `SourceDocument`,
@@ -38,24 +39,60 @@ in source order as session memory, including tool calls, tool results, empty
 messages, and image blocks. Text blocks and serialized structured blocks are
 kept in full. Credentials are redacted before persistence.
 
-Each capture hook stores only the transcript written since the previous capture
-of the same session. The byte position of the last capture is kept per session
-under `.membrick/claude-state/capture-cursors/`, and it advances only after the
-capture is stored, so a failed capture is retried by the next hook. A trailing
-line that is still being written is left for the next capture.
+Claude and Codex hooks submit a durable capture request to the existing project
+resident and return after acceptance. Acceptance means queued, not fully
+captured or searchable. The resident's MemoryService capture task drains the
+transcript independently of the hook process and its timeout. It reuses the
+provider parsers, source documents, stable document IDs and single writer.
+
+Pending requests are saved under `.membrick/runtime/transcript-captures/`.
+Repeated hooks for the same provider and session extend the pending target
+instead of starting competing replay loops. The resident processes one batch
+per pending session per pass, and saves the existing provider cursor only after
+MemoryService durably accepts that batch. A failed write leaves the cursor
+unchanged and retries with backoff. A crash after a write but before the cursor
+update safely repeats the same document IDs. Startup resumes saved jobs without
+another hook; graceful shutdown finishes the in-flight batch and retains the
+remaining work. Partial JSONL lines wait for completion. Requests use the same
+Unix socket, loopback HTTP, then filesystem queue fallback as other resident
+operations.
+
+The MCP `info` response and dashboard Overview show captured bytes, target bytes,
+remaining bytes, last progress time and the last error. `GET /api/captures`
+returns the same per-session progress. A pending capture can be accepted even
+while indexing is busy; it becomes searchable after the normal background
+publication.
+
+A missing cursor is initialized to byte zero under
+`.membrick/{claude,codex}-state/capture-cursors/`. Complete JSONL lines are
+batched up to 1 MiB without splitting a line. An unusually large line remains
+intact in its own batch. All transcript text is retained; batching limits work
+per pass and never truncates the session.
 
 Each parsed transcript observation in that slice is stored as its own stable
 `SourceDocument` with its speaker, order, provider message ID when available,
-timestamp when available, and complete text or serialized blocks. The slice's
-text is also stored once as a turn document of the hook's type (`outcome`,
+timestamp when available, and complete text or serialized blocks. When a
+provider turn ID is available, it is retained in `filters["turn_id"]` and
+included in the document ID alongside the existing provider, project, session,
+and event identity. Transcript turn IDs take precedence; a multi-turn backfill
+is never labeled with the hook's latest turn ID. Messages without a provider
+message ID use their actual JSONL line byte position, which stays stable when
+capture boundaries change. Capture fragments retain separate event identities
+so two portions of the same turn do not overwrite each other's text. Existing
+stored document IDs are not migrated by this change.
+
+The slice's text is also stored once as a turn document of the hook's type (`outcome`,
 `checkpoint`, or `session-summary`) with project semantic scope, so its claims
 are compared with other sessions. Transcript discovery uses the hook path or
 project `.membrick/settings.toml`; it does not read environment variables.
 
 One `session-context` document per session holds a short header and links the
-observations of the latest capture. Every capture is a single batch sent to
-`POST /provider-memory/mcp/documents/upsert`. The resident owner journals the
-batch and replies once it is durable; the background publisher makes it
+observations captured for that session. Search feedback can add a managed
+conclusion, headings, and evidence-backed links to this existing document.
+Subsequent hook captures preserve those enrichments and accumulate links to
+the observations rather than dropping earlier references. Each batch is sent
+to `POST /provider-memory/mcp/documents/upsert`. The resident owner journals
+the batch and replies once it is durable; the background publisher makes it
 searchable, usually within the refresh interval. The server does not rebuild
 the session from the store, so a capture never waits for a full index refresh.
 If the transcript becomes shorter than the stored position, the capture starts
@@ -86,7 +123,10 @@ Claude protocol and adapter
         |                           v
         |                  Claude additionalContext
         |
-        +---- capture ------> ClaudeCodeDocument
+        +---- capture ------> durable resident capture request
+                                    |
+                                    v
+                              ClaudeCodeDocument
                                     |
                                     v
                               SourceDocument
@@ -303,11 +343,13 @@ Purpose: preserve resumable state before Claude compacts its context.
 
 Operation:
 
-1. Read the complete transcript identified by the hook.
+1. Read complete JSONL lines appended since the session's previous durable
+   capture. The cursor advances only after the upsert succeeds.
 2. Preserve each parsed message's speaker and full text in source order.
 3. Redact credentials before persistence.
-4. Create a deterministic `ClaudeCodeDocument` of type `Checkpoint`.
-5. Convert it to `SourceDocument` and upsert it through `MemoryService`.
+4. Create one observation document per message, one checkpoint turn document,
+   and update the stable session-context document with links to the batch.
+5. Upsert the batch through the resident `MemoryService`.
 
 Repeated compaction for the same session uses deterministic checkpoint IDs or
 content hashes so retries do not create duplicate memory.
@@ -316,11 +358,11 @@ content hashes so retries do not create duplicate memory.
 
 Purpose: capture the durable outcome after Claude finishes a response.
 
-The adapter stores all parsed transcript text observations, including earlier
-decisions, corrections, tool text, and results, in source order. The complete
-snapshot becomes a `ClaudeCodeDocument` of type `Outcome` and is upserted into
-the current session segment. The stable per-session document identity replaces
-the prior snapshot on each capture, avoiding a duplicate copy for every turn.
+The adapter stores newly appended transcript observations, including decisions,
+corrections, tool text, and results, in source order. Those observations and a
+turn-level outcome document are upserted with the stable session-context
+document. Prior observations remain linked as history; the hook does not resend
+the complete transcript on every capture.
 
 The implementation must respect Claude's stop-hook recursion indicator and must
 not cause another stop cycle.
@@ -329,10 +371,10 @@ not cause another stop cycle.
 
 Purpose: record final resumable session state and termination metadata.
 
-The adapter creates a compact `SessionSummary` document containing the latest
-known outcome, unresolved work, and affected paths. It does
-not inject context. Session end does not make the segment immutable; resumed
-sessions may update it.
+SessionEnd uses the same incremental capture path and creates a turn document
+of type `SessionSummary`, alongside the observation documents and session
+context links. It does not inject context. A resumed session can continue
+adding observations to the same session context.
 
 ## Retrieval Provenance
 
@@ -525,3 +567,83 @@ response to stdout.
 - `PreToolUse` retrieval uses the planned tool call as query
 - `SubagentStart` retrieval uses the subagent prompt
 - `SubagentStop` capture is idempotent and stores an `outcome` document type
+
+## Cursor recovery
+
+The resident capture worker checks registered sessions again after they catch
+up. Idle checks run once per second and do not rewrite unchanged job files.
+This detects subsequent transcript growth and cursor loss without another hook.
+Both Claude and Codex use the same recovery path.
+
+| Condition | Recovery |
+|---|---|
+| Missing cursor | Initialize at zero and replay complete lines in batches |
+| Malformed JSON or invalid offset | Archive cursor metadata, reset to zero, replay |
+| Offset inside a line or beyond EOF | Archive, reset to zero, replay complete lines |
+| Transcript replaced or checkpoint bytes changed | Archive, reset to zero, replay |
+| Transcript or cursor cannot be read | Report the I/O error and retry; do not assume corruption |
+| Transcript changes while a batch is being persisted | Leave cursor unadvanced and retry |
+| Last line is incomplete | Leave it pending until its newline arrives |
+
+Recovery metadata lives alongside the cursor as `.json.recovery` (latest),
+with content-addressed `.json.recovery-<sha256>` archives retaining each distinct
+invalid checkpoint. These contain the reason and exact original cursor bytes
+encoded as hex. Recovery preserves source transcripts and existing documents.
+Replay uses the existing provider document identities and MemoryService writes;
+the cursor advances atomically only after persistence succeeds.
+
+New committed cursors also store the transcript's Unix device/inode where
+available, and SHA-256 fingerprints of the first and preceding 64 bytes of the
+captured prefix. These checks detect replacement and common rewrites without
+rehashing an entire transcript during each batch. They are not a complete file
+integrity check: an in-place edit wholly outside both sampled regions can go
+undetected. Legacy cursors containing only an offset retain alignment checks
+and acquire fingerprints on their next successfully committed batch.
+
+## Cursor alignment harness
+
+Run the read-only harness from the project root:
+
+```bash
+python3 scripts/check_capture_cursors.py --validate-json
+```
+
+It discovers Claude and Codex sessions from durable capture requests under
+`.membrick/runtime/transcript-captures/`. It verifies that each cursor exists,
+contains a nonnegative integer offset, is within the transcript, and points just
+after a newline. It reports complete bytes still uncaptured and an unfinished
+trailing line separately. `--validate-json` additionally parses every complete
+JSONL record without printing transcript contents.
+
+To watch catch-up against the complete transcript size at the first sample:
+
+```bash
+python3 scripts/check_capture_cursors.py --wait-seconds 60 --stall-seconds 30 --json
+```
+
+New transcript appends do not move this wait target. Samples report progress,
+regressions, transcript replacement or shrinkage, and lack of progress. A stall
+threshold is diagnostic: a slow durable write can exceed it without being lost.
+Use `--resident-url http://127.0.0.1:8465` to include the existing resident's
+`/api/captures` status. This optional status check requires HTTP; the filesystem
+checks also work when HTTP and Unix sockets are blocked.
+
+For a session without a durable request, supply all three identifiers:
+
+```bash
+python3 scripts/check_capture_cursors.py --provider codex \
+  --session-id SESSION_ID --transcript /absolute/path/to/transcript.jsonl
+```
+
+Exit codes are `0` for valid alignment (or a reached wait target), `1` for an
+invalid cursor, missing input, status failure, or configured stall threshold,
+and `2` for a catch-up timeout or incomplete capture with `--require-caught-up`.
+JSON output includes `exit_code`, `all_caught_up`, and per-session diagnostics.
+Alignment alone does not prove that every document was persisted or is visible
+in search. The harness never changes cursors or starts a resident.
+
+Run its isolated tests with:
+
+```bash
+python3 -m unittest discover -s tests/python -p test_capture_cursor_harness.py
+```

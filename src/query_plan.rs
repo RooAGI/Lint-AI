@@ -14,12 +14,13 @@ use crate::index::{
     TemporalQueryHint,
 };
 use crate::query_semantics::{
-    analyze_query, parse_reference_date, resolve_anchor_window, resolve_temporal_anchor,
-    temporal_anchor_is_span, QueryAnalysis, QueryTimeHint,
+    parse_reference_date, resolve_anchor_window, resolve_temporal_anchor, temporal_anchor_is_span,
+    QueryAnalysis, QueryTimeHint,
 };
 use crate::semantic_relations::{is_historical_query, SemanticRelationStore, SemanticStatus};
 use chrono::{NaiveDate, TimeDelta, Utc};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// A raw query plus the analysis derived from it.
 ///
@@ -36,13 +37,34 @@ pub struct PreparedQuery {
 
 impl PreparedQuery {
     pub fn new(query: &str) -> Self {
-        Self::build(analyze_query(query), None)
+        Self::new_with_rules(query, crate::reasoning_rules::builtin_rules())
+    }
+
+    pub(crate) fn new_with_rules(
+        query: &str,
+        rules: Arc<crate::reasoning_rules::ReasoningRules>,
+    ) -> Self {
+        let analysis = crate::query_semantics::analyze_query_with_rules(query, Arc::clone(&rules));
+        Self::build(analysis, None)
     }
 
     /// Builds a query whose relative temporal language is resolved against
     /// `reference_date` instead of the machine clock.
     pub fn new_at(query: &str, reference_date: &str) -> Self {
-        Self::build(analyze_query(query), Some(reference_date.to_string()))
+        Self::new_at_with_rules(
+            query,
+            reference_date,
+            crate::reasoning_rules::builtin_rules(),
+        )
+    }
+
+    pub(crate) fn new_at_with_rules(
+        query: &str,
+        reference_date: &str,
+        rules: Arc<crate::reasoning_rules::ReasoningRules>,
+    ) -> Self {
+        let analysis = crate::query_semantics::analyze_query_with_rules(query, Arc::clone(&rules));
+        Self::build(analysis, Some(reference_date.to_string()))
     }
 
     fn build(analysis: QueryAnalysis, reference_date: Option<String>) -> Self {

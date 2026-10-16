@@ -1333,7 +1333,7 @@ fn dedupe_claims(claims: &mut Vec<SemanticClaim>) {
     });
 }
 
-fn semantic_scope(doc: &SourceDocument) -> String {
+pub(crate) fn semantic_scope(doc: &SourceDocument) -> String {
     if let Some(scope) = doc.filters.get("semantic_scope") {
         return format!("scope:{scope}");
     }

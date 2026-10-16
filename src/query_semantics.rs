@@ -7,7 +7,8 @@ use std::collections::HashSet;
 
 use crate::aggregation::AggregateIntent;
 use crate::query_expansion::normalize_for_index;
-use crate::reasoning_rules::reasoning_rules;
+use crate::reasoning_rules::{builtin_rules, ReasoningRules};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum QueryKind {
@@ -55,7 +56,15 @@ pub enum QueryRoutingIntent {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub enum QueryIntent {
     Lookup,
+    /// Retrieve the applicable current state without treating recency alone
+    /// as proof that a statement remains authoritative.
+    CurrentState,
+    /// Retrieve the explanation, rationale, or decision behind an outcome.
+    Explain,
     Aggregate,
+    /// Compare two explicitly named subjects or versions. Retrieval must keep
+    /// evidence for both sides; this is distinct from choosing one option.
+    Compare,
     TemporalDiff,
     TemporalOrder,
     Choose,
@@ -67,7 +76,10 @@ impl QueryIntent {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             QueryIntent::Lookup => "lookup",
+            QueryIntent::CurrentState => "current-state",
+            QueryIntent::Explain => "explain",
             QueryIntent::Aggregate => "aggregate",
+            QueryIntent::Compare => "compare",
             QueryIntent::TemporalDiff => "temporal-diff",
             QueryIntent::TemporalOrder => "temporal-order",
             QueryIntent::Choose => "choose",
@@ -77,7 +89,10 @@ impl QueryIntent {
     }
 
     pub(crate) fn is_multi_operand(self) -> bool {
-        !matches!(self, QueryIntent::Lookup)
+        !matches!(
+            self,
+            QueryIntent::Lookup | QueryIntent::CurrentState | QueryIntent::Explain
+        )
     }
 }
 
@@ -146,6 +161,9 @@ pub struct QueryAnalysis {
     pub temporal: Option<QueryTemporal>,
     pub time_hint: Option<QueryTimeHint>,
     pub intent: QueryIntent,
+    /// Distinct retrieval scopes for an explicit comparison. Empty when the
+    /// query does not name two sides clearly enough to search independently.
+    pub comparison_operands: Vec<String>,
     pub query_routing_intent: Option<QueryRoutingIntent>,
     pub evidence_requirements: QueryEvidenceRequirements,
     pub raw_pos_tags: Vec<QueryPosTag>,
@@ -154,6 +172,10 @@ pub struct QueryAnalysis {
 }
 
 pub fn analyze_query(query: &str) -> QueryAnalysis {
+    analyze_query_with_rules(query, builtin_rules())
+}
+
+pub(crate) fn analyze_query_with_rules(query: &str, rules: Arc<ReasoningRules>) -> QueryAnalysis {
     let original_query = query.trim().to_string();
     let signals = analyze_query_signals(&original_query);
     build_query_analysis(
@@ -162,6 +184,7 @@ pub fn analyze_query(query: &str) -> QueryAnalysis {
         signals.entities,
         signals.focused_pos_tags,
         signals.source,
+        &rules,
     )
 }
 
@@ -341,6 +364,7 @@ fn build_query_analysis(
     entities: Vec<QuerySpan>,
     focused_pos_tags: Option<Vec<POSTag>>,
     source: QuerySignalSource,
+    rules: &ReasoningRules,
 ) -> QueryAnalysis {
     let normalized_query = normalize_for_index(&original_query);
     let kind = classify_query_kind(&original_query);
@@ -351,7 +375,9 @@ fn build_query_analysis(
     });
 
     let temporal = extract_temporal(&original_query);
-    let intent = classify_query_intent(&original_query, aggregate_intent.as_ref(), &temporal);
+    let intent =
+        classify_query_intent(&original_query, aggregate_intent.as_ref(), &temporal, rules);
+    let comparison_operands = comparison_operands(&original_query, intent, rules);
     let query_routing_intent = if let Some(intent) = aggregate_intent.as_ref() {
         Some(match intent {
             AggregateIntent::Count => QueryRoutingIntent::Count,
@@ -363,7 +389,7 @@ fn build_query_analysis(
         None
     };
     let evidence_requirements =
-        infer_evidence_requirements(&original_query, intent, temporal.as_ref());
+        infer_evidence_requirements(&original_query, intent, temporal.as_ref(), rules);
     let mut spans = Vec::new();
     if let Some(qw) = leading_question_word(&original_query) {
         spans.push(QuerySpan {
@@ -517,6 +543,16 @@ fn build_query_analysis(
             }
         }
     }
+    if intent == QueryIntent::Explain {
+        for term in &rules.query_explanation_terms {
+            if !focus_unstemmed
+                .iter()
+                .any(|existing| normalize_for_index(existing) == normalize_for_index(term))
+            {
+                focus_unstemmed.push(term.clone());
+            }
+        }
+    }
     let augmented_query = build_augmented_query(
         &original_query,
         &entities,
@@ -556,6 +592,7 @@ fn build_query_analysis(
         temporal,
         time_hint,
         intent,
+        comparison_operands,
         query_routing_intent,
         evidence_requirements,
         raw_pos_tags,
@@ -564,16 +601,85 @@ fn build_query_analysis(
     }
 }
 
+fn comparison_operands(query: &str, intent: QueryIntent, rules: &ReasoningRules) -> Vec<String> {
+    if intent != QueryIntent::Compare {
+        return Vec::new();
+    }
+
+    let trimmed = query.trim().trim_end_matches(['?', '.', '!']).trim();
+    let lower = trimmed.to_lowercase();
+
+    // "Compare the old and new command interfaces" names two versions of
+    // one subject. Preserve that shared subject on both retrieval queries.
+    for (old, new) in [
+        ("old and new ", ("old", "new")),
+        ("new and old ", ("new", "old")),
+    ] {
+        if let Some(position) = lower.find(old) {
+            let subject = trimmed[position + old.len()..].trim();
+            let subject = subject.trim_start_matches("the ").trim();
+            if !subject.is_empty() {
+                return vec![
+                    format!("{} {subject}", new.0),
+                    format!("{} {subject}", new.1),
+                ];
+            }
+        }
+    }
+
+    let marker_end = rules
+        .query_comparison_markers
+        .iter()
+        .filter_map(|marker| lower.find(marker).map(|at| at + marker.len()))
+        .min();
+    let remainder = marker_end.map_or(trimmed, |end| trimmed[end..].trim());
+    let remainder_lower = remainder.to_lowercase();
+    let remainder = remainder
+        .strip_prefix("between ")
+        .or_else(|| {
+            remainder_lower
+                .starts_with("between ")
+                .then(|| &remainder[8..])
+        })
+        .unwrap_or(remainder);
+    let remainder_lower = remainder.to_lowercase();
+
+    // Prefer explicit comparison connectors. "and" is used only after the
+    // comparison cue has already established that this is a comparison.
+    let connector = [" versus ", " vs. ", " vs ", " with ", " to ", " and "]
+        .iter()
+        .filter_map(|connector| remainder_lower.rfind(connector).map(|at| (at, *connector)))
+        .max_by_key(|(at, _)| *at);
+    let Some((position, connector)) = connector else {
+        return Vec::new();
+    };
+    let left = remainder[..position]
+        .trim()
+        .trim_start_matches("the ")
+        .trim();
+    let right = remainder[position + connector.len()..]
+        .trim()
+        .trim_start_matches("the ")
+        .trim();
+    if left.is_empty()
+        || right.is_empty()
+        || normalize_for_index(left) == normalize_for_index(right)
+    {
+        return Vec::new();
+    }
+    vec![left.to_string(), right.to_string()]
+}
+
 fn infer_evidence_requirements(
     query: &str,
     intent: QueryIntent,
     temporal: Option<&QueryTemporal>,
+    rules: &ReasoningRules,
 ) -> QueryEvidenceRequirements {
     // Keep semantic cue matching on the original lexical forms. Index
     // normalization stems words (for example, "participated") and is meant
     // for retrieval, not phrase-level intent detection.
     let lexical = query.to_lowercase();
-    let rules = reasoning_rules();
     let direct_participation = rules
         .direct_participation_phrases
         .iter()
@@ -638,15 +744,19 @@ fn classify_query_intent(
     query: &str,
     aggregate_intent: Option<&AggregateIntent>,
     temporal: &Option<QueryTemporal>,
+    rules: &ReasoningRules,
 ) -> QueryIntent {
     let lower = query.to_lowercase();
-    let rules = reasoning_rules();
     let has_and = lower.contains(" and ");
     let has_time_unit = has_any_word(&lower, &rules.query_time_units);
     let has_how_many = rules
         .query_count_phrases
         .iter()
         .any(|phrase| lower.contains(phrase));
+    let has_comparison_cue = rules
+        .query_comparison_markers
+        .iter()
+        .any(|marker| lower.contains(marker));
     let has_options = rules
         .query_option_connectors
         .iter()
@@ -661,11 +771,24 @@ fn classify_query_intent(
                 .iter()
                 .any(|phrase| lower.contains(phrase.as_str())));
 
-    if has_temporal_ordering_language(query) && (temporal.is_some() || has_options) {
+    if has_temporal_ordering_language_with_rules(query, rules)
+        && (temporal.is_some() || has_options)
+    {
         return QueryIntent::TemporalOrder;
     }
     if lower.contains(&rules.query_temporal_diff_marker) && has_how_many && has_time_unit {
         return QueryIntent::TemporalDiff;
+    }
+    // A comparison asks for evidence about each side. Keep it separate from
+    // `Choose`, which selects one option and may only need evidence for that
+    // option. Require an explicit two-sided connector to avoid classifying
+    // requests such as "compare the documentation" as multi-operand work.
+    if has_comparison_cue
+        && [" and ", " versus ", " vs ", " with "]
+            .iter()
+            .any(|connector| lower.contains(connector))
+    {
+        return QueryIntent::Compare;
     }
     if has_how_many
         && rules
@@ -697,6 +820,16 @@ fn classify_query_intent(
                 .any(|phrase| lower.contains(phrase.as_str())))
     {
         return QueryIntent::Aggregate;
+    }
+    if rules
+        .query_current_state_markers
+        .iter()
+        .any(|marker| lower.contains(marker.as_str()))
+    {
+        return QueryIntent::CurrentState;
+    }
+    if classify_query_kind(query) == QueryKind::Why {
+        return QueryIntent::Explain;
     }
     QueryIntent::Lookup
 }
@@ -919,8 +1052,15 @@ fn quantity_phrase(query: &str) -> Option<String> {
 /// callers still decide whether the query has enough operands to perform a
 /// multi-operand temporal-order operation.
 pub(crate) fn has_temporal_ordering_language(query: &str) -> bool {
+    has_temporal_ordering_language_with_rules(query, &builtin_rules())
+}
+
+pub(crate) fn has_temporal_ordering_language_with_rules(
+    query: &str,
+    rules: &ReasoningRules,
+) -> bool {
     let lower = query.to_lowercase();
-    reasoning_rules()
+    rules
         .temporal_order_markers
         .iter()
         .any(|marker| lower.contains(marker))
@@ -2077,6 +2217,48 @@ mod tests {
             quantity_intent("How much did it cost?"),
             Some(AggregateIntent::Sum)
         );
+    }
+
+    #[test]
+    fn comparison_with_two_explicit_sides_is_not_a_choice() {
+        let analysis = analyze_query("Compare the old and new command interfaces");
+        assert_eq!(analysis.intent, QueryIntent::Compare);
+        assert!(analysis.intent.is_multi_operand());
+        assert_eq!(
+            analysis.comparison_operands,
+            vec!["old command interfaces", "new command interfaces"]
+        );
+
+        let single_subject = analyze_query("Compare the command interface");
+        assert_eq!(single_subject.intent, QueryIntent::Lookup);
+        assert!(single_subject.comparison_operands.is_empty());
+    }
+
+    #[test]
+    fn comparison_operands_preserve_two_named_sides() {
+        for (query, expected) in [
+            ("Compare Claude with Codex", vec!["Claude", "Codex"]),
+            (
+                "What are the differences between the old CLI and the new CLI?",
+                vec!["old CLI", "new CLI"],
+            ),
+            ("Compare Claude versus Codex", vec!["Claude", "Codex"]),
+        ] {
+            let analysis = analyze_query(query);
+            assert_eq!(analysis.intent, QueryIntent::Compare, "{query}");
+            assert_eq!(analysis.comparison_operands, expected, "{query}");
+        }
+    }
+
+    #[test]
+    fn rationale_questions_have_typed_intent_and_expand_with_explanation_terms() {
+        let analysis = analyze_query("Why did we change the command interface?");
+        assert_eq!(analysis.kind, QueryKind::Why);
+        assert_eq!(analysis.intent, QueryIntent::Explain);
+        assert!(!analysis.intent.is_multi_operand());
+        for term in ["reason", "rationale", "decision"] {
+            assert!(analysis.augmented_query.contains(term), "missing {term}");
+        }
     }
 
     #[test]

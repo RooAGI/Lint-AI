@@ -55,6 +55,7 @@ impl MemoryService {
             published_search_view: None,
             superseded_ids: self.superseded_ids.clone(),
             has_expiring_documents: self.has_expiring_documents,
+            has_session_observations: self.has_session_observations,
             request_fingerprints: HashMap::new(),
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -63,6 +64,7 @@ impl MemoryService {
             conversation_states: Arc::clone(&self.conversation_states),
             relations_cache: Mutex::new(RelationsCache::default()),
             enrichment: Arc::new(Mutex::new(KeyPhraseEnrichment::default())),
+            project_rules: self.project_rules.as_ref().map(Arc::clone),
             board_state: Mutex::new(BoardState::default()),
         }
     }

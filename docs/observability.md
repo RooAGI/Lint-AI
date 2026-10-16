@@ -60,6 +60,7 @@ The dashboard refreshes every five seconds. It shows:
 
 - **Memory index health:** freshness, revisions, and segment counts.
 - **Search performance:** recent request rates, latency, errors, and empty results.
+- **Search reviews:** submitted feedback, usefulness labels, and relevance judgments for each returned document.
 - **Agent activity:** observed providers, recent sessions, lifecycle events, and
   tool activity when the connected agent reports it.
 - **Usage:** token counts when available from the agent's hooks or transcripts.
@@ -157,3 +158,10 @@ OpenTelemetry OTLP data.
 
 See the [server setup](server.md) to start the dashboard, and
 [telemetry details](telemetry.md) for event coverage and data handling.
+
+## Transcript capture progress
+
+The Overview displays each Claude and Codex capture job, including captured and
+remaining bytes, last progress and errors. Queued means the request is safely
+saved; caught-up means every complete line through the current target has been
+captured. Search visibility follows normal MemoryService publication.

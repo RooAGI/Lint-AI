@@ -434,7 +434,7 @@ impl MuseMcp {
                     .cloned()
                     .unwrap_or_else(|| json!({}));
                 let started = std::time::Instant::now();
-                let response = self.handle_tool_call(id.clone(), Some(params));
+                let mut response = self.handle_tool_call(id.clone(), Some(params));
                 mcp_tools::record_mcp_tool_response(
                     &self.root,
                     "muse",
@@ -442,7 +442,7 @@ impl MuseMcp {
                     id,
                     &arguments,
                     started.elapsed().as_millis() as u64,
-                    &response,
+                    &mut response,
                 );
                 response
             }
@@ -493,10 +493,41 @@ impl MuseMcp {
                     | "add_memory"
                     | "get_memory"
                     | "delete_memory"
+                    | "review_search"
+                    | "search_feedback"
+                    | "enrich_doc"
             )
         {
             return crate::integrations::mcp_tools::call_resident_tool(
                 id, &self.root, "muse", tool_name, &arguments,
+            );
+        }
+
+        if matches!(
+            tool_name,
+            "board_open"
+                | "board_list"
+                | "board_info"
+                | "board_post"
+                | "board_read"
+                | "board_get"
+                | "board_search"
+                | "add_memory"
+                | "get_memory"
+                | "delete_memory"
+                | "review_search"
+                | "search_feedback"
+                | "enrich_doc"
+        ) {
+            let mut service = self.store()?;
+            let service = service.as_mut().expect("MCP store initialized");
+            return mcp_tools::call_board_or_memory_tool(
+                tool_name,
+                id,
+                &arguments,
+                service,
+                &self.root,
+                RecordingProvider::Muse.as_str(),
             );
         }
 
@@ -700,6 +731,7 @@ impl MuseMcp {
                                 "text": serde_json::to_string_pretty(&json!({
                                     "root": self.root,
                                     "docs_count": service.docs_count(),
+                                    "reasoning_rules": service.reasoning_rules_status(),
                                 }))?,
                             }
                         ]
@@ -712,7 +744,7 @@ impl MuseMcp {
     }
 
     fn tools(&self) -> Vec<ToolDefinition> {
-        vec![
+        let mut tools = vec![
             ToolDefinition {
                 name: "search".to_string(),
                 description:
@@ -767,7 +799,10 @@ impl MuseMcp {
                 input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
             },
             mcp_tools::update_tool_definition(),
-        ]
+        ];
+        tools.extend(mcp_tools::board_tool_definitions());
+        tools.extend(mcp_tools::memory_tool_definitions());
+        tools
     }
 }
 
@@ -905,6 +940,56 @@ mod tests {
             .unwrap()
             .to_string();
         serde_json::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn search_review_tools_are_listed_and_work_through_muse_mcp() {
+        let root = temp_dir("muse-search-review");
+        let mcp = test_mcp(root.clone(), Vec::new());
+
+        let listed = mcp
+            .handle_request(JsonRpcRequest {
+                id: Some(json!(1)),
+                method: "tools/list".to_string(),
+                params: None,
+            })
+            .unwrap();
+        let listed_result = listed.result.unwrap();
+        let names = listed_result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"review_search"));
+        assert!(names.contains(&"search_feedback"));
+        assert!(names.contains(&"enrich_doc"));
+
+        let search = call_tool(&mcp, "search", json!({"query":"unmatched query"}));
+        let search_id = search["search_id"].as_str().unwrap();
+        let page = call_tool(&mcp, "review_search", json!({"page_size":10}));
+        assert_eq!(page["searches"].as_array().unwrap().len(), 1);
+        assert_eq!(page["searches"][0]["search_id"], json!(search_id));
+
+        let exact = call_tool(&mcp, "review_search", json!({"search_id": search_id}));
+        assert_eq!(exact["reviewed"], json!(false));
+        let feedback = call_tool(
+            &mcp,
+            "search_feedback",
+            json!({
+                "search_id": search_id,
+                "label": "not_helpful",
+                "feedback": "The query returned no matching documents.",
+                "document_judgments": []
+            }),
+        );
+        assert_eq!(feedback["status"], json!("reviewed"));
+        assert_eq!(
+            call_tool(&mcp, "review_search", json!({"search_id": search_id}))["reviewed"],
+            json!(true)
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

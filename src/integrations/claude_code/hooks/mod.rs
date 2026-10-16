@@ -1,4 +1,4 @@
-mod protocol;
+pub(crate) mod protocol;
 
 use super::document::{ClaudeCodeDocument, ClaudeCodeDocumentType};
 use crate::ids::stable_doc_id_from_source;
@@ -429,19 +429,96 @@ fn capture(
     let Some(transcript_path) = input.transcript_path.as_deref() else {
         return Ok(ClaudeHookOutput::default());
     };
-    // Store only the transcript written since this session's previous
-    // capture, so earlier turns are never re-sent.
-    let state_dir = provider_state_dir(RecordingProvider::Claude, root);
-    let slice =
-        transcript_cursor::read_since_last_capture(&state_dir, &input.session_id, transcript_path)?;
-    let messages = extract_messages(&slice.text);
-    if messages.is_empty() {
-        transcript_cursor::mark_captured(&state_dir, &input.session_id, slice.end)?;
+    if crate::integrations::mcp_tools::resident_backend_enabled() {
+        let mut capture_input = serde_json::to_value(&input)?;
+        capture_input["transcript_path"] = serde_json::to_value(transcript_path.canonicalize()?)?;
+        capture_input["cwd"] = serde_json::to_value(root.canonicalize()?)?;
+        crate::integrations::mcp_tools::submit_transcript_capture(
+            root,
+            "claude",
+            document_type.as_str(),
+            capture_input,
+        )?;
         return Ok(ClaudeHookOutput::default());
     }
+    let state_dir = provider_state_dir(RecordingProvider::Claude, root);
+    transcript_cursor::replay_batches(&state_dir, &input.session_id, transcript_path, |slice| {
+        capture_slice(root, &input, document_type, slice)
+    })?;
+    Ok(ClaudeHookOutput::default())
+}
+
+fn capture_slice(
+    root: &Path,
+    input: &ClaudeHookInput,
+    document_type: ClaudeCodeDocumentType,
+    slice: &transcript_cursor::TranscriptSlice,
+) -> Result<()> {
+    let documents = build_capture_documents(root, input, document_type, slice)?;
+    if !documents.is_empty() {
+        crate::integrations::mcp_tools::upsert_hook_documents(
+            root,
+            "claude",
+            &input.session_id,
+            documents,
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn capture_documents_from_request(
+    root: &Path,
+    input: &Value,
+    document_type: &str,
+    slice: &transcript_cursor::TranscriptSlice,
+) -> Result<Vec<crate::SourceDocument>> {
+    let document_type = match document_type {
+        "checkpoint" => ClaudeCodeDocumentType::Checkpoint,
+        "outcome" => ClaudeCodeDocumentType::Outcome,
+        "session-summary" => ClaudeCodeDocumentType::SessionSummary,
+        _ => anyhow::bail!("invalid capture document type"),
+    };
+    build_capture_documents(
+        root,
+        &serde_json::from_value(input.clone())?,
+        document_type,
+        slice,
+    )
+}
+
+fn build_capture_documents(
+    root: &Path,
+    input: &ClaudeHookInput,
+    document_type: ClaudeCodeDocumentType,
+    slice: &transcript_cursor::TranscriptSlice,
+) -> Result<Vec<crate::SourceDocument>> {
+    let messages = extract_messages(&slice.text);
+    if messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A hook's turn ID describes its current turn, not every older turn in
+    // an initial backfill. Prefer transcript attribution and only use the hook
+    // fallback for a capture that contains at most one user message.
+    let capture_turn_id = if messages.iter().all(|message| message.turn_id.is_none())
+        && messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count()
+            <= 1
+    {
+        input.turn_id.clone()
+    } else {
+        messages
+            .front()
+            .and_then(|message| message.turn_id.clone())
+            .filter(|id| {
+                messages
+                    .iter()
+                    .all(|message| message.turn_id.as_ref() == Some(id))
+            })
+    };
     let affected_paths = affected_paths(&input.extra);
     let content = structured_memory(&messages, document_type, &affected_paths);
-    let captured_session_id = input.session_id.clone();
     let make_document =
         |event_id: String, document_type, content: String, timestamp| ClaudeCodeDocument {
             event_id,
@@ -455,10 +532,10 @@ fn capture(
             affected_paths: affected_paths.clone(),
         };
     let mut documents = Vec::with_capacity(messages.len() + 2);
-    for (offset, message) in messages.into_iter().enumerate() {
-        // Byte offsets grow faster than message counts, so this order stays
-        // unique and increasing across captures.
-        let order = slice.start as usize + offset;
+    for message in messages {
+        // The actual JSONL line position stays stable across batch boundaries.
+        let order = slice.start as usize + message.source_offset;
+        let turn_id = message.turn_id.as_deref().or(capture_turn_id.as_deref());
         let identity = message.message_id.as_deref().unwrap_or("");
         let event_id = if identity.is_empty() {
             format!("observation-{order}")
@@ -472,6 +549,7 @@ fn capture(
             message.timestamp,
         )
         .into_source_document()?;
+        transcript_cursor::link_provider_turn(&mut observation, turn_id);
         observation
             .filters
             .insert("document_type".into(), "session-observation".into());
@@ -491,6 +569,7 @@ fn capture(
         Some(current_timestamp()),
     )
     .into_source_document()?;
+    transcript_cursor::link_provider_turn(&mut turn, capture_turn_id.as_deref());
     if let Some(project_id) = turn.filters.get("project_id").cloned() {
         turn.filters
             .insert("semantic_scope".into(), format!("project:{project_id}"));
@@ -520,14 +599,7 @@ fn capture(
     context.doc_id = stable_doc_id_from_source(&format!("{}::whole-session", context.source));
     context.doc_length = context.content.len();
     documents.push(context);
-    crate::integrations::mcp_tools::upsert_hook_documents(
-        root,
-        "claude",
-        &captured_session_id,
-        documents,
-    )?;
-    transcript_cursor::mark_captured(&state_dir, &captured_session_id, slice.end)?;
-    Ok(ClaudeHookOutput::default())
+    Ok(documents)
 }
 
 #[cfg(test)]
@@ -575,6 +647,8 @@ struct ConversationMessage {
     content: String,
     timestamp: Option<String>,
     message_id: Option<String>,
+    turn_id: Option<String>,
+    source_offset: usize,
 }
 
 fn structured_memory(
@@ -625,10 +699,17 @@ fn extract_structured_memory(
 
 fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
     let mut messages = VecDeque::new();
-    for line in text.lines() {
+    let mut source_offset = 0;
+    let mut context_turn_id = None;
+    for line in text.split_inclusive('\n') {
+        let line_start = source_offset;
+        source_offset += line.len();
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if value.get("type").and_then(Value::as_str) == Some("turn_context") {
+            context_turn_id = transcript_cursor::transcript_turn_id(&value).map(str::to_owned);
+        }
         let Some(message) = value.get("message") else {
             continue;
         };
@@ -648,6 +729,10 @@ fn extract_messages(text: &str) -> VecDeque<ConversationMessage> {
             .or_else(|| serde_json::to_string(message).ok())
             .unwrap_or_default();
         messages.push_back(ConversationMessage {
+            turn_id: transcript_cursor::transcript_turn_id(&value)
+                .map(str::to_owned)
+                .or_else(|| context_turn_id.clone()),
+            source_offset: line_start,
             role: role.to_string(),
             content: redact(if content.trim().is_empty() {
                 "[empty message content]"
@@ -827,6 +912,61 @@ mod tests {
     }
 
     #[test]
+    fn batch_replay_persists_every_claude_observation_and_checkpoints_each_batch() {
+        let root = temp_dir("batch-replay");
+        let transcript = root.join("transcript.jsonl");
+        let rows = [
+            ("turn-1", "user", "First full request"),
+            ("turn-1", "assistant", "First full answer"),
+            ("turn-2", "user", "Second full request"),
+        ];
+        let contents = rows
+            .iter()
+            .map(|(turn_id, role, content)| {
+                serde_json::json!({
+                    "turn_id": turn_id,
+                    "uuid": format!("{turn_id}-{role}"),
+                    "message": {"role": role, "content": content}
+                })
+                .to_string()
+                    + "\n"
+            })
+            .collect::<String>();
+        fs::write(&transcript, &contents).unwrap();
+        let hook_input = input(&root, Some(transcript.clone()), "Stop");
+        let state_dir = provider_state_dir(RecordingProvider::Claude, &root);
+
+        let batches = transcript_cursor::replay_batches_with_limit(
+            &state_dir,
+            &hook_input.session_id,
+            &transcript,
+            1,
+            |slice| capture_slice(&root, &hook_input, ClaudeCodeDocumentType::Outcome, slice),
+        )
+        .unwrap();
+
+        assert_eq!(batches, rows.len());
+        assert_eq!(
+            transcript_cursor::load_offset(&state_dir, &hook_input.session_id),
+            contents.len() as u64
+        );
+        let store = open_store(&root).unwrap();
+        let observations = store
+            .source_documents()
+            .into_iter()
+            .filter(|doc| {
+                doc.filters.get("document_type").map(String::as_str) == Some("session-observation")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observations.len(), rows.len());
+        for (_, _, content) in rows {
+            assert!(observations.iter().any(|doc| doc.content.contains(content)));
+        }
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn codex_session_memories_are_not_treated_as_operational_records() {
         let codex_session = serde_json::json!({
             "source": "codex://project/session/outcome",
@@ -839,6 +979,135 @@ mod tests {
 
         assert!(!is_operational_memory_result(&codex_session));
         assert!(is_operational_memory_result(&codex_operational_record));
+    }
+
+    #[test]
+    fn provider_turn_id_preserves_backfill_attribution() {
+        let root = temp_dir("turn-backfill");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(&transcript, concat!(
+            "{\"turn_id\":\"earlier\",\"message\":{\"role\":\"user\",\"content\":\"Earlier request\"}}\n",
+            "{\"turn_id\":\"latest\",\"message\":{\"role\":\"user\",\"content\":\"Latest request\"}}\n"
+        )).unwrap();
+        let mut stop = input(&root, Some(transcript), "Stop");
+        stop.turn_id = Some("latest".into());
+        handle_hook(ClaudeHookKind::Stop, stop, &root).unwrap();
+        let store = open_store(&root).unwrap();
+        let documents = store.source_documents();
+        for (text, expected) in [("Earlier request", "earlier"), ("Latest request", "latest")] {
+            let doc = documents
+                .iter()
+                .find(|doc| {
+                    doc.filters.get("document_type").map(String::as_str)
+                        == Some("session-observation")
+                        && doc.content.contains(text)
+                })
+                .unwrap();
+            assert_eq!(
+                doc.filters.get("turn_id").map(String::as_str),
+                Some(expected)
+            );
+        }
+        let capture = documents
+            .iter()
+            .find(|doc| doc.filters.get("document_type").map(String::as_str) == Some("outcome"))
+            .unwrap();
+        assert!(
+            !capture.filters.contains_key("turn_id"),
+            "a capture spanning turns must not be mislabeled as the latest turn"
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_turn_id_replay_keeps_message_ids_across_capture_boundaries() {
+        let root = temp_dir("turn-replay");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            "{\"turn_id\":\"turn-a\",\"message\":{\"role\":\"user\",\"content\":\"A request\"}}\n",
+        )
+        .unwrap();
+        let mut stop = input(&root, Some(transcript.clone()), "Stop");
+        stop.turn_id = Some("turn-a".into());
+        handle_hook(ClaudeHookKind::Stop, stop.clone(), &root).unwrap();
+        append_line(
+            &transcript,
+            r#"{"turn_id":"turn-a","message":{"role":"assistant","content":"An answer"}}"#,
+        );
+        handle_hook(ClaudeHookKind::Stop, stop.clone(), &root).unwrap();
+        let before = {
+            let store = open_store(&root).unwrap();
+            store
+                .source_documents()
+                .into_iter()
+                .filter(|doc| {
+                    doc.filters.get("document_type").map(String::as_str)
+                        == Some("session-observation")
+                })
+                .map(|doc| doc.doc_id.clone())
+                .collect::<HashSet<_>>()
+        };
+        fs::remove_dir_all(provider_state_dir(RecordingProvider::Claude, &root)).unwrap();
+        handle_hook(ClaudeHookKind::Stop, stop, &root).unwrap();
+        let store = open_store(&root).unwrap();
+        let after = store
+            .source_documents()
+            .into_iter()
+            .filter(|doc| {
+                doc.filters.get("document_type").map(String::as_str) == Some("session-observation")
+            })
+            .map(|doc| doc.doc_id.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(before.len(), 2);
+        assert_eq!(
+            before, after,
+            "replaying with a missing cursor must upsert the same observations"
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_turn_id_links_capture_documents_without_overwriting_other_turns() {
+        let root = temp_dir("provider-turn-identity");
+        let transcript = root.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"Turn result\"}}\n",
+        )
+        .unwrap();
+        for turn_id in ["turn-a", "turn-b"] {
+            let state_dir = provider_state_dir(RecordingProvider::Claude, &root);
+            if state_dir.exists() {
+                fs::remove_dir_all(&state_dir).unwrap();
+            }
+            let mut stop = input(&root, Some(transcript.clone()), "Stop");
+            stop.turn_id = Some(turn_id.into());
+            handle_hook(ClaudeHookKind::Stop, stop, &root).unwrap();
+        }
+        let store = open_store(&root).unwrap();
+        let documents = store.source_documents();
+        let outcomes = documents
+            .iter()
+            .filter(|doc| doc.filters.get("document_type").map(String::as_str) == Some("outcome"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            outcomes.len(),
+            2,
+            "distinct provider turns must have distinct doc_ids"
+        );
+        for turn_id in ["turn-a", "turn-b"] {
+            assert!(
+                outcomes
+                    .iter()
+                    .any(|doc| doc.filters.get("turn_id").map(String::as_str) == Some(turn_id)),
+                "provider turn ID must be retained on its document"
+            );
+        }
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -584,6 +584,17 @@ pub(crate) fn relevant_excerpt(
     matched_terms: &[String],
     max_bytes: usize,
 ) -> String {
+    // Term-ranked excerpts can keep the topic sentence and a closing
+    // acknowledgment while dropping every numbered item. Preserve the list
+    // as a unit when the query asks for an item or its order.
+    if query_requests_list_item(query) {
+        if let Some(list) = numbered_list_block(content) {
+            if list.len() <= max_bytes {
+                return list;
+            }
+        }
+    }
+
     let terms = excerpt_terms(query, matched_terms);
     let mut lines = content
         .lines()
@@ -615,6 +626,65 @@ pub(crate) fn relevant_excerpt(
             .join("\n"),
         max_bytes,
     )
+}
+
+fn query_requests_list_item(query: &str) -> bool {
+    let query = query.to_ascii_lowercase();
+    if [
+        "list", "numbered", "item", "entry", "order", "first", "second", "third",
+    ]
+    .iter()
+    .any(|term| query.contains(term))
+    {
+        return true;
+    }
+    query
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|token| {
+            ["st", "nd", "rd", "th"].iter().any(|suffix| {
+                token.strip_suffix(suffix).is_some_and(|number| {
+                    !number.is_empty() && number.chars().all(|character| character.is_ascii_digit())
+                })
+            })
+        })
+}
+
+fn numbered_list_block(content: &str) -> Option<String> {
+    let lines = content.lines().collect::<Vec<_>>();
+    let mut best: Option<(usize, usize)> = None;
+    let mut start = None;
+    let mut last_item = 0;
+    let mut count = 0;
+    for (index, line) in lines.iter().enumerate() {
+        if is_numbered_list_item(line) {
+            if start.is_none() {
+                start = Some(index);
+            }
+            last_item = index;
+            count += 1;
+        } else if line.trim().is_empty() && start.is_some() {
+            // Empty lines are often used to format Markdown lists. Keep
+            // scanning; the final range includes them when rendering.
+        } else if start.is_some() {
+            if count >= 2 && best.is_none_or(|(_, best_count)| count > best_count) {
+                best = Some((start.unwrap(), count));
+            }
+            start = None;
+            count = 0;
+        }
+    }
+    if start.is_some() && count >= 2 && best.is_none_or(|(_, best_count)| count > best_count) {
+        best = Some((start.unwrap(), count));
+    }
+    let (start, _) = best?;
+    let end = last_item.max(start);
+    Some(lines[start..=end].join("\n"))
+}
+
+fn is_numbered_list_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    digits > 0 && trimmed[digits..].trim_start().starts_with(['.', ')'])
 }
 
 #[cfg(test)]
@@ -699,6 +769,7 @@ mod tests {
             superseded_by: None,
             relation_confidence: None,
             relation_evidence: Vec::new(),
+            comparison_operands: Vec::new(),
         }
     }
 
@@ -709,6 +780,30 @@ mod tests {
             ("revision".to_string(), "d4d78b7".to_string()),
             ("document_type".to_string(), "outcome".to_string()),
         ])
+    }
+
+    #[test]
+    fn list_item_recall_keeps_the_numbered_list_in_order() {
+        let content = "Saved conversation about work from home jobs for seniors.\n\n1. Virtual customer service representative\n2. Telehealth professional\n3. Remote bookkeeper\n4. Virtual tutor or teacher\n5. Freelance writer or editor\n6. Online survey taker\n7. Transcriptionist\n8. Social media manager\n\nThe assistant acknowledged the list.";
+        let excerpt = relevant_excerpt(
+            content,
+            "what was the 7th job in the list of work from home jobs for seniors",
+            &[
+                "home".into(),
+                "job".into(),
+                "list".into(),
+                "senior".into(),
+                "work".into(),
+            ],
+            4_000,
+        );
+
+        assert!(excerpt.contains("7. Transcriptionist"), "{excerpt}");
+        assert!(
+            excerpt.contains("1. Virtual customer service representative"),
+            "{excerpt}"
+        );
+        assert!(excerpt.contains("8. Social media manager"), "{excerpt}");
     }
 
     #[test]

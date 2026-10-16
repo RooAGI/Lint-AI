@@ -16,7 +16,7 @@ use crate::{IndexStore, SourceDocument};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,10 +33,316 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ))]
 pub(crate) mod workspace;
 
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+pub(crate) mod transcript_capture;
+
 mod staged;
 pub use staged::StagedAddResponse;
 
 const USER_FILTER: &str = "memory_user_id";
+const SESSION_OBSERVATION_DOCUMENT_TYPE: &str = "session-observation";
+
+fn is_session_observation(document: &SourceDocument) -> bool {
+    document
+        .filters
+        .get("document_type")
+        .is_some_and(|kind| kind == SESSION_OBSERVATION_DOCUMENT_TYPE)
+}
+
+fn read_search_review_state(path: &Path) -> anyhow::Result<serde_json::Value> {
+    let state = match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::json!({"schema_version":1,"reviews":{}})
+        }
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        state
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(1)
+            && state
+                .get("reviews")
+                .is_some_and(serde_json::Value::is_object),
+        "unsupported or invalid search review state"
+    );
+    Ok(state)
+}
+
+fn write_search_review_state(path: &Path, state: &serde_json::Value) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut temp = path.to_path_buf();
+    temp.set_extension(format!("tmp-{}", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    file.write_all(&serde_json::to_vec(state)?)?;
+    file.sync_all()?;
+    std::fs::rename(&temp, path)?;
+    Ok(())
+}
+
+fn parse_mcp_search_history(
+    bytes: &[u8],
+) -> anyhow::Result<Vec<(usize, crate::telemetry::McpCallRecord)>> {
+    let mut records = Vec::new();
+    let mut position = 0;
+    while position < bytes.len() {
+        let Some(relative_end) = bytes[position..].iter().position(|byte| *byte == b'\n') else {
+            break;
+        };
+        let end = position + relative_end + 1;
+        let record =
+            serde_json::from_slice::<crate::telemetry::McpCallRecord>(&bytes[position..end - 1]);
+        if let Ok(record) = record {
+            if record.tool == "search" {
+                records.push((position, record));
+            }
+        }
+        position = end;
+    }
+    Ok(records)
+}
+
+fn set_session_conclusion(document: &mut SourceDocument, conclusion: &str) {
+    const CONCLUSION_FILTER: &str = "membrick_session_conclusion";
+    const CONCLUSION_HEADING: &str = "Session conclusion:";
+    if let Some(previous) = document.filters.get(CONCLUSION_FILTER) {
+        let previous_block = format!("\n\n{CONCLUSION_HEADING}\n{previous}");
+        if let Some(base) = document.content.strip_suffix(&previous_block) {
+            document.content = base.to_string();
+        }
+    }
+    let base = document.content.trim_end();
+    document.content = format!("{base}\n\n{CONCLUSION_HEADING}\n{conclusion}");
+    document
+        .filters
+        .insert(CONCLUSION_FILTER.to_string(), conclusion.to_string());
+    document.doc_length = document.content.len();
+}
+
+fn remove_session_conclusion(document: &mut SourceDocument) {
+    const CONCLUSION_FILTER: &str = "membrick_session_conclusion";
+    const CONCLUSION_HEADING: &str = "Session conclusion:";
+    if let Some(previous) = document.filters.remove(CONCLUSION_FILTER) {
+        let previous_block = format!("\n\n{CONCLUSION_HEADING}\n{previous}");
+        if let Some(base) = document.content.strip_suffix(&previous_block) {
+            document.content = base.to_string();
+            document.doc_length = document.content.len();
+        }
+    }
+}
+
+const ENRICHMENT_CONTRIBUTION_PREFIX: &str = "membrick_enrichment_contribution:";
+
+fn enrichment_contribution_filter(operation_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(operation_id.as_bytes());
+    let suffix = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{ENRICHMENT_CONTRIBUTION_PREFIX}{suffix}")
+}
+
+fn source_content_fingerprint(document: &SourceDocument) -> String {
+    crate::pipeline::key_phrase_content_hash(&document.content)
+}
+
+fn mcp_search_id(record: &crate::telemetry::McpCallRecord) -> String {
+    record.trace_id.clone().unwrap_or_else(|| {
+        let encoded = serde_json::to_vec(record).unwrap_or_default();
+        format!("mcp:legacy:{:x}", Sha256::digest(encoded))
+    })
+}
+
+fn search_result_payload(record: &crate::telemetry::McpCallRecord) -> serde_json::Value {
+    record
+        .response
+        .pointer("/result/content/0/text")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn search_feedback_evaluation(
+    reviews: &serde_json::Map<String, serde_json::Value>,
+    records: &HashMap<String, crate::telemetry::McpCallRecord>,
+) -> serde_json::Value {
+    let mut overall_labels = BTreeMap::<String, usize>::new();
+    let mut relevance_labels = BTreeMap::<String, usize>::new();
+    let mut judged_searches = 0usize;
+    let mut judged_documents = 0usize;
+    let (mut ndcg5_sum, mut ndcg10_sum, mut ndcg5_n, mut ndcg10_n, mut mrr_sum) =
+        (0.0, 0.0, 0usize, 0usize, 0.0);
+
+    for (search_id, entry) in reviews {
+        let Some(feedback) = entry.get("feedback") else {
+            continue;
+        };
+        if let Some(label) = feedback.get("label").and_then(serde_json::Value::as_str) {
+            *overall_labels.entry(label.to_string()).or_default() += 1;
+        }
+        let judgments = feedback
+            .get("document_judgments")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut by_doc = HashMap::new();
+        for judgment in &judgments {
+            let (Some(doc_id), Some(relevance)) = (
+                judgment.get("doc_id").and_then(serde_json::Value::as_str),
+                judgment
+                    .get("relevance")
+                    .and_then(serde_json::Value::as_str),
+            ) else {
+                continue;
+            };
+            *relevance_labels.entry(relevance.to_string()).or_default() += 1;
+            by_doc.insert(doc_id.to_string(), relevance);
+        }
+        judged_documents += by_doc.len();
+
+        let Some(record) = records.get(search_id) else {
+            continue;
+        };
+        let result = search_result_payload(record);
+        let Some(hits) = result.get("results").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        if hits.is_empty() || hits.len() != by_doc.len() {
+            continue;
+        }
+        let ranked = hits
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| {
+                let doc_id = hit
+                    .get("doc_id")
+                    .or_else(|| hit.get("id"))
+                    .and_then(serde_json::Value::as_str);
+                doc_id
+                    .and_then(|id| by_doc.get(id).copied())
+                    .map(|relevance| {
+                        let gain = match relevance {
+                            "relevant" => 3.0,
+                            "partially_relevant" => 1.0,
+                            _ => 0.0,
+                        };
+                        (rank + 1, gain, relevance == "relevant")
+                    })
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(ranked) = ranked else { continue };
+        let hit_ids = hits
+            .iter()
+            .filter_map(|hit| {
+                hit.get("doc_id")
+                    .or_else(|| hit.get("id"))
+                    .and_then(serde_json::Value::as_str)
+            })
+            .collect::<HashSet<_>>();
+        if hit_ids.len() != hits.len()
+            || hit_ids.len() != by_doc.len()
+            || !hit_ids.iter().all(|id| by_doc.contains_key(*id))
+        {
+            continue;
+        }
+        judged_searches += 1;
+
+        let dcg = |cutoff: usize| {
+            ranked
+                .iter()
+                .take(cutoff)
+                .enumerate()
+                .map(|(index, (_, gain, _))| gain / ((index + 2) as f64).log2())
+                .sum::<f64>()
+        };
+        let mut ideal_gains = ranked.iter().map(|(_, gain, _)| *gain).collect::<Vec<_>>();
+        ideal_gains.sort_by(|a, b| b.total_cmp(a));
+        let ideal = |cutoff: usize| {
+            ideal_gains
+                .iter()
+                .take(cutoff)
+                .enumerate()
+                .map(|(index, gain)| gain / ((index + 2) as f64).log2())
+                .sum::<f64>()
+        };
+        let idcg5 = ideal(5);
+        let idcg10 = ideal(10);
+        if idcg5 > 0.0 {
+            ndcg5_sum += dcg(5) / idcg5;
+            ndcg5_n += 1;
+        }
+        if idcg10 > 0.0 {
+            ndcg10_sum += dcg(10) / idcg10;
+            ndcg10_n += 1;
+        }
+        mrr_sum += ranked
+            .iter()
+            .find(|(_, _, relevant)| *relevant)
+            .map(|(rank, _, _)| 1.0 / *rank as f64)
+            .unwrap_or(0.0);
+    }
+
+    let metric = |sum: f64, n: usize| {
+        serde_json::json!({
+            "value": if n == 0 { serde_json::Value::Null } else { serde_json::json!(sum / n as f64) },
+            "n": n,
+        })
+    };
+    serde_json::json!({
+        "reviewed_searches": reviews.values().filter(|entry| entry.get("feedback").is_some()).count(),
+        "complete_judged_searches": judged_searches,
+        "judged_documents": judged_documents,
+        "overall_labels": overall_labels,
+        "relevance_labels": relevance_labels,
+        "ndcg_at_5": metric(ndcg5_sum, ndcg5_n),
+        "ndcg_at_10": metric(ndcg10_sum, ndcg10_n),
+        "mrr": metric(mrr_sum, judged_searches),
+        "sample_status": if judged_searches < 30 { "small" } else { "usable" },
+    })
+}
+
+fn search_history_cursor(history: &[u8], offset: usize) -> String {
+    let prefix_hash = format!("{:x}", Sha256::digest(&history[..offset]));
+    format!("v1:{offset}:{prefix_hash}")
+}
+
+fn parse_search_history_cursor(history: &[u8], cursor: &str) -> anyhow::Result<usize> {
+    let mut parts = cursor.splitn(3, ':');
+    anyhow::ensure!(
+        parts.next() == Some("v1"),
+        "unsupported search history cursor"
+    );
+    let offset = parts
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or_else(|| anyhow::anyhow!("invalid search history cursor"))?;
+    let expected_hash = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid search history cursor"))?;
+    anyhow::ensure!(
+        offset <= history.len(),
+        "search history changed; restart review from the first page"
+    );
+    anyhow::ensure!(
+        history.get(offset.saturating_sub(1)) == Some(&b'\n') || offset == 0,
+        "search history changed; restart review from the first page"
+    );
+    let actual_hash = format!("{:x}", Sha256::digest(&history[..offset]));
+    anyhow::ensure!(
+        actual_hash == expected_hash,
+        "search history changed; restart review from the first page"
+    );
+    Ok(offset)
+}
 
 fn is_workspace_markdown_document(document: &SourceDocument) -> bool {
     document.source == document.doc_id
@@ -268,6 +574,9 @@ pub struct SearchMemory {
     /// Empty for lexical hits; skipped in serialization when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relation_evidence: Vec<String>,
+    /// Comparison sides for which this document was independently retrieved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comparison_operands: Vec<String>,
 }
 
 /// Backing corpus selected by the resident workspace owner. Callers enqueue
@@ -299,6 +608,9 @@ pub struct MemoryService {
     published_search_view: Option<Arc<std::sync::RwLock<Arc<MemoryService>>>>,
     superseded_ids: HashSet<(String, String)>,
     has_expiring_documents: bool,
+    /// Transcript observations are retained as source evidence, but are
+    /// excluded from all MemoryService retrieval candidates.
+    has_session_observations: bool,
     request_fingerprints: HashMap<(String, String), String>,
     /// Cached write-adjudication receipts by (user_id, request_id), so an
     /// idempotent retry returns the identical response including the receipt.
@@ -314,6 +626,9 @@ pub struct MemoryService {
     relations_cache: Mutex<RelationsCache>,
     /// Background key-phrase enrichment (see [`KeyPhraseEnrichment`]).
     enrichment: std::sync::Arc<Mutex<KeyPhraseEnrichment>>,
+    /// Immutable workspace-specific query rules, replaced atomically by the
+    /// project rules watcher after a complete overlay validates.
+    project_rules: Option<Arc<crate::reasoning_rules::ProjectReasoningRules>>,
     /// Agent bulletin-board state: per-board sequence counters and
     /// request-id dedup, all assigned under one lock by the single writer.
     board_state: Mutex<BoardState>,
@@ -426,6 +741,48 @@ fn run_key_phrase_extraction_bounded(
     rx.recv_timeout(std::time::Duration::from_secs(timeout_secs))
         .ok()
         .flatten()
+}
+
+fn enrichment_is_present(
+    document: &SourceDocument,
+    enrichment: &crate::source::SourceDocumentEnrichment,
+) -> bool {
+    let has_contribution = !enrichment.key_phrases.is_empty()
+        || !enrichment.headings.is_empty()
+        || !enrichment.links.is_empty()
+        || enrichment.supersedes_document_id.is_some()
+        || enrichment.session_conclusion.is_some();
+    has_contribution
+        && enrichment.key_phrases.iter().all(|phrase| {
+            document.key_phrases.iter().any(|existing| {
+                existing.origin == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+                    && existing.text.eq_ignore_ascii_case(phrase.text.trim())
+                    && existing.kind.eq_ignore_ascii_case(phrase.kind.trim())
+            })
+        })
+        && enrichment.headings.iter().all(|heading| {
+            document
+                .headings
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(heading.trim()))
+        })
+        && enrichment
+            .links
+            .iter()
+            .all(|link| document.links.contains(&link.trim().to_string()))
+        && enrichment
+            .supersedes_document_id
+            .as_ref()
+            .is_none_or(|target| document.filters.get("supersedes_id") == Some(target))
+        && enrichment
+            .session_conclusion
+            .as_ref()
+            .is_none_or(|conclusion| {
+                document
+                    .filters
+                    .get("membrick_session_conclusion")
+                    .is_some_and(|existing| existing == conclusion.trim())
+            })
 }
 
 impl MemoryService {
@@ -643,12 +1000,30 @@ fn structured_fact_results(
     superseded_ids: &HashSet<(String, String)>,
     request: &SearchRequest,
 ) -> Vec<crate::SearchResult> {
+    structured_fact_results_with_rules(
+        store,
+        cache,
+        superseded_ids,
+        request,
+        crate::reasoning_rules::builtin_rules(),
+    )
+}
+
+fn structured_fact_results_with_rules(
+    store: &IndexStore,
+    cache: &Mutex<RelationsCache>,
+    superseded_ids: &HashSet<(String, String)>,
+    request: &SearchRequest,
+    reasoning_rules: Arc<crate::reasoning_rules::ReasoningRules>,
+) -> Vec<crate::SearchResult> {
     if !store.options().structured_fact_retrieval || request.query.trim().is_empty() {
         return Vec::new();
     }
     // Personal relationships are served from native claims written with each
     // DocRecord. This keeps retrieval in the normal write/query lifecycle.
-    if let Some(results) = native_relationship_results(store, superseded_ids, request) {
+    if let Some(results) =
+        native_relationship_results(store, superseded_ids, request, reasoning_rules)
+    {
         if !results.is_empty() {
             return results;
         }
@@ -668,6 +1043,7 @@ fn structured_fact_results(
         .iter()
         .copied()
         .filter(|doc| owns_memory(doc, &request.user_id))
+        .filter(|doc| !is_session_observation(doc))
         .filter(|doc| !superseded_ids.contains(&(request.user_id.clone(), doc.doc_id.clone())))
         .filter(|doc| {
             doc.filters
@@ -711,6 +1087,7 @@ fn structured_fact_results(
                 superseded_by: None,
                 relation_confidence: Some(hit.confidence),
                 relation_evidence: vec![hit.evidence_label],
+                comparison_operands: Vec::new(),
             })
         })
         .collect()
@@ -723,10 +1100,11 @@ fn native_relationship_results(
     store: &IndexStore,
     superseded_ids: &HashSet<(String, String)>,
     request: &SearchRequest,
+    reasoning_rules: Arc<crate::reasoning_rules::ReasoningRules>,
 ) -> Option<Vec<crate::SearchResult>> {
     let prepared = match request.reference_date.as_deref() {
-        Some(date) => PreparedQuery::new_at(&request.query, date),
-        None => PreparedQuery::new(&request.query),
+        Some(date) => PreparedQuery::new_at_with_rules(&request.query, date, reasoning_rules),
+        None => PreparedQuery::new_with_rules(&request.query, reasoning_rules),
     };
     let relation = prepared.temporal_context().evidence_requirements.relation?;
     let (predicate, is_participation) = match relation {
@@ -759,6 +1137,9 @@ fn native_relationship_results(
             continue;
         };
         if !owns_memory(source, &request.user_id) {
+            continue;
+        }
+        if is_session_observation(source) {
             continue;
         }
         if superseded_ids.contains(&(request.user_id.clone(), record.doc_id.clone())) {
@@ -873,6 +1254,7 @@ fn native_relationship_results(
             superseded_by: None,
             relation_confidence: Some(claim.confidence),
             relation_evidence: vec![evidence],
+            comparison_operands: Vec::new(),
         });
     }
     let chronological =
@@ -922,6 +1304,51 @@ fn blend_structured_first(
             .take(room),
     );
     blended
+}
+
+/// Merge independently ranked comparison sides while keeping both sides
+/// represented in the result window. A document returned for both operands
+/// appears once and retains both labels.
+fn interleave_comparison_results(
+    sides: Vec<Vec<crate::SearchResult>>,
+    top_k: usize,
+) -> Vec<crate::SearchResult> {
+    let mut sides = sides.into_iter().map(VecDeque::from).collect::<Vec<_>>();
+    let mut merged = Vec::<crate::SearchResult>::new();
+    let mut positions = HashMap::<String, usize>::new();
+    while merged.len() < top_k && sides.iter().any(|side| !side.is_empty()) {
+        for side in &mut sides {
+            let Some(mut result) = side.pop_front() else {
+                continue;
+            };
+            if let Some(index) = positions.get(&result.doc_id).copied() {
+                let existing = &mut merged[index];
+                for operand in result.comparison_operands.drain(..) {
+                    if !existing.comparison_operands.contains(&operand) {
+                        existing.comparison_operands.push(operand);
+                    }
+                }
+                for entity in result.matched_entities.drain(..) {
+                    if !existing.matched_entities.contains(&entity) {
+                        existing.matched_entities.push(entity);
+                    }
+                }
+                for term in result.matched_terms.drain(..) {
+                    if !existing.matched_terms.contains(&term) {
+                        existing.matched_terms.push(term);
+                    }
+                }
+                existing.score = existing.score.max(result.score);
+                continue;
+            }
+            positions.insert(result.doc_id.clone(), merged.len());
+            merged.push(result);
+            if merged.len() == top_k {
+                break;
+            }
+        }
+    }
+    merged
 }
 
 impl MemoryService {
@@ -1120,6 +1547,9 @@ impl MemoryService {
         let has_expiring_documents = source_documents
             .iter()
             .any(|doc| doc.filters.contains_key("expires_at_ms"));
+        let has_session_observations = source_documents
+            .iter()
+            .any(|doc| is_session_observation(doc));
         let superseded_ids = source_documents
             .iter()
             .into_iter()
@@ -1155,6 +1585,7 @@ impl MemoryService {
             published_search_view: None,
             superseded_ids,
             has_expiring_documents,
+            has_session_observations,
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -1165,6 +1596,7 @@ impl MemoryService {
             )),
             relations_cache: Mutex::new(RelationsCache::default()),
             enrichment: std::sync::Arc::new(Mutex::new(KeyPhraseEnrichment::default())),
+            project_rules: None,
             board_state: Mutex::new(BoardState::default()),
         }
     }
@@ -1295,6 +1727,7 @@ impl MemoryService {
                         .map(|p| crate::source::KeyPhrase {
                             text: p.text.clone(),
                             kind: p.kind.clone(),
+                            origin: Some(crate::source::KeyPhraseOrigin::Extractor),
                         })
                         .collect();
                     guard.inbox.push(EnrichedDoc {
@@ -1434,6 +1867,7 @@ impl MemoryService {
                 .map(|p| crate::source::KeyPhrase {
                     text: p.text.clone(),
                     kind: p.kind.clone(),
+                    origin: Some(crate::source::KeyPhraseOrigin::Extractor),
                 })
                 .collect();
             self.store.set_key_phrases(&doc.doc_id, &hash, doc_phrases);
@@ -1701,10 +2135,18 @@ impl MemoryService {
         request_id: String,
         doc_ids: &[String],
     ) -> WriteAdjudicationReceipt {
+        self.build_adjudication_receipt_from_store(&self.store, request_id, doc_ids)
+    }
+
+    fn build_adjudication_receipt_from_store(
+        &self,
+        store: &crate::pipeline::IndexStore,
+        request_id: String,
+        doc_ids: &[String],
+    ) -> WriteAdjudicationReceipt {
         use std::collections::HashSet;
         let doc_set: HashSet<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
-        let claims = self
-            .store
+        let claims = store
             .semantic_claims()
             .iter()
             .filter(|c| doc_set.contains(c.source_doc_id.as_str()))
@@ -1713,12 +2155,12 @@ impl MemoryService {
                 predicate: c.predicate.clone(),
                 object: c.object.clone(),
                 scope: c.scope.clone(),
-                evidence: self.linked_turn_evidence(c),
+                evidence: self.linked_turn_evidence_from_store(store, c),
             })
             .collect();
         let mut decisions = Vec::new();
         let mut retired_doc_ids = Vec::new();
-        for r in self.store.semantic_relations() {
+        for r in store.semantic_relations() {
             let is_source = doc_set.contains(r.source_doc_id.as_str());
             let is_target = doc_set.contains(r.target_doc_id.as_str());
             if !is_source && !is_target {
@@ -1751,7 +2193,7 @@ impl MemoryService {
                 // relation: the target must really be Superseded (not
                 // Conflicted via confidence thresholds or the multi-claim
                 // protection) and by this write's document.
-                let state = self.store.semantic_document_state(&r.target_doc_id);
+                let state = store.semantic_document_state(&r.target_doc_id);
                 let retired_by_this_write = state.status
                     == Some(crate::semantic_relations::SemanticStatus::Superseded)
                     && state
@@ -1777,11 +2219,19 @@ impl MemoryService {
     /// The existing receipt string carries the citation, so no parallel
     /// evidence DTO is needed.
     fn linked_turn_evidence(&self, claim: &crate::semantic_relations::SemanticClaim) -> String {
-        let Some(context) = self.store.source_document_by_id(&claim.source_doc_id) else {
+        self.linked_turn_evidence_from_store(&self.store, claim)
+    }
+
+    fn linked_turn_evidence_from_store(
+        &self,
+        store: &crate::pipeline::IndexStore,
+        claim: &crate::semantic_relations::SemanticClaim,
+    ) -> String {
+        let Some(context) = store.source_document_by_id(&claim.source_doc_id) else {
             return claim.evidence.clone();
         };
         for turn_id in &context.links {
-            let Some(turn) = self.store.source_document_by_id(turn_id) else {
+            let Some(turn) = store.source_document_by_id(turn_id) else {
                 continue;
             };
             let Some(start) = turn.content.find(&claim.evidence) else {
@@ -2159,7 +2609,9 @@ impl MemoryService {
         // Keep expired and API-superseded documents out before ranking when
         // either lifecycle feature is present. Ordinary stores can use the
         // index's exact-filter bitmap without materializing every visible ID.
-        self.has_expiring_documents || !self.superseded_ids.is_empty()
+        self.has_expiring_documents
+            || self.has_session_observations
+            || !self.superseded_ids.is_empty()
     }
 
     fn visible_doc_ids_matching(&self, filters: &BTreeMap<String, String>) -> HashSet<String> {
@@ -2168,6 +2620,7 @@ impl MemoryService {
             .into_iter()
             .filter(|document| {
                 self.is_visible(document)
+                    && !is_session_observation(document)
                     && filters.iter().all(|(key, value)| {
                         document
                             .filters
@@ -2209,7 +2662,27 @@ impl MemoryService {
         // usually a no-op once every document carries its extraction stamp.
         self.backfill_key_phrases();
         self.flush()?;
-        self.search_with_filters_cached(query, scope, session_id, top_k, filters, reference_date)
+        if self.requires_visibility_allow_list() {
+            let allowed_doc_ids = self.visible_doc_ids_matching(filters);
+            self.search_with_filters_cached_and_allowed_doc_ids(
+                query,
+                scope,
+                session_id,
+                top_k,
+                filters,
+                reference_date,
+                Some(&allowed_doc_ids),
+            )
+        } else {
+            self.search_with_filters_cached(
+                query,
+                scope,
+                session_id,
+                top_k,
+                filters,
+                reference_date,
+            )
+        }
     }
 
     fn search_with_filters_restricted(
@@ -2439,12 +2912,19 @@ impl MemoryService {
         // Prepare the question once. Session follow-ups must be resolved from
         // the raw question before PreparedQuery derives its analysis and
         // augmented lexical search text.
+        let reasoning_rules = self
+            .project_rules
+            .as_ref()
+            .map(|rules| rules.snapshot())
+            .unwrap_or_else(crate::reasoning_rules::builtin_rules);
         let prepared = if session_id.is_none() {
             // Reference date (Luyi 2026-10-09): when supplied, relative
             // temporal language resolves against it instead of the clock.
             match reference_date {
-                Some(ref_date) => PreparedQuery::new_at(query, ref_date),
-                None => PreparedQuery::new(query),
+                Some(ref_date) => {
+                    PreparedQuery::new_at_with_rules(query, ref_date, Arc::clone(&reasoning_rules))
+                }
+                None => PreparedQuery::new_with_rules(query, Arc::clone(&reasoning_rules)),
             }
         } else {
             prepare_session_query(
@@ -2453,6 +2933,7 @@ impl MemoryService {
                 session_id,
                 query,
                 reference_date,
+                Arc::clone(&reasoning_rules),
             )
         };
         // Synthetic document terms (Luyi 2026-10-07): bekind's mapping lives
@@ -2478,18 +2959,93 @@ impl MemoryService {
         } else {
             top_k
         };
-        let mut lexical = match additional_allowed_doc_ids {
-            Some(allowed_doc_ids) => self.store.query_prepared_cached_with_allowed_doc_ids(
-                &prepared,
-                depth,
-                filters,
-                allowed_doc_ids,
-            )?,
-            None => self
-                .store
-                .query_prepared_cached(&prepared, depth, filters)?,
+        let comparison_operands = &prepared.analysis().comparison_operands;
+        let is_explicit_comparison = prepared.analysis().intent
+            == crate::query_semantics::QueryIntent::Compare
+            && comparison_operands.len() == 2;
+        let mut lexical = if is_explicit_comparison {
+            let mut per_operand = Vec::with_capacity(comparison_operands.len());
+            for operand in comparison_operands {
+                let operand_prepared = match reference_date {
+                    Some(date) => PreparedQuery::new_at_with_rules(
+                        operand,
+                        date,
+                        Arc::clone(&reasoning_rules),
+                    ),
+                    None => PreparedQuery::new_with_rules(operand, Arc::clone(&reasoning_rules)),
+                };
+                let mut side_results = match additional_allowed_doc_ids {
+                    Some(allowed_doc_ids) => {
+                        self.store.query_prepared_cached_with_allowed_doc_ids(
+                            &operand_prepared,
+                            depth,
+                            filters,
+                            allowed_doc_ids,
+                        )?
+                    }
+                    None => self
+                        .store
+                        .query_prepared_cached(&operand_prepared, depth, filters)?,
+                };
+                if do_rerank {
+                    let entities = session_resolved_entities(
+                        &self.conversation_states,
+                        scope,
+                        session_id.unwrap_or(""),
+                    );
+                    side_results = conversational_rerank(
+                        side_results,
+                        &self.store,
+                        operand,
+                        &entities,
+                        filters,
+                        RERANK_WEIGHTS,
+                    );
+                    side_results.truncate(depth);
+                }
+                let user_id = filters.get(USER_FILTER).cloned().unwrap_or_default();
+                let structured = if user_id.is_empty() {
+                    Vec::new()
+                } else {
+                    let request = SearchRequest {
+                        query: operand.clone(),
+                        options: None,
+                        user_id,
+                        top_k: depth,
+                        session_id: session_id.map(String::from),
+                        scope: Some(scope.to_string()),
+                        filters: None,
+                        reference_date: reference_date.map(str::to_owned),
+                    };
+                    structured_fact_results_with_rules(
+                        &self.store,
+                        &self.relations_cache,
+                        &self.superseded_ids,
+                        &request,
+                        Arc::clone(&reasoning_rules),
+                    )
+                };
+                side_results = blend_structured_first(structured, side_results, depth);
+                for result in &mut side_results {
+                    result.comparison_operands.push(operand.clone());
+                }
+                per_operand.push(side_results);
+            }
+            interleave_comparison_results(per_operand, top_k)
+        } else {
+            match additional_allowed_doc_ids {
+                Some(allowed_doc_ids) => self.store.query_prepared_cached_with_allowed_doc_ids(
+                    &prepared,
+                    depth,
+                    filters,
+                    allowed_doc_ids,
+                )?,
+                None => self
+                    .store
+                    .query_prepared_cached(&prepared, depth, filters)?,
+            }
         };
-        if do_rerank {
+        if do_rerank && !is_explicit_comparison {
             let entities = session_resolved_entities(
                 &self.conversation_states,
                 scope,
@@ -2509,7 +3065,9 @@ impl MemoryService {
         // ahead of the lexical results. The ownership filter comes from the
         // caller's filters when present (benchmark); provider-scoped callers
         // (MCP) get no structured results, which is safe — lexical still works.
-        let structured = {
+        let structured = if is_explicit_comparison {
+            Vec::new()
+        } else {
             let user_id = filters.get(USER_FILTER).cloned().unwrap_or_default();
             if user_id.is_empty() {
                 Vec::new()
@@ -2524,11 +3082,12 @@ impl MemoryService {
                     filters: None,
                     reference_date: reference_date.map(str::to_owned),
                 };
-                structured_fact_results(
+                structured_fact_results_with_rules(
                     &self.store,
                     &self.relations_cache,
                     &self.superseded_ids,
                     &request,
+                    Arc::clone(&reasoning_rules),
                 )
             }
         };
@@ -2597,6 +3156,10 @@ impl MemoryService {
             || provider_memory
                 .as_ref()
                 .is_some_and(|service| service.has_expiring_documents);
+        let has_session_observations = workspace.has_session_observations
+            || provider_memory
+                .as_ref()
+                .is_some_and(|service| service.has_session_observations);
         if let Some(provider) = &provider_memory {
             superseded_ids.extend(provider.superseded_ids.iter().cloned());
             request_fingerprints.extend(
@@ -2619,6 +3182,7 @@ impl MemoryService {
             published_search_view: None,
             superseded_ids,
             has_expiring_documents,
+            has_session_observations,
             request_fingerprints,
             request_receipts: HashMap::new(),
             receipts_path: None,
@@ -2627,6 +3191,7 @@ impl MemoryService {
             conversation_states,
             relations_cache: Mutex::new(RelationsCache::default()),
             enrichment: Arc::new(Mutex::new(KeyPhraseEnrichment::default())),
+            project_rules: workspace.project_rules,
             board_state: Mutex::new(BoardState::default()),
         })
     }
@@ -2696,20 +3261,1205 @@ impl MemoryService {
         self.store.is_empty()
     }
 
-    /// Upsert one source document. Integration capture paths call this, then
-    /// [`MemoryService::refresh_index`], exactly as they did on the raw store.
-    /// Insert or replace a source document directly. Low-level bulk-load;
-    /// prefer `add` for application writes.
-    /// Insert or replace one document. This is the single content-write
-    /// funnel: every document entering the store is queued for background
-    /// key-phrase enrichment (no-op when enrichment is disabled), so no
-    /// content write path can silently bypass it. Metadata-only touches
-    /// such as `supersede` use the store directly: the content is
-    /// unchanged, so re-queuing would only redo identical extraction.
+    /// Insert or replace one source document through `MemoryService`.
+    ///
+    /// This applies the service's common key-phrase enrichment scheduling
+    /// before delegating to its internal `IndexStore`. In-memory callers
+    /// publish the changed search view with [`MemoryService::refresh_index`];
+    /// durable resident mutations use the service's staged writer path. Agent
+    /// adapters must not mutate `IndexStore` directly.
     pub fn upsert(&mut self, document: crate::SourceDocument) {
         self.has_expiring_documents |= document.filters.contains_key("expires_at_ms");
+        self.has_session_observations |= is_session_observation(&document);
         self.queue_key_phrase_enrichment(std::slice::from_ref(&document));
         self.store.upsert(document)
+    }
+
+    /// Merge grounded terminology into one existing source document. The
+    /// caller must provide the full-source hash it reviewed; stale proposals
+    /// are rejected, while identical retries are no-ops. The source document
+    /// remains the sole searchable representation.
+    pub fn enrich_source_document(
+        &mut self,
+        enrichment: crate::source::SourceDocumentEnrichment,
+    ) -> anyhow::Result<bool> {
+        Ok(self.enrich_source_documents(vec![enrichment])? > 0)
+    }
+
+    /// Validate and stage a set of additive source-document enrichments as
+    /// one service mutation. Every expected hash is checked before any source
+    /// is changed, so a stale or invalid member cannot leave a partial batch.
+    /// The resident writer publishes the resulting source records through its
+    /// normal staged index path.
+    pub fn enrich_source_documents(
+        &mut self,
+        enrichments: Vec<crate::source::SourceDocumentEnrichment>,
+    ) -> anyhow::Result<usize> {
+        Ok(self
+            .enrich_source_documents_for_operation(enrichments, None)?
+            .len())
+    }
+
+    fn enrich_source_documents_for_operation(
+        &mut self,
+        enrichments: Vec<crate::source::SourceDocumentEnrichment>,
+        operation_id: Option<&str>,
+    ) -> anyhow::Result<Vec<String>> {
+        let replacements = self.prepare_source_document_enrichments(enrichments, operation_id)?;
+        self.apply_prepared_source_document_enrichments(replacements)
+    }
+
+    fn prepare_source_document_enrichments(
+        &self,
+        enrichments: Vec<crate::source::SourceDocumentEnrichment>,
+        operation_id: Option<&str>,
+    ) -> anyhow::Result<Vec<(crate::SourceDocument, bool)>> {
+        use crate::source::{KeyPhrase, KeyPhraseOrigin};
+        use std::collections::HashSet;
+
+        let mut seen_ids = HashSet::new();
+        let mut replacements = Vec::new();
+        for enrichment in enrichments {
+            let original_enrichment = enrichment.clone();
+            anyhow::ensure!(!enrichment.doc_id.trim().is_empty(), "doc_id is required");
+            anyhow::ensure!(
+                seen_ids.insert(enrichment.doc_id.clone()),
+                "enrichment batch contains duplicate document id {:?}",
+                enrichment.doc_id
+            );
+            let captured = self.store.source_document_by_id(&enrichment.doc_id);
+            let workspace = self
+                .workspace_store
+                .as_deref()
+                .and_then(|store| store.store.source_document_by_id(&enrichment.doc_id));
+            anyhow::ensure!(
+                !(captured.is_some() && workspace.is_some()),
+                "enrichment target document ID is ambiguous across MemoryService stores"
+            );
+            let (current, workspace_owned) = if let Some(document) = captured {
+                (document.clone(), false)
+            } else if let Some(document) = workspace {
+                (document.clone(), true)
+            } else {
+                anyhow::bail!("enrichment target document was not found");
+            };
+
+            let is_session_context = current
+                .filters
+                .get("document_type")
+                .is_some_and(|kind| kind == "session-context");
+            anyhow::ensure!(
+                (enrichment.session_conclusion.is_none() && enrichment.headings.is_empty())
+                    || is_session_context,
+                "session conclusions and generated headings require a session-context document"
+            );
+
+            let mut additions = Vec::<KeyPhrase>::new();
+            for mut phrase in enrichment.key_phrases {
+                phrase.text = phrase.text.trim().to_string();
+                phrase.kind = phrase.kind.trim().to_ascii_lowercase();
+                anyhow::ensure!(!phrase.text.is_empty(), "key phrase text must not be blank");
+                anyhow::ensure!(
+                    matches!(
+                        phrase.kind.as_str(),
+                        "event" | "place" | "org" | "work" | "thing"
+                    ),
+                    "unsupported key phrase kind {:?}",
+                    phrase.kind
+                );
+                phrase.origin = Some(KeyPhraseOrigin::ProviderEnrichment);
+                let duplicate = current
+                    .key_phrases
+                    .iter()
+                    .chain(&additions)
+                    .any(|existing| {
+                        existing.text.eq_ignore_ascii_case(&phrase.text)
+                            && existing.kind.eq_ignore_ascii_case(&phrase.kind)
+                    });
+                if !duplicate {
+                    additions.push(phrase);
+                }
+            }
+
+            let mut headings = Vec::new();
+            for heading in enrichment.headings {
+                let heading = heading.trim().to_string();
+                anyhow::ensure!(!heading.is_empty(), "heading must not be blank");
+                if !current
+                    .headings
+                    .iter()
+                    .chain(&headings)
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(&heading))
+                {
+                    headings.push(heading);
+                }
+            }
+
+            let mut links = Vec::new();
+            for link in enrichment.links {
+                let link = link.trim().to_string();
+                anyhow::ensure!(!link.is_empty(), "link target must not be blank");
+                anyhow::ensure!(link != current.doc_id, "a document cannot link to itself");
+                let exists = self.store.source_document_by_id(&link).is_some()
+                    || self
+                        .workspace_store
+                        .as_deref()
+                        .and_then(|store| store.store.source_document_by_id(&link))
+                        .is_some();
+                anyhow::ensure!(exists, "link target document was not found");
+                if !current.links.contains(&link) && !links.contains(&link) {
+                    links.push(link);
+                }
+            }
+
+            let supersedes_document_id = enrichment
+                .supersedes_document_id
+                .map(|value| value.trim().to_string());
+            let supersedes_changed = if let Some(target_id) = supersedes_document_id.as_ref() {
+                anyhow::ensure!(
+                    !target_id.is_empty(),
+                    "superseded document ID must not be blank"
+                );
+                anyhow::ensure!(
+                    target_id != &current.doc_id,
+                    "a document cannot supersede itself"
+                );
+                let target_captured = self.store.source_document_by_id(target_id);
+                let target_workspace = self
+                    .workspace_store
+                    .as_deref()
+                    .and_then(|store| store.store.source_document_by_id(target_id));
+                anyhow::ensure!(
+                    !(target_captured.is_some() && target_workspace.is_some()),
+                    "superseded document ID is ambiguous across MemoryService stores"
+                );
+                let target = target_captured
+                    .or(target_workspace)
+                    .ok_or_else(|| anyhow::anyhow!("superseded document was not found"))?;
+                let target_workspace_owned = target_workspace.is_some();
+                anyhow::ensure!(
+                    workspace_owned == target_workspace_owned,
+                    "superseded document must be in the same backing store"
+                );
+                anyhow::ensure!(
+                    crate::semantic_relations::semantic_scope(&current)
+                        == crate::semantic_relations::semantic_scope(target),
+                    "superseded document is outside the target's semantic scope"
+                );
+                if let Some(existing) = current.filters.get("supersedes_id") {
+                    anyhow::ensure!(
+                        existing == target_id,
+                        "source document already supersedes a different document"
+                    );
+                    false
+                } else {
+                    true
+                }
+            } else {
+                false
+            };
+
+            let conclusion = enrichment
+                .session_conclusion
+                .map(|value| value.trim().to_string());
+            if let Some(value) = conclusion.as_ref() {
+                anyhow::ensure!(!value.is_empty(), "session conclusion must not be blank");
+            }
+            let conclusion_changed = conclusion.as_ref().is_some_and(|value| {
+                current
+                    .filters
+                    .get("membrick_session_conclusion")
+                    .is_none_or(|existing| existing != value)
+            });
+
+            if additions.is_empty()
+                && headings.is_empty()
+                && links.is_empty()
+                && !supersedes_changed
+                && !conclusion_changed
+            {
+                // A retry, or a provider phrase already produced by the
+                // extractor, needs no write and cannot overwrite newer data.
+                continue;
+            }
+
+            let actual_hash = crate::source::source_document_hash(&current)?;
+            anyhow::ensure!(
+                actual_hash == enrichment.expected_source_hash,
+                "source document changed after enrichment work was prepared"
+            );
+            let mut replacement = current;
+            replacement.key_phrases.extend(additions);
+            replacement.headings.extend(headings);
+            let contributed_link_ids = links.iter().cloned().collect::<HashSet<_>>();
+            replacement.links.extend(links);
+            if supersedes_changed {
+                replacement.filters.insert(
+                    "supersedes_id".to_string(),
+                    supersedes_document_id.expect("supersedes_changed requires a target"),
+                );
+            }
+            if let Some(conclusion) = conclusion.filter(|_| conclusion_changed) {
+                set_session_conclusion(&mut replacement, &conclusion);
+            }
+            if let Some(operation_id) = operation_id {
+                replacement.filters.insert(
+                    "membrick_last_enrichment_search_id".to_string(),
+                    operation_id.to_string(),
+                );
+                let mut contribution = original_enrichment;
+                contribution.key_phrases = contribution
+                    .key_phrases
+                    .into_iter()
+                    .filter_map(|mut phrase| {
+                        let present = replacement.key_phrases.iter().any(|existing| {
+                            existing.origin
+                                == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+                                && existing.text.eq_ignore_ascii_case(phrase.text.trim())
+                                && existing.kind.eq_ignore_ascii_case(phrase.kind.trim())
+                        });
+                        if present {
+                            phrase.origin =
+                                Some(crate::source::KeyPhraseOrigin::ProviderEnrichment);
+                            Some(phrase)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                contribution.headings.retain(|heading| {
+                    replacement
+                        .headings
+                        .iter()
+                        .any(|existing| existing.eq_ignore_ascii_case(heading.trim()))
+                });
+                contribution
+                    .links
+                    .retain(|link| contributed_link_ids.contains(&link.trim().to_string()));
+                contribution.session_conclusion = conclusion_changed
+                    .then(|| {
+                        replacement
+                            .filters
+                            .get("membrick_session_conclusion")
+                            .cloned()
+                    })
+                    .flatten();
+                if let Some(target_id) = replacement.filters.get("supersedes_id") {
+                    contribution.supersedes_document_id = Some(target_id.clone());
+                }
+                for evidence in &mut contribution.evidence {
+                    let source = self
+                        .store
+                        .source_document_by_id(&evidence.doc_id)
+                        .or_else(|| {
+                            self.workspace_store.as_deref().and_then(|store| {
+                                store.store.source_document_by_id(&evidence.doc_id)
+                            })
+                        })
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("enrichment evidence document was not found")
+                        })?;
+                    evidence.expected_source_hash = source_content_fingerprint(source);
+                }
+                if !contribution.key_phrases.is_empty()
+                    || !contribution.headings.is_empty()
+                    || !contribution.links.is_empty()
+                    || contribution.supersedes_document_id.is_some()
+                    || contribution.session_conclusion.is_some()
+                {
+                    replacement.filters.insert(
+                        enrichment_contribution_filter(operation_id),
+                        serde_json::to_string(&contribution)?,
+                    );
+                }
+            }
+            replacement
+                .headings
+                .sort_by_key(|heading| heading.to_ascii_lowercase());
+            replacement
+                .headings
+                .dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+            replacement.links.sort();
+            replacement.links.dedup();
+            replacement.doc_length = replacement.content.len();
+            replacement.key_phrases.sort_by(|left, right| {
+                let left_origin = serde_json::to_string(&left.origin).unwrap_or_default();
+                let right_origin = serde_json::to_string(&right.origin).unwrap_or_default();
+                left_origin
+                    .cmp(&right_origin)
+                    .then_with(|| {
+                        left.kind
+                            .to_ascii_lowercase()
+                            .cmp(&right.kind.to_ascii_lowercase())
+                    })
+                    .then_with(|| {
+                        left.text
+                            .to_ascii_lowercase()
+                            .cmp(&right.text.to_ascii_lowercase())
+                    })
+            });
+            replacements.push((replacement, workspace_owned));
+        }
+
+        Ok(replacements)
+    }
+
+    fn apply_prepared_source_document_enrichments(
+        &mut self,
+        replacements: Vec<(crate::SourceDocument, bool)>,
+    ) -> anyhow::Result<Vec<String>> {
+        if replacements.is_empty() {
+            return Ok(Vec::new());
+        }
+        let changed_doc_ids = replacements
+            .iter()
+            .map(|(document, _)| document.doc_id.clone())
+            .collect::<Vec<_>>();
+        let (captured, workspace): (Vec<_>, Vec<_>) = replacements
+            .into_iter()
+            .partition(|(_, workspace_owned)| !workspace_owned);
+        if !captured.is_empty() {
+            self.stage_upsert_batch(captured.into_iter().map(|(document, _)| document).collect())?;
+        }
+        if !workspace.is_empty() {
+            let store = self
+                .workspace_store
+                .as_deref_mut()
+                .ok_or_else(|| anyhow::anyhow!("workspace enrichment owner is unavailable"))?;
+            store.stage_upsert_batch(
+                workspace
+                    .into_iter()
+                    .map(|(document, _)| document)
+                    .collect(),
+            )?;
+        }
+        Ok(changed_doc_ids)
+    }
+
+    /// Preserve provider-approved additions on generated session-context
+    /// documents when a hook publishes the next capture batch.
+    pub(crate) fn preserve_document_enrichment(
+        &self,
+        target: MemoryStore,
+        documents: &mut [SourceDocument],
+    ) {
+        let existing_store = self.memory_store(target);
+        let incoming_fingerprints = documents
+            .iter()
+            .map(|document| {
+                (
+                    document.doc_id.clone(),
+                    source_content_fingerprint(document),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for incoming in documents {
+            let Some(existing) = existing_store
+                .store
+                .source_document_by_id(&incoming.doc_id)
+                .cloned()
+            else {
+                continue;
+            };
+
+            let contributions = existing
+                .filters
+                .iter()
+                .filter(|(key, _)| key.starts_with(ENRICHMENT_CONTRIBUTION_PREFIX))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>();
+            if incoming.filters.get("document_type").map(String::as_str) == Some("session-context")
+            {
+                // Hook-generated observation links are part of the complete
+                // session record, not an optional provider enrichment. Keep
+                // them across captures even when the feedback contribution
+                // only added a conclusion or headings. Links owned by a
+                // feedback contribution are merged below only if its cited
+                // evidence is still current.
+                let contributed_links = contributions
+                    .iter()
+                    .filter_map(|(_, encoded)| {
+                        serde_json::from_str::<crate::source::SourceDocumentEnrichment>(encoded)
+                            .ok()
+                    })
+                    .flat_map(|contribution| contribution.links)
+                    .collect::<HashSet<_>>();
+                for link in &existing.links {
+                    if contributed_links.contains(link) {
+                        continue;
+                    }
+                    let target_exists = incoming_fingerprints.contains_key(link)
+                        || self.store.source_document_by_id(link).is_some()
+                        || self
+                            .workspace_store
+                            .as_deref()
+                            .and_then(|store| store.store.source_document_by_id(link))
+                            .is_some();
+                    if target_exists && !incoming.links.contains(link) {
+                        incoming.links.push(link.clone());
+                    }
+                }
+            }
+            if contributions.is_empty()
+                && incoming.filters.get("document_type").map(String::as_str)
+                    == Some("session-context")
+            {
+                // Preserve context enrichment created before per-operation
+                // contribution records were introduced.
+                for (key, value) in &existing.filters {
+                    if key.starts_with("membrick_") {
+                        incoming.filters.insert(key.clone(), value.clone());
+                    }
+                }
+                for heading in &existing.headings {
+                    if !incoming
+                        .headings
+                        .iter()
+                        .any(|candidate| candidate.eq_ignore_ascii_case(heading))
+                    {
+                        incoming.headings.push(heading.clone());
+                    }
+                }
+                for link in &existing.links {
+                    if !incoming.links.contains(link) {
+                        incoming.links.push(link.clone());
+                    }
+                }
+                for phrase in existing.key_phrases.iter().filter(|phrase| {
+                    phrase.origin == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+                }) {
+                    if !incoming.key_phrases.iter().any(|current| {
+                        current.text.eq_ignore_ascii_case(&phrase.text)
+                            && current.kind.eq_ignore_ascii_case(&phrase.kind)
+                    }) {
+                        incoming.key_phrases.push(phrase.clone());
+                    }
+                }
+                if let Some(conclusion) = existing.filters.get("membrick_session_conclusion") {
+                    set_session_conclusion(incoming, conclusion);
+                }
+                incoming.doc_length = incoming.content.len();
+                continue;
+            }
+
+            let mut valid_operation_ids = HashSet::new();
+            for (key, encoded) in contributions {
+                let Ok(contribution) =
+                    serde_json::from_str::<crate::source::SourceDocumentEnrichment>(&encoded)
+                else {
+                    incoming.filters.remove(&key);
+                    continue;
+                };
+                let dependencies_match = contribution.evidence.iter().all(|evidence| {
+                    let actual = incoming_fingerprints
+                        .get(&evidence.doc_id)
+                        .cloned()
+                        .or_else(|| {
+                            self.store
+                                .source_document_by_id(&evidence.doc_id)
+                                .map(source_content_fingerprint)
+                        })
+                        .or_else(|| {
+                            self.workspace_store
+                                .as_deref()
+                                .and_then(|store| {
+                                    store.store.source_document_by_id(&evidence.doc_id)
+                                })
+                                .map(source_content_fingerprint)
+                        });
+                    actual.as_deref() == Some(evidence.expected_source_hash.as_str())
+                });
+
+                if dependencies_match {
+                    for phrase in contribution.key_phrases {
+                        if !incoming.key_phrases.iter().any(|current| {
+                            current.text.eq_ignore_ascii_case(&phrase.text)
+                                && current.kind.eq_ignore_ascii_case(&phrase.kind)
+                        }) {
+                            incoming.key_phrases.push(phrase);
+                        }
+                    }
+                    for heading in contribution.headings {
+                        if !incoming
+                            .headings
+                            .iter()
+                            .any(|current| current.eq_ignore_ascii_case(&heading))
+                        {
+                            incoming.headings.push(heading);
+                        }
+                    }
+                    for link in contribution.links {
+                        if !incoming.links.contains(&link) {
+                            incoming.links.push(link);
+                        }
+                    }
+                    if let Some(target_id) = contribution.supersedes_document_id {
+                        incoming
+                            .filters
+                            .insert("supersedes_id".to_string(), target_id);
+                    }
+                    if let Some(conclusion) = contribution.session_conclusion {
+                        set_session_conclusion(incoming, &conclusion);
+                    }
+                    valid_operation_ids.insert(key);
+                } else {
+                    for phrase in contribution.key_phrases {
+                        incoming.key_phrases.retain(|current| {
+                            !(current.origin
+                                == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+                                && current.text.eq_ignore_ascii_case(&phrase.text)
+                                && current.kind.eq_ignore_ascii_case(&phrase.kind))
+                        });
+                    }
+                    for heading in contribution.headings {
+                        incoming
+                            .headings
+                            .retain(|current| !current.eq_ignore_ascii_case(&heading));
+                    }
+                    for link in contribution.links {
+                        incoming.links.retain(|current| current != &link);
+                    }
+                    if contribution
+                        .supersedes_document_id
+                        .as_ref()
+                        .is_some_and(|target| incoming.filters.get("supersedes_id") == Some(target))
+                    {
+                        incoming.filters.remove("supersedes_id");
+                    }
+                    if contribution
+                        .session_conclusion
+                        .as_ref()
+                        .is_some_and(|conclusion| {
+                            incoming
+                                .filters
+                                .get("membrick_session_conclusion")
+                                .is_some_and(|current| current == conclusion)
+                        })
+                    {
+                        remove_session_conclusion(incoming);
+                    }
+                    incoming.filters.remove(&key);
+                }
+            }
+            for (key, value) in &existing.filters {
+                if key.starts_with(ENRICHMENT_CONTRIBUTION_PREFIX)
+                    && valid_operation_ids.contains(key)
+                {
+                    incoming.filters.insert(key.clone(), value.clone());
+                }
+            }
+            if let Some(last_operation) = existing.filters.get("membrick_last_enrichment_search_id")
+            {
+                let key = enrichment_contribution_filter(last_operation);
+                if valid_operation_ids.contains(&key) {
+                    incoming.filters.insert(
+                        "membrick_last_enrichment_search_id".to_string(),
+                        last_operation.clone(),
+                    );
+                }
+            }
+            incoming.doc_length = incoming.content.len();
+        }
+    }
+
+    /// Return either a page of unreviewed MCP searches or one exact search.
+    /// Review state is keyed by the stable MCP trace ID and is owned by this
+    /// project service, while the append-only telemetry ledger remains intact.
+    pub(crate) fn review_search_mcp(
+        &self,
+        project_root: &Path,
+        arguments: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let args = arguments
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("review_search arguments must be an object"))?;
+        if let Some(unknown) = args
+            .keys()
+            .find(|key| !["search_id", "cursor", "page_size"].contains(&key.as_str()))
+        {
+            anyhow::bail!("unknown review_search argument: {unknown}");
+        }
+
+        let history_path = project_root
+            .join(".membrick")
+            .join("mcp-call-history.jsonl");
+        let history = match std::fs::read(&history_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let state_path = project_root
+            .join(".membrick")
+            .join("search-review-state.json");
+        let state = read_search_review_state(&state_path)?;
+        let reviews = state
+            .get("reviews")
+            .and_then(serde_json::Value::as_object)
+            .expect("validated search review state contains reviews");
+        let entries = parse_mcp_search_history(&history)?;
+
+        if let Some(search_id) = args.get("search_id").and_then(serde_json::Value::as_str) {
+            anyhow::ensure!(!search_id.trim().is_empty(), "search_id must not be blank");
+            let (_, record) = entries
+                .iter()
+                .find(|(_, record)| mcp_search_id(record) == search_id)
+                .ok_or_else(|| anyhow::anyhow!("search_id was not found in MCP call history"))?;
+            let result = search_result_payload(record);
+            let documents = self.documents_for_review(record, &result)?;
+            return Ok(serde_json::json!({
+                "search_id": search_id,
+                "reviewed": reviews.contains_key(search_id),
+                "search": record,
+                "result": result,
+                "documents": documents,
+                "prior_feedback": reviews.get(search_id).and_then(|v| v.get("feedback")),
+            }));
+        }
+
+        let page_size = args
+            .get("page_size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(10)
+            .clamp(1, 100) as usize;
+        let mut cursor = args
+            .get("cursor")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| parse_search_history_cursor(&history, value))
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("invalid continuation cursor: {error}"))?
+            .unwrap_or(0);
+        anyhow::ensure!(
+            cursor <= history.len(),
+            "cursor is beyond the search history"
+        );
+        if cursor > 0 && history.get(cursor - 1) != Some(&b'\n') {
+            anyhow::bail!("cursor does not point to a search-history record boundary");
+        }
+
+        let mut page = Vec::new();
+        let mut position = cursor;
+        while position < history.len() && page.len() < page_size {
+            let Some(relative_end) = history[position..].iter().position(|byte| *byte == b'\n')
+            else {
+                break;
+            };
+            let end = position + relative_end + 1;
+            if let Ok(record) = serde_json::from_slice::<crate::telemetry::McpCallRecord>(
+                &history[position..end - 1],
+            ) {
+                if record.tool == "search" {
+                    let search_id = mcp_search_id(&record);
+                    if !reviews.contains_key(&search_id) {
+                        let result = search_result_payload(&record);
+                        page.push(serde_json::json!({
+                            "search_id": search_id,
+                            "search": record,
+                            "result": result,
+                            "documents": self.documents_for_review(&record, &result)?,
+                        }));
+                    }
+                }
+            }
+            position = end;
+        }
+        cursor = position;
+        let has_more_records = history[cursor..].iter().any(|byte| *byte == b'\n');
+        let next_cursor = has_more_records.then(|| search_history_cursor(&history, cursor));
+        Ok(serde_json::json!({
+            "searches": page,
+            "next_cursor": next_cursor,
+            "has_more": has_more_records,
+        }))
+    }
+
+    /// Return reviewed MCP searches for the local dashboard. Feedback remains
+    /// owned by MemoryService; the append-only MCP history supplies query and
+    /// provider details without being rewritten.
+    pub(crate) fn dashboard_search_feedback_reviews(
+        &self,
+        project_root: &Path,
+        offset: usize,
+        page_size: usize,
+    ) -> anyhow::Result<serde_json::Value> {
+        let directory = project_root.join(".membrick");
+        let state = read_search_review_state(&directory.join("search-review-state.json"))?;
+        let history = match std::fs::read(directory.join("mcp-call-history.jsonl")) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let records = parse_mcp_search_history(&history)?
+            .into_iter()
+            .map(|(_, record)| (mcp_search_id(&record), record))
+            .collect::<HashMap<_, _>>();
+        let reviews = state["reviews"]
+            .as_object()
+            .expect("validated search review state contains reviews");
+        let evaluation = search_feedback_evaluation(reviews, &records);
+        let mut rows = reviews
+            .iter()
+            .filter_map(|(search_id, entry)| {
+                let feedback = entry.get("feedback")?;
+                let record = records.get(search_id);
+                let searched_at = record.map(|record| record.timestamp_ms).unwrap_or_default();
+                let submitted_at = entry
+                    .get("submitted_at_ms")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(searched_at);
+                Some((
+                    submitted_at,
+                    serde_json::json!({
+                        "search_id": search_id,
+                        "submitted_at_ms": submitted_at,
+                        "provider": record.map(|record| record.provider.as_str()),
+                        "query": record.and_then(|record| record.arguments.get("query")).and_then(serde_json::Value::as_str),
+                        "status": entry.get("status").and_then(serde_json::Value::as_str).unwrap_or("pending"),
+                        "label": feedback.get("label"),
+                        "feedback": feedback.get("feedback"),
+                        "document_judgments": feedback.get("document_judgments").cloned().unwrap_or_else(|| serde_json::json!([])),
+                    }),
+                ))
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| right.0.cmp(&left.0));
+        let total = rows.len();
+        let page_size = page_size.clamp(1, 100);
+        let offset = offset.min(total);
+        let page = rows
+            .into_iter()
+            .skip(offset)
+            .take(page_size)
+            .map(|(_, review)| review)
+            .collect::<Vec<_>>();
+        let next_offset = (offset + page.len() < total).then_some(offset + page.len());
+        Ok(serde_json::json!({
+            "reviews": page,
+            "evaluation": evaluation,
+            "total": total,
+            "offset": offset,
+            "page_size": page_size,
+            "next_offset": next_offset,
+        }))
+    }
+
+    fn documents_for_review(
+        &self,
+        record: &crate::telemetry::McpCallRecord,
+        result: &serde_json::Value,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let mut wanted = HashSet::<String>::new();
+        if let Some(hits) = result.get("results").and_then(serde_json::Value::as_array) {
+            for hit in hits {
+                if let Some(id) = hit
+                    .get("id")
+                    .or_else(|| hit.get("doc_id"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    wanted.insert(id.to_string());
+                }
+            }
+        }
+        if matches!(record.session_attribution.as_str(), "explicit" | "inferred") {
+            let Some(session_id) = record.session_id.as_deref() else {
+                return Err(anyhow::anyhow!(
+                    "MCP history marks a session as explicit but has no session ID"
+                ));
+            };
+            for document in self.all_source_documents_for_review() {
+                if document.filters.get("session_id").map(String::as_str) == Some(session_id) {
+                    wanted.insert(document.doc_id.clone());
+                }
+            }
+        }
+        let documents = self.all_source_documents_for_review();
+        documents
+            .into_iter()
+            .filter(|document| wanted.contains(&document.doc_id))
+            .map(|document| {
+                Ok(serde_json::json!({
+                    "doc_id": document.doc_id,
+                    "source_hash": crate::source::source_document_hash(&document)?,
+                    "document": document,
+                }))
+            })
+            .collect()
+    }
+
+    fn all_source_documents_for_review(&self) -> Vec<SourceDocument> {
+        let mut documents = self
+            .store
+            .source_documents()
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(workspace) = self.workspace_store.as_deref() {
+            documents.extend(workspace.store.source_documents().into_iter().cloned());
+        }
+        documents
+    }
+
+    /// Enrich one selected source document through MemoryService. The target
+    /// and each evidence document are identified by exact source revisions.
+    pub(crate) fn enrich_doc_mcp(
+        &mut self,
+        arguments: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let args = arguments
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("enrich_doc arguments must be an object"))?;
+        const ALLOWED: &[&str] = &[
+            "doc_id",
+            "expected_source_hash",
+            "key_phrases",
+            "session_conclusion",
+            "headings",
+            "links",
+            "supersedes_document_id",
+            "evidence",
+        ];
+        if let Some(unknown) = args.keys().find(|key| !ALLOWED.contains(&key.as_str())) {
+            anyhow::bail!("unknown enrich_doc argument: {unknown}");
+        }
+        let enrichment: crate::source::SourceDocumentEnrichment =
+            serde_json::from_value(arguments.clone())?;
+        anyhow::ensure!(
+            !enrichment.evidence.is_empty(),
+            "enrich_doc requires evidence"
+        );
+
+        let source_doc = |service: &MemoryService, doc_id: &str| {
+            let captured = service.store.source_document_by_id(doc_id);
+            let workspace = service
+                .workspace_store
+                .as_deref()
+                .and_then(|store| store.store.source_document_by_id(doc_id));
+            anyhow::ensure!(
+                !(captured.is_some() && workspace.is_some()),
+                "evidence document ID is ambiguous across MemoryService stores"
+            );
+            captured
+                .or(workspace)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("evidence document was not found: {doc_id}"))
+        };
+        let target_is_workspace = self
+            .store
+            .source_document_by_id(&enrichment.doc_id)
+            .is_none()
+            && self
+                .workspace_store
+                .as_deref()
+                .and_then(|store| store.store.source_document_by_id(&enrichment.doc_id))
+                .is_some();
+        let target = source_doc(self, &enrichment.doc_id)?;
+        anyhow::ensure!(
+            crate::source::source_document_hash(&target)? == enrichment.expected_source_hash
+                || enrichment_is_present(&target, &enrichment),
+            "target source hash does not match the current document"
+        );
+        let mut evidence_ids = HashSet::new();
+        for evidence in &enrichment.evidence {
+            anyhow::ensure!(
+                evidence_ids.insert(evidence.doc_id.as_str()),
+                "duplicate evidence document ID"
+            );
+            let document = source_doc(self, &evidence.doc_id)?;
+            anyhow::ensure!(
+                crate::source::source_document_hash(&document)? == evidence.expected_source_hash,
+                "evidence source hash does not match the current document"
+            );
+        }
+        if let Some(replaced) = enrichment.supersedes_document_id.as_deref() {
+            anyhow::ensure!(
+                evidence_ids.contains(replaced),
+                "superseded document must be cited as evidence"
+            );
+        }
+
+        let operation_hash = format!("{:x}", Sha256::digest(serde_json::to_vec(&enrichment)?));
+        let operation_id = format!("enrich_doc:{operation_hash}");
+        let target_id = enrichment.doc_id.clone();
+        let supersedes = enrichment.supersedes_document_id.is_some();
+        let changed =
+            self.enrich_source_documents_for_operation(vec![enrichment], Some(&operation_id))?;
+        if changed
+            .iter()
+            .any(|id| self.store.source_document_by_id(id).is_some())
+        {
+            self.flush()?;
+        }
+        if changed.iter().any(|id| {
+            self.workspace_store
+                .as_deref()
+                .is_some_and(|store| store.store.source_document_by_id(id).is_some())
+        }) {
+            self.workspace_store
+                .as_deref_mut()
+                .ok_or_else(|| anyhow::anyhow!("workspace enrichment owner is unavailable"))?
+                .flush()?;
+        }
+        let adjudication = if supersedes {
+            let owner = if target_is_workspace {
+                &self
+                    .workspace_store
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("workspace enrichment owner is unavailable"))?
+                    .store
+            } else {
+                &self.store
+            };
+            Some(self.build_adjudication_receipt_from_store(
+                owner,
+                operation_id.clone(),
+                &[target_id.clone()],
+            ))
+        } else {
+            None
+        };
+        Ok(serde_json::json!({
+            "doc_id": target_id,
+            "status": if changed.is_empty() { "unchanged" } else { "enriched" },
+            "changed_documents": changed.len(),
+            "changed_document_ids": changed,
+            "publication_status": "published",
+            "adjudication": adjudication,
+        }))
+    }
+
+    /// Store one search's usefulness label and explanation. Document
+    /// enrichment is handled separately by `enrich_doc`.
+    pub(crate) fn search_feedback_mcp(
+        &mut self,
+        project_root: &Path,
+        arguments: &serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        let args = arguments
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("search_feedback arguments must be an object"))?;
+        if let Some(unknown) = args.keys().find(|key| {
+            ![
+                "search_id",
+                "label",
+                "feedback",
+                "document_judgments",
+                "query_rule_additions",
+            ]
+            .contains(&key.as_str())
+        }) {
+            anyhow::bail!("unknown search_feedback argument: {unknown}");
+        }
+        let search_id = args
+            .get("search_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("search_id is required"))?;
+        let label = args
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("label is required"))?;
+        anyhow::ensure!(
+            matches!(label, "helpful" | "partially_helpful" | "not_helpful"),
+            "label must be helpful, partially_helpful, or not_helpful"
+        );
+        let feedback = args
+            .get("feedback")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("feedback must explain the search outcome"))?;
+        let query_rule_additions: BTreeMap<String, Vec<String>> = args
+            .get("query_rule_additions")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_default();
+
+        let history_path = project_root
+            .join(".membrick")
+            .join("mcp-call-history.jsonl");
+        let history = std::fs::read(&history_path)?;
+        let record = parse_mcp_search_history(&history)?
+            .into_iter()
+            .map(|(_, record)| record)
+            .find(|record| mcp_search_id(record) == search_id)
+            .ok_or_else(|| anyhow::anyhow!("search_id was not found in MCP call history"))?;
+        let result = search_result_payload(&record);
+        let result_hits = result
+            .get("results")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("recorded search has no results array"))?;
+        let supplied_judgments = args
+            .get("document_judgments")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("document_judgments array is required"))?;
+        let mut supplied_by_id = HashMap::new();
+        for judgment in supplied_judgments {
+            let judgment = judgment
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("each document judgment must be an object"))?;
+            if let Some(unknown) = judgment
+                .keys()
+                .find(|key| !["doc_id", "relevance", "feedback"].contains(&key.as_str()))
+            {
+                anyhow::bail!("unknown document judgment argument: {unknown}");
+            }
+            let doc_id = judgment
+                .get("doc_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("document judgment doc_id is required"))?;
+            let relevance = judgment
+                .get("relevance")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| {
+                    matches!(*value, "relevant" | "partially_relevant" | "not_relevant")
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "document relevance must be relevant, partially_relevant, or not_relevant"
+                    )
+                })?;
+            let feedback = judgment
+                .get("feedback")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            anyhow::ensure!(
+                supplied_by_id
+                    .insert(
+                        doc_id.to_string(),
+                        (relevance.to_string(), feedback.map(str::to_string))
+                    )
+                    .is_none(),
+                "duplicate document judgment for {doc_id}"
+            );
+        }
+        let mut normalized_judgments = Vec::with_capacity(result_hits.len());
+        for (rank, hit) in result_hits.iter().enumerate() {
+            let doc_id = hit
+                .get("doc_id")
+                .or_else(|| hit.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("recorded result at rank {} has no doc_id", rank + 1)
+                })?;
+            let (relevance, feedback) = supplied_by_id.remove(doc_id).ok_or_else(|| {
+                anyhow::anyhow!("missing document judgment for returned document {doc_id}")
+            })?;
+            normalized_judgments.push(serde_json::json!({
+                "doc_id": doc_id,
+                "rank": rank + 1,
+                "source_hash": hit.get("source_hash").cloned().unwrap_or(serde_json::Value::Null),
+                "relevance": relevance,
+                "feedback": feedback,
+            }));
+        }
+        anyhow::ensure!(
+            supplied_by_id.is_empty(),
+            "document judgments contain IDs not returned by this search: {}",
+            supplied_by_id
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let review = serde_json::json!({
+            "search_id": search_id,
+            "label": label,
+            "feedback": feedback,
+            "document_judgments": normalized_judgments,
+        });
+        let request_hash = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(&review, &query_rule_additions))?)
+        );
+        let state_path = project_root
+            .join(".membrick")
+            .join("search-review-state.json");
+        std::fs::create_dir_all(state_path.parent().expect("state path has parent"))?;
+        let mut state = read_search_review_state(&state_path)?;
+        let retrying_pending = if let Some(prior) = state["reviews"].get(search_id) {
+            anyhow::ensure!(
+                prior
+                    .get("request_hash")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(request_hash.as_str()),
+                "search_id already has different feedback"
+            );
+            if let Some(receipt) = prior.get("receipt") {
+                return Ok(receipt.clone());
+            }
+            true
+        } else {
+            false
+        };
+
+        if !query_rule_additions.is_empty() {
+            let context_documents = self.documents_for_review(&record, &result)?;
+            let query = record
+                .arguments
+                .get("query")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let mut grounded_text = query.to_lowercase();
+            for value in &context_documents {
+                if let Some(document) = value.get("document") {
+                    grounded_text.push(' ');
+                    grounded_text.push_str(&document.to_string().to_lowercase());
+                }
+            }
+            for terms in query_rule_additions.values() {
+                for term in terms {
+                    let term = term.trim();
+                    anyhow::ensure!(!term.is_empty(), "query rule additions cannot be empty");
+                    anyhow::ensure!(grounded_text.contains(&term.to_lowercase()),
+                        "query rule addition {term:?} must appear in the reviewed query or source documents");
+                }
+            }
+            let rules = self.project_rules.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "query rule additions require the workspace MemoryService rules configuration"
+                )
+            })?;
+            rules.validate_query_rule_terms(&query_rule_additions)?;
+        }
+
+        if !retrying_pending {
+            state["reviews"][search_id] = serde_json::json!({
+                "request_hash": request_hash,
+                "feedback": review,
+                "status": "pending",
+                "submitted_at_ms": unix_time_ms(),
+            });
+            write_search_review_state(&state_path, &state)?;
+        }
+        let accepted_query_rules = if query_rule_additions.is_empty() {
+            0
+        } else {
+            self.project_rules
+                .as_deref()
+                .expect("query rules validated")
+                .add_query_rule_terms(query_rule_additions)?
+        };
+        let receipt = serde_json::json!({
+            "search_id": search_id,
+            "label": label,
+            "status": "reviewed",
+            "judged_documents": normalized_judgments.len(),
+            "changed_documents": 0,
+            "changed_document_ids": [],
+            "accepted_query_rules": accepted_query_rules,
+            "publication_status": "not_required",
+        });
+        state["reviews"][search_id]["status"] = serde_json::json!("reviewed");
+        state["reviews"][search_id]["receipt"] = receipt.clone();
+        write_search_review_state(&state_path, &state)?;
+        Ok(receipt)
     }
 
     /// Replace a host-owned capture group, removing obsolete chunks on replay.
@@ -3407,6 +5157,20 @@ impl MemoryService {
         self.store.source_documents()
     }
 
+    /// Compact status for the workspace-owned reasoning-rule overlay.
+    /// `None` means this service was opened as an in-memory/standalone index.
+    pub(crate) fn reasoning_rules_status(&self) -> Option<serde_json::Value> {
+        let rules = self.project_rules.as_ref()?;
+        let status = rules.status();
+        Some(serde_json::json!({
+            "path": status.path.map(|path| path.display().to_string()),
+            "active_query_fingerprint": status.query_fingerprint,
+            "active_extraction_fingerprint": status.extraction_fingerprint,
+            "last_reload_error": status.last_error,
+            "supported_overlay_scope": "query_only",
+        }))
+    }
+
     /// Stateless query for integration read paths (recall).
     /// Runs the shared service query pipeline with no session state read or
     /// recorded.
@@ -3565,6 +5329,25 @@ impl MemoryService {
         ))
     }
 
+    #[cfg(any(
+        feature = "claude-code",
+        feature = "codex",
+        feature = "gemini-cli",
+        feature = "agy",
+        feature = "muse-code",
+        feature = "openclaw",
+        feature = "hermes",
+        feature = "roo-runtime"
+    ))]
+    pub(crate) fn comparison_operands_for_query(&self, query: &str) -> Vec<String> {
+        let rules = self
+            .project_rules
+            .as_ref()
+            .map(|rules| rules.snapshot())
+            .unwrap_or_else(crate::reasoning_rules::builtin_rules);
+        crate::query_semantics::analyze_query_with_rules(query, rules).comparison_operands
+    }
+
     /// Format the memory list as the MCP list_memories payload.
     #[cfg(any(
         feature = "claude-code",
@@ -3602,6 +5385,7 @@ impl MemoryService {
                         user_id: doc.filters.get(USER_FILTER).cloned(),
                         session_id: doc.group_id.clone(),
                         relation_evidence: result.relation_evidence.clone(),
+                        comparison_operands: result.comparison_operands.clone(),
                     })
             })
             .collect();
@@ -3772,9 +5556,10 @@ pub(crate) fn prepare_session_query(
     session_id: Option<&str>,
     query: &str,
     reference_date: Option<&str>,
+    rules: std::sync::Arc<crate::reasoning_rules::ReasoningRules>,
 ) -> PreparedQuery {
     let Some(session_id) = session_id else {
-        return PreparedQuery::new(query);
+        return PreparedQuery::new_with_rules(query, rules);
     };
     let now_ms = unix_time_ms();
     let rewritten = {
@@ -3786,8 +5571,8 @@ pub(crate) fn prepare_session_query(
     // too, so relative temporal language resolves against it instead of the
     // clock, consistent with non-session searches.
     match reference_date {
-        Some(ref_date) => PreparedQuery::new_at(&rewritten, ref_date),
-        None => PreparedQuery::new(&rewritten),
+        Some(ref_date) => PreparedQuery::new_at_with_rules(&rewritten, ref_date, rules),
+        None => PreparedQuery::new_with_rules(&rewritten, rules),
     }
 }
 
@@ -3919,6 +5704,45 @@ mod tests {
     use super::*;
     use crate::PipelineOptions;
 
+    #[test]
+    fn search_feedback_evaluation_uses_complete_ranked_judgments_only() {
+        let record = crate::telemetry::McpCallRecord {
+            trace_id: Some("search-1".into()),
+            timestamp_ms: 1,
+            provider: "codex".into(),
+            tool: "search".into(),
+            session_id: None,
+            session_attribution: "absent".into(),
+            request_id: None,
+            arguments: serde_json::json!({"query":"example"}),
+            duration_ms: 1,
+            error: false,
+            response: serde_json::json!({"result":{"content":[{"text":serde_json::json!({
+                "results":[{"doc_id":"doc:a"},{"doc_id":"doc:b"}]
+            }).to_string()}]}}),
+        };
+        let records = HashMap::from([("search-1".into(), record)]);
+        let reviews = serde_json::json!({
+            "search-1":{"feedback":{"label":"partially_helpful","document_judgments":[
+                {"doc_id":"doc:a","rank":1,"relevance":"not_relevant"},
+                {"doc_id":"doc:b","rank":2,"relevance":"relevant"}
+            ]}},
+            "search-2":{"feedback":{"label":"not_helpful","document_judgments":[
+                {"doc_id":"doc:missing","rank":1,"relevance":"relevant"}
+            ]}}
+        });
+        let evaluation = search_feedback_evaluation(reviews.as_object().unwrap(), &records);
+
+        assert_eq!(evaluation["reviewed_searches"], 2);
+        assert_eq!(evaluation["complete_judged_searches"], 1);
+        assert_eq!(evaluation["judged_documents"], 3);
+        assert_eq!(evaluation["mrr"]["n"], 1);
+        assert_eq!(evaluation["mrr"]["value"], 0.5);
+        assert!((evaluation["ndcg_at_5"]["value"].as_f64().unwrap() - 0.6309297536).abs() < 1e-8);
+        assert_eq!(evaluation["overall_labels"]["not_helpful"], 1);
+        assert_eq!(evaluation["sample_status"], "small");
+    }
+
     fn service() -> MemoryService {
         MemoryService::in_memory(PipelineOptions::default())
     }
@@ -3942,6 +5766,57 @@ mod tests {
             })
             .unwrap();
         assert!(service.requires_visibility_allow_list());
+    }
+
+    #[test]
+    fn session_observations_are_persisted_but_excluded_from_memoryservice_search() {
+        let mut service = service();
+        let mut observation = direct_doc("observation-1", "rare raw transcript phrase");
+        observation.filters.insert(
+            "document_type".into(),
+            SESSION_OBSERVATION_DOCUMENT_TYPE.into(),
+        );
+        let turn = direct_doc("turn-1", "searchable turn result");
+        service.upsert(observation);
+        service.upsert(turn);
+        service.refresh_index().unwrap();
+
+        let hits = service
+            .search_with_filters(
+                "rare raw transcript phrase",
+                "user",
+                None,
+                10,
+                &BTreeMap::new(),
+                None,
+            )
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "raw observation leaked into search results"
+        );
+
+        let hits = service
+            .search_with_filters(
+                "searchable turn result",
+                "user",
+                None,
+                10,
+                &BTreeMap::new(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            hits.iter()
+                .map(|hit| hit.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            ["turn-1"]
+        );
+
+        assert!(service
+            .store
+            .source_document_by_id("observation-1")
+            .is_some());
     }
 
     #[cfg(any(
@@ -4215,7 +6090,36 @@ mod tests {
             superseded_by: None,
             relation_confidence: None,
             relation_evidence: vec![],
+            comparison_operands: vec![],
         }
+    }
+
+    #[test]
+    fn comparison_merge_interleaves_sides_and_combines_shared_hits() {
+        let mut left = bare_search_result("shared", 0.8);
+        left.comparison_operands = vec!["old interface".into()];
+        let mut left_only = bare_search_result("old-only", 0.7);
+        left_only.comparison_operands = vec!["old interface".into()];
+        let mut right = bare_search_result("shared", 0.9);
+        right.comparison_operands = vec!["new interface".into()];
+        let mut right_only = bare_search_result("new-only", 0.6);
+        right_only.comparison_operands = vec!["new interface".into()];
+
+        let merged =
+            interleave_comparison_results(vec![vec![left, left_only], vec![right, right_only]], 3);
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|result| result.doc_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["shared", "old-only", "new-only"]
+        );
+        assert_eq!(
+            merged[0].comparison_operands,
+            vec!["old interface", "new interface"]
+        );
+        assert_eq!(merged[0].score, 0.9);
     }
 
     #[test]
@@ -4249,6 +6153,134 @@ mod tests {
             .unwrap();
         assert_eq!(response.data.len(), 1);
         assert!(response.data[0].content.contains("dark mode"));
+    }
+
+    #[test]
+    fn comparison_search_retrieves_both_named_sides_through_memory_service() {
+        let mut service = service();
+        for (request_id, content) in [
+            (
+                "old",
+                "The old command interface used --claude-code-install.",
+            ),
+            (
+                "new",
+                "The new command interface uses membrick install claude.",
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: request_id.into(),
+                })
+                .unwrap();
+        }
+        let filters = BTreeMap::from([(USER_FILTER.to_string(), "user-a".to_string())]);
+
+        let results = service
+            .search_with_filters_cached(
+                "Compare old and new command interface",
+                "user-a",
+                None,
+                10,
+                &filters,
+                None,
+            )
+            .unwrap();
+
+        assert!(results.iter().any(|result| {
+            result
+                .comparison_operands
+                .iter()
+                .any(|operand| operand.starts_with("old "))
+        }));
+        assert!(results.iter().any(|result| {
+            result
+                .comparison_operands
+                .iter()
+                .any(|operand| operand.starts_with("new "))
+        }));
+
+        let response = service
+            .search(SearchRequest {
+                query: "Compare old and new command interface".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 10,
+                session_id: None,
+                scope: None,
+                filters: None,
+                reference_date: None,
+            })
+            .unwrap();
+        assert!(response.data.iter().any(|result| {
+            result
+                .comparison_operands
+                .iter()
+                .any(|operand| operand.starts_with("old "))
+        }));
+        assert!(response.data.iter().any(|result| {
+            result
+                .comparison_operands
+                .iter()
+                .any(|operand| operand.starts_with("new "))
+        }));
+    }
+
+    #[test]
+    fn explanation_query_terms_retrieve_a_rationale_document() {
+        let mut service = service();
+        for (request_id, content) in [
+            (
+                "command-history",
+                "The command interface used six provider-specific installation options.",
+            ),
+            (
+                "command-rationale",
+                "Decision rationale: we changed the command interface because combining provider commands made installation easier. This records why the old options were replaced.",
+            ),
+        ] {
+            service
+                .add(AddRequest {
+                    request_id: request_id.into(),
+                    messages: vec![Message {
+                        role: "user".into(),
+                        timestamp: None,
+                        content: content.into(),
+                        expires_at_ms: None,
+                        supersedes_id: None,
+                    }],
+                    user_id: "user-a".into(),
+                    session_id: request_id.into(),
+                })
+                .unwrap();
+        }
+
+        let response = service
+            .search(SearchRequest {
+                query: "Why did we change the command interface?".into(),
+                options: None,
+                user_id: "user-a".into(),
+                top_k: 5,
+                session_id: None,
+                scope: None,
+                filters: None,
+                reference_date: None,
+            })
+            .unwrap();
+
+        assert!(response
+            .data
+            .iter()
+            .any(|result| result.content.contains("Decision rationale")));
     }
 
     #[test]
@@ -6049,6 +8081,7 @@ mod tests {
             superseded_by: None,
             relation_confidence: None,
             relation_evidence: Vec::new(),
+            comparison_operands: Vec::new(),
         }
     }
 
@@ -6493,6 +8526,1589 @@ json.dump({"relations": [], "key_phrases": []}, sys.stdout)
             key_phrases: Vec::new(),
             key_phrase_extraction_hash: String::new(),
         }
+    }
+
+    fn enrichment(doc: &SourceDocument, phrase: &str) -> crate::source::SourceDocumentEnrichment {
+        crate::source::SourceDocumentEnrichment {
+            doc_id: doc.doc_id.clone(),
+            expected_source_hash: crate::source::source_document_hash(doc).unwrap(),
+            key_phrases: vec![crate::source::KeyPhrase {
+                text: phrase.to_string(),
+                kind: "thing".to_string(),
+                origin: None,
+            }],
+            session_conclusion: None,
+            headings: Vec::new(),
+            links: Vec::new(),
+            supersedes_document_id: None,
+            evidence: Vec::new(),
+        }
+    }
+
+    fn search_feedback_temp_dir(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("membrick-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    #[test]
+    fn dashboard_search_reviews_join_feedback_and_paginate_newest_first() {
+        let root = search_feedback_temp_dir("dashboard-feedback");
+        std::fs::create_dir_all(&root).unwrap();
+        let service = MemoryService::in_memory(PipelineOptions::default());
+        for (request, timestamp, query) in [
+            ("dashboard-old", 10, "older query"),
+            ("dashboard-new", 20, "newer query"),
+        ] {
+            crate::telemetry::record_mcp_call(
+                &root,
+                "codex",
+                "search",
+                Some(serde_json::json!(request)),
+                &serde_json::json!({"query":query}),
+                1,
+                false,
+                serde_json::json!({"result":{"content":[{"text":"{}"}]}}),
+            )
+            .unwrap();
+            let history = std::fs::read(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+            let mut record = parse_mcp_search_history(&history).unwrap().pop().unwrap().1;
+            record.timestamp_ms = timestamp;
+            let search_id = mcp_search_id(&record);
+            let state_path = root.join(".membrick/search-review-state.json");
+            let mut state = read_search_review_state(&state_path).unwrap();
+            state["reviews"][&search_id] = serde_json::json!({
+                "status":"reviewed",
+                "submitted_at_ms":timestamp + 100,
+                "feedback":{
+                    "label":"helpful",
+                    "feedback":format!("review for {query}"),
+                    "document_judgments":[{"doc_id":"doc:one","relevance":"relevant"}]
+                }
+            });
+            write_search_review_state(&state_path, &state).unwrap();
+        }
+
+        let first = service
+            .dashboard_search_feedback_reviews(&root, 0, 1)
+            .unwrap();
+        assert_eq!(first["total"], 2);
+        assert_eq!(first["next_offset"], 1);
+        assert_eq!(first["reviews"][0]["query"], "newer query");
+        assert_eq!(first["reviews"][0]["provider"], "codex");
+        assert_eq!(first["reviews"][0]["label"], "helpful");
+        assert_eq!(
+            first["reviews"][0]["document_judgments"][0]["doc_id"],
+            "doc:one"
+        );
+
+        let second = service
+            .dashboard_search_feedback_reviews(&root, 1, 1)
+            .unwrap();
+        assert_eq!(second["reviews"][0]["query"], "older query");
+        assert_eq!(second["next_offset"], serde_json::Value::Null);
+        let past_end = service
+            .dashboard_search_feedback_reviews(&root, 20, 10)
+            .unwrap();
+        assert_eq!(past_end["offset"], 2);
+        assert!(past_end["reviews"].as_array().unwrap().is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dashboard_search_reviews_handles_missing_history_and_review_files() {
+        let root = search_feedback_temp_dir("dashboard-feedback-empty");
+        std::fs::create_dir_all(&root).unwrap();
+        let service = MemoryService::in_memory(PipelineOptions::default());
+        let result = service
+            .dashboard_search_feedback_reviews(&root, 0, 25)
+            .unwrap();
+        assert_eq!(result["total"], 0);
+        assert_eq!(result["reviews"], serde_json::json!([]));
+        assert_eq!(result["next_offset"], serde_json::Value::Null);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_document_enrichment_is_version_checked_and_retry_safe() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let document = direct_doc("enrich-target", "The command interface is documented here.");
+        service.upsert(document.clone());
+        let reviewed = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+        let request = enrichment(&reviewed, "command interface");
+
+        assert!(service.enrich_source_document(request.clone()).unwrap());
+        assert!(!service.enrich_source_document(request).unwrap());
+        let enriched = service.source_document_by_id(&document.doc_id).unwrap();
+        assert_eq!(enriched.key_phrases.len(), 1);
+        assert_eq!(
+            enriched.key_phrases[0].origin,
+            Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+        );
+
+        let mut stale = enrichment(&reviewed, "stale phrase");
+        stale.expected_source_hash = "incorrect-version".to_string();
+        assert!(service.enrich_source_document(stale).is_err());
+        assert_eq!(
+            service
+                .source_document_by_id(&document.doc_id)
+                .unwrap()
+                .key_phrases
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn evidence_grounded_enrichment_survives_only_while_evidence_content_is_current() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let target = direct_doc("enrich-dependency-target", "The current CLI is documented.");
+        let evidence = direct_doc(
+            "enrich-dependency-evidence",
+            "The command is named `membrick`.",
+        );
+        service.upsert(target.clone());
+        service.upsert(evidence.clone());
+        let reviewed_target = service
+            .source_document_by_id(&target.doc_id)
+            .unwrap()
+            .clone();
+        let reviewed_evidence = service
+            .source_document_by_id(&evidence.doc_id)
+            .unwrap()
+            .clone();
+        let mut proposal = enrichment(&reviewed_target, "project CLI");
+        proposal.evidence = vec![crate::source::SourceDocumentEvidence {
+            doc_id: evidence.doc_id.clone(),
+            expected_source_hash: crate::source::source_document_hash(&reviewed_evidence).unwrap(),
+        }];
+        let prepared = service
+            .prepare_source_document_enrichments(vec![proposal], Some("search-dependency"))
+            .unwrap();
+        service
+            .apply_prepared_source_document_enrichments(prepared)
+            .unwrap();
+        service.flush().unwrap();
+
+        let mut unchanged_target = target.clone();
+        service.preserve_document_enrichment(
+            MemoryStore::Captured,
+            std::slice::from_mut(&mut unchanged_target),
+        );
+        assert!(unchanged_target.key_phrases.iter().any(|phrase| {
+            phrase.text == "project CLI"
+                && phrase.origin == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+        }));
+        assert!(unchanged_target
+            .filters
+            .keys()
+            .any(|key| key.starts_with(ENRICHMENT_CONTRIBUTION_PREFIX)));
+
+        let mut revised_evidence = evidence;
+        revised_evidence.content = "The command has been renamed to `membrickctl`.".into();
+        revised_evidence.doc_length = revised_evidence.content.len();
+        service.upsert(revised_evidence);
+        let mut changed_target = target;
+        service.preserve_document_enrichment(
+            MemoryStore::Captured,
+            std::slice::from_mut(&mut changed_target),
+        );
+        assert!(!changed_target
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "project CLI"));
+        assert!(!changed_target
+            .filters
+            .keys()
+            .any(|key| key.starts_with(ENRICHMENT_CONTRIBUTION_PREFIX)));
+
+        let deleted_target = direct_doc(
+            "enrich-deleted-dependency-target",
+            "The command setup is documented.",
+        );
+        let deleted_evidence = direct_doc(
+            "enrich-deleted-dependency-evidence",
+            "The setup command is `membrick install`.",
+        );
+        service.upsert(deleted_target.clone());
+        service.upsert(deleted_evidence.clone());
+        let reviewed_target = service
+            .source_document_by_id(&deleted_target.doc_id)
+            .unwrap()
+            .clone();
+        let reviewed_evidence = service
+            .source_document_by_id(&deleted_evidence.doc_id)
+            .unwrap()
+            .clone();
+        let mut proposal = enrichment(&reviewed_target, "setup command");
+        proposal.evidence = vec![crate::source::SourceDocumentEvidence {
+            doc_id: deleted_evidence.doc_id.clone(),
+            expected_source_hash: crate::source::source_document_hash(&reviewed_evidence).unwrap(),
+        }];
+        let prepared = service
+            .prepare_source_document_enrichments(vec![proposal], Some("search-deleted-evidence"))
+            .unwrap();
+        service
+            .apply_prepared_source_document_enrichments(prepared)
+            .unwrap();
+        service.flush().unwrap();
+        service.store.remove(&deleted_evidence.doc_id);
+
+        let mut after_delete = deleted_target;
+        service.preserve_document_enrichment(
+            MemoryStore::Captured,
+            std::slice::from_mut(&mut after_delete),
+        );
+        assert!(!after_delete
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "setup command"));
+        assert!(!after_delete
+            .filters
+            .keys()
+            .any(|key| key.starts_with(ENRICHMENT_CONTRIBUTION_PREFIX)));
+    }
+
+    #[test]
+    fn provider_key_phrase_enrichment_changes_search_without_rewriting_source() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let document = direct_doc(
+            "enrich-searchable",
+            "An internal procedure is documented in this source.",
+        );
+        let original_content = document.content.clone();
+        service.upsert(document.clone());
+        let filters = BTreeMap::new();
+        let query = "quartz command interface";
+        assert!(service
+            .search_with_filters(query, "user-a", None, 10, &filters, None)
+            .unwrap()
+            .iter()
+            .all(|hit| hit.doc_id != document.doc_id));
+
+        let reviewed = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+        let update = enrichment(&reviewed, query);
+        assert!(service.enrich_source_document(update.clone()).unwrap());
+        assert!(!service.enrich_source_document(update).unwrap());
+
+        let hits = service
+            .search_with_filters(query, "user-a", None, 10, &filters, None)
+            .unwrap();
+        assert!(
+            hits.iter().any(|hit| hit.doc_id == document.doc_id),
+            "the provider phrase should become searchable after publication"
+        );
+        let enriched = service.source_document_by_id(&document.doc_id).unwrap();
+        assert_eq!(enriched.content, original_content);
+        assert_eq!(enriched.key_phrases.len(), 1);
+        assert_eq!(
+            enriched.key_phrases[0].origin,
+            Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+        );
+    }
+
+    #[test]
+    fn segmented_feedback_enrichment_rebuilds_only_its_segment_and_matches_full_rebuild() {
+        let options = PipelineOptions {
+            memory_index_layout: crate::pipeline::MemoryIndexLayout::Segmented {
+                query_top_n: 8,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut service = MemoryService::in_memory(options.clone());
+        let mut target = direct_doc(
+            "enrich-segment-target",
+            "The internal rollout procedure is recorded here.",
+        );
+        target.group_id = Some("session-target".to_string());
+        let mut unrelated = direct_doc(
+            "enrich-segment-unrelated",
+            "A separate guide covers database maintenance.",
+        );
+        unrelated.group_id = Some("session-unrelated".to_string());
+        service.upsert(target.clone());
+        service.upsert(unrelated.clone());
+        service.refresh().unwrap();
+
+        let unrelated_segment_before = match service
+            .store
+            .memory_index_snapshot()
+            .expect("initial segmented snapshot")
+        {
+            crate::pipeline::MemoryIndexSnapshot::Segmented(snapshot) => snapshot
+                .segments
+                .iter()
+                .find(|segment| segment.doc_ids.contains(&unrelated.doc_id))
+                .expect("unrelated document segment")
+                .index
+                .clone(),
+            crate::pipeline::MemoryIndexSnapshot::Single(_) => {
+                panic!("configured segmented layout produced a single index")
+            }
+        };
+
+        let query = "quartz sequoia alignment";
+        assert!(service
+            .search_with_filters(query, "user-a", None, 10, &BTreeMap::new(), None)
+            .unwrap()
+            .iter()
+            .all(|hit| hit.doc_id != target.doc_id));
+        let reviewed = service
+            .store
+            .source_document_by_id(&target.doc_id)
+            .unwrap()
+            .clone();
+        service
+            .enrich_source_document(enrichment(&reviewed, query))
+            .unwrap();
+        service.refresh().unwrap();
+
+        let enriched_segmented = service
+            .search_with_filters(query, "user-a", None, 10, &BTreeMap::new(), None)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.doc_id)
+            .collect::<Vec<_>>();
+        assert!(enriched_segmented.contains(&target.doc_id));
+        match service
+            .store
+            .memory_index_snapshot()
+            .expect("published enriched snapshot")
+        {
+            crate::pipeline::MemoryIndexSnapshot::Segmented(snapshot) => {
+                let unrelated_segment_after = snapshot
+                    .segments
+                    .iter()
+                    .find(|segment| segment.doc_ids.contains(&unrelated.doc_id))
+                    .expect("unrelated document segment")
+                    .index
+                    .clone();
+                assert!(
+                    std::sync::Arc::ptr_eq(&unrelated_segment_before, &unrelated_segment_after),
+                    "enrichment should leave unrelated segment indexes shared"
+                );
+            }
+            crate::pipeline::MemoryIndexSnapshot::Single(_) => {
+                panic!("enrichment changed the configured index layout")
+            }
+        }
+
+        let enriched_target = service
+            .store
+            .source_document_by_id(&target.doc_id)
+            .unwrap()
+            .clone();
+        let mut full_rebuild = MemoryService::in_memory(options);
+        full_rebuild.upsert(enriched_target);
+        full_rebuild.upsert(unrelated);
+        full_rebuild.refresh().unwrap();
+        let rebuilt_results = full_rebuild
+            .search_with_filters(query, "user-a", None, 10, &BTreeMap::new(), None)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.doc_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            enriched_segmented, rebuilt_results,
+            "incremental enrichment should match a full rebuild for the same sources"
+        );
+    }
+
+    #[test]
+    fn segmented_feedback_supersession_matches_full_rebuild_across_segments() {
+        let options = PipelineOptions {
+            memory_index_layout: crate::pipeline::MemoryIndexLayout::Segmented {
+                query_top_n: 8,
+                routing_strategy: crate::segments::SegmentRoutingStrategy::SparseOverlap,
+            },
+            ..PipelineOptions::default()
+        };
+        let mut service = MemoryService::in_memory(options.clone());
+        let mut old = direct_doc(
+            "supersession-segment-old",
+            "The deployment routing policy uses the blue gateway.",
+        );
+        old.group_id = Some("supersession-old-session".to_string());
+        old.filters
+            .insert("semantic_scope".into(), "project:segmented-feedback".into());
+        let mut replacement = direct_doc(
+            "supersession-segment-new",
+            "The deployment routing policy now uses the green gateway.",
+        );
+        replacement.group_id = Some("supersession-new-session".to_string());
+        replacement
+            .filters
+            .insert("semantic_scope".into(), "project:segmented-feedback".into());
+        let mut unrelated = direct_doc(
+            "supersession-segment-unrelated",
+            "A separate handbook describes database backups.",
+        );
+        unrelated.group_id = Some("supersession-unrelated-session".to_string());
+        service.upsert(old.clone());
+        service.upsert(replacement.clone());
+        service.upsert(unrelated.clone());
+        service.refresh().unwrap();
+
+        let query = "deployment routing policy gateway";
+        let before = service
+            .search_with_filters(query, "user-a", None, 10, &BTreeMap::new(), None)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.doc_id)
+            .collect::<Vec<_>>();
+        assert!(before.contains(&old.doc_id));
+        assert!(before.contains(&replacement.doc_id));
+
+        let unrelated_segment_before = match service
+            .store
+            .memory_index_snapshot()
+            .expect("initial segmented snapshot")
+        {
+            crate::pipeline::MemoryIndexSnapshot::Segmented(snapshot) => snapshot
+                .segments
+                .iter()
+                .find(|segment| segment.doc_ids.contains(&unrelated.doc_id))
+                .expect("unrelated document segment")
+                .index
+                .clone(),
+            crate::pipeline::MemoryIndexSnapshot::Single(_) => {
+                panic!("configured segmented layout produced a single index")
+            }
+        };
+
+        let reviewed_replacement = service
+            .store
+            .source_document_by_id(&replacement.doc_id)
+            .unwrap()
+            .clone();
+        let mut update = enrichment(&reviewed_replacement, "deployment routing policy");
+        update.supersedes_document_id = Some(old.doc_id.clone());
+        service.enrich_source_document(update).unwrap();
+        service.refresh().unwrap();
+
+        let incremental_results = service
+            .search_with_filters(query, "user-a", None, 10, &BTreeMap::new(), None)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.doc_id)
+            .collect::<Vec<_>>();
+        assert!(incremental_results.contains(&replacement.doc_id));
+        assert!(!incremental_results.contains(&old.doc_id));
+        assert_eq!(
+            service.semantic_document_state(&old.doc_id).status,
+            Some(crate::semantic_relations::SemanticStatus::Superseded)
+        );
+
+        match service
+            .store
+            .memory_index_snapshot()
+            .expect("published supersession snapshot")
+        {
+            crate::pipeline::MemoryIndexSnapshot::Segmented(snapshot) => {
+                let unrelated_segment_after = snapshot
+                    .segments
+                    .iter()
+                    .find(|segment| segment.doc_ids.contains(&unrelated.doc_id))
+                    .expect("unrelated document segment")
+                    .index
+                    .clone();
+                assert!(
+                    std::sync::Arc::ptr_eq(&unrelated_segment_before, &unrelated_segment_after),
+                    "semantic supersession should not rebuild an unrelated segment"
+                );
+            }
+            crate::pipeline::MemoryIndexSnapshot::Single(_) => {
+                panic!("supersession changed the configured index layout")
+            }
+        }
+
+        let updated_replacement = service
+            .store
+            .source_document_by_id(&replacement.doc_id)
+            .unwrap()
+            .clone();
+        let mut full_rebuild = MemoryService::in_memory(options);
+        full_rebuild.upsert(old);
+        full_rebuild.upsert(updated_replacement);
+        full_rebuild.upsert(unrelated);
+        full_rebuild.refresh().unwrap();
+        let rebuilt_results = full_rebuild
+            .search_with_filters(query, "user-a", None, 10, &BTreeMap::new(), None)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.doc_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            incremental_results, rebuilt_results,
+            "incremental semantic publication should match a full rebuild"
+        );
+    }
+
+    #[test]
+    fn provider_enrichments_reject_stale_writes_and_preserve_both_additions() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let document = direct_doc("enrich-concurrent", "Shared project documentation.");
+        service.upsert(document.clone());
+        let reviewed = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+
+        // Two providers prepare work from the same source version. The first
+        // update wins; the stale second update must surface a conflict instead
+        // of replacing the first provider's contribution.
+        service
+            .enrich_source_document(enrichment(&reviewed, "claude terminology"))
+            .unwrap();
+        let stale_result =
+            service.enrich_source_document(enrichment(&reviewed, "codex terminology"));
+        assert!(stale_result
+            .unwrap_err()
+            .to_string()
+            .contains("changed after enrichment"));
+        let after_conflict = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+        assert!(after_conflict
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "claude terminology"));
+        assert!(!after_conflict
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "codex terminology"));
+
+        // The second provider can refresh its reviewed hash and merge its
+        // additive phrase without removing the first contribution.
+        service
+            .enrich_source_document(enrichment(&after_conflict, "codex terminology"))
+            .unwrap();
+        let merged = service.source_document_by_id(&document.doc_id).unwrap();
+        assert!(merged
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "claude terminology"));
+        assert!(merged
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "codex terminology"));
+    }
+
+    #[test]
+    fn session_context_enrichment_survives_later_hook_capture() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let observation = direct_doc("session-observation-one", "The resident owns writes.");
+        let mut context = direct_doc("session-context-one", "Session session-one context.");
+        context
+            .filters
+            .insert("document_type".into(), "session-context".into());
+        context
+            .filters
+            .insert("session_id".into(), "session-one".into());
+        context.links.push(observation.doc_id.clone());
+        service.upsert(observation.clone());
+        service.upsert(context.clone());
+
+        let reviewed = service
+            .source_document_by_id(&context.doc_id)
+            .unwrap()
+            .clone();
+        let mut update = enrichment(&reviewed, "resident writer");
+        update.session_conclusion = Some("The resident serializes durable writes.".into());
+        update.headings.push("Writer architecture".into());
+        assert_eq!(
+            service
+                .enrich_source_documents_for_operation(vec![update], Some("search-123"))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let next_observation = direct_doc(
+            "session-observation-two",
+            "Searches use the published view.",
+        );
+        service.upsert(next_observation.clone());
+        let mut next_context = context;
+        next_context.links = vec![next_observation.doc_id.clone()];
+        service.preserve_document_enrichment(
+            MemoryStore::Captured,
+            std::slice::from_mut(&mut next_context),
+        );
+        assert!(next_context
+            .content
+            .contains("The resident serializes durable writes."));
+        assert!(next_context
+            .headings
+            .contains(&"Writer architecture".into()));
+        assert!(next_context.links.contains(&observation.doc_id));
+        assert!(next_context.links.contains(&next_observation.doc_id));
+        service.upsert(next_context);
+        let persisted = service.source_document_by_id(&reviewed.doc_id).unwrap();
+        assert!(persisted
+            .content
+            .contains("The resident serializes durable writes."));
+        assert_eq!(
+            persisted
+                .filters
+                .get("membrick_session_conclusion")
+                .map(String::as_str),
+            Some("The resident serializes durable writes.")
+        );
+    }
+
+    #[test]
+    fn enrichment_batch_validates_before_staging_any_document() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let first = direct_doc("enrich-batch-first", "first source text");
+        let second = direct_doc("enrich-batch-second", "second source text");
+        service.upsert(first.clone());
+        service.upsert(second.clone());
+        let reviewed_first = service
+            .source_document_by_id(&first.doc_id)
+            .unwrap()
+            .clone();
+        let reviewed_second = service
+            .source_document_by_id(&second.doc_id)
+            .unwrap()
+            .clone();
+        let mut stale_second = enrichment(&reviewed_second, "stale addition");
+        stale_second.expected_source_hash = "stale-version".to_string();
+
+        let error = service
+            .enrich_source_documents(vec![
+                enrichment(&reviewed_first, "first new phrase"),
+                stale_second,
+            ])
+            .unwrap_err();
+        assert!(error.to_string().contains("changed after enrichment"));
+        assert!(service
+            .source_document_by_id(&first.doc_id)
+            .unwrap()
+            .key_phrases
+            .is_empty());
+        assert!(service
+            .source_document_by_id(&second.doc_id)
+            .unwrap()
+            .key_phrases
+            .is_empty());
+    }
+
+    #[test]
+    fn enrich_doc_targets_one_document_and_checks_exact_evidence_revision() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let target = direct_doc(
+            "enrich-doc-target",
+            "The shared MCP query uses the resident.",
+        );
+        let evidence = direct_doc(
+            "enrich-doc-evidence",
+            "MemoryService routes MCP search through the resident.",
+        );
+        service.upsert(target.clone());
+        service.upsert(evidence.clone());
+        let reviewed_target = service
+            .source_document_by_id(&target.doc_id)
+            .unwrap()
+            .clone();
+        let reviewed_evidence = service
+            .source_document_by_id(&evidence.doc_id)
+            .unwrap()
+            .clone();
+        let target_hash = crate::source::source_document_hash(&reviewed_target).unwrap();
+        let evidence_hash = crate::source::source_document_hash(&reviewed_evidence).unwrap();
+        let request = serde_json::json!({
+            "doc_id": target.doc_id,
+            "expected_source_hash": target_hash,
+            "key_phrases": [{"text":"shared MCP MemoryService search","kind":"thing"}],
+            "evidence": [{"doc_id": evidence.doc_id, "expected_source_hash": evidence_hash}]
+        });
+
+        let receipt = service.enrich_doc_mcp(&request).unwrap();
+        assert_eq!(receipt["status"], "enriched");
+        assert_eq!(
+            receipt["changed_document_ids"],
+            serde_json::json!([target.doc_id])
+        );
+        let enriched = service.source_document_by_id(&target.doc_id).unwrap();
+        assert!(enriched
+            .key_phrases
+            .iter()
+            .any(|phrase| phrase.text == "shared MCP MemoryService search"));
+        assert!(service
+            .source_document_by_id(&evidence.doc_id)
+            .unwrap()
+            .key_phrases
+            .is_empty());
+
+        let stale = serde_json::json!({
+            "doc_id": target.doc_id,
+            "expected_source_hash": crate::source::source_document_hash(enriched).unwrap(),
+            "key_phrases": [{"text":"another phrase","kind":"thing"}],
+            "evidence": [{"doc_id": evidence.doc_id, "expected_source_hash":"stale"}]
+        });
+        assert!(service
+            .enrich_doc_mcp(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("evidence source hash"));
+    }
+
+    #[test]
+    fn review_search_pages_then_feedback_labels_search_and_retries_idempotently() {
+        let root = search_feedback_temp_dir("feedback-roundtrip");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        service.project_rules = Some(Arc::new(
+            crate::reasoning_rules::ProjectReasoningRules::open(&root),
+        ));
+        let mut document = direct_doc(
+            "feedback-search-doc",
+            "Weigh the old and new project command interface using a consistent vocabulary.",
+        );
+        document
+            .filters
+            .insert("session_id".to_string(), "session-feedback-1".to_string());
+        service.upsert(document.clone());
+
+        // Frozen control corpus: only the experimental service will receive
+        // the provider's enrichment below.
+        let mut control = MemoryService::in_memory(PipelineOptions::default());
+        control.upsert(document.clone());
+        control.refresh().unwrap();
+        let replay_queries = [
+            "QZXVProtocol",
+            "latest QZXVProtocol",
+            "QZXVProtocol version",
+        ];
+        let recall_at_one = |service: &mut MemoryService| {
+            replay_queries
+                .iter()
+                .filter(|query| {
+                    service
+                        .search_with_filters(query, "user-a", None, 1, &BTreeMap::new(), None)
+                        .unwrap()
+                        .iter()
+                        .any(|hit| hit.doc_id == document.doc_id)
+                })
+                .count()
+        };
+        assert_eq!(recall_at_one(&mut service), 0, "baseline Recall@1");
+        assert_eq!(recall_at_one(&mut control), 0, "control Recall@1");
+
+        let query = "weigh old and new project command interface QZXVProtocol";
+        assert!(service.comparison_operands_for_query(query).is_empty());
+        let indexed_document = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+        let result = serde_json::json!({
+            "results": [{"id": document.doc_id, "source_hash": crate::source::source_document_hash(&indexed_document).unwrap(), "content": document.content}]
+        });
+        let response = serde_json::json!({
+            "result": {"content": [{"text": serde_json::to_string(&result).unwrap()}]}
+        });
+        crate::telemetry::record_mcp_call(
+            &root,
+            "claude",
+            "search",
+            Some(serde_json::json!("request-feedback-1")),
+            &serde_json::json!({"query":query, "session_id":"session-feedback-1"}),
+            4,
+            false,
+            response,
+        )
+        .unwrap();
+
+        let history = std::fs::read(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record = parse_mcp_search_history(&history).unwrap().remove(0).1;
+        let search_id = mcp_search_id(&record);
+        let page = service
+            .review_search_mcp(&root, &serde_json::json!({"page_size":1}))
+            .unwrap();
+        assert_eq!(page["searches"].as_array().unwrap().len(), 1);
+        assert_eq!(page["searches"][0]["search_id"], search_id);
+        assert_eq!(
+            page["searches"][0]["documents"].as_array().unwrap().len(),
+            1
+        );
+
+        let exact = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":search_id}))
+            .unwrap();
+        assert_eq!(exact["documents"][0]["doc_id"], document.doc_id);
+        let source_hash = exact["documents"][0]["source_hash"].as_str().unwrap();
+        assert_eq!(exact["reviewed"], false);
+        assert_eq!(exact["search_id"], search_id);
+        let document_judgments = serde_json::json!([{
+            "doc_id": document.doc_id,
+            "relevance": "relevant",
+            "feedback": "Contains the project command-interface decision."
+        }]);
+
+        for (invalid_judgments, expected_error) in [
+            (serde_json::json!([]), "missing document judgment"),
+            (
+                serde_json::json!([{"doc_id":"not-returned", "relevance":"relevant"}]),
+                "missing document judgment",
+            ),
+            (
+                serde_json::json!([
+                {"doc_id":document.doc_id, "relevance":"relevant"},
+                {"doc_id":document.doc_id, "relevance":"not_relevant"}
+                ]),
+                "duplicate document judgment",
+            ),
+        ] {
+            let invalid = serde_json::json!({
+                "search_id": search_id,
+                "label": "partially_helpful",
+                "feedback": "Checking the per-document judgment contract.",
+                "document_judgments": invalid_judgments
+            });
+            assert!(service
+                .search_feedback_mcp(&root, &invalid)
+                .unwrap_err()
+                .to_string()
+                .contains(expected_error));
+        }
+
+        let ungrounded = serde_json::json!({
+            "search_id": search_id,
+            "label": "partially_helpful",
+            "feedback": "Proposed an unrelated phrase.",
+            "document_judgments": document_judgments,
+            "query_rule_additions": {
+                "query_current_state_markers": ["unrelated secret phrase"]
+            }
+        });
+        assert!(service
+            .search_feedback_mcp(&root, &ungrounded)
+            .unwrap_err()
+            .to_string()
+            .contains("must appear in the reviewed query or source documents"));
+
+        let invalid_update = serde_json::json!({
+            "search_id": search_id,
+            "label": "partially_helpful",
+            "feedback": "The result was close but needs a supported phrase kind.",
+            "document_judgments": document_judgments,
+            "updates": [{
+                "doc_id": document.doc_id,
+                "expected_source_hash": source_hash,
+                "key_phrases": [{"text":"project command interface", "kind":"unsupported"}],
+                "evidence": [{"doc_id":document.doc_id, "expected_source_hash":source_hash}]
+            }]
+        });
+        assert!(service
+            .search_feedback_mcp(&root, &invalid_update)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown search_feedback argument: updates"));
+        let state_after_rejection =
+            read_search_review_state(&root.join(".membrick/search-review-state.json")).unwrap();
+        assert!(state_after_rejection["reviews"].get(&search_id).is_none());
+
+        let unsupported_rule = serde_json::json!({
+            "search_id": search_id,
+            "label": "partially_helpful",
+            "feedback": "Use a supported rule list for this grounded query cue.",
+            "document_judgments": document_judgments,
+            "query_rule_additions": {
+                "query_not_a_supported_list": ["project command interface"]
+            }
+        });
+        assert!(service
+            .search_feedback_mcp(&root, &unsupported_rule)
+            .unwrap_err()
+            .to_string()
+            .contains("not a supported query-only rule"));
+        let state_after_rule_rejection =
+            read_search_review_state(&root.join(".membrick/search-review-state.json")).unwrap();
+        assert!(state_after_rule_rejection["reviews"]
+            .get(&search_id)
+            .is_none());
+
+        let submit = serde_json::json!({
+            "search_id": search_id,
+            "label": "partially_helpful",
+            "feedback": "The result was close but should also match the project's CLI terminology.",
+            "document_judgments": document_judgments,
+            "query_rule_additions": {
+                "query_current_state_markers": ["project command interface"],
+                "query_comparison_markers": ["weigh"]
+            }
+        });
+        let receipt = service
+            .search_feedback_mcp(&root, &submit)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{error:#}; review document={:?}; submit={submit}",
+                    exact["documents"][0]
+                )
+            });
+        assert_eq!(receipt["status"], "reviewed");
+        assert_eq!(receipt["changed_documents"], 0);
+        assert!(receipt["changed_document_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(receipt["accepted_query_rules"], 2);
+        assert_eq!(receipt["judged_documents"], 1);
+        assert_eq!(receipt["publication_status"], "not_required");
+        assert!(service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .key_phrases
+            .is_empty());
+        assert_eq!(
+            recall_at_one(&mut service),
+            0,
+            "search feedback does not enrich documents"
+        );
+        assert_eq!(recall_at_one(&mut control), 0, "unchanged control Recall@1");
+        assert_eq!(
+            service.comparison_operands_for_query(query),
+            vec![
+                "old project command interface QZXVProtocol".to_string(),
+                "new project command interface QZXVProtocol".to_string()
+            ],
+            "search_feedback should activate the accepted rule in this service immediately"
+        );
+        let reviewed = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":search_id}))
+            .unwrap();
+        assert_eq!(
+            reviewed["prior_feedback"]["document_judgments"][0]["rank"],
+            1
+        );
+        assert_eq!(
+            reviewed["prior_feedback"]["document_judgments"][0]["doc_id"],
+            document.doc_id
+        );
+        assert_eq!(
+            reviewed["prior_feedback"]["document_judgments"][0]["source_hash"],
+            source_hash
+        );
+
+        // Simulate a crash after source publication but before receipt
+        // persistence. The pending retry must recognize its own update even
+        // though the target is also cited evidence and its hash has changed.
+        let state_path = root.join(".membrick/search-review-state.json");
+        let mut pending = read_search_review_state(&state_path).unwrap();
+        pending["reviews"][&search_id]["status"] = serde_json::json!("pending");
+        pending["reviews"][&search_id]
+            .as_object_mut()
+            .unwrap()
+            .remove("receipt");
+        write_search_review_state(&state_path, &pending).unwrap();
+        let retry = service.search_feedback_mcp(&root, &submit).unwrap();
+        assert_eq!(retry, receipt);
+        let rules_path = root.join(".membrick/rules.json");
+        let overlay: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(rules_path).unwrap()).unwrap();
+        assert_eq!(
+            overlay["additions"]["query_current_state_markers"][0],
+            "project command interface"
+        );
+        let changed_retry = serde_json::json!({
+            "search_id": search_id,
+            "label": "helpful",
+            "feedback": "Different review for the same search.",
+            "document_judgments": document_judgments
+        });
+        assert!(service
+            .search_feedback_mcp(&root, &changed_retry)
+            .unwrap_err()
+            .to_string()
+            .contains("already has different feedback"));
+        let reviewed = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":search_id}))
+            .unwrap();
+        assert_eq!(reviewed["reviewed"], true);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_service_applies_external_query_rule_edit_without_restart() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("target")
+            .join(format!("membrick-rule-service-{}", std::process::id()));
+        let state_dir = root.join(".membrick");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        service.project_rules = Some(Arc::new(
+            crate::reasoning_rules::ProjectReasoningRules::open(&root),
+        ));
+        let query = "weigh old and new project command interface";
+        assert!(service.comparison_operands_for_query(query).is_empty());
+
+        std::fs::write(
+            state_dir.join("rules.json"),
+            r#"{"schema_version":1,"additions":{"query_comparison_markers":["weigh"]}}"#,
+        )
+        .unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let operands = service.comparison_operands_for_query(query);
+            if !operands.is_empty() {
+                assert_eq!(
+                    operands,
+                    vec![
+                        "old project command interface".to_string(),
+                        "new project command interface".to_string()
+                    ]
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "workspace service did not activate an external query-rule edit"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        drop(service);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn review_search_includes_attributed_session_history_but_not_absent_sessions() {
+        let root = search_feedback_temp_dir("review-session-scope");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let mut earlier = direct_doc(
+            "review-session-earlier-observation",
+            "The first observation records the original deployment constraint.",
+        );
+        earlier
+            .filters
+            .insert("session_id".into(), "session-review-history".into());
+        let mut result_hit = direct_doc(
+            "review-session-result-hit",
+            "The later observation records the verified deployment fix.",
+        );
+        result_hit
+            .filters
+            .insert("session_id".into(), "session-review-history".into());
+        let mut other_session = direct_doc(
+            "review-session-other-session",
+            "A different session records unrelated deployment work.",
+        );
+        other_session
+            .filters
+            .insert("session_id".into(), "session-review-other".into());
+        service.upsert(earlier.clone());
+        service.upsert(result_hit.clone());
+        service.upsert(other_session.clone());
+
+        let result = serde_json::json!({
+            "results": [{"id": result_hit.doc_id, "content": result_hit.content}]
+        });
+        let response = serde_json::json!({
+            "result": {"content": [{"type":"text", "text":serde_json::to_string(&result).unwrap()}]}
+        });
+        crate::telemetry::record_mcp_call(
+            &root,
+            "claude",
+            "search",
+            Some(serde_json::json!("request-explicit-session-review")),
+            &serde_json::json!({"query":"verified deployment fix", "session_id":"session-review-history"}),
+            2,
+            false,
+            response.clone(),
+        )
+        .unwrap();
+        crate::telemetry::record_mcp_call(
+            &root,
+            "codex",
+            "search",
+            Some(serde_json::json!("request-unattributed-session-review")),
+            &serde_json::json!({"query":"verified deployment fix"}),
+            2,
+            false,
+            response,
+        )
+        .unwrap();
+
+        let history = std::fs::read(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let entries = parse_mcp_search_history(&history).unwrap();
+        let explicit_id = entries
+            .iter()
+            .find(|(_, record)| record.session_attribution == "explicit")
+            .map(|(_, record)| mcp_search_id(record))
+            .unwrap();
+        let absent_id = entries
+            .iter()
+            .find(|(_, record)| record.session_attribution == "absent")
+            .map(|(_, record)| mcp_search_id(record))
+            .unwrap();
+
+        let explicit = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":explicit_id}))
+            .unwrap();
+        let explicit_document_ids = explicit["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["doc_id"].as_str())
+            .collect::<HashSet<_>>();
+        assert!(explicit_document_ids.contains(earlier.doc_id.as_str()));
+        assert!(explicit_document_ids.contains(result_hit.doc_id.as_str()));
+        assert!(!explicit_document_ids.contains(other_session.doc_id.as_str()));
+
+        let absent = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":absent_id}))
+            .unwrap();
+        let absent_document_ids = absent["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["doc_id"].as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            absent_document_ids,
+            HashSet::from([result_hit.doc_id.as_str()])
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn enrich_doc_publishes_scoped_document_supersession() {
+        let root = search_feedback_temp_dir("feedback-supersession");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let mut old = direct_doc("feedback-old-decision", "The old deployment decision.");
+        old.filters
+            .insert("semantic_scope".into(), "project:feedback".into());
+        let mut new = direct_doc(
+            "feedback-new-decision",
+            "The corrected deployment decision.",
+        );
+        new.filters
+            .insert("semantic_scope".into(), "project:feedback".into());
+        service.upsert(old.clone());
+        service.upsert(new.clone());
+        let result = serde_json::json!({
+            "results": [
+                {"id": old.doc_id, "content": old.content},
+                {"id": new.doc_id, "content": new.content}
+            ]
+        });
+        crate::telemetry::record_mcp_call(
+            &root,
+            "claude",
+            "search",
+            Some(serde_json::json!("request-feedback-supersession")),
+            &serde_json::json!({"query":"corrected deployment decision"}),
+            4,
+            false,
+            serde_json::json!({"result":{"content":[{"text":serde_json::to_string(&result).unwrap()}]}}),
+        )
+        .unwrap();
+        let history = std::fs::read(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record = parse_mcp_search_history(&history).unwrap().remove(0).1;
+        let search_id = mcp_search_id(&record);
+        let reviewed = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":search_id}))
+            .unwrap();
+        let hashes = reviewed["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|document| {
+                (
+                    document["doc_id"].as_str().unwrap().to_string(),
+                    document["source_hash"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let submit = serde_json::json!({
+            "doc_id": new.doc_id,
+            "expected_source_hash": hashes[&new.doc_id],
+            "supersedes_document_id": old.doc_id,
+            "evidence": [{"doc_id": old.doc_id, "expected_source_hash": hashes[&old.doc_id]}]
+        });
+        let receipt = service.enrich_doc_mcp(&submit).unwrap();
+        assert_eq!(receipt["publication_status"], "published");
+        assert_eq!(
+            receipt["adjudication"]["decisions"][0]["kind"],
+            "supersedes"
+        );
+        assert_eq!(
+            receipt["adjudication"]["retired_doc_ids"],
+            serde_json::json!([old.doc_id])
+        );
+        let old_state = service.semantic_document_state(&old.doc_id);
+        assert_eq!(
+            old_state.status,
+            Some(crate::semantic_relations::SemanticStatus::Superseded)
+        );
+        assert_eq!(
+            old_state.superseded_by.as_deref(),
+            Some(new.doc_id.as_str())
+        );
+        assert_eq!(
+            service
+                .source_document_by_id(&new.doc_id)
+                .unwrap()
+                .filters
+                .get("supersedes_id"),
+            Some(&old.doc_id)
+        );
+        let retry = service.enrich_doc_mcp(&submit).unwrap();
+        assert_eq!(retry["status"], "unchanged");
+        assert_eq!(
+            retry["adjudication"]["retired_doc_ids"],
+            serde_json::json!([old.doc_id])
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn enrich_doc_publishes_workspace_document_supersession() {
+        let root = search_feedback_temp_dir("feedback-workspace-supersession");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut service = MemoryService::retain_workspace_store(
+            MemoryService::in_memory(PipelineOptions::default()),
+            MemoryService::in_memory(PipelineOptions::default()),
+        );
+        let mut old = direct_doc("feedback-workspace-old", "The old workspace decision.");
+        old.filters
+            .insert("semantic_scope".into(), "project:feedback-workspace".into());
+        let mut new = direct_doc(
+            "feedback-workspace-new",
+            "The corrected workspace decision.",
+        );
+        new.filters
+            .insert("semantic_scope".into(), "project:feedback-workspace".into());
+        service
+            .memory_store_mut(MemoryStore::Workspace)
+            .upsert(old.clone());
+        service
+            .memory_store_mut(MemoryStore::Workspace)
+            .upsert(new.clone());
+        let result = serde_json::json!({
+            "results": [
+                {"id": old.doc_id, "content": old.content},
+                {"id": new.doc_id, "content": new.content}
+            ]
+        });
+        crate::telemetry::record_mcp_call(
+            &root,
+            "claude",
+            "search",
+            Some(serde_json::json!("request-feedback-workspace-supersession")),
+            &serde_json::json!({"query":"corrected workspace decision"}),
+            4,
+            false,
+            serde_json::json!({"result":{"content":[{"text":serde_json::to_string(&result).unwrap()}]}}),
+        )
+        .unwrap();
+        let history = std::fs::read(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record = parse_mcp_search_history(&history).unwrap().remove(0).1;
+        let search_id = mcp_search_id(&record);
+        let reviewed = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":search_id}))
+            .unwrap();
+        let hashes = reviewed["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|document| {
+                (
+                    document["doc_id"].as_str().unwrap().to_string(),
+                    document["source_hash"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let submit = serde_json::json!({
+            "doc_id": new.doc_id,
+            "expected_source_hash": hashes[&new.doc_id],
+            "supersedes_document_id": old.doc_id,
+            "evidence": [{"doc_id": old.doc_id, "expected_source_hash": hashes[&old.doc_id]}]
+        });
+        let receipt = service.enrich_doc_mcp(&submit).unwrap();
+        assert_eq!(receipt["publication_status"], "published");
+        assert_eq!(
+            receipt["adjudication"]["decisions"][0]["kind"],
+            "supersedes"
+        );
+        assert_eq!(
+            receipt["adjudication"]["retired_doc_ids"],
+            serde_json::json!([old.doc_id])
+        );
+        let workspace = service.memory_store(MemoryStore::Workspace);
+        assert_eq!(
+            workspace.semantic_document_state(&old.doc_id).status,
+            Some(crate::semantic_relations::SemanticStatus::Superseded)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn enrich_doc_rejects_cross_scope_document_supersession() {
+        let root = search_feedback_temp_dir("feedback-cross-scope");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let mut old = direct_doc("feedback-other-scope", "A decision in another project.");
+        old.filters
+            .insert("semantic_scope".into(), "project:other".into());
+        let mut new = direct_doc("feedback-this-scope", "A proposed replacement decision.");
+        new.filters
+            .insert("semantic_scope".into(), "project:this".into());
+        service.upsert(old.clone());
+        service.upsert(new.clone());
+        let result = serde_json::json!({
+            "results": [
+                {"id": old.doc_id, "content": old.content},
+                {"id": new.doc_id, "content": new.content}
+            ]
+        });
+        crate::telemetry::record_mcp_call(
+            &root,
+            "codex",
+            "search",
+            Some(serde_json::json!("request-feedback-cross-scope")),
+            &serde_json::json!({"query":"replacement decision"}),
+            4,
+            false,
+            serde_json::json!({"result":{"content":[{"text":serde_json::to_string(&result).unwrap()}]}}),
+        )
+        .unwrap();
+        let history = std::fs::read(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record = parse_mcp_search_history(&history).unwrap().remove(0).1;
+        let search_id = mcp_search_id(&record);
+        let reviewed = service
+            .review_search_mcp(&root, &serde_json::json!({"search_id":search_id}))
+            .unwrap();
+        let hashes = reviewed["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|document| {
+                (
+                    document["doc_id"].as_str().unwrap().to_string(),
+                    document["source_hash"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let submit = serde_json::json!({
+            "doc_id": new.doc_id,
+            "expected_source_hash": hashes[&new.doc_id],
+            "supersedes_document_id": old.doc_id,
+            "evidence": [{"doc_id": old.doc_id, "expected_source_hash": hashes[&old.doc_id]}]
+        });
+        let error = service.enrich_doc_mcp(&submit).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("outside the target's semantic scope"));
+        let state =
+            read_search_review_state(&root.join(".membrick/search-review-state.json")).unwrap();
+        assert!(state["reviews"].get(&search_id).is_none());
+        assert_eq!(
+            service
+                .source_document_by_id(&new.doc_id)
+                .unwrap()
+                .filters
+                .get("supersedes_id"),
+            None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_document_supersession_cannot_cross_backing_stores() {
+        let mut service = MemoryService::retain_workspace_store(
+            MemoryService::in_memory(PipelineOptions::default()),
+            MemoryService::in_memory(PipelineOptions::default()),
+        );
+        let mut captured = direct_doc("feedback-captured-target", "Captured decision.");
+        captured
+            .filters
+            .insert("semantic_scope".into(), "project:shared".into());
+        let mut workspace = direct_doc("feedback-workspace-source", "Workspace correction.");
+        workspace
+            .filters
+            .insert("semantic_scope".into(), "project:shared".into());
+        service.upsert(captured.clone());
+        service
+            .memory_store_mut(MemoryStore::Workspace)
+            .upsert(workspace.clone());
+        let mut proposal = enrichment(&workspace, "workspace correction");
+        proposal.supersedes_document_id = Some(captured.doc_id);
+
+        let error = service
+            .prepare_source_document_enrichments(vec![proposal], Some("cross-store"))
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("must be in the same backing store"));
+        assert!(service
+            .memory_store(MemoryStore::Workspace)
+            .source_document_by_id(&workspace.doc_id)
+            .unwrap()
+            .filters
+            .get("supersedes_id")
+            .is_none());
+    }
+
+    #[test]
+    fn review_search_cursor_pages_and_rejects_a_changed_history_prefix() {
+        let root = search_feedback_temp_dir("review-pagination");
+        std::fs::create_dir_all(&root).unwrap();
+        let service = MemoryService::in_memory(PipelineOptions::default());
+        for index in 0..2 {
+            crate::telemetry::record_mcp_call(
+                &root,
+                "claude",
+                "search",
+                Some(serde_json::json!(format!("pagination-{index}"))),
+                &serde_json::json!({"query":format!("pagination query {index}")}),
+                1,
+                false,
+                serde_json::json!({"result":{"content":[{"text":"{}"}]}}),
+            )
+            .unwrap();
+        }
+
+        let first_page = service
+            .review_search_mcp(&root, &serde_json::json!({"page_size":1}))
+            .unwrap();
+        assert_eq!(first_page["searches"].as_array().unwrap().len(), 1);
+        assert_eq!(first_page["has_more"], true);
+        let cursor = first_page["next_cursor"].as_str().unwrap().to_string();
+        assert!(cursor.starts_with("v1:"));
+
+        let second_page = service
+            .review_search_mcp(&root, &serde_json::json!({"page_size":1,"cursor":cursor}))
+            .unwrap();
+        assert_eq!(second_page["searches"].as_array().unwrap().len(), 1);
+        assert_eq!(second_page["has_more"], false);
+        assert_ne!(
+            first_page["searches"][0]["search_id"],
+            second_page["searches"][0]["search_id"]
+        );
+
+        let first_line = std::fs::read_to_string(root.join(".membrick/mcp-call-history.jsonl"))
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let history_path = root.join(".membrick/mcp-call-history.jsonl");
+        let mut changed_history = std::fs::read_to_string(&history_path).unwrap();
+        changed_history = changed_history.replacen("pagination query 0", "replaced query 0", 1);
+        assert_ne!(first_line, changed_history.lines().next().unwrap());
+        std::fs::write(&history_path, changed_history).unwrap();
+        assert!(service
+            .review_search_mcp(&root, &serde_json::json!({"page_size":1,"cursor":cursor}))
+            .unwrap_err()
+            .to_string()
+            .contains("search history changed"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn published_key_phrase_enrichment_changes_search_matching() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let document = direct_doc(
+            "enrich-search-target",
+            "The project interface is described here.",
+        );
+        service.upsert(document.clone());
+        let reviewed = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+        service
+            .enrich_source_document(enrichment(&reviewed, "QZXVProtocol"))
+            .unwrap();
+        service.refresh_index().unwrap();
+
+        let record = service.record_by_id(&document.doc_id).unwrap();
+        assert!(record
+            .key_entities
+            .iter()
+            .any(|entity| entity.text.eq_ignore_ascii_case("QZXVProtocol")));
+        let direct = service.store.query("QZXVProtocol", 5).unwrap();
+        assert!(
+            direct.iter().any(|hit| hit.doc_id == document.doc_id),
+            "raw index did not retrieve the enriched key entity: {}",
+            serde_json::to_string(&direct).unwrap()
+        );
+        let result = service
+            .search_with_filters(
+                "QZXVProtocol",
+                "enrichment-test",
+                None,
+                5,
+                &BTreeMap::new(),
+                None,
+            )
+            .unwrap();
+        assert!(
+            result.iter().any(|hit| hit.doc_id == document.doc_id),
+            "enriched entity was not retrievable: {}",
+            serde_json::to_string(&result).unwrap()
+        );
+    }
+
+    #[test]
+    fn extractor_refresh_preserves_provider_enrichment_on_the_source_document() {
+        let mut service = MemoryService::in_memory(PipelineOptions::default());
+        let document = direct_doc("enrich-refresh", "A project-specific command interface.");
+        service.upsert(document.clone());
+        let reviewed = service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .clone();
+        service
+            .enrich_source_document(enrichment(&reviewed, "project command interface"))
+            .unwrap();
+
+        let content_hash = crate::pipeline::key_phrase_content_hash(&document.content);
+        service.store.set_key_phrases(
+            &document.doc_id,
+            &content_hash,
+            vec![crate::source::KeyPhrase {
+                text: "command interface".to_string(),
+                kind: "thing".to_string(),
+                origin: Some(crate::source::KeyPhraseOrigin::Extractor),
+            }],
+        );
+
+        let phrases = &service
+            .source_document_by_id(&document.doc_id)
+            .unwrap()
+            .key_phrases;
+        assert!(phrases.iter().any(|phrase| {
+            phrase.text == "command interface"
+                && phrase.origin == Some(crate::source::KeyPhraseOrigin::Extractor)
+        }));
+        assert!(phrases.iter().any(|phrase| {
+            phrase.text == "project command interface"
+                && phrase.origin == Some(crate::source::KeyPhraseOrigin::ProviderEnrichment)
+        }));
     }
 
     #[test]
@@ -7208,7 +10824,16 @@ impl MemoryService {
         ignore_paths: &[String],
         source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
     ) -> anyhow::Result<Self> {
-        workspace::open_workspace_memory_store(root, memory_name, ignore_paths, source_documents)
+        let mut service = workspace::open_workspace_memory_store(
+            root,
+            memory_name,
+            ignore_paths,
+            source_documents,
+        )?;
+        service.project_rules = Some(Arc::new(
+            crate::reasoning_rules::ProjectReasoningRules::open(root),
+        ));
+        Ok(service)
     }
 
     pub(crate) fn open_workspace_owner(
@@ -7217,7 +10842,16 @@ impl MemoryService {
         ignore_paths: &[String],
         source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
     ) -> anyhow::Result<Self> {
-        workspace::open_workspace_memory_owner(root, memory_name, ignore_paths, source_documents)
+        let mut service = workspace::open_workspace_memory_owner(
+            root,
+            memory_name,
+            ignore_paths,
+            source_documents,
+        )?;
+        service.project_rules = Some(Arc::new(
+            crate::reasoning_rules::ProjectReasoningRules::open(root),
+        ));
+        Ok(service)
     }
 
     pub(crate) fn open_workspace_owner_with_options_at(
@@ -7228,14 +10862,18 @@ impl MemoryService {
         options: PipelineOptions,
         source_documents: impl FnOnce() -> anyhow::Result<Vec<SourceDocument>>,
     ) -> anyhow::Result<Self> {
-        workspace::open_workspace_memory_owner_with_options_at(
+        let mut service = workspace::open_workspace_memory_owner_with_options_at(
             root,
             workspace_root,
             memory_name,
             ignore_paths,
             options,
             source_documents,
-        )
+        )?;
+        service.project_rules = Some(Arc::new(
+            crate::reasoning_rules::ProjectReasoningRules::open(root),
+        ));
+        Ok(service)
     }
 
     pub(crate) fn open_persistent_workspace(

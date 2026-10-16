@@ -593,6 +593,7 @@ mod tests {
                 superseded_by: None,
                 relation_confidence: None,
                 relation_evidence: vec![],
+                comparison_operands: Vec::new(),
             },
             SearchResult {
                 doc_id: "d2".to_string(),
@@ -608,6 +609,7 @@ mod tests {
                 superseded_by: None,
                 relation_confidence: None,
                 relation_evidence: vec![],
+                comparison_operands: Vec::new(),
             },
         ];
         let agg = build_aggregate_output(&index, "How many miles did I walk?", &results, 5)

@@ -573,6 +573,7 @@ fn assemble_doc_record(
             enriched_source.key_phrases.push(crate::source::KeyPhrase {
                 text: tag.clone(),
                 kind: "semantic_tag".to_string(),
+                origin: Some(crate::source::KeyPhraseOrigin::SemanticTag),
             });
         }
     }

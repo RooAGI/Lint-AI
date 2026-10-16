@@ -184,8 +184,60 @@ pub(crate) fn record_mcp_tool_response(
     request_id: Option<Value>,
     arguments: &Value,
     duration_ms: u64,
-    response: &anyhow::Result<JsonRpcResponse>,
+    response: &mut anyhow::Result<JsonRpcResponse>,
 ) {
+    let mut session_attribution = None;
+    let prepared_trace = if tool == "search" {
+        crate::telemetry::mcp_trace_id_for_call(provider, tool, &request_id, arguments)
+            .ok()
+            .and_then(|(timestamp_ms, trace_id)| {
+                let response = response.as_mut().ok()?;
+                if response.error.is_some() {
+                    return None;
+                }
+                let text = response
+                    .result
+                    .as_mut()?
+                    .get_mut("content")?
+                    .as_array_mut()?
+                    .first_mut()?
+                    .get_mut("text")?
+                    .as_str()?
+                    .to_string();
+                let mut body = serde_json::from_str::<Value>(&text).ok()?;
+                let object = body.as_object_mut()?;
+                session_attribution = object
+                    .remove("__membrick_telemetry")
+                    .and_then(|metadata| {
+                        let session_id = metadata
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let attribution = metadata
+                            .get("session_attribution")
+                            .and_then(Value::as_str)?
+                            .to_string();
+                        matches!(attribution.as_str(), "explicit" | "inferred" | "absent")
+                            .then_some((session_id, attribution))
+                    });
+                object.insert("search_id".to_string(), json!(trace_id));
+                object.insert(
+                    "feedback_guidance".to_string(),
+                    json!("If these results do not answer the question or miss important context, call search_feedback with this search_id, an overall label, and one relevance judgment for every returned doc_id. Use relevant, partially_relevant, or not_relevant. Use enrich_doc separately if a source document needs improvement. If the results are adequate, no feedback call is needed."),
+                );
+                let encoded = serde_json::to_string_pretty(&body).ok()?;
+                *response
+                    .result
+                    .as_mut()?
+                    .get_mut("content")?
+                    .as_array_mut()?
+                    .first_mut()?
+                    .get_mut("text")? = Value::String(encoded);
+                Some((timestamp_ms, trace_id))
+            })
+    } else {
+        None
+    };
     let (error, payload) = match response {
         Ok(response) => (
             response.error.is_some(),
@@ -193,18 +245,75 @@ pub(crate) fn record_mcp_tool_response(
         ),
         Err(error) => (true, json!({"transport_error":format!("{error:#}")})),
     };
-    if let Err(error) = crate::telemetry::record_mcp_call(
-        root,
-        provider,
-        tool,
-        request_id,
-        arguments,
-        duration_ms,
-        error,
-        payload,
-    ) {
+    let record = match prepared_trace {
+        Some((timestamp_ms, trace_id)) => {
+            if let Some((session_id, attribution)) = session_attribution {
+                crate::telemetry::record_mcp_call_with_trace_id_and_attribution(
+                    root,
+                    provider,
+                    tool,
+                    request_id,
+                    arguments,
+                    duration_ms,
+                    error,
+                    payload,
+                    timestamp_ms,
+                    trace_id,
+                    session_id,
+                    &attribution,
+                )
+            } else {
+                crate::telemetry::record_mcp_call_with_trace_id(
+                    root,
+                    provider,
+                    tool,
+                    request_id,
+                    arguments,
+                    duration_ms,
+                    error,
+                    payload,
+                    timestamp_ms,
+                    trace_id,
+                )
+            }
+        }
+        None => crate::telemetry::record_mcp_call(
+            root,
+            provider,
+            tool,
+            request_id,
+            arguments,
+            duration_ms,
+            error,
+            payload,
+        ),
+    };
+    if let Err(error) = record {
         eprintln!("Membrick could not append MCP call history: {error:#}");
     }
+}
+
+/// Save capture work in the resident before returning from the provider hook.
+#[cfg(any(feature = "claude-code", feature = "codex"))]
+pub(crate) fn submit_transcript_capture(
+    root: &Path,
+    provider: &str,
+    document_type: &str,
+    input: Value,
+) -> anyhow::Result<()> {
+    let root = root.canonicalize()?;
+    let (status, body) = post_resident_json(
+        &root,
+        "/provider-memory/captures",
+        &json!({
+            "workspace":root, "provider":provider, "document_type":document_type, "input":input,
+        }),
+    )?;
+    anyhow::ensure!(
+        status == reqwest::StatusCode::ACCEPTED,
+        "resident rejected transcript capture: {status}: {body}"
+    );
+    Ok(())
 }
 
 /// Publish a hook capture through the resident workspace owner.
@@ -496,9 +605,35 @@ fn format_search_results(
     query: Option<&str>,
     results: Vec<SearchResult>,
 ) -> Value {
+    let comparison_operands = query
+        .map(|query| service.comparison_operands_for_query(query))
+        .filter(|operands| operands.len() == 2)
+        .unwrap_or_default();
+    let comparison_coverage = (!comparison_operands.is_empty()).then(|| {
+        let sides = comparison_operands
+            .iter()
+            .map(|operand| {
+                let count = results
+                    .iter()
+                    .filter(|result| result.comparison_operands.contains(operand))
+                    .count();
+                json!({
+                    "operand": operand,
+                    "retrieved_documents": count,
+                    "covered": count > 0,
+                })
+            })
+            .collect::<Vec<_>>();
+        let covered = sides
+            .iter()
+            .filter(|side| side.get("covered").and_then(Value::as_bool) == Some(true))
+            .count();
+        json!({"sides": sides, "covered_sides": covered, "total_sides": comparison_operands.len()})
+    });
     let results = results
         .into_iter()
-        .filter_map(|result| {
+        .enumerate()
+        .filter_map(|(rank, result)| {
             let document = service.source_document_by_id(&result.doc_id)?;
             let content: String = match query {
                 Some(query) => crate::integrations::recall::relevant_excerpt(
@@ -525,6 +660,9 @@ fn format_search_results(
             };
             Some(json!({
                 "id": result.doc_id,
+                "doc_id": result.doc_id,
+                "rank": rank + 1,
+                "source_hash": crate::source::source_document_hash(&document).ok(),
                 "source": result.source,
                 "content": content,
                 "score": result.score,
@@ -536,13 +674,17 @@ fn format_search_results(
                 "superseded_by": result.superseded_by,
                 "relation_confidence": result.relation_confidence,
                 "relation_evidence": result.relation_evidence,
+                "comparison_operands": result.comparison_operands,
                 "document_type": document.filters.get("document_type"),
                 "branch": document.filters.get("branch"),
                 "revision": document.filters.get("revision"),
             }))
         })
         .collect::<Vec<_>>();
-    json!({"results": results})
+    match comparison_coverage {
+        Some(comparison) => json!({"results": results, "comparison": comparison}),
+        None => json!({"results": results}),
+    }
 }
 
 fn preserve_matched_excerpt(
@@ -1015,6 +1157,70 @@ pub(crate) fn memory_tool_definitions() -> Vec<ToolDefinition> {
                 "additionalProperties": false
             }),
         },
+        ToolDefinition {
+            name: "review_search".to_string(),
+            description: "Review MCP searches. Omit search_id to page through unreviewed searches with cursor and page_size. Supply search_id to retrieve that exact query, result, and available source documents. Reading a page does not mark a search reviewed.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "search_id": {"type":"string", "description":"Return one exact recorded search. Omit to list unreviewed searches."},
+                    "cursor": {"type":"string", "description":"Continuation cursor returned by the previous page."},
+                    "page_size": {"type":"integer", "minimum":1, "maximum":100, "default":10}
+                },
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "search_feedback".to_string(),
+            description: "Submit an overall usefulness label and a relevance judgment for every document returned by one search_id. The original rank is taken from the recorded search result. This records evaluation feedback only; use enrich_doc to change a specific source document.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "search_id": {"type":"string"},
+                    "label": {"type":"string", "enum":["helpful","partially_helpful","not_helpful"]},
+                    "feedback": {"type":"string", "description":"What answered the query, what was missing or misleading, and why this label applies."},
+                    "document_judgments": {"type":"array", "description":"Provide exactly one relevance judgment for every document in the recorded search results. The service records each document's original rank and source hash; do not submit a replacement rank.", "items":{"type":"object", "properties":{
+                        "doc_id":{"type":"string"},
+                        "relevance":{"type":"string", "enum":["relevant","partially_relevant","not_relevant"]},
+                        "feedback":{"type":"string", "description":"Optional brief reason for this document's relevance judgment."}
+                    }, "required":["doc_id","relevance"], "additionalProperties":false}},
+                    "query_rule_additions": {"type":"object", "description":"Optional additions to supported query-only rule lists. Every term must appear in the reviewed query or returned source documents. Supported lists: query_time_units, query_count_phrases, query_option_connectors, query_option_prefixes, query_option_phrases, query_comparison_markers, query_temporal_filter_markers, query_both_verbs, query_aggregate_phrases, query_current_state_markers, query_explanation_terms.", "properties": {
+                        "query_time_units":{"type":"array", "items":{"type":"string"}},
+                        "query_count_phrases":{"type":"array", "items":{"type":"string"}},
+                        "query_option_connectors":{"type":"array", "items":{"type":"string"}},
+                        "query_option_prefixes":{"type":"array", "items":{"type":"string"}},
+                        "query_option_phrases":{"type":"array", "items":{"type":"string"}},
+                        "query_comparison_markers":{"type":"array", "items":{"type":"string"}},
+                        "query_temporal_filter_markers":{"type":"array", "items":{"type":"string"}},
+                        "query_both_verbs":{"type":"array", "items":{"type":"string"}},
+                        "query_aggregate_phrases":{"type":"array", "items":{"type":"string"}},
+                        "query_current_state_markers":{"type":"array", "items":{"type":"string"}},
+                        "query_explanation_terms":{"type":"array", "items":{"type":"string"}}
+                    }, "additionalProperties":false}
+                },
+                "required":["search_id","label","feedback","document_judgments"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "enrich_doc".to_string(),
+            description: "Add evidence-backed searchable metadata to one existing source document. Use the exact doc_id and expected_source_hash returned by search or review_search. This changes the selected document only; it does not label a search.".to_string(),
+            input_schema: json!({
+                "type":"object",
+                "properties": {
+                    "doc_id":{"type":"string","description":"Exact source document ID to enrich."},
+                    "expected_source_hash":{"type":"string","description":"Exact source_hash returned for this document by search or review_search."},
+                    "key_phrases":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"kind":{"type":"string","enum":["event","place","org","work","thing"]}},"required":["text","kind"],"additionalProperties":false}},
+                    "session_conclusion":{"type":"string","description":"Replace the managed conclusion on an existing session-context document."},
+                    "headings":{"type":"array","items":{"type":"string"}},
+                    "links":{"type":"array","items":{"type":"string"}},
+                    "supersedes_document_id":{"type":"string","description":"Existing same-scope document this document explicitly replaces; cite it in evidence."},
+                    "evidence":{"type":"array","minItems":1,"items":{"type":"object","properties":{"doc_id":{"type":"string"},"expected_source_hash":{"type":"string"}},"required":["doc_id","expected_source_hash"],"additionalProperties":false}}
+                },
+                "required":["doc_id","expected_source_hash","evidence"],
+                "additionalProperties":false
+            }),
+        },
     ]
 }
 
@@ -1179,13 +1385,20 @@ pub(crate) fn call_board_or_memory_tool(
     provider: &str,
 ) -> anyhow::Result<JsonRpcResponse> {
     #[cfg(test)]
-    service.sync_shared_memory(&crate::integrations::mcp_index::shared_memory_root(root))?;
+    if tool_name != "enrich_doc" {
+        service.sync_shared_memory(&crate::integrations::mcp_index::shared_memory_root(root))?;
+    }
     // Board owner/workspace: the workspace root scopes boards;
     // "mcp" is the stable owner for agent-posted boards.
     let workspace = root.to_string_lossy().to_string();
     let is_write = matches!(
         tool_name,
-        "board_open" | "board_post" | "add_memory" | "delete_memory"
+        "board_open"
+            | "board_post"
+            | "add_memory"
+            | "delete_memory"
+            | "search_feedback"
+            | "enrich_doc"
     );
     let result: Result<Value, String> = if is_write {
         // Resolve the session from the composed service, which tracks hook
@@ -1207,6 +1420,7 @@ pub(crate) fn call_board_or_memory_tool(
                 "mcp",
                 &workspace,
                 provider,
+                root,
             )
             .map_err(anyhow::Error::msg)
         }) {
@@ -1222,6 +1436,9 @@ pub(crate) fn call_board_or_memory_tool(
             "add_memory" | "get_memory" | "delete_memory" => {
                 dispatch_memory_tool(tool_name, arguments, service, provider)
             }
+            "review_search" => service
+                .review_search_mcp(root, arguments)
+                .map_err(|error| format!("{error:#}")),
             _ => Err(format!("unknown tool: {tool_name}")),
         }
     };
@@ -1264,6 +1481,7 @@ fn dispatch_write_tool(
     owner: &str,
     workspace: &str,
     provider: &str,
+    root: &Path,
 ) -> Result<Value, String> {
     match tool_name {
         "board_open" | "board_post" => {
@@ -1271,6 +1489,12 @@ fn dispatch_write_tool(
         }
         "add_memory" => dispatch_memory_tool(tool_name, arguments, service, provider),
         "delete_memory" => dispatch_memory_tool(tool_name, arguments, service, provider),
+        "search_feedback" => service
+            .search_feedback_mcp(root, arguments)
+            .map_err(|error| format!("{error:#}")),
+        "enrich_doc" => service
+            .enrich_doc_mcp(arguments)
+            .map_err(|error| format!("{error:#}")),
         _ => Err(format!("unknown write tool: {tool_name}")),
     }
 }
@@ -1384,7 +1608,17 @@ mod tests {
     fn memory_tool_definitions_expose_add_and_get() {
         let defs = memory_tool_definitions();
         let names: Vec<_> = defs.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["add_memory", "get_memory", "delete_memory"]);
+        assert_eq!(
+            names,
+            vec![
+                "add_memory",
+                "get_memory",
+                "delete_memory",
+                "review_search",
+                "search_feedback",
+                "enrich_doc"
+            ]
+        );
         // Schemas require only the essentials.
         assert_eq!(
             defs[0].input_schema["required"],
@@ -1392,6 +1626,274 @@ mod tests {
         );
         assert_eq!(defs[1].input_schema["required"], json!(["memory_id"]));
         assert_eq!(defs[2].input_schema["required"], json!(["memory_id"]));
+        assert_eq!(defs[4].input_schema["properties"].get("updates"), None);
+        assert!(defs[4].input_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "document_judgments"));
+        assert_eq!(
+            defs[5].input_schema["required"],
+            json!(["doc_id", "expected_source_hash", "evidence"])
+        );
+    }
+
+    #[test]
+    fn shared_router_runs_review_search_then_search_feedback_for_one_search() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "membrick-shared-search-review-{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let result = json!({"results":[{"id":"review-doc","content":"The writer publishes accepted document changes."}]});
+        let recorded_response = json!({
+            "result":{"content":[{"text":serde_json::to_string(&result).unwrap()}]}
+        });
+        crate::telemetry::record_mcp_call(
+            &root,
+            "codex",
+            "search",
+            Some(json!(91)),
+            &json!({"query":"how are document changes published?"}),
+            5,
+            false,
+            recorded_response,
+        )
+        .unwrap();
+
+        let mut service = memory_service();
+        let page = call_board_or_memory_tool(
+            "review_search",
+            Some(json!(92)),
+            &json!({"page_size":10}),
+            &mut service,
+            &root,
+            "codex",
+        )
+        .unwrap();
+        let page_text = page.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let page_body: Value = serde_json::from_str(&page_text).unwrap();
+        let search_id = page_body["searches"][0]["search_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(page_body["searches"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            page_body["searches"][0]["search"]["arguments"]["query"],
+            "how are document changes published?"
+        );
+
+        let exact = call_board_or_memory_tool(
+            "review_search",
+            Some(json!(93)),
+            &json!({"search_id":search_id}),
+            &mut service,
+            &root,
+            "codex",
+        )
+        .unwrap();
+        let exact_text = exact.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let exact_body: Value = serde_json::from_str(&exact_text).unwrap();
+        assert_eq!(exact_body["search_id"], search_id);
+        assert_eq!(exact_body["reviewed"], false);
+        assert_eq!(
+            exact_body["search"]["arguments"]["query"],
+            "how are document changes published?"
+        );
+        assert_eq!(exact_body["result"]["results"][0]["id"], "review-doc");
+
+        let feedback = call_board_or_memory_tool(
+            "search_feedback",
+            Some(json!(94)),
+            &json!({
+                "search_id":search_id,
+                "label":"helpful",
+                "feedback":"The result answered the question with the publication behavior.",
+                "document_judgments":[{"doc_id":"review-doc","relevance":"relevant"}]
+            }),
+            &mut service,
+            &root,
+            "codex",
+        )
+        .unwrap();
+        let feedback_payload = feedback.result.unwrap_or_else(|| {
+            panic!(
+                "search_feedback router returned error: {:?}",
+                feedback.error
+            )
+        });
+        let feedback_text = feedback_payload["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let feedback_body: Value = serde_json::from_str(&feedback_text).unwrap();
+        assert_eq!(feedback_body["status"], "reviewed");
+        assert_eq!(feedback_body["search_id"], search_id);
+
+        let reviewed = call_board_or_memory_tool(
+            "review_search",
+            Some(json!(95)),
+            &json!({"search_id":search_id}),
+            &mut service,
+            &root,
+            "codex",
+        )
+        .unwrap();
+        let reviewed_text = reviewed.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let reviewed_body: Value = serde_json::from_str(&reviewed_text).unwrap();
+        assert_eq!(reviewed_body["reviewed"], true);
+
+        let target = SourceDocument {
+            doc_id: "router-enrich-target".to_string(),
+            source: "test://router-enrich-target".to_string(),
+            content: "The target contains a project decision.".to_string(),
+            concept: "decision".to_string(),
+            group_id: None,
+            filters: Default::default(),
+            headings: Vec::new(),
+            links: Vec::new(),
+            timestamp: None,
+            doc_length: 39,
+            author_agent: None,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        };
+        let evidence = SourceDocument {
+            doc_id: "router-enrich-evidence".to_string(),
+            source: "test://router-enrich-evidence".to_string(),
+            content: "The supporting evidence confirms the project decision.".to_string(),
+            concept: "evidence".to_string(),
+            group_id: None,
+            filters: Default::default(),
+            headings: Vec::new(),
+            links: Vec::new(),
+            timestamp: None,
+            doc_length: 55,
+            author_agent: None,
+            key_phrases: Vec::new(),
+            key_phrase_extraction_hash: String::new(),
+        };
+        crate::memory_api::MemoryService::with_shared_memory(&root, |shared| {
+            shared.upsert(target.clone());
+            shared.upsert(evidence.clone());
+            shared.flush()?;
+            Ok(())
+        })
+        .unwrap();
+        let (target_hash, evidence_hash) =
+            crate::memory_api::MemoryService::with_shared_memory(&root, |shared| {
+                Ok((
+                    crate::source::source_document_hash(
+                        shared.source_document_by_id(&target.doc_id).unwrap(),
+                    )?,
+                    crate::source::source_document_hash(
+                        shared.source_document_by_id(&evidence.doc_id).unwrap(),
+                    )?,
+                ))
+            })
+            .unwrap();
+        let enriched = call_board_or_memory_tool(
+            "enrich_doc",
+            Some(json!(96)),
+            &json!({
+                "doc_id": target.doc_id,
+                "expected_source_hash": target_hash,
+                "key_phrases": [{"text":"project decision", "kind":"thing"}],
+                "evidence": [{"doc_id": evidence.doc_id, "expected_source_hash": evidence_hash}]
+            }),
+            &mut service,
+            &root,
+            "codex",
+        )
+        .unwrap();
+        let enriched_payload = enriched
+            .result
+            .unwrap_or_else(|| panic!("enrich_doc router returned error: {:?}", enriched.error));
+        let enriched_text = enriched_payload["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let enriched_body: Value = serde_json::from_str(&enriched_text).unwrap();
+        assert_eq!(enriched_body["status"], "enriched");
+        assert_eq!(
+            enriched_body["changed_document_ids"],
+            json!([target.doc_id])
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn search_response_id_matches_the_recorded_search_id() {
+        let root = std::env::temp_dir().join(format!(
+            "membrick-search-response-id-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut response = Ok(JsonRpcResponse {
+            jsonrpc: "2.0",
+            id: Some(json!(7)),
+            result: Some(json!({
+                "content":[{"type":"text","text":"{\"results\":[{\"id\":\"doc-1\"}],\"__membrick_telemetry\":{\"session_id\":\"active-session\",\"session_attribution\":\"inferred\"}}"}]
+            })),
+            error: None,
+        });
+        record_mcp_tool_response(
+            &root,
+            "claude",
+            "search",
+            Some(json!(7)),
+            &json!({"query":"example"}),
+            3,
+            &mut response,
+        );
+
+        let response = response.unwrap();
+        let text = response.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let body: Value = serde_json::from_str(&text).unwrap();
+        let response_search_id = body["search_id"].as_str().unwrap();
+        assert!(body.get("__membrick_telemetry").is_none());
+        assert!(body["feedback_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("search_feedback"));
+
+        let history =
+            std::fs::read_to_string(root.join(".membrick/mcp-call-history.jsonl")).unwrap();
+        let record: crate::telemetry::McpCallRecord =
+            serde_json::from_str(history.lines().next().unwrap()).unwrap();
+        assert_eq!(record.tool, "search");
+        assert_eq!(record.session_id.as_deref(), Some("active-session"));
+        assert_eq!(record.session_attribution, "inferred");
+        assert_eq!(record.trace_id.as_deref(), Some(response_search_id));
+        assert_eq!(
+            record
+                .response
+                .pointer("/result/content/0/text")
+                .and_then(Value::as_str),
+            Some(text.as_str())
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1733,6 +2235,22 @@ mod tests {
     }
 
     #[test]
+    fn comparison_search_reports_uncovered_operands_when_empty() {
+        let service = MemoryService::in_memory(PipelineOptions::default());
+        let payload = format_search_results(
+            &service,
+            Some("Compare old and new command interface"),
+            Vec::new(),
+        );
+
+        assert_eq!(payload["results"], json!([]));
+        assert_eq!(payload["comparison"]["covered_sides"], 0);
+        assert_eq!(payload["comparison"]["total_sides"], 2);
+        assert_eq!(payload["comparison"]["sides"][0]["covered"], false);
+        assert_eq!(payload["comparison"]["sides"][1]["covered"], false);
+    }
+
+    #[test]
     fn search_results_anchor_memories_to_their_session_date() {
         fn memory(doc_id: &str, timestamp: Option<&str>) -> SourceDocument {
             SourceDocument {
@@ -1766,6 +2284,7 @@ mod tests {
                 superseded_by: None,
                 relation_confidence: None,
                 relation_evidence: Vec::new(),
+                comparison_operands: Vec::new(),
             }
         }
 
@@ -1776,11 +2295,20 @@ mod tests {
         let payload = search_results(&service, vec![hit("dated"), hit("undated")]);
         let results = payload["results"].as_array().unwrap();
         assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["doc_id"], "dated");
+        assert_eq!(results[0]["rank"], 1);
+        assert_eq!(results[1]["doc_id"], "undated");
+        assert_eq!(results[1]["rank"], 2);
 
         let dated = &results[0];
         assert_eq!(dated["created_at"], "2026-09-20T10:00:00Z");
         assert_eq!(dated["session_id"], "session-1");
         let content = dated["content"].as_str().unwrap();
+        let indexed_dated = service.source_document_by_id("dated").unwrap();
+        assert_eq!(
+            dated["source_hash"],
+            crate::source::source_document_hash(&indexed_dated).unwrap()
+        );
         assert!(
             content.starts_with("[session date: 2026-09-20T10:00:00Z]\n"),
             "date prefix missing: {content}"

@@ -42,16 +42,23 @@ that loopback HTTP listener. If both socket transports are unavailable, it
 writes one atomic request file under the project's `.membrick/runtime/requests`
 directory and waits for the resident to return a matching response file. If no
 owner is available, the client starts resident-server mode. Concurrent first
-requests coordinate through a startup marker, and a kernel-backed owner lock
-prevents a second resident or standalone HTTP process from opening another
-writer for the same project.
+requests coordinate through a kernel-backed startup lock in
+`.membrick/runtime/`; the `.starting` marker is status metadata only. A starter
+reclaims or replaces that marker only after acquiring the lock. The separate
+workspace owner lock prevents a second resident or standalone HTTP process
+from opening another writer for the same project.
 
 The process that starts a resident watches it until an endpoint responds.
 If the child exits before binding, the starter removes only its own marker and
-reports the startup failure. Other waiting clients notice the cleared marker
-and fail promptly; a later request can claim startup and launch a replacement.
-Failures while preparing the launch also clear the marker, so they cannot
-strand future requests behind a marker for a server that was never started.
+reports the startup failure. If the starter itself exits or crashes, the OS
+releases its startup lock. The next starter acquires that lock, replaces any
+orphaned marker, and can launch a replacement resident.
+
+Claude Code and Codex hooks use a project-configurable execution budget, which
+defaults to 5 seconds and is capped at 10 seconds, plus at most 2 seconds for
+a capture already in progress. A blocked file-queue request therefore fails
+open promptly instead of holding the provider hook for the queue's full
+request timeout.
 
 Each workspace keeps its resident socket (macOS and Linux), startup marker,
 and diagnostics under its own `.membrick/runtime/` directory. On Unix-like
@@ -92,7 +99,14 @@ to a different project. Later sessions for that project read the saved value. Se
 If both socket transports are blocked, the file queue uses atomic rename to
 claim each request once and routes it through the same resident router. A
 timeout after a request was claimed reports that its outcome may be unknown;
-Membrick does not replay the operation with a new identifier.
+Membrick does not replay the operation with a new identifier. When a resident
+restarts, it turns leftover claims into a `503` response that says the outcome
+is unknown, then removes the claim. This avoids repeating a write that may
+already have reached `MemoryService`. Pending requests and orphaned responses
+are retained for 24 hours, then removed; incomplete temporary files follow the
+same retention period. Cleanup runs at resident startup and every 15 minutes.
+The startup recovery handles claims only after the previous resident has lost
+the project owner lock, so an active request is never mistaken for an orphan.
 
 ## Relationship to the HTTP server
 

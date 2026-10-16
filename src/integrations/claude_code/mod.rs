@@ -555,7 +555,7 @@ impl ClaudeMcp {
                     .cloned()
                     .unwrap_or_else(|| json!({}));
                 let started = std::time::Instant::now();
-                let response = self.handle_tool_call(id.clone(), Some(params));
+                let mut response = self.handle_tool_call(id.clone(), Some(params));
                 mcp_tools::record_mcp_tool_response(
                     &self.root,
                     "claude",
@@ -563,7 +563,7 @@ impl ClaudeMcp {
                     id,
                     &arguments,
                     started.elapsed().as_millis() as u64,
-                    &response,
+                    &mut response,
                 );
                 response
             }
@@ -614,6 +614,9 @@ impl ClaudeMcp {
                     | "add_memory"
                     | "get_memory"
                     | "delete_memory"
+                    | "review_search"
+                    | "search_feedback"
+                    | "enrich_doc"
             )
         {
             return crate::integrations::mcp_tools::call_resident_tool(
@@ -799,6 +802,7 @@ impl ClaudeMcp {
                                 "text": serde_json::to_string_pretty(&json!({
                                     "root": self.root,
                                     "docs_count": service.docs_count(),
+                                    "reasoning_rules": service.reasoning_rules_status(),
                                 }))?,
                             }
                         ]
@@ -1359,6 +1363,9 @@ mod tests {
                 "add_memory".to_string(),
                 "get_memory".to_string(),
                 "delete_memory".to_string(),
+                "review_search".to_string(),
+                "search_feedback".to_string(),
+                "enrich_doc".to_string(),
                 "update_membrick".to_string()
             ]
         );

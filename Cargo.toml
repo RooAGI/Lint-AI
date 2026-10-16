@@ -1,7 +1,7 @@
 [package]
 autobins = false
 name = "membrick"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Persistent memory layer for AI coding agents — MCP server with current-state retrieval and supersession tracking"
 license = "Apache-2.0"
@@ -118,6 +118,11 @@ path = "src/bin/launchers/haystack_scoped_benchmark.rs"
 [[bin]]
 name = "jevbench_case_classifier"
 path = "src/bin/launchers/jevbench_case_classifier.rs"
+
+[[bin]]
+name = "feedback_eval"
+path = "src/bin/feedback_eval.rs"
+required-features = ["experimental"]
 
 [[bin]]
 name = "locomo_benchmark"
